@@ -961,8 +961,55 @@ sweep is one dot product per mode plus a complex division per (mode, frequency) 
 assembled, nothing factorized. The DIRECT alternative factorizes `(K − W²M + i·W·C)` per
 frequency and is the only option in three cases, none of which this can express: damping that is
 not proportional, material properties that vary WITH frequency (the modal basis itself would
-change per point), and a load whose spatial distribution changes with frequency. So it is filed
-as a second METHOD rather than a better one.
+change per point), and a load whose spatial distribution changes with frequency. It is a second
+METHOD rather than a better one, and it is now built — the next subsection.
+
+### The direct per-frequency solve, and where the damping vocabulary had to live
+
+`DirectHarmonicSolver` factors `(K − W²M + i·W·C)` at every sweep point over Core's
+`SparseLdlt` (complex symmetric LDLᵀ — built for exactly this system; its class doc records
+why the complex spelling beat a real Bunch–Kaufman). Three decisions are worth recording.
+
+**The damping lives on the MODEL, and that is the deliverable rather than a convenience.**
+The modal route's damping is a per-mode RATIO (a property of a modal basis) and the
+transient's a run option; what neither can carry is damping attached to GEOMETRY — a
+dashpot at a node, a lossier region — which is precisely the case the direct solve exists
+for. So `StructuralModel` gained the vocabulary (`SetDamping` model-wide and per region,
+`Dashpot` grounded and node-to-node), the direct solver reads ONLY the model, and the two
+solvers that cannot integrate a model-carried C — the modal harmonic route and the
+transient — REFUSE a model that carries one, naming `DirectHarmonicSolver`, rather than
+silently ignoring it: one statement per model, and no consumer that quietly drops it. A
+node-pair dashpot's coupling block can land where the stiffness pattern has no entry at all
+(two nodes sharing no element), which is the union-pattern case `SparseLdlt` factors and
+the test fixture exercises deliberately.
+
+**The "no damping matrix" statement gained its one exception, and the exception proves the
+rule.** §3g's finding — everywhere a C's uses are products or scalar folds, assembling it
+buys a slower operation — stands untouched. This factorization is different in KIND: it
+consumes the VALUES of `i·omega·C` as a matrix, there is no product to decompose into, and
+a non-proportional C is data rather than a projection of ratios. So `FeaAssembly.Damping`
+is the one place a damping matrix exists, built per-element (`sum_e alpha_e·M_e +
+beta_e·K_e` + dashpot blocks) through ONE assembly path — which is what makes "every region
+states the same value" bit-identical to "the default states it once", asserted rather than
+hoped.
+
+**An undamped model is accepted, and the refusal at an exact resonance is the physics.**
+The modal route requires an explicit damping statement because `None` makes every resonance
+infinite; here the model's damping state IS the statement, an undamped sweep is the
+standard real FRF, and an undamped model driven exactly at a natural frequency hits
+`SparseLdlt`'s exactly-zero pivot — wrapped naming the frequency and the fact that no
+steady state exists there (the response grows linearly in time forever). Reaching that
+refusal in a test took reproducing the solver's own pivot arithmetic VERBATIM — the
+assembled matrix entries through the hertz→omega→coefficient chain, scanned over a family
+of fixtures because one ulp of hertz moves the pivot by ~5–9 ulps of the stiffness (the
+measured stiffness `probe/deflection`, ulps away from the assembled entry, found no refusal
+at all: the recomputation-must-be-bit-reproducible lesson, in a test fixture). Verification
+is three-way: agreement with the corrected modal route at 3.5e-6 relative on a real mesh
+(the gap IS the truncation), 1e-9 on a 1×1-reduced model whose one mode is the whole basis,
+and hand-built complex Cramer oracles for the dashpot and per-region cases — each free DOF
+of the per-region fixture its own closed-form oscillator, so a per-region map applied to
+the wrong region fails at the right magnitude where any total-only assertion would agree
+with the regions swapped.
 
 **Truncation is turned into a correction rather than left as a caveat.** The mode-acceleration
 form `u(W) = u_static + sum_n phi_n F_n [1/D_n − 1/w_n²]` has a bracket that vanishes at
@@ -1013,11 +1060,13 @@ is one of exactly two things, and neither wants the matrix:
   `[a0 + (1+alpha)·a1·alpha_R]·M + [(1+alpha)(1 + a1·beta_R)]·K` — one `FeaAssembly.Combine`
   with two coefficients, which is why that overload exists.
 
-So forming `C` would cost a third sparse matrix to buy a slower operation. No damping matrix
-exists anywhere in this project and §3f's statement now stands unqualified. The general shape is
-worth keeping: **a prediction about what a future consumer will need is a hypothesis, and the
-consumer arriving is the experiment.** Four agents in a row have found a filed diagnosis wrong;
-this is the fifth.
+So forming `C` would cost a third sparse matrix to buy a slower operation. Under proportional
+damping no matrix is ever formed — the one damping matrix that has since arrived
+(`FeaAssembly.Damping`, for §3f's direct per-frequency harmonic solve) is the case whose
+factorization consumes VALUES rather than products, the exception that proves this finding
+rather than a reversal of it. The general shape is worth keeping: **a prediction about what a
+future consumer will need is a hypothesis, and the consumer arriving is the experiment.** Four
+agents in a row have found a filed diagnosis wrong; this is the fifth.
 
 ### The initial acceleration is a solve against M, and assuming it away is a modelling error
 
@@ -1390,15 +1439,90 @@ keeping: negating a load negates every solve and recovery output bit for bit —
 round-to-nearest commutes with negation — and the signed von Mises is odd in the stress,
 so the two halves cancel identically rather than to round-off.)
 
+### Marin factors: a derivation with a pivot, not an edit and not a scale
+
+`SnCurve.WithFactors` makes the polished-specimen rows honest for a real part, and two
+shapes of the feature were rejected before the one that landed. Editing the catalogue
+(a "machined 1045" row) is the fine-pitch tap-drill mistake — a second stored column
+that drifts with nothing to catch it — so the transcription stays pristine and the
+corrected curve is DERIVED. And scaling the whole line (multiplying sigma'_f) is wrong
+physics wearing simpler arithmetic: surface finish, size and scatter govern crack
+INITIATION, which dominates at long life, while at 10³ cycles plastic strain dominates
+and the factors classically do not apply. So the construction is the classical
+two-anchor re-fit — through the pristine line's own 10³-cycle value (Basquin's own
+validity floor, already stated in the class remarks, now load-bearing as the pivot) and
+through `k·S_e` at the unchanged knee — which is Shigley's construction with the
+curve's own low-cycle point as the anchor rather than a second transcribed constant
+(`f·S_ut` would be one more datasheet number to verify). S_ut is untouched because a
+finish does not change a static failure; a factor of exactly 1 returns the pristine
+object verbatim (re-deriving would move the coefficients by ulps for nothing — the
+exact-zero-semantic-test tier); and the refusals are named: aluminium (no limit to
+anchor on — a knee-less material needs a stated reference life, a different
+construction), a knee at or below the pivot, diameters past the correlation's 254 mm
+data (the classical 0.6 floor is an assumption, not a fit, and this library does not
+assume it silently), and reliabilities off the standard table, since interpolating a
+normal quantile through it would invent precision the underlying 8%-scatter assumption
+does not have. The transcription tests are the textbook's own worked values (0.798 /
+0.858 / 0.814), not the formulas re-typed — a re-typed formula agrees with its own
+transcription mistake — and the first run caught exactly that: three hand-approximated
+expected values were off in the third decimal and the worked-value anchors (690 MPa
+machined, 32 mm) were not.
+
+### Rainflow over a transient run, and the two design questions it answered in code
+
+Variable amplitude landed as `Rainflow.Count` — ASTM E1049's three-point algorithm
+verbatim (X the range under consideration, Y the previous one, S the starting point;
+the standard's Fig. 6 worked example transcribed as a test, cycle for cycle, because a
+counting that gets the totals right can still pair the wrong points and the
+total-variation identity would pass it) — plus
+`FatigueAnalysis.Evaluate(TransientResults, curve, options)`, Miner's rule over each
+node's signed von Mises history with `EquivalentAlternating` reused verbatim per
+counted cycle. The filed entry named two design questions to settle at build time, and
+both are answered by arithmetic rather than preference.
+
+**(a) Every node, one pass, no hot-spot preselection.** The per-node footprint is one
+scalar per stored state (8 bytes), which is small beside the states the transient
+already retains — each holds full displacement, velocity, acceleration and reaction
+fields — so preselection would save a rounding error of memory and cost the "which node
+is worst" answer the published field exists to give. The honest caveat is the SAMPLING:
+the counting sees the STORED states, so a reversal falling between stored steps is
+never counted — a run that feeds fatigue stores every step, and the remarks say so.
+
+**(b) The open end is an option because E1049 names two honest readings.** One-shot by
+default: a transient is a load event with a beginning and an end, and the residual
+ranges the counting cannot close are the standard's HALF cycles, no more and no less.
+`AssumeRepeating` reads the history as one period of a repeating load — rearranged to
+begin at its largest-magnitude extremum (the standard's own prescription, under which
+every count closes) and the residual halves paired into full cycles by EXACT
+(range, mean) key, a pairing rather than a tolerance because both flanks of one closed
+excursion are computed from the same two point values. The rotation is of the RAW
+samples, not the turning points, because the turning-point structure at the seam
+differs between the two orderings. The two modes agree on damage for a
+constant-amplitude history; what changes is the reported cycle structure, which is the
+option's contract.
+
+**The degeneracy oracle runs through the real seam.** Internally-built transient states
+alternating between the `SolveAll` pair's two `StructuralResults` ARE a
+constant-amplitude history, and the counted cycle's amplitude and mean come out
+BIT-equal to the static pair's decomposition (same values through the same arithmetic —
+IEEE addition is commutative, so `0.5·(a + b)` cannot differ), making the damage
+exactly `count/life` as an identity rather than a tolerance. The second oracle with
+teeth is the total-variation identity `sum(2·count·range) = sum|Δ|` over the turning
+points, exact on a pseudo-random history — it holds for ANY input, so it catches a
+dropped or double-counted range on histories nobody hand-checked. What is deliberately
+absent is a variable-amplitude SAFETY factor: scaling the loads scales every cycle at
+once, so the factor to a damage target under a power-law line is an iteration against a
+stated target life — a different quantity from the static radial factor, filed rather
+than approximated.
+
 ### Refused by name
 
 Welds (hot-spot / nominal-stress category methods are their own discipline — a weld's
-life is governed by its detail class, not the parent metal's line), multiaxial criteria
-beyond von Mises equivalence (above), and variable amplitude (rainflow needs a time
-history two static cases cannot carry; `TransientResults`' stored states are the natural
-input, filed). Mixed inputs refuse loudly: results on different `AnalysisMesh` instances
-would pair unrelated nodes, and results answering with different `Recovery`/`Averaging`
-settings would book the recovery gap between two fields of different accuracy as
+life is governed by its detail class, not the parent metal's line) and multiaxial
+criteria beyond von Mises equivalence (above). Mixed inputs refuse loudly: results on
+different `AnalysisMesh` instances would pair unrelated nodes, and results answering
+with different `Recovery`/`Averaging` settings — including across one transient's
+stored states — would book the recovery gap between two fields of different accuracy as
 alternating stress.
 
 ## 4. Implicit engine

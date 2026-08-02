@@ -72,9 +72,11 @@ public sealed record FatigueOptions
 /// (Findley, Fatemi–Socie), a different computation over a different input — and the
 /// structural tell is inside <see cref="SignedVonMises"/>'s own remarks: a reversed pure
 /// shear cycle is invisible to ANY scalar signed equivalent, because negating a pure shear
-/// tensor is a rotation of it. <b>Variable amplitude</b>: rainflow counting needs a time
-/// history, which two static cases cannot carry; the transient solver's stored states are
-/// the natural input and that consumer is filed in todo.md.</para>
+/// tensor is a rotation of it. <b>Variable amplitude</b> is no longer refused: the
+/// <see cref="Evaluate(TransientResults, SnCurve, RainflowFatigueOptions?)"/> overload
+/// runs ASTM E1049 rainflow over a transient run's stored states with Miner's-rule
+/// accumulation — two static cases still cannot carry a time history, which is why it
+/// takes the transient's.</para>
 /// </summary>
 public static class FatigueAnalysis
 {
@@ -262,6 +264,107 @@ public static class FatigueAnalysis
         return new FatigueResults(
             a, b, curve, options, designStrength,
             alternating, mean, corrected, safety, log10Life);
+    }
+
+    /// <summary>
+    /// Evaluates VARIABLE-AMPLITUDE fatigue at every node from a transient run: ASTM E1049
+    /// rainflow counting over each node's signed von Mises history, Miner's-rule damage
+    /// against the S-N curve with the mean-stress correction applied PER COUNTED CYCLE
+    /// (<see cref="EquivalentAlternating"/>, reused verbatim — each cycle's own mean
+    /// corrects its own amplitude, which is what lets one R = -1 curve answer a history
+    /// whose mean wanders).
+    ///
+    /// <para><b>The series is extracted at EVERY node in one pass over the stored
+    /// states</b> — the design question answered by its own arithmetic: the per-node
+    /// footprint is one scalar per stored state (8 bytes), small beside the states the
+    /// transient already retains (each holds full displacement, velocity, acceleration and
+    /// reaction fields), so a hot-spot preselection would buy little and cost the
+    /// "which node is worst" answer the field display exists for. What the counting sees
+    /// is the STORED states: a coarse <c>TransientSolveOptions.StoreEvery</c> drops
+    /// reversals between stored steps, and a reversal that was never stored is never
+    /// counted — store every step for a run that feeds fatigue.</para>
+    ///
+    /// <para><b>The open end is an option, not a guess</b> — see
+    /// <see cref="RainflowFatigueOptions.AssumeRepeating"/> for the two honest readings
+    /// E1049 names (residual halves for a one-shot event; rearrange-and-pair for one
+    /// period of a repeating load).</para>
+    /// </summary>
+    /// <param name="history">A completed transient run (its stored states are the
+    /// samples).</param>
+    /// <param name="curve">The material's S-N line.</param>
+    /// <param name="options">Correction and end-handling, or null for the defaults.</param>
+    public static RainflowFatigueResults Evaluate(
+        TransientResults history, SnCurve curve, RainflowFatigueOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        ArgumentNullException.ThrowIfNull(curve);
+        options ??= new RainflowFatigueOptions();
+
+        var states = history.States;
+        if (states.Count < 2)
+            throw new FeaException(
+                "The transient stored a single state, and one instant carries no cycle to "
+                + "count. Store more of the run (TransientSolveOptions.StoreEvery).");
+        for (int s = 1; s < states.Count; s++)
+        {
+            if (states[s].Results.Recovery != states[0].Results.Recovery
+                || states[s].Results.Averaging != states[0].Results.Averaging)
+                throw new FeaException(
+                    "The stored states answer with different nodal stress settings "
+                    + $"(state {s}: {states[s].Results.Recovery}/{states[s].Results.Averaging} "
+                    + $"against {states[0].Results.Recovery}/{states[0].Results.Averaging}). "
+                    + "A history differenced across recoveries books the recovery gap as "
+                    + "cycle amplitude; set the same Recovery and Averaging on every state.");
+        }
+
+        int nodes = history.Mesh.NodeCount;
+        var series = new double[nodes][];
+        for (int v = 0; v < nodes; v++)
+            series[v] = new double[states.Count];
+        for (int s = 0; s < states.Count; s++)
+        {
+            var stress = states[s].Results.NodalStress;
+            for (int v = 0; v < nodes; v++)
+                series[v][s] = SignedVonMises(stress[v]);
+        }
+
+        var damage = new double[nodes];
+        var cycleCounts = new double[nodes];
+        var log10Repetitions = new double[nodes];
+        for (int v = 0; v < nodes; v++)
+        {
+            var cycles = Rainflow.Count(series[v], options.AssumeRepeating);
+            double d = 0, count = 0;
+            foreach (var cycle in cycles)
+            {
+                count += cycle.Count;
+                double equivalent = EquivalentAlternating(
+                    curve, cycle.Amplitude, cycle.Mean, options.Correction);
+                if (double.IsPositiveInfinity(equivalent))
+                {
+                    // Static failure: a mean at or beyond S_ut fails on the first pass,
+                    // not by accumulation.
+                    d = double.PositiveInfinity;
+                    continue;
+                }
+                double life = curve.LifeAt(equivalent);
+                // Exact-infinity skip: a cycle at or below the endurance limit
+                // contributes exactly nothing, the same statement the static path makes.
+                if (double.IsPositiveInfinity(life))
+                    continue;
+                d += cycle.Count / life;
+            }
+            damage[v] = d;
+            cycleCounts[v] = count;
+            // Repetitions to failure = 1/damage, floored at one repetition (log10 = 0)
+            // and NaN for no damage — the static path's spellings, for its reasons.
+            log10Repetitions[v] = d == 0
+                ? double.NaN
+                : Math.Log10(Math.Max(1.0, 1.0 / d));
+        }
+
+        return new RainflowFatigueResults(
+            history, curve, options, damage, cycleCounts, log10Repetitions);
     }
 
     /// <summary>

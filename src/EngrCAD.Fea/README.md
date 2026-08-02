@@ -1958,9 +1958,12 @@ matrix pair. **That is a different solver, not a bigger version of this one**, a
 attempts it. `ModalDamping` also takes a flat ratio (`Uniform`) or a measured table
 (`PerMode`), both of which are proportional by construction.
 
-**No damping matrix is ever assembled.** Every consumer wants `zeta_n`, and forming `C` in
-order to project it back down to the same numbers would be arithmetic with nothing to show for
-it. That is a design statement, not an omission.
+**A damping matrix exists in exactly ONE place.** Wherever a C's only uses are products or
+scalar multiples folded into another matrix — the modal ratios, the transient's effective
+stiffness — forming it buys a slower operation and nothing is assembled; that finding stands.
+The exception is `FeaAssembly.Damping`, assembled for `DirectHarmonicSolver` alone, because
+its factorization consumes the VALUES of `i·omega·C` (there is no product to decompose into)
+and a non-proportional C is geometry-attached data no ratio can carry.
 
 ## Frequency response by modal superposition
 
@@ -2003,13 +2006,56 @@ kept, and the missing modes' static flexibility is carried at every other freque
 `TruncationError` reports what the plain sum would have missed, and is **NaN without a static
 solve**, because then it is not small, it is unknown.
 
-**What a DIRECT solve buys, and when it is actually needed** (filed, not built): factorizing
-`(K - W²M + i·W·C)` at every frequency costs a complex factorization per point — hundreds of
-times this — and is the only option in three cases, none of which this can express. Damping
-that is not proportional (the modes stop diagonalising C, and the eigenproblem becomes
-quadratic); material properties that vary WITH frequency (a viscoelastic modulus — the modal
-basis itself would change per point); and a load whose spatial distribution changes with
-frequency.
+## The direct per-frequency solve: `DirectHarmonicSolver`
+
+Factorizes the full complex system `(K - W²M + i·W·C)` at every sweep point over Core's
+`SparseLdlt` (complex symmetric LDLᵀ, the union pattern of the two parts, AMD by default —
+the shifted family its own remarks name as the one AMD serves). **The value is fidelity, not
+speed**: one complex factorization per frequency, hundreds of times a modal sweep, and
+nothing amortises across points because the matrix carries the frequency — the amortisation
+here is per-frequency, one factor serving every right-hand side AT that frequency, of which
+a sweep has exactly one. What it buys is what modal superposition structurally cannot
+express: **non-proportional damping**, stated on the MODEL because it is geometry-attached
+data no per-mode ratio can carry —
+
+```csharp
+model.SetDamping(new RayleighDamping(alpha, beta));      // model-wide material damping
+model.SetDamping(1, new RayleighDamping(0, betaRubber)); // a lossier region — already
+                                                         // non-proportional if it differs
+model.Dashpot(node, new Vector3d(0, 0, 1), 0.05);        // a discrete damper to ground
+model.Dashpot(nodeA, nodeB, 0.02);                       // between two nodes, along their chord
+
+var response = DirectHarmonicSolver.Solve(model, new DirectHarmonicOptions
+{
+    Frequencies = HarmonicSweep.Logarithmic(10, 5000, 60),
+});
+```
+
+A pair dashpot's coupling block can land where the stiffness pattern has no entry at all
+(two nodes sharing no element), which is precisely the union-pattern case `SparseLdlt`
+factors. The response type mirrors `HarmonicResponse`'s accessors (`ResponseAt`,
+`DisplacementAt`, `AmplitudeAt`, `Fields` under the SAME field names) minus the modal
+coordinates there are no modes to have; the report carries the worst backward residual
+`|Zu - f|/|f|` over the sweep and the smallest pivot met, because an unpivoted
+factorization's accuracy is a property of each frequency's conditioning rather than a
+guarantee. Three decided behaviours: an **undamped model is accepted** (real response,
+unbounded toward resonance — and EXACTLY at an undamped resonance the factorization refuses
+loudly, since there is no steady state to report), a **non-zero prescribed offset is
+refused** (a static answer riding on the oscillation; an oscillating support is base
+excitation, filed), and an **unrestrained body is accepted** (`K - W²M` is nonsingular at
+almost every frequency; the low-frequency answer is the rigid `|u| = F/(W²·m)`, verified
+against exactly that closed form). The modal and transient routes REFUSE a model carrying
+its own damping rather than silently ignoring it — one statement per model.
+
+Verified: agreement with the corrected modal route to **3.5e-6 relative** over a sweep
+bracketing the first resonance of a quadratic cantilever (the gap is modal truncation);
+**1e-9 agreement** on a 1x1-reduced model whose single mode is the complete basis; a
+hand-built complex 2x2 Cramer oracle for a dashpot between unconnected nodes and for
+per-region coefficients (each region its own closed-form oscillator — the oracle that
+catches a per-region map applied to the wrong region); resonant amplification exactly
+`1/(2·zeta)` to 1e-6 with the -90° phase; equal per-region values bit-identical to the
+uniform statement (one assembly path); and the exact-resonance refusal driven through a
+frequency scan that reproduces the solver's own pivot arithmetic verbatim.
 
 ## Verification
 
@@ -2040,13 +2086,15 @@ frequency.
 
 ## Limitations
 
-- **Proportional damping only** (above). Non-proportional damping is a quadratic eigenproblem
-  and a different solver.
+- **The MODAL route is proportional-damping only** (above); the non-proportional steady state
+  is `DirectHarmonicSolver`'s job. What remains outside both are the damped NATURAL MODES
+  under non-proportional damping — the quadratic eigenproblem, a different solver — and
+  frequency-dependent moduli / frequency-dependent load shapes, which the direct solve could
+  express but which have no vocabulary here yet.
 - **Harmonic (steady-state) response only** on this path. Direct time integration is a separate
   solver - see [Transient dynamics](#transient-dynamics-direct-time-integration) below.
 - **Nodal-force excitation only.** Base acceleration would ride the participation factors the
-  modal results already carry; a load whose spatial shape changes with frequency needs the
-  direct solve.
+  modal results already carry.
 - **No residual-vector basis augmentation.** The mode-acceleration correction handles the
   static part of what the truncated modes miss, which is most of it; a residual VECTOR (the
   static response orthogonalised against the kept modes, added to the basis) would handle the
@@ -2311,6 +2359,68 @@ On the nu = 0 bar whose uniaxial state is exact in the element space (the
 | loads scaled by the measured safety factor | the critical node lands ON the line, min factor 1.0 to 1e-9 (Goodman AND Gerber) |
 | R = −1 at 400 MPa, full pipeline vs the hand-computed life | 5.92e3 cycles, log10 within 1e-6 of the Basquin inversion |
 
+## Marin factors: `SnCurve.WithFactors`
+
+The catalogue rows are polished-specimen fits — upper bounds for a real part — and
+`WithFactors(surface, diameter, reliability)` derives the corrected curve without the
+transcribed row ever being edited (the derived-vs-stored rule the endurance limit itself
+follows). The classical correlations live in `MarinFactors`, transcribed
+verify-against-datasheet with the textbook worked values as the transcription tests
+(machined at 690 MPa → 0.798, 32 mm → 0.858, 99% reliability → 0.814): `Surface` is the
+`a·S_ut^b` finish rows clamped at 1 (the polished specimen IS the baseline, and the
+ground fit crosses 1 below ~215 MPa), `Size` the rotating-bending diameter effect (1
+below the 2.79 mm data, refused past the 254 mm data — the classical 0.6 floor is an
+assumption this library does not make silently; omit the diameter for axial loading),
+and `Reliability` the tabulated 8%-scatter shifts, standard levels only (interpolating a
+quantile through the table would invent precision the scatter assumption does not have).
+
+**The factors multiply the ENDURANCE LIMIT, not sigma'_f** — finish, size and scatter
+govern crack initiation, which dominates at long life — so the derived curve is the
+two-anchor re-fit through the pristine line's own 10³-cycle point (Basquin's validity
+floor, where the factors classically do not apply) and `k·S_e` at the unchanged knee:
+Shigley's construction with the curve's own low-cycle value as the anchor rather than a
+second transcribed constant. S_ut and the knee are untouched, exactly-1 returns the
+pristine curve verbatim, and the refusals are named: aluminium (no limit to anchor on),
+a knee at or below the pivot, out-of-data diameters, off-table reliabilities. The
+derived curve is an ordinary `SnCurve`, so the safety-factor and life machinery — and
+the rainflow path below — consume it with nothing special-cased.
+
+## Variable amplitude: rainflow over `TransientResults`
+
+`Rainflow.Count` is ASTM E1049's three-point algorithm verbatim (X/Y/S rules; the
+standard's Fig. 6 worked example is transcribed as a test, cycle for cycle), and
+`FatigueAnalysis.Evaluate(transient, curve, options)` runs it over every node's signed
+von Mises history from a transient run's stored states, accumulating **Miner's-rule**
+damage with the mean-stress correction applied per counted cycle through the SAME
+`EquivalentAlternating` the static path uses — reuse, not restatement.
+
+Two design questions the backlog filed are answered in the code rather than before it.
+**(a) The series is extracted at every node in one pass over the states** — the per-node
+footprint is one scalar per stored state, small beside the full fields each state
+already retains, so hot-spot preselection would buy little and cost the "which node is
+worst" answer the field exists for. What the counting sees is the STORED states: a
+reversal between stored steps was never sampled, so a run that feeds fatigue stores
+every step. **(b) The open end is an option with both honest readings**
+(`RainflowFatigueOptions.AssumeRepeating`): one-shot by default — a transient is a load
+event, and the unclosable residual ranges are E1049 half cycles — or one period of a
+repeating load, rearranged to start at the largest-magnitude extremum (E1049's own
+prescription, under which every count closes) with the residual halves paired into full
+cycles. The modes agree on damage for constant amplitude; the cycle structure differs.
+
+`RainflowFatigueResults` publishes **damage per pass of the history** (the quantity that
+composes — k passes accumulate k·damage) and life as **log10(repetitions)** under the
+static path's spellings (NaN = infinite, one-repetition floor covers static failure);
+`CyclesAt(node)` recomputes one node's counted cycles for verification. Verified: the
+ASTM worked example cycle for cycle; the total-variation identity
+`sum(2·count·range) = sum|Δ|` over the turning points, exact on a pseudo-random history
+(the identity that catches a dropped or double-counted range on inputs nobody
+hand-checked); and a constant-amplitude history — internally-built transient states
+alternating between the SolveAll pair — degenerating to the static-pair answer with the
+counted amplitude and mean BIT-equal and damage exactly `count/life`. A
+variable-amplitude SAFETY FACTOR is deliberately absent: the factor to a damage target
+under a power-law line needs an iteration and a stated target life, filed rather than
+approximated.
+
 ## Refused by name, not approximated
 
 - **Welds** — hot-spot / nominal-stress category methods (IIW, Eurocode) are their own
@@ -2318,5 +2428,3 @@ On the nu = 0 bar whose uniaxial state is exact in the element space (the
 - **Multiaxial criteria beyond von Mises equivalence** — non-proportional paths need
   critical-plane methods (Findley, Fatemi–Socie): a different computation over a
   different input, with the reversed-pure-shear case above as the structural tell.
-- **Variable amplitude / rainflow** — needs a time history two static cases cannot
-  carry; `TransientResults`' stored states are the natural input, filed in todo.md.

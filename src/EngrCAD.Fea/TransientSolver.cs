@@ -60,8 +60,11 @@ public sealed record TransientSolveOptions
     /// stands unqualified.</para>
     ///
     /// <para>A NON-proportional damping model — a discrete dashpot, two loss factors, joint
-    /// friction — would genuinely need an assembled C, and would also need it to come from
-    /// somewhere: there is no vocabulary in this library for stating one. See
+    /// friction — would genuinely need an assembled C in the effective stiffness. The
+    /// vocabulary for stating one now exists on <see cref="StructuralModel"/> (dashpots,
+    /// per-region coefficients), and this solver REFUSES a model that carries it rather than
+    /// silently ignoring it: today only <see cref="DirectHarmonicSolver"/> integrates
+    /// model-carried damping, and transient support is filed. See
     /// <see cref="RayleighDamping"/> for what proportionality excludes.</para>
     /// </summary>
     public RayleighDamping Damping { get; init; } = RayleighDamping.None;
@@ -210,6 +213,17 @@ public static class TransientSolver
         // problem because the effective stiffness carries a0·M, which is positive definite on
         // its own, so nothing here is singular. The static solver's refusal exists because
         // K alone is not.
+
+        if (model.HasDamping)
+            throw new FeaException(
+                $"The model carries its own damping ({model.DampingDescription}), which this "
+                + "transient would silently ignore: its damping statement is "
+                + "TransientSolveOptions.Damping, integrated as products against M and K, and "
+                + "a model-carried C — dashpots, per-region coefficients — is non-proportional "
+                + "in general and needs an assembled matrix in the effective stiffness. Only "
+                + "DirectHarmonicSolver consumes model-carried damping today; transient "
+                + "support for it is filed. For proportional damping, state it on the options "
+                + "and leave the model clean.");
 
         int nodeCount = mesh.NodeCount;
         int totalDofs = 3 * nodeCount;

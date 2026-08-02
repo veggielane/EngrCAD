@@ -903,17 +903,17 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
 
 ## Simulation
 
-- [ ] **Rainflow counting over `TransientResults` — the variable-amplitude fatigue the
-  static pair cannot express.** `FatigueAnalysis` (landed) takes exactly two load cases
-  because that is what a proportional min/max history is; a variable-amplitude history
-  needs ASTM E1049 rainflow over a per-node stress TIME SERIES plus Miner's-rule
-  accumulation against the same `SnCurve`, and the transient solver's stored states are
-  the natural input (each `TransientState` is a full `StructuralResults`, so the signed
-  von Mises per node per instant already exists). Two design questions to settle at
-  build time, not before: whether the series is extracted at every node (memory: states
-  × nodes) or at caller-selected hot spots first; and how a half-cycle at the history's
-  open end is closed (E1049 names the options). The mean-stress correction composes per
-  counted cycle, so `EquivalentAlternating` is reused verbatim.
+- [ ] **Variable-amplitude SAFETY factor over rainflow damage.** The rainflow path
+  (landed: `Rainflow.Count` + `FatigueAnalysis.Evaluate(TransientResults, ...)`)
+  publishes damage and life-in-repetitions but deliberately no safety factor: scaling
+  the loads scales every counted cycle at once, and under a power-law S-N line the
+  damage of a scaled history is not a simple power of the factor once mean corrections
+  and the endurance cutoff engage — cycles cross the endurance limit as the factor
+  grows, so the factor to a damage target is a bracketed 1-D root find (each probe
+  re-scales the counted cycles, no re-solve needed since the stress history is linear
+  in the load) against a REQUIRED target life in repetitions. The static pair's
+  verify-by-applying oracle carries over: scale the history by the found factor and the
+  damage must land ON the target.
 - [ ] **Log-scale colour mapping residuals** (the LEGEND half ✅ landed: `FieldLegend`
   reads the `log10(…)` units declaration — `TryLogUnits`/`TickMarks` — and prints
   anti-logged decade ticks, end ticks stating the true range, title in the base units
@@ -931,13 +931,12 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
   neutral (grey), which touches `SourceColors` and possibly the legend (a "no value"
   swatch). The fatigue docs page sidesteps it today by plotting an aluminium life
   field, where every node is finite — that choice is documented on the page.
-- [ ] **Marin modification factors on `SnCurve`.** The catalogue's constants are
-  polished-specimen values, stated as such; a machined/as-forged surface, a size effect
-  and a reliability level each knock the ENDURANCE end down (classically multiplying
-  the limit, not sigma'_f). A `WithFactors(surface, size, reliability)` derivation
-  would keep the transcribed row pristine (the derived-vs-stored rule the endurance
-  limit already follows) while making the numbers honest for real parts. Needs the
-  standard Marin correlations transcribed with the same verify-against-datasheet flag.
+- [ ] **Marin-style correction for knee-less (aluminium) curves.** `WithEnduranceFactor`
+  (landed) refuses a curve with no endurance limit by name, because the classical
+  construction anchors on the limit; the honest version for aluminium applies the
+  factor at a STATED reference life (5e8 is the rotating-beam convention) and re-fits
+  through the same 10³ pivot — one more parameter, but it must be required rather than
+  defaulted, since the reference life IS the claim being made.
 
 FEA as a first-class citizen of the hybrid kernel: the CAD model (any representation)
 feeds the mesher, results feed back into the viewer as fields on the mesh. The mesh
@@ -1119,32 +1118,31 @@ conditions within 0.05–0.70% of the shear-corrected load, refinement monotone 
 `omega²(P)/omega²(0) = 1 + P/P_cr` to 7.4e-10, resonant amplification 25.006 against 25.000,
 half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Residuals below.
 
-- [ ] **FEA: a DIRECT (per-frequency) harmonic solve — the Core blocker is LANDED and only
-  the Fea consumer remains.** `(K − omega²M + i·omega·C)·u = f` factorized per frequency —
-  the only option in three cases modal superposition structurally cannot express:
-  non-proportional damping (the modes stop diagonalising C), material properties that vary
-  WITH frequency (the modal basis itself would change per point), and a load whose spatial
-  distribution changes with frequency. **`SparseLdlt` in `EngrCAD.Core.Solvers` is the
-  factorization this entry was blocked on** — complex symmetric L·D·Lᵀ over the union
-  pattern of the two parts, sharing `SparseCholesky`'s symbolic pass verbatim (AMD included),
-  chosen over a real Bunch–Kaufman with the weighing recorded in design.md §2(d) and the
-  class doc; verified against independent dense complex solves at backward residuals
-  < 1e-13, including a Rayleigh-damped bar AT its first resonance and a dashpot whose
-  pattern the stiffness does not cover. The Fea-side hookup is per frequency:
-  `SparseLdlt.Factorize(Combine(K, 1, M, −omega²), scaled C, Amd)` + one complex `Solve`
-  with the load split as (Re, Im) — plus an assembled non-proportional `C` (a dashpot/
-  per-region loss vocabulary on `StructuralModel`, which does not exist yet and is the
-  actual remaining work), and the sweep loop with its per-frequency refactor cost stated
-  honestly against the modal route. Note the value stays confined to the three cases above:
-  under PROPORTIONAL damping the direct solve and the modal one answer the same question,
-  and the non-proportional case overlaps the quadratic-eigenproblem item below.
 - [ ] **FEA: non-proportional damping — the quadratic eigenproblem.** A discrete dashpot, two
   materials with different loss factors in one model, viscoelasticity or hysteretic damping all
   leave `phi' C phi` with off-diagonal terms, at which point the damped modes are no longer the
   undamped ones and `(lambda²M + lambda·C + K)phi = 0` needs a `2n` state-space linearization
   in a NON-SYMMETRIC matrix pair — so neither `SparseCholesky` nor `LanczosEigen` applies and
   the modes come out complex. Scoped separately on purpose; `RayleighDamping`'s docs say
-  precisely what is and is not covered.
+  precisely what is and is not covered. Note the steady-state RESPONSE under such damping no
+  longer waits on this: `DirectHarmonicSolver` factors the full complex system per frequency
+  with the model's own damping assembled — what remains open here is the damped NATURAL MODES.
+- [ ] **FEA: transient integration of model-carried damping.** `StructuralModel` now carries a
+  damping vocabulary (`SetDamping` per region, `Dashpot`) that only `DirectHarmonicSolver`
+  consumes; `TransientSolver` REFUSES a model carrying it rather than silently ignoring it.
+  Landing it there is mechanical — the effective stiffness gains `(1+alpha)·a1·C` with C from
+  `FeaAssembly.Damping`, and the right-hand-side C·x products become matrix products against
+  the assembled C — but it needs its own verification (a dashpot's decay envelope against the
+  2-DOF closed form, and the energy-balance identity re-derived with the C term), so it is
+  filed rather than bolted on.
+- [ ] **FEA: hysteretic (structural) damping for the direct harmonic solve.** A loss factor
+  eta enters the steady state as a frequency-INDEPENDENT imaginary stiffness `i·eta·K` (the
+  complex modulus), not as `i·omega·C` — at the direct solve's seam that is one more term in
+  the imaginary part (`eta_r·K_r` per region beside `omega·C`), and it is the classic direct-
+  solve-only damping model. Needs its own 1-DOF closed-form oracle
+  (`|u| = f/sqrt((k − omega²m)² + (eta·k)²)`) and a decision about whether `SetDamping` grows
+  a loss-factor overload or a separate `SetLossFactor` — the vocabulary should not let one
+  region state both without saying what the sum means.
 - [ ] **FEA: residual-VECTOR basis augmentation.** `HarmonicSolveOptions.StaticCorrection`
   handles the static part of what truncated modes miss (mode acceleration), which is most of it
   — 3.079% → 1.8e-16 at zero frequency on the cantilever. The remainder wants the static

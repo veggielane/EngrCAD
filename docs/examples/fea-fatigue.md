@@ -285,12 +285,113 @@ Named rather than approximated, the discipline's own boundaries:
   signed equivalent, because negating a pure shear tensor is a rotation of it — no
   invariant can tell the two halves apart. That is precisely the case critical-plane
   methods exist for.
-- **Variable amplitude.** Rainflow counting needs a time history, which two static
-  cases cannot carry. The [transient solver](fea-transient.md)'s stored states are the
-  natural input, and that consumer is filed in todo.md.
-- **Surface and size effects.** The catalogue's constants are polished-specimen
-  values; Marin-style surface-finish, size and reliability factors are not applied,
-  so these are upper bounds for a machined part.
+- **Surface and size effects applied silently.** The catalogue's constants are
+  polished-specimen values and stay that way; `WithFactors` (below) is how a real
+  part's surface, size and reliability knock the endurance end down — a derivation
+  the caller asks for, never a default.
+
+## Marin factors: the corrected curve is derived, the row stays pristine
+
+The catalogue rows are polished-specimen fits, which makes them upper bounds for any
+real part. `SnCurve.WithFactors(surface, diameter, reliability)` derives a corrected
+curve from the classical Marin correlations — `MarinFactors.Surface` (the
+`a·S_ut^b` finish rows), `MarinFactors.Size` (the rotating-bending diameter effect;
+omit the diameter for axial loading, which has none) and `MarinFactors.Reliability`
+(the tabulated 8%-scatter shifts) — **without the transcribed row ever being edited**,
+the same derived-vs-stored rule the endurance limit itself follows.
+
+```csharp run:fea-fatigue-marin
+var pristine = FatigueMaterials.Steel1045;
+var machined = pristine.WithFactors(
+    SurfaceFinish.Machined, diameterMm: 25, reliability: 0.99);
+
+Console.WriteLine(pristine);
+Console.WriteLine(machined);
+
+// The construction pivots at 10^3 cycles (where plastic strain dominates and the
+// factors classically do not apply) and scales the endurance end exactly.
+if (Math.Abs(machined.StressAt(1e3) - pristine.StressAt(1e3)) > 1e-9 * pristine.StressAt(1e3))
+    throw new Exception("the 10^3-cycle pivot must be unchanged");
+if (machined.EnduranceLimit! >= pristine.EnduranceLimit!)
+    throw new Exception("the corrected endurance must fall");
+```
+
+The **factors multiply the endurance limit, not σ'_f**: surface finish, size and
+scatter govern crack *initiation*, which dominates at long life, so the corrected line
+passes through the pristine line's own 10³-cycle point (Basquin's validity floor) and
+through `k·S_e` at the unchanged knee — Shigley's two-anchor construction with the
+curve's own low-cycle value as the anchor rather than a second transcribed constant.
+The ultimate strength is untouched (a finish does not change a static failure), a
+factor of exactly 1 returns the pristine curve verbatim, and the correlations refuse
+what they cannot answer by name: aluminium (no endurance limit to anchor on — a
+knee-less material needs a stated reference life, a different construction), diameters
+past the 254 mm data, and reliabilities off the standard table (interpolating a
+quantile through it would invent precision the 8%-scatter assumption does not have).
+The correlations themselves are transcribed **verify-against-datasheet** like every
+constant table here — the classic worked values (machined at 690 MPa → 0.798, 32 mm →
+0.858, 99% → 0.814) are the transcription tests.
+
+## Variable amplitude: rainflow over a transient run
+
+Two static cases cannot carry a time history; a [transient solve](fea-transient.md)'s
+stored states can, and are exactly what the rainflow overload consumes. `Rainflow.Count`
+is ASTM E1049's own three-point algorithm — the standard's worked example is transcribed
+as a test, cycle for cycle — and
+`FatigueAnalysis.Evaluate(transient, curve, rainflowOptions)` runs it over every node's
+signed von Mises history with **Miner's-rule** damage accumulation, the mean-stress
+correction applied *per counted cycle* through the same `EquivalentAlternating` the
+static path uses.
+
+```csharp run:fea-fatigue-rainflow
+// The ASTM E1049 worked example: seven counts, one of them the full cycle E-F.
+double[] series = [-2, 1, -3, 5, -1, 3, -4, 4, -2];
+foreach (var cycle in Rainflow.Count(series))
+    Console.WriteLine(cycle);
+
+// The pipeline: an irregular load history no static pair can carry, counted per node.
+var tets = TetMesher.Mesh(
+    new Part("bar", Shape.Box(40, 10, 10)).GetMesh(),
+    new TetMeshOptions { RefineQuality = true, MaxElementSize = 10 });
+var model = new StructuralModel(AnalysisMesh.Of(tets), Materials.Steel);
+model.Fix(Facets.OnPlane(new Vector3d(-20, 0, 0), Vector3d.UnitX));
+model.Force(Facets.OnPlane(new Vector3d(20, 0, 0), Vector3d.UnitX), new Vector3d(30000, 0, 0));
+
+var run = TransientSolver.Solve(model, new TransientSolveOptions(2e-5, 120)
+{
+    LoadFactor = t => Math.Sin(90000.0 * t) + 0.4 * Math.Sin(23000.0 * t),
+});
+
+var fatigue = FatigueAnalysis.Evaluate(run, FatigueMaterials.Steel1045);
+Console.WriteLine(fatigue);
+if (fatigue.MaxDamage <= 0)
+    throw new Exception("an over-endurance swing must accumulate damage somewhere");
+```
+
+**What the counting sees is the *stored* states**: a reversal that fell between stored
+steps was never sampled and is never counted, so a run that feeds fatigue should store
+every step (`StoreEvery = 1`, the default). The per-node series costs one scalar per
+stored state — small beside the full fields each state already retains — which is why
+the extraction runs at every node rather than at preselected hot spots: the "which node
+is worst" answer is the point of the field.
+
+**The open end of the history is an option, because ASTM E1049 names two honest
+readings.** By default the history is **one-shot** — a load event with a beginning and
+an end, which is what a transient run is — and the residual ranges the counting cannot
+close are the standard's *half* cycles. `AssumeRepeating = true` reads it as **one
+period of a repeating load**: the series is rearranged to begin at its
+largest-magnitude extremum (E1049's own prescription, under which every count closes)
+and the residual halves pair into full cycles, so a block program counted per block
+accumulates no phantom boundary halves. The two modes agree on damage for a
+constant-amplitude history; what changes is the cycle structure reported.
+
+The answer publishes as two fields: **`Fatigue damage`** — Miner damage per pass of the
+stored history, the quantity that composes (k passes accumulate k·damage; life is
+`1/damage` repetitions) — and **`Fatigue repetitions`** as log10(repetitions), with the
+static path's spellings (NaN = no damage anywhere = infinite life; the one-repetition
+floor covers the static-failure branch). A **variable-amplitude safety factor** is
+deliberately absent: scaling the loads scales every cycle at once and Basquin is a power
+law, so the factor to a damage target needs an iteration and a stated target life — a
+different quantity from the static pair's radial factor, filed rather than approximated.
 
 ## Verification
 
@@ -310,3 +411,6 @@ is exact in the element space (ν = 0, the same trick the multi-material bar use
 | loads scaled by the measured safety factor | the critical node lands ON the line: min factor 1.0 to 1e-9 |
 | R = −1 at 400 MPa, full pipeline, vs the hand-computed life | 5.92e3 cycles, log10 within 1e-6 of the Basquin inversion |
 | steel endurance limits vs their ultimate strengths | 0.40 / 0.40 / 0.34 — near the classical one-half correlation, inside the asserted 0.30–0.55 band a mistyped exponent cannot survive |
+| ASTM E1049 Fig. 6 worked example (`RainflowTests`) | all seven counts reproduced — range, mean AND half/full status, in algorithm order |
+| rainflow decomposes the total variation, `sum(2·count·range)` vs the turning points' own `sum|Δ|` | exact on a 257-sample pseudo-random history — the identity that catches a dropped or double-counted range on inputs nobody hand-checked |
+| a constant-amplitude history (transient states alternating between the SolveAll pair) vs the static-pair answer | the counted cycle's amplitude and mean **bit-equal** the static decomposition; damage exactly `count/life` |

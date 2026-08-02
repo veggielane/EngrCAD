@@ -47,6 +47,31 @@ public enum Dof
 public readonly record struct FacetRef(int Index, int Tag, Vector3d Centroid, Vector3d Normal, double Area);
 
 /// <summary>
+/// A discrete (concentrated) viscous damper: force <c>-c·(relative velocity along the
+/// axis)</c> on each of its ends. The one damping element a per-mode ratio structurally
+/// cannot express — its 3x3 blocks <c>c·a·a'</c> land on specific nodes, so
+/// <c>phi'·C·phi</c> has off-diagonal terms and the damped modes stop being the undamped
+/// ones — which is why it is consumed by <see cref="DirectHarmonicSolver"/> and refused by
+/// name by the modal route.
+/// </summary>
+/// <param name="NodeA">The node the dashpot acts on.</param>
+/// <param name="NodeB">The other end, or -1 for a dashpot to ground.</param>
+/// <param name="Axis">The unit axis the damper resists motion along.</param>
+/// <param name="Coefficient">The viscous coefficient c, in N·s/mm (force per unit
+/// velocity in the mm/N/s system).</param>
+public readonly record struct DashpotSpec(int NodeA, int NodeB, Vector3d Axis, double Coefficient)
+{
+    /// <summary>True for a dashpot between a node and ground.</summary>
+    public bool IsGrounded => NodeB < 0;
+
+    /// <inheritdoc/>
+    public override string ToString() =>
+        IsGrounded
+            ? $"dashpot c = {Coefficient:G6} on node {NodeA} along {Axis}, to ground"
+            : $"dashpot c = {Coefficient:G6} between nodes {NodeA} and {NodeB} along {Axis}";
+}
+
+/// <summary>
 /// Facet selectors — how a boundary condition says <i>which</i> surface it acts on.
 ///
 /// <para><b>Tags are the durable handle</b> (<see cref="Tag"/>): pass B-Rep face ids
@@ -154,7 +179,10 @@ public sealed class StructuralModel
     private readonly Vector3d[] _force;
     private readonly Dictionary<int, Material> _materials = [];
     private readonly Dictionary<int, ElasticLaw> _laws = [];
+    private readonly Dictionary<int, RayleighDamping> _regionDamping = [];
+    private readonly List<DashpotSpec> _dashpots = [];
     private readonly List<string> _conditions = [];
+    private RayleighDamping _defaultDamping;
     private double[]? _deltaT;
 
     /// <summary>A model over an analysis mesh with one material everywhere.</summary>
@@ -602,6 +630,190 @@ public sealed class StructuralModel
         _deltaT = null;
         _conditions.Add("loads cleared");
         return this;
+    }
+
+    // ---- damping -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Rayleigh damping for every region without its own
+    /// <see cref="SetDamping(int, RayleighDamping)"/> — the model-level statement of what
+    /// the structure's material damping is.
+    ///
+    /// <para><b>Model-carried damping is a different statement from the per-solve
+    /// kind, and only <see cref="DirectHarmonicSolver"/> consumes it.</b> The modal route
+    /// takes damping as per-mode RATIOS (<see cref="ModalDamping"/>) and the transient as a
+    /// run option (<c>TransientSolveOptions.Damping</c>), because for a PROPORTIONAL model
+    /// those are complete descriptions and no matrix is needed. Damping that lives on the
+    /// model — a region's own coefficients, a dashpot at a node — is geometry-attached data
+    /// no ratio can carry, which is exactly the case the direct per-frequency solve exists
+    /// for. To keep one statement per model, the solvers that CANNOT integrate this
+    /// vocabulary refuse a model that carries it rather than silently ignoring it.</para>
+    /// </summary>
+    public StructuralModel SetDamping(RayleighDamping damping)
+    {
+        _defaultDamping = damping;
+        _conditions.Add($"damping {damping} (default for all regions)");
+        return this;
+    }
+
+    /// <summary>
+    /// Rayleigh damping for ONE region (from multi-body meshing), overriding the default —
+    /// the "two materials with different loss factors" case, which makes the assembled
+    /// <c>C = sum_r (alpha_r·M_r + beta_r·K_r)</c> non-proportional the moment two regions
+    /// state different values: no single (alpha, beta) reproduces it, so the undamped modes
+    /// no longer diagonalise C and only <see cref="DirectHarmonicSolver"/> can answer.
+    /// </summary>
+    public StructuralModel SetDamping(int region, RayleighDamping damping)
+    {
+        _regionDamping[region] = damping;
+        _conditions.Add($"damping {damping} on region {region}");
+        return this;
+    }
+
+    /// <summary>The Rayleigh damping of one element, by its region id.</summary>
+    public RayleighDamping DampingOf(int element) =>
+        _regionDamping.TryGetValue(Mesh.RegionOf(element), out var d) ? d : _defaultDamping;
+
+    /// <summary>
+    /// A discrete viscous damper between one node and GROUND, resisting that node's
+    /// velocity along <paramref name="axis"/> with force <c>-c·(v·a)·a</c>. Its 3x3 block
+    /// <c>c·a·a'</c> lands on the node's own diagonal block of C.
+    /// </summary>
+    /// <param name="node">The node the damper acts on.</param>
+    /// <param name="axis">The damper's axis (normalized here; zero refused).</param>
+    /// <param name="coefficient">The viscous coefficient c in N·s/mm — positive, because a
+    /// negative dashpot ADDS energy every cycle and a zero one is no statement at all.</param>
+    public StructuralModel Dashpot(int node, Vector3d axis, double coefficient)
+    {
+        RequireNode(node);
+        RequireDashpot(axis, coefficient, out var unit);
+        _dashpots.Add(new DashpotSpec(node, -1, unit, coefficient));
+        _conditions.Add(_dashpots[^1].ToString());
+        return this;
+    }
+
+    /// <summary>
+    /// A discrete viscous damper BETWEEN two nodes, resisting their relative velocity along
+    /// <paramref name="axis"/> — the classic <c>[[+c, -c], [-c, +c]]</c> block pattern on
+    /// <c>a·a'</c>. The two nodes need not share an element: the off-diagonal coupling then
+    /// sits where the stiffness has no entry at all, which is precisely the union-pattern
+    /// case <c>SparseLdlt</c> factors.
+    /// </summary>
+    /// <param name="nodeA">One end.</param>
+    /// <param name="nodeB">The other end (a different node).</param>
+    /// <param name="axis">The damper's axis (normalized here; zero refused).</param>
+    /// <param name="coefficient">The viscous coefficient c in N·s/mm, positive.</param>
+    public StructuralModel Dashpot(int nodeA, int nodeB, Vector3d axis, double coefficient)
+    {
+        RequireNode(nodeA);
+        RequireNode(nodeB);
+        if (nodeA == nodeB)
+            throw new FeaException(
+                $"A dashpot between node {nodeA} and itself resists no relative motion and "
+                + "contributes nothing; use the (node, axis, coefficient) overload for a "
+                + "dashpot to ground.");
+        RequireDashpot(axis, coefficient, out var unit);
+        _dashpots.Add(new DashpotSpec(nodeA, nodeB, unit, coefficient));
+        _conditions.Add(_dashpots[^1].ToString());
+        return this;
+    }
+
+    /// <summary>
+    /// A discrete viscous damper between two nodes along their own chord — the physical
+    /// dashpot, whose axis in a LINEAR analysis is its undeformed line of sight.
+    /// </summary>
+    public StructuralModel Dashpot(int nodeA, int nodeB, double coefficient)
+    {
+        RequireNode(nodeA);
+        RequireNode(nodeB);
+        var chord = Mesh.Position(nodeB) - Mesh.Position(nodeA);
+        if (!chord.TryNormalize(Tolerance.Default, out _))
+            throw new FeaException(
+                $"Nodes {nodeA} and {nodeB} are coincident, so a dashpot between them has no "
+                + "line of sight to act along. State the axis explicitly with the "
+                + "(nodeA, nodeB, axis, coefficient) overload.");
+        return Dashpot(nodeA, nodeB, chord, coefficient);
+    }
+
+    private static void RequireDashpot(Vector3d axis, double coefficient, out Vector3d unit)
+    {
+        if (!axis.TryNormalize(Tolerance.Default, out unit))
+            throw new FeaException($"A dashpot needs a non-zero axis; got {axis}.");
+        if (!(coefficient > 0))
+            throw new FeaException(
+                $"A dashpot coefficient must be positive; {coefficient} was given. A negative "
+                + "coefficient ADDS energy at every cycle (the steady state it describes does "
+                + "not exist), and a zero one is no statement at all — omit the dashpot "
+                + "instead.");
+    }
+
+    /// <summary>Every discrete dashpot on the model, in the order added.</summary>
+    public IReadOnlyList<DashpotSpec> Dashpots => _dashpots;
+
+    /// <summary>True when the model carries ANY damping statement of its own — a non-zero
+    /// default or per-region Rayleigh value, or a dashpot. What the modal and transient
+    /// routes check so they can refuse rather than silently ignore it.</summary>
+    public bool HasDamping
+    {
+        get
+        {
+            if (_dashpots.Count > 0)
+                return true;
+            if (_defaultDamping != RayleighDamping.None)
+                return true;
+            foreach (var d in _regionDamping.Values)
+            {
+                if (d != RayleighDamping.None)
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// True when the model's damping is NOT expressible as <c>alpha·M + beta·K</c> with one
+    /// (alpha, beta): any dashpot, or two regions PRESENT IN THE MESH carrying different
+    /// Rayleigh values. Region overrides on regions the mesh does not contain change
+    /// nothing, so they do not count — the test walks the elements, which is what makes it
+    /// a statement about the assembled C rather than about the declarations.
+    /// </summary>
+    public bool HasNonProportionalDamping
+    {
+        get
+        {
+            if (_dashpots.Count > 0)
+                return true;
+            if (_regionDamping.Count == 0)
+                return false;
+            var first = DampingOf(0);
+            for (int e = 1; e < Mesh.ElementCount; e++)
+            {
+                if (DampingOf(e) != first)
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>A readable description of the model's own damping, for a report.</summary>
+    public string DampingDescription
+    {
+        get
+        {
+            if (!HasDamping)
+                return "undamped";
+            var parts = new List<string>();
+            if (_defaultDamping != RayleighDamping.None)
+                parts.Add(_defaultDamping.ToString());
+            foreach (var (region, damping) in _regionDamping.OrderBy(p => p.Key))
+            {
+                if (damping != RayleighDamping.None || _defaultDamping != RayleighDamping.None)
+                    parts.Add($"region {region}: {damping}");
+            }
+            if (_dashpots.Count > 0)
+                parts.Add($"{_dashpots.Count} dashpot{(_dashpots.Count == 1 ? "" : "s")}");
+            return string.Join("; ", parts);
+        }
     }
 
     // ---- thermal coupling ------------------------------------------------------------
