@@ -40,6 +40,32 @@ public enum ViewStyle
 }
 
 /// <summary>
+/// How a FILL is lit, for a whole render pass — deliberately not a
+/// <see cref="ViewStyle"/> member, because the style is about what is drawn (points,
+/// lines, fills) while shading is about how a fill is lit, and the two compose (a
+/// matcap-shaded translucent part is legal). The non-default members are <b>analytic
+/// matcaps</b>: the lit-sphere image a matcap samples is procedural — Gaussian lobes
+/// over the view-space normal, evaluated in <c>ViewerShaders.MeshFragment</c> — so no
+/// texture machinery has to reach three front ends, and the material constants live in
+/// the one shader file window, offscreen and web already share. Global per pass, with
+/// no per-part override in v1: a scene lit two ways reads as a rendering bug.
+/// <para>The numeric values are the shader's <c>uMatcap</c> selector verbatim, and
+/// <see cref="Lit"/> is 0 — the value a linked program's uniforms initialize to — so a
+/// front end that says nothing renders exactly the incumbent look.</para>
+/// </summary>
+public enum ShadingStyle
+{
+    /// <summary>The standard directional light + specular (the default look).</summary>
+    Lit = 0,
+
+    /// <summary>Matte studio matcap: a broad key lobe and a soft fill.</summary>
+    Clay = 1,
+
+    /// <summary>Polished-metal matcap: dark base, tight highlight, bright rim.</summary>
+    Metal = 2,
+}
+
+/// <summary>
 /// Which world axis a section plane is perpendicular to (v1 restricts section planes
 /// to the three world axes). The plane keeps everything at
 /// <c>coordinate &lt;= offset</c> along the axis and clips what lies above.
@@ -391,11 +417,46 @@ public static class ViewerShaders
         uniform vec3 uColor;
         uniform vec3 uLightDir;
         uniform vec3 uEyePos;
+        uniform mat4 uView;
         uniform float uHighlight;
         uniform float uAlpha;
         uniform float uAmbientOcclusion;
         uniform float uFieldColor;
+        uniform int uMatcap;
         out vec4 fragColor;
+        // Analytic matcap: the lit-sphere image a matcap samples is PROCEDURAL here -
+        // Gaussian lobes evaluated at the view-space normal - so no texture machinery
+        // has to reach three front ends. The lobe constants ARE the material and live
+        // in this one file, where window, offscreen and web share every shading
+        // decision. uMatcap 0 is the standard lighting below, and a linked program's
+        // uniforms initialize to 0, so a front end that says nothing gets exactly the
+        // incumbent look. uView is the same program uniform the vertex shader reads;
+        // a matcap is defined in the CAMERA's frame, which is what makes the material
+        // stick to the view while the model turns under it.
+        vec3 matcapShade(vec3 surface, vec3 n)
+        {
+            vec3 nv = normalize(mat3(uView) * n);
+            vec2 p = nv.xy;
+            if (uMatcap == 1)
+            {
+                // Clay: a broad key lobe upper-left, a soft fill opposite - the
+                // classic studio sphere, matte.
+                vec2 dk = p - vec2(-0.45, 0.55);
+                vec2 df = p - vec2(0.55, -0.35);
+                float key = exp(-2.2 * dot(dk, dk));
+                float fill = 0.30 * exp(-2.0 * dot(df, df));
+                return surface * min(0.34 + 0.62 * key + fill, 1.1);
+            }
+            // Metal: dark base, a tight near-white key highlight, a soft secondary
+            // lobe and a strong silhouette rim - the polished-metal sphere.
+            vec2 d1 = p - vec2(-0.50, 0.62);
+            vec2 d2 = p - vec2(0.55, -0.20);
+            float key = exp(-16.0 * dot(d1, d1));
+            float soft = exp(-5.0 * dot(d2, d2));
+            float rim = pow(1.0 - abs(nv.z), 3.0);
+            return surface * (0.14 + 0.50 * soft + 0.60 * rim)
+                + vec3(0.90, 0.92, 0.95) * (0.85 * key);
+        }
         void main()
         {
             // The surface colour before lighting: the part's own, or the colour-mapped
@@ -429,6 +490,15 @@ public static class ViewerShaders
             // Occlusion darkens ambient and diffuse but not the specular highlight
             // (a direct-light term); uAmbientOcclusion 0 leaves the factor exactly 1.
             float ao = mix(1.0, vOcclusion, uAmbientOcclusion);
+            if (uMatcap != 0)
+            {
+                // AO multiplies the matcap sample exactly as it multiplies the
+                // ambient+diffuse product below; highlight and field colour are
+                // already folded into base/surface, and the cut-face material above
+                // is untouched - a matcap is about how a FILL is lit, nothing else.
+                fragColor = vec4(matcapShade(base, n) * ao, uAlpha);
+                return;
+            }
             vec3 c = base * (0.22 + 0.78 * diffuse) * ao + vec3(specular);
             fragColor = vec4(c, uAlpha);
         }
