@@ -523,7 +523,166 @@ Because the tooth profile is lines and circular arcs, a spur gear is exact in al
 three representations. `Gears.HelicalGear(spec, faceWidth, helixAngleDegrees)`
 rides the twisted extrusion (the spur profile as the *transverse* section — mesh
 and implicit only, `Explain` says so), and a bore is one `boreDiameter` argument;
-keyways, internal gears and racks are filed follow-ups.
+keyways and internal gears are filed follow-ups.
+
+## The rack, and why it is the definition
+
+As the tooth count grows the base circle recedes and the involute flattens into a
+**straight line** at the pressure angle. That limit is not merely one more member of
+the family: it is the *basic rack*, the profile ISO 53 uses to define the whole tooth
+system. `Gears.Rack` draws it with straight `Line2d` flanks and exact `Arc2d` root
+fillets, so — unlike `GearProfile` — there is no fit deviation to report, and
+`RackProfile` deliberately has no `MaxFitDeviation` for there to be.
+
+`RackSpec` carries the same coefficients `GearSpec` does, and `MatingGear`/`For`
+convert both ways so a pair cannot drift apart in the tooth system it claims to
+share. The profile shift does not travel across that conversion, and the omission is
+the point: a shift says where a *gear* sits against this rack, not what the rack is.
+`MaximumRootFilletRadius` is ISO 53's ρ_fP,max = (π·m/4 − h_f·tan α)·cos α/(1 − sin α)
+— 0.4719·m at the standard 20°/1.25 pair, which is why the standard 0.38·m fits, and
+why the *same* 0.38 is refused by name at 25°, where the maximum falls to 0.318·m.
+
+The bar spans a whole number of pitches beginning and ending at a tooth-**space**
+centre, so two bars laid end to end at a `Length` offset form one continuous rack.
+
+```csharp render:rack-and-pinion
+var rackSpec = new RackSpec(module: 2);
+var pinionSpec = rackSpec.MatingGear(teeth: 18);   // one tooth system, stated once
+
+const int teeth = 12;
+var rack = Gears.Rack(rackSpec, teeth, backHeight: 4);
+if (Math.Abs(rackSpec.ToothThicknessAtPitch - rackSpec.CircularPitch / 2) > 1e-12)
+    throw new Exception("a rack tooth is exactly half the pitch thick");
+if (Math.Abs(rack.Sketch.Area() - rack.ClosedFormArea) > 1e-9)
+    throw new Exception("the outline is exact, so the area is an equality");
+
+// The pitch line is y = 0 and the teeth point +Y, so the pinion rolls on y = 0 with
+// its centre one pitch radius above. x = 0 is a space centre, and an even tooth
+// count puts another at the bar's midpoint - where a pinion tooth turned to point
+// straight down will sit.
+double midpoint = rack.Length / 2;
+// Looking down the rack, slightly above the pitch line, so the engagement shows.
+var camera = new CameraState(-Math.PI / 2 + 0.35, 0.55, 90, (midpoint, 6, 5));
+var scene = new Scene();
+var tab = scene.AddTab("rack and pinion");
+tab.Add(new Part("rack", Gears.RackBar(rackSpec, teeth, faceWidth: 10, backHeight: 4),
+    Palette.Sky));
+tab.Add(new Part("pinion",
+    Gears.SpurGear(pinionSpec, faceWidth: 10, boreDiameter: 8)
+        .RotateZ(-Math.PI / 2)
+        .Translate(midpoint, pinionSpec.PitchDiameter / 2, 0),
+    Palette.Coral));
+```
+
+![A 12-tooth rack meshing an 18-tooth pinion](images/rack-and-pinion.png)
+
+`Coupling.RackAndPinion` supplies the kinematics; the verification here is again the
+law of gearing *measured from contact*, and it is the rack's own version of it — the
+bar must advance exactly one pitch radius per radian of pinion rotation. The pinion
+is lifted 0.4 mm to open real backlash, which is legal precisely because an involute
+against a straight rack transmits the same ratio at *any* mounting height: the rack
+flank's normal direction is fixed, so its supporting line is tangent to the base
+circle and translates by exactly r_b·dφ. Measured over 1.2 tooth pitches, through
+handover, the advance varied by **6.9×10⁻⁵ mm**. The same instrument reads
+**1.2×10⁻¹ mm** — 1740× more — for a 25° rack forced against a 20° pinion, so it
+sees flank *form* and not merely that contact happened.
+
+## Worm and worm wheel
+
+**The worm is a thread.** A cylindrical worm of the ZA form is straight-sided in the
+*axial* plane, so its body is one helical sweep of a trapezoidal (radius, axial)
+profile — exactly the family `SolidFactory.MakeThreadedRod` already builds every
+modelled thread from, with the axial module taking a pitch's place. It is
+boolean-free for the same reason a thread is: the root lands are part of the sweep,
+so no core cylinder and no coaxial tangent seam ever exists. Multi-start is not a
+different construction either — a helical sweep repeats every **lead**, so the
+profile simply contains z₁ teeth.
+
+A worm's "one tooth" is one **start**, and the reduction ratio is the wheel's tooth
+count over that number: a two-start worm on a 40-tooth wheel is 20:1, not 40:1.
+Unlike a gear, the worm's pitch diameter is a free choice — it sets the lead angle
+tan γ = lead/(π·d₁) = z₁/q, hence the efficiency and whether the drive self-locks.
+
+**The wheel is honestly an approximation, and the caveat is the design.** A true worm
+wheel is *throated*: its teeth wrap the worm and their surface is the **envelope** of
+the worm's motion — hobbing kinematics, with no closed form to draw. What
+`Gears.WormWheel` gives instead is an ordinary helical gear whose helix angle equals
+the worm's **lead** angle, which is the exact geometry of a crossed-helical (screw)
+pair. It meshes, it transmits the stated ratio, and it touches the worm at a
+**point** rather than along a line — right for a motion drive, a print or a layout,
+and wrong for a load-carrying reducer, where the throat is what carries the contact.
+
+Two identities make the pairing work, and both are asserted rather than assumed: the
+worm's **axial** pitch is the wheel's **transverse** circular pitch, and at a 90°
+shaft angle the worm's axial plane *is* the wheel's transverse plane at the central
+point — so the wheel's transverse pressure angle is the worm's axial one, with
+nothing to convert.
+
+```csharp render:mechanism-worm
+var wormSpec = new WormSpec(axialModule: 2, starts: 2, pitchDiameter: 24);
+var pair = Gears.WormPair(wormSpec, wheelTeeth: 26);
+
+if (Math.Abs(wormSpec.AxialPitch - pair.Wheel.CircularPitch) > 1e-12)
+    throw new Exception("the worm's axial pitch IS the wheel's transverse pitch");
+if (Math.Abs(wormSpec.HelixAngleDegrees + pair.WheelHelixAngleDegrees - 90) > 1e-12)
+    throw new Exception("the shaft angle is the sum of the two helix angles");
+if (Math.Abs(pair.GearRatio - 26.0 / 2) > 1e-12)
+    throw new Exception("starts, not teeth: 26 teeth over 2 starts is 13:1");
+
+// Worm along X (an integer number of axial pitches, so a crest lands on x = 0, and
+// pre-spun a quarter turn so the profile facing the wheel is the drawn one); wheel
+// flat about Z at the centre distance along Y. The wheel is then turned to put a
+// tooth SPACE on the line of centres, less half its own twist so the section that
+// meets the worm is the section that was drawn.
+double px = wormSpec.AxialPitch;
+const double faceWidth = 12;
+double twist = faceWidth * Math.Tan(pair.WheelHelixAngleDegrees * Math.PI / 180)
+    / (pair.WheelPitchDiameter / 2);
+
+var scene = new Scene();
+var tab = scene.AddTab("worm drive");
+tab.Add(new Part("worm",
+    Gears.Worm(wormSpec, length: 6 * px)
+        .Translate(0, 0, -3 * px)
+        .RotateZ(Math.PI / 2)
+        .RotateY(Math.PI / 2),
+    Palette.Coral));
+tab.Add(new Part("wheel",
+    Gears.WormWheel(pair, faceWidth, boreDiameter: 12)
+        .Translate(0, 0, -faceWidth / 2)
+        .RotateZ(-Math.PI / 2 - Math.PI / pair.WheelTeeth - twist / 2)
+        .Translate(0, pair.CentreDistance, 0),
+    Palette.Sky));
+```
+
+![A two-start worm driving a 26-tooth crossed-helical wheel](images/mechanism-worm.png)
+
+The worm's own geometry is verified from its **field** rather than restated. The
+axial tooth thickness at three radii lands one-sided against a *derived* chord bias
+(the helical bands are chorded in phase only, since the generator is straight and a
+v-chord is exactly on the surface): 0.0267 mm predicted at r = 7.6 and the default 32
+segments per circle, against 0.0275 measured. The axial flank angle follows from how
+fast that thickness closes with radius — the ZA property itself — reading 20.10°
+against 20.00°. And the **lead and the hand** come from the tooth *centre* at
+azimuths a quarter and a half turn apart, which reads to **10⁻¹⁴**: a centre is the
+mean of two flank crossings, so the chord bias cancels exactly where a thickness
+doubles it.
+
+That handedness check is worth its keep for a specific reason. The worm is a helical
+sweep in the B-Rep kernel and the wheel is a twisted extrusion in the modelling
+layer — two independent constructions that must agree about what "right-handed"
+means, or a correctly specified pair would be *built* meshing the wrong way. Both
+are read off the geometry, and a left-hand worm takes a left-hand wheel (at a 90°
+shaft angle the two members always match).
+
+Volume is Pappus over the sweep — V = L·(2π/lead)·∫½R² dz over one lead, so any
+length works and the phase washes out — cross-checked against a numerical integral
+over one *axial pitch*, a different decomposition since the radius has period p_x
+while the sweep has period lead.
+
+`Gears.Worm` refuses by name what it cannot draw: a non-positive root diameter
+(naming the diameter factor), a pointed thread, and adjacent starts overlapping at
+the root cylinder.
 
 ## Saving a mechanism
 
