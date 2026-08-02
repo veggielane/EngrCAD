@@ -1710,19 +1710,43 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     its two end quarter arcs, whose intermediate sections are TRUE circles because equal
     weights make lerping points identical to lerping control points, and its top and
     bottom boundaries are `LoftRailCurve` rails on the band so the grid and the edge
-    polylines sample the same points. Remaining, refused by name: a varying radius
-    across a SHARP corner (two variable bands are cones that do not circumscribe a
-    common sphere, so they meet in a quartic — a constant law across such a corner still
-    works, so the refusal is about the law), a varying law along an ARC or on a full
-    circular rim (a spiral), and variable laws on partial RUNS (the `OpenRun` path still
-    takes a scalar; the terminations themselves would be exact, since the band's end
-    cross-section is a planar quarter arc of whatever radius the law gives).
+    polylines sample the same points. **Variable laws on partial RUNS ✅ landed**
+    (`Filleting.FilletEdges/ChamferEdges` law overloads now resolve runs through
+    `RimSurgeon.OpenRun(topLaw, sideRatio)`; the terminations are exact at any law value
+    — the band's end cross-section is a planar quarter arc of whatever radius the law
+    gives at the stop vertex; kernel corpus member "variable fillet run", analytic
+    volume (1 − π/4)·L·(r₀² + r₀r₁ + r₁²)/3 converging at ratio exactly 4.0). Remaining,
+    refused by name: a varying radius across a SHARP corner (two variable bands are
+    cones that do not circumscribe a common sphere, so they meet in a quartic — a
+    constant law across such a corner still works, so the refusal is about the law, and
+    on a RUN there is a third way out: stop the run before the corner), and a varying
+    law along an ARC or on a full circular rim (a spiral).
+  - [ ] **`Shape.FilletEdges(law, edges)`/`ChamferEdges(law, edges)` still resolve
+    complete rims only** (Modeling): the scalar edge-set overloads pass `edgeSelector`
+    through to `Filleting.FilletEdges(solid, edges, radius)` and so pick up partial
+    runs, but the LAW overloads route via `Filleting.RimFacesFor`, which refuses a
+    partial selection before the kernel's new law-run path is reached. The fix is the
+    scalar overloads' shape: hand the edge selector to
+    `Filleting.FilletEdges(solid, edges, law)` (which now resolves rims AND runs) —
+    a few lines in `Shape.cs`/`RimShape`, out of the B-Rep agent's fence.
 - [ ] **`StepReader`: trim closed NON-circular generators** — circles ✅ landed (meridian
   arcs trim a closed circular revolve generator; congruent translated end arcs trim a
   closed circular extrusion generator; both closed form, so `FilletAllEdges` output now
-  round-trips manifold with zero diagnostics). A closed NURBS generator under a partial
-  sweep still keeps the honest non-manifold diagnostic — recovering it needs projection,
-  not congruence, and nothing exports one today.
+  round-trips manifold with zero diagnostics). **The recorded residual was wrong in both
+  halves, verified by construction**: a partial revolve of a SINGLE closed NURBS profile
+  (an elbow with a one-curve tube section) IS exportable — it builds, tessellates and
+  writes — and what it hit was not "the honest non-manifold diagnostic" but a SILENT
+  full turn: a one-curve profile has no segment junctions, so the sweep traces no
+  axis-centered rail arc anywhere, the angle recovery found nothing, and a 1.2 rad elbow
+  came back at 2π with zero diagnostics (the tessellator's full-domain gate then refused
+  it three stages later). ✅ Landed: `TryAngleFromRotatedCopy` reads the angle in closed
+  form as the azimuthal rotation between corresponding samples of the generator and its
+  rotated boundary copy (congruence checked in (radius, axial) profile coordinates), and
+  the closed-generator diagnostic is exempted for this case since the face genuinely
+  covers the whole generator. What REMAINS unreachable is a closed NURBS generator used
+  PARTIALLY under a partial sweep with no rims — that would need the projection-style
+  trim the old entry described, and nothing exports one (the boolean would have to split
+  such a face, and those faces refuse tessellation before any boolean sees them).
 - [ ] **Traced-curve residuals after the band-crossing fix** (`SnapTracerEnds` ✅ landed —
   a traced polyline is extended onto the EXACT solution of E(t) = S(u, v) once, on the
   curve object both faces share, and `SplitByCurve`'s interior probe ✅ now takes an exact
@@ -1730,17 +1754,36 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   band case and, unexpectedly, cuts that break out through a face boundary part-way).
   What is left:
   - [ ] **A tool drilled ALONG a band's own axis** — its intersection with the band runs
-    the band's whole LENGTH rather than crossing it, and still throws `Open splitting
-    curves must start and end outside the face` (pinned by
+    the band's whole LENGTH rather than crossing it. **The recorded symptom is stale**:
+    the failure has MOVED from splitting to classification — it no longer throws `Open
+    splitting curves must start and end outside the face` but
+    `Could not find a probe point on a face fragment` from `BrepBoolean.ProbePoint`,
+    which now names the fragment (an `ExtrudedSurface` band fragment, one loop, pulled
+    uv u [3.14, 3.92] × v [0.25, 0.75] on the measured case — a lengthwise sliver strip
+    whose 12×12 probe grid finds no contained sample). So the splitting half was fixed
+    by the SnapTracerEnds era and the remaining defect is a probe/parity one on
+    hair-thin lengthwise fragments (pinned by
     `WholeSolidFilletBooleanTests.ToolRunningAlongABandsAxis_StillRefusesLoudly`).
-  - [ ] **A baked tracer polyline does not refine with the grid.** Its sample count is
-    fixed at boolean time, so as `segmentsPerCircle` rises the facets straddling it
-    disagree more with the exact surface: measured 0.999 at 32 segments → 0.90 at 192 on a
-    band-crossing bore (no folds, and volumes still converge, so this is accuracy rather
-    than validity). `TrimmedFaceRefusalTests`' "cap cut low with bore" is the same story
-    and folds at 16/8 and 192/96 while being clean at the audited 32/24. The fix is to
-    re-sample a baked intersection curve at tessellation time against its two exact
-    carriers, which needs the surface pair carried on the curve.
+  - [ ] **Tracer polylines now refine at tessellation time — the HOLE-RIM and
+    winding-loop half remains.** ✅ Landed: `PolylineCurve3d.Carriers` carries the two
+    exact surfaces the tracer marched on (attached in `SurfaceIntersection.March`,
+    preserved by `SnapTracerEnds`/`Simplified`/`GeometryTransform`, serialized as two
+    optional trailing surface refs in `BrepArchive`), and `BRepTessellator.SampleEdge`
+    refines each chord onto the exact intersection (`SurfaceCorner.TrySolvePoint`,
+    minimum-norm Newton, weld-tier acceptance, inserts-only so baked vertices pass
+    through bit-for-bit) until a chord subtends at most one natural angular step. The
+    band-crossing bore went **0.9988/0.9460/0.3229 → 0.9988/0.9999/1.0000** worst
+    facet-vs-surface agreement at 32/96/192 — the degradation with density is gone.
+    **Scope, measured rather than assumed**: refinement engages only for OPEN traced
+    branches whose every use sits in its face's OUTER loop, because the paired
+    strip/slab tiers absorb the density while `TriangulateBandWithHoles` measurably
+    cannot — refining a plane-cut torus's bore rim (a chain forming a HOLE loop) took
+    its band from 0 folds to 3 base folds at 48/24 and an outright refusal at 192/96,
+    the recorded narrow-column-at-the-rim residual surfacing as inversions. The open
+    item is a row path in the hole/winding tiers that can anchor on a dense rim; when
+    it lands, drop the outer-loop clause from `SampleEdge`'s gate and the hole rims
+    (torus bore ~0.0198 at 192/96, Ø3-through-Ø10 cylinder band 0.565 at 192) refine
+    for free.
 - [ ] **Draft follow-ups** (`Draft.Apply` landed with per-face angles in one call, wired
   as `Shape.Draft`; CURVED faces ✅ landed too — a face of revolution about the pull axis
   tapers by rotating its generator in its own half-plane, so a drafted cylinder is
@@ -1838,7 +1881,13 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   relative on a cylinder at default quality). Exact quadrature is worth doing only
   *after* trimmed parameter-space boundaries become exact, since the domain scan is the
   accuracy limit, not the quadrature. Would make analytic primitives exact rather than
-  1e-7.
+  1e-7. **Premise re-verified (OCCT-parity pass): still holds** — trimmed boundaries
+  remain chordal AT BOOLEAN TIME (tracer polylines), so an exact domain scan still has
+  nothing exact to scan against; what changed is that traced curves now CARRY their
+  exact carrier pair (`PolylineCurve3d.Carriers`), so a future exact quadrature could
+  refine its own domain boundary against them the way the tessellator now does, rather
+  than needing a new mechanism. The tessellate-then-Richardson route also improves for
+  free wherever rims refine.
 - [x] **`BrepSolid` one-call rigid transform** ✅ landed — `BrepSolid.Transformed(Matrix4d)`
   over the new `GeometryTransform` (per-type surface and curve mapping; the `Clone()` walk
   with geometry moved and provenance inherited). Exact for **proper rigid motions**, which is

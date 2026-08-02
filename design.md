@@ -4007,6 +4007,29 @@ for `in`-parameters being illegal in expression trees.
   band's top and bottom boundaries must be RAILS on the band (`LoftRailCurve`) rather
   than free-standing lines, or the loft's v grid samples the boundary at a density the
   straight edge polyline does not and the face T-junctions against its neighbours.
+  **The rails then taught the complementary rule**: sampling a rail DENSELY is as wrong
+  as sampling it sparsely, because a ruled band's rail is an exact straight segment and
+  25 near-collinear samples of it in a neighbouring PLANAR face's loop force the ear
+  clipper into sliver ears (measured on a variable partial run: 18 of 23 facets
+  degenerate, non-manifold at 128/96 — the slot's caps had only escaped because their
+  arcs interleaved the runs). The resolution is not a rail rule but a SURFACE property,
+  `LoftedSurface.IsAffineInV`: a degree-1 two-section loft is P = (1 − v)C₀ + vC₁, so a
+  v-chord lies exactly on the surface, the natural grid collapses v to the two section
+  rows, and the rails sample as the 2-point segments they are — the helical band's
+  infinite-v-step argument, stated by the surface that satisfies it, with the grid and
+  the edge sampling reading ONE condition. Landing it surfaced a second recorded trap
+  in new clothes: the loft ALIGNER's golden-section seam shift stalls at √ε ≈ 1e-8 (the
+  STEP reader's distance-minimization lesson), which put a 1.09e-8 phantom twist into
+  every closed-section loft — invisible while 24 interior v rows averaged it away,
+  4.5e-9 of volume once they collapsed. A Newton polish on dJ/ds = 0 with exact curve
+  derivatives (a root solve) lands the true optimum, and two aligned circles now take
+  the wrapper-free exact-zero path.
+  **Variable laws reach partial RUNS through the same machinery** (`OpenRun` law
+  overload): the law anchors at the run's corners INCLUDING its end vertices, and a
+  setback termination is exact at any value because the band's end cross-section is a
+  planar quarter arc of whatever radius the law returns there. The run-specific escape
+  is named in the sharp-corner refusal: a run may simply STOP before a corner whose two
+  edges would carry different radii.
   Variable-*setback* chamfers escape the corner problem entirely (the corner
   segment is a boundary ruling of both strips) and are implemented: the law is evaluated
   at rim corners and interpolates linearly along each edge, and two small theorems keep
@@ -4029,6 +4052,22 @@ for `in`-parameters being illegal in expression trees.
   tangency, or insert a corner arc in the sketch), chamfer that face instead, or accept
   an approximate blend explicitly through the implicit representation. If a traced
   corner is ever added it must be opt-in and labeled, never the default.
+- **A baked tracer curve now carries its two exact carriers, and the fixed sampling
+  floor became a refinable one — where the consuming tier can take it.**
+  `PolylineCurve3d.Carriers` rides from `SurfaceIntersection`'s tracer through
+  end-snapping, simplification, rigid transforms and the archive, and
+  `BRepTessellator.SampleEdge` refines each chord onto the exact intersection
+  (`SurfaceCorner.TrySolvePoint` — the corner machinery's minimum-norm Newton, reused
+  rather than restated) until it subtends one natural angular step. Refinement INSERTS
+  only, at weld-tier acceptance, so the baked vertices pass through bit-for-bit and
+  every guard errs toward keeping the chord: a coarse density, a carrier without an
+  implicit form, or a non-converged solve all reproduce the pre-carrier output exactly.
+  The band-crossing bore went 0.9988/0.9460/0.3229 → 0.9988/0.9999/1.0000 worst
+  facet-vs-surface agreement at 32/96/192. The scope boundary is a MEASUREMENT: open
+  branches in outer loops feed the paired strip/slab tiers, which absorb the density;
+  a hole rim feeds `TriangulateBandWithHoles`, which measurably folds on a denser rim
+  (a plane-cut torus's bore rim: 0 → 3 base folds at 48/24, refusing at 192/96), so
+  hole rims keep their baked density until that tier grows a dense-rim row path.
 - **STEP export** (`StepWriter`, AP214): topology maps one-to-one to
   `MANIFOLD_SOLID_BREP`; analytic surfaces and curves export exactly (including rational
   B-splines via the complex-instance form); wrapper curves simplify to analytic forms or
