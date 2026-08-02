@@ -424,14 +424,27 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   a decision about singular Jacobians (poles). This is the change worth making instead of
   routing the tracing through `Arrangement2d` — see the assessment in design.md §5 for why
   that one is a no.
-- [ ] **`Region2dBoolean.ContainedIn` is still O(cells × operand vertices)** — the next
-  quadratic term after the clearance scan (now BVH-backed: a union of 120 overlapping
-  32-gons went 436.2 → 93.6 ms, its classification phase 367.7 → 8.8 ms) and the
-  arrangement's insertion, though an order of magnitude smaller in the cases measured.
-  A per-operand `Region2d` point-location index would close it. **Still owed**:
-  re-benchmark the arrangement broad phase on a quiet machine — the candidate-pair
-  reduction is a solid 9.1%, but the wall-clock numbers were taken under load and
-  disagreed by 3×.
+- [ ] **`Region2dBoolean.ContainedIn` is O(cells × operand vertices) — and a
+  point-location index was BUILT, MEASURED and DECLINED, so the next attempt has a bar.**
+  The filed premise ("a per-operand `Region2d` point-location index would close it") was
+  implemented in full — a per-operand y-bucket edge index asking Region2d's own per-edge
+  rules (`OnSegment`/`RayCrossesEdge` extracted as shared single-edge predicates), result-
+  identical by construction since parity is an order-free count over edges no skipped edge
+  can pass, `Region2dGoldenTests` byte-for-byte — and measured NOTHING on the very
+  workload this entry cited: the now-committed `Region2dBooleanBenchmark` (120 and 480
+  overlapping 32-gons) read 40.1 → 41.8 ms and 135.7 → 137.8 ms (win-x64, i9-9900K,
+  minima over interleaved runs of both binaries). The reason is structural: an
+  overlap-heavy union's balanced fold keeps the CELL count tiny exactly where the operand
+  vertex counts grow (two half-union blobs merge into a handful of cells), so the C·V
+  product never gets large and the classification cost is under the ~5% noise floor of
+  the whole union. **The term is real and the workload that would feel it is different**:
+  an operation whose result KEEPS many cells against many-vertex operands — two
+  interleaved combs intersected, a grid of crossing strips — which nothing in the repo
+  currently produces at scale. Re-attempt only with such a consumer measured first, and
+  hold it to the committed benchmark plus a new fixture that provably carries the C·V
+  term. **Still owed**: re-benchmark the arrangement broad phase on a quiet machine — the
+  candidate-pair reduction is a solid 9.1%, but the wall-clock numbers were taken under
+  load and disagreed by 3×.
 - [ ] **`Bvh.Build` follow-ups** (the build ✅ landed 4.9× faster and bit-identical) —
   reusing a hierarchy across a boolean cascade is untried, and after the fix the broad
   phase is 10.0 ms of a ~199 ms exact union, so the remaining wins are elsewhere.
@@ -574,7 +587,10 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     tangency is always a touch) but its pairwise sweep is O(n²) with only a box reject
     in front of it, where the polygonal validator has a `Bvh` above 24 segments.
   - [ ] **`ContainedIn` is O(cells × operand edges)** here as well — the curved twin of
-    the open item below.
+    the open item below, and that item's measured verdict applies here first: a
+    point-location index was built for the polygonal twin and DECLINED at 1.0× on the
+    filed workload, so do not build the curved one without a fixture that provably
+    carries the cells × edges product.
 - [ ] **Sketch constraint follow-ups** (the variational solver ✅ landed —
   `Sketch.Constrain()`/`ConstrainedSketch`, full coincident/tangent/parallel/dimension
   vocabulary, analytic-Jacobian LM with rank-revealing DOF reports, drawn config as seed
