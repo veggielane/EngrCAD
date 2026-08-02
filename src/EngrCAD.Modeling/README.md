@@ -1058,7 +1058,15 @@ rod. The only face pairs the boolean sees are helical-band ∩ drilled-plane: ex
 spiral arcs that chain into a closed loop the plane face splits along
 (`FaceSplitter.SplitByClosedCurveChain`). Nonzero clearance keeps B-Rep Impossible
 with the same distance-field report, so thread features stay honest about what they
-can and cannot represent. One boundary: downstream B-Rep booleans may cut modeled
+can and cannot represent. **A MIRRORED threaded hole is Native too**, riding the same
+FlipY identity as the rod, applied per placed point: the tool's improper placement
+`effective∘flipDown` factors as a proper frame times FlipY, and FlipY of a rod is the
+opposite-handed rod, so the lowering flips the per-point frame's Y axis back to proper
+and XORs the spec's handedness (verified cross-representation: every vertex of the
+mirrored tessellation reads ≤ 2.4e-15 against the mirrored implicit field, while the
+handedness-slipped construction reads up to 0.47 at the same points). What stays
+refused is the genuinely different case — a sheared or non-uniformly scaled placement
+cannot re-place a helix at all. One boundary: downstream B-Rep booleans may cut modeled
 threads only with planes perpendicular to the thread axis (the exact spiral case) —
 cuts along the threads fail loudly; use clearance or the implicit route for those.
 

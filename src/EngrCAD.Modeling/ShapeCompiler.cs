@@ -273,10 +273,13 @@ internal static class ShapeCompiler
                 // pilot radius (the pilot volume is part of the same helical rod, so no
                 // coaxial tool∩bore tangency ever reaches the boolean). Clearance stays
                 // Impossible for the same distance-field reason as ExternalThread.
+                // Mirrored placements are Native exactly as ThreadShape's are — the tool
+                // is the same helical rod, so the FlipY identity applies per placed
+                // point with the handedness XOR'd at lowering.
                 ClassifyBrep(hole.Child, m, entries);
-                if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
+                if (!TryDecomposeThreadPlacement(m, out _, out _, out _, out _))
                     entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
-                        "a mirrored, sheared, or non-uniformly scaled placement cannot re-place a helical thread exactly (a mirrored thread is left-handed)"));
+                        "a sheared or non-uniformly scaled placement cannot re-place a helical thread exactly"));
                 // Deliberate exact-zero test (see ThreadShape above).
                 else if (hole.Clearance != 0)
                     entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
@@ -865,7 +868,8 @@ internal static class ShapeCompiler
                 // (SplitByClosedCurveChain), each band splits at its own arc, and the
                 // tool's flat caps sit strictly off every body face (overshoot above,
                 // blind-depth validation below) — no tangent or coplanar pairs.
-                Decompose(m, shape, out _, out _, out double scale);
+                if (!TryDecomposeThreadPlacement(m, out _, out _, out double scale, out bool reflected))
+                    throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
                 var body = LowerBrep(hole.Child, m);
                 var spec = hole.Spec;
                 double pitch = spec.Pitch;
@@ -909,14 +913,21 @@ internal static class ShapeCompiler
                 foreach (var point in hole.Points)
                 {
                     // The tool advances DOWN the plane normal: frame (X, −Y, −Z), the
-                    // exact π-rotation about X the implicit route uses (flipDown).
+                    // exact π-rotation about X the implicit route uses (flipDown). A
+                    // MIRRORED placement folds the FlipY factorization into the same
+                    // recipe — the tool's improper placement effective∘flipDown factors
+                    // as (effective∘flipDown∘FlipY)∘FlipY, whose proper half has axes
+                    // (X, +Y) and Z still down the transformed normal — and FlipY∘rod
+                    // is the opposite-handed rod on that proper frame (the ThreadShape
+                    // identity, applied per placed point).
                     var origin = effective.TransformPoint(new Vector3d(point.X, point.Y, overshoot));
                     var xAxis = effective.TransformVector(Vector3d.UnitX).Normalized();
-                    var yAxis = -effective.TransformVector(Vector3d.UnitY).Normalized();
+                    var yAxis = (reflected ? 1.0 : -1.0)
+                        * effective.TransformVector(Vector3d.UnitY).Normalized();
                     var frame = Frame3d.FromOrthonormal(origin, xAxis, yAxis);
                     var tool = SolidFactory.MakeThreadedRod(
                         scaledCorners, pitch * scale, (hole.Depth + overshoot) * scale, frame,
-                        spec.LeftHand);
+                        spec.LeftHand ^ reflected);
                     var cutting = body;
                     body = WithImplicitRouteHint(() => BrepBoolean.Difference(cutting, tool));
                 }

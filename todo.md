@@ -1504,13 +1504,6 @@ export — is recorded in CLAUDE.md):
   and Draft's pull direction takes its linear image un-negated. Remaining refusal in the
   family, with a real reason: `SheetMetalBody` (an ordered, edge-quoted flange tree would
   need rebuilding the other way round, not re-placing).
-- [ ] **`ThreadedHole` still refuses a mirror with the rationale `ExternalThread` retired**
-  ("a mirrored thread is left-handed" — which is now Native via `TryDecomposeThreadPlacement`'s
-  FlipY branch). A threaded hole's tool is the same helical rod clipped at the pilot
-  radius, so the same decomposition should apply, with the handedness XOR'd exactly as
-  `ThreadShape` does. Not folded into the mirror-completion work because it also has to
-  carry the per-point placement and the depth validation through the reflection, which is
-  a different (and testable) job from a gate change.
 - [ ] **2D offset follow-ups** (`Region2dOffset`/`Sketch.Offset` ✅ landed — round/miter/
   chamfer joins, erosion as complement dilation; **open-path stroking ✅ landed** —
   `Region2dOffset.Stroke(path, width, cap, join)`, butt/round/square caps, both-side
