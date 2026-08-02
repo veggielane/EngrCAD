@@ -1075,16 +1075,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   - **A displacement-stated input scales as omega²**, so the vocabulary has to say whether the
     caller is giving an acceleration, a velocity or a displacement amplitude; naming the method
     after the acceleration and offering the other two as conversions is the honest shape.
-- [ ] **FEA: the buckling residual FLOOR, and whether a better residual measure removes it.**
-  The measured relative residual is a total cancellation of `K phi` against `lambda Kg phi`, so
-  its floor is `eps·kappa(K)` — worse than a modal solve's because `K^-1 Kg` does not SMOOTH
-  the way `K^-1 M` does (a geometric stiffness is derivative-like, so the Lanczos vectors keep
-  the high-frequency content K amplifies). Measured: a 23 166-DOF slender column stalls at
-  1.76e-9 where every coarser mesh reaches 1e-10, which is why the buckling default tolerance
-  is 1e-7. A residual measured in the `K^-1` norm (i.e. `|K^-1(K phi − lambda Kg phi)|`, one
-  extra back-substitution per check through a factorization that already exists) would not
-  cancel the same way and might restore a tighter default; unmeasured, and the current default
-  is honest rather than a workaround.
 - [ ] **FEA: block Lanczos, for multiplicity three and above.** Locking and restarting
   recovers the SECOND member of a degenerate pair, and the solver targets one extra mode so a
   missed copy has a run to appear in — but neither is a proof of completeness for a triple

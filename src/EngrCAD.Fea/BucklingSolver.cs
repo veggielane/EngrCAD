@@ -46,6 +46,21 @@ public sealed record BucklingSolveOptions
     /// relative — fourteen digits below anything the mesh they are computed on can support.
     /// The same 23 166-DOF column accepted at 1e-5 returns 15 437.12 N against the
     /// 9 310-DOF mesh's 15 437.99 N.</para>
+    ///
+    /// <para><b>The obvious alternative measure was MEASURED and declined</b>
+    /// (<c>FeaBenchmark.WhetherAKInverseNormResidualEscapesTheBucklingFloor</c>): a residual
+    /// taken in the K^-1 norm — <c>|K^-1(K phi - lambda Kg phi)|/|phi|</c>, one extra
+    /// back-substitution — does escape the cancellation (8.2e-11 on the same vector whose
+    /// standard residual stalls at 1.9e-9), because <c>K^-1·r = -lambda·(T phi - theta phi)</c>
+    /// is exactly the shift-invert OPERATOR's residual, which full reorthogonalization
+    /// drives to round-off. But that is also why it cannot serve as the acceptance test: it
+    /// SATURATES at its own ~1e-10 floor within a dozen Lanczos steps, while the standard
+    /// measure still reads 1.2e-7 — so past that point it can no longer distinguish a
+    /// 1e-7-grade vector from a 1e-9-grade one, and an acceptance measure that has stopped
+    /// measuring is worse than a looser one that has not. The eigenvalue drift between the
+    /// earliest and the most converged acceptance is 1e-15…5e-13 relative on all three
+    /// column refinements, so a tighter default would have bought no accuracy — only a
+    /// smaller printed number.</para>
     /// </summary>
     public double Tolerance
     {

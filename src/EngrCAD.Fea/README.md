@@ -1803,6 +1803,19 @@ refinement of an ordinary model. Nothing is given up: an eigenvalue is accurate 
 SQUARE of the residual over the spectral gap, and the same 23 166-DOF column accepted at 1e-5
 returns 15 437.12 N against the 9 310-DOF mesh's 15 437.99 N.
 
+**Whether a K^-1-norm residual removes the floor was measured, and the answer is a lesson**
+(`FeaBenchmark.WhetherAKInverseNormResidualEscapesTheBucklingFloor`): it escapes the
+cancellation — 8.2e-11 on the same vector whose standard residual stalls at 1.9e-9, roughly
+mesh-independent where the standard floor grows with `kappa(K)` — because
+`K^-1·r = -lambda·(T phi - theta phi)` is exactly the shift-invert operator's residual, which
+full reorthogonalization drives to round-off. That is also why it cannot be the acceptance
+test: it saturates at its own ~1e-10 floor within a dozen Lanczos steps, while the standard
+measure still reads 1.2e-7, so past that point it cannot distinguish a 1e-7-grade vector from
+a 1e-9-grade one — a measure that has stopped measuring. The eigenvalue drift between the
+earliest and the most converged acceptance is 1e-15…5e-13 relative on all three refinements,
+so a tighter default was never going to buy accuracy; the default stands, and the reported
+residual keeps its backward-error meaning.
+
 The refusal when even that is unreachable **names which of the two causes it hit** —
 `LanczosEigen` now reports the best candidate it saw but did not accept, so "no positive factor
 exists" and "a factor was there and the tolerance was in the way" are different messages. They

@@ -845,6 +845,29 @@ ordinary model. Nothing is given up — an eigenvalue is accurate to roughly the
 residual over the spectral gap, and that same column accepted at 1e-5 returns 15 437.12 N
 against a finer mesh's 15 437.99 N.
 
+**Whether a better residual MEASURE removes the floor was an open question, and the answer is
+measured: half yes, and it does not matter — because a measure that escapes the cancellation
+also stops measuring.** The candidate was the K^-1 norm, `|K^-1(K phi - lambda Kg phi)|/|phi|`
+— one extra back-substitution through the factorization that already exists — and it does
+escape: on the same 23 166-DOF column the standard measure stalls at 1.9e-9 while the K^-1
+measure of the SAME vector reads 8.2e-11, and where the standard floor grows with `kappa(K)`
+across refinements (3.1e-10 / 9.1e-10 / 1.9e-9 at 3 550 / 10 486 / 23 166 DOF) the K^-1
+figure sits near 1e-10 at every one (5.5e-11 / 9.1e-11 / 8.2e-11). The structural reason is
+also the disqualification: `K^-1·r = -lambda·(T phi - theta phi)` is exactly the shift-invert
+OPERATOR's residual — the quantity the textbook `beta·|y|` bound describes and the acceptance
+test deliberately declined — and full reorthogonalization drives it to round-off within a
+dozen steps, after which it reads the back-substitution's noise rather than the pair's
+quality: at 12 Lanczos steps it already sits at 8.9e-11 while the standard measure still
+reads **1.2e-7**, and it does not move again through 120 steps. An acceptance measure that
+saturates before convergence cannot distinguish a 1e-7-grade vector from a 1e-9-grade one,
+which is worse than a looser measure that still measures. And nothing was on the table: the
+eigenvalue drift between the earliest acceptance and the most converged one is
+1e-15…4.8e-13 relative on all three meshes — the residual-squared-over-gap claim, confirmed —
+so the 1e-7 default stands as chosen and the reported residual keeps its honest
+backward-error meaning. (`FeaBenchmark.WhetherAKInverseNormResidualEscapesTheBucklingFloor`;
+the historical 1.76e-9 reads 1.87e-9 on today's code — same fixture, summation orders have
+moved since.)
+
 **An empty eigen-result has two unrelated causes**, and an empty list cannot tell them apart:
 either the spectrum genuinely holds nothing wanted, or a candidate was there and the tolerance
 was in the way. They want opposite responses from a user, so `LanczosEigen` now reports the best
