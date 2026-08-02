@@ -94,6 +94,17 @@ public sealed class Part
     /// </summary>
     public Material? Material { get; set; }
 
+    /// <summary>
+    /// The stock length this part is cut from, in millimetres — null (the default) for
+    /// parts that are not cut from stock. <see cref="Weldment"/> stamps it on every
+    /// frame member (the member's exact overall axial extent after trimming, so a
+    /// mitred end counts to its longest point), and <see cref="BomLine.CutLength"/>
+    /// projects it, which is what makes a <see cref="Bom"/> double as a cut list.
+    /// The same follow-the-part pattern as <see cref="Material"/>: no BOM record had
+    /// to change, and a part stating no cut length prints nothing.
+    /// </summary>
+    public double? CutLength { get; set; }
+
     /// <summary>Display color; when null, the tab assigns the material's color if it has
     /// one, else the next palette color on add.</summary>
     public PartColor? Color { get; set; }

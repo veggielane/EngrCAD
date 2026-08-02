@@ -34,6 +34,12 @@ public sealed record BomLine(Part Part, int Quantity, IReadOnlyList<string> Path
     /// A projection of <see cref="Part.Material"/>, so no line record had to change.</summary>
     public Material? Material => Part.Material;
 
+    /// <summary>The stock length this part is cut from, in millimetres, when it states one
+    /// (frame members via <see cref="Weldment"/>); null otherwise. A projection of
+    /// <see cref="Part.CutLength"/> — the same pattern as <see cref="Material"/> — and the
+    /// reason a BOM of a weldment IS its cut list.</summary>
+    public double? CutLength => Part.CutLength;
+
     /// <summary>
     /// The mass of ONE of these parts, in grams, or null when the part states no material.
     /// <para><b>Evaluates geometry</b> (it measures the part's cached solid or display mesh),
@@ -232,6 +238,11 @@ public sealed class Bom
     /// what decides whether the reports carry a MATERIAL column.</summary>
     public bool HasMaterials => Lines.Any(l => l.Material is not null);
 
+    /// <summary>True when at least one line's part states a <see cref="Part.CutLength"/> —
+    /// what decides whether the reports carry a CUT column. A scene with no frame members
+    /// prints byte-identically what it always did (the MATERIAL-column rule).</summary>
+    public bool HasCutLengths => Lines.Any(l => l.CutLength is not null);
+
     /// <summary>
     /// The BOM as an aligned text table: quantity, item, kind, and where the occurrences
     /// are (the first few paths, then a count of the rest).
@@ -253,12 +264,14 @@ public sealed class Bom
             return "(empty bill of materials)";
 
         bool materials = HasMaterials;
+        bool cuts = HasCutLengths;
         var rows = Lines
             .Select(line => (
                 Qty: line.Quantity.ToString(),
                 line.Item,
                 Kind: line.IsHardware ? "catalogue" : "made",
                 Material: line.Material?.Name ?? "-",
+                Cut: Millimetres(line.CutLength),
                 Unit: mass ? Grams(line.UnitMassGrams) : "",
                 Total: mass ? Grams(line.TotalMassGrams) : "",
                 Where: Where(line, pathsShown)))
@@ -268,6 +281,7 @@ public sealed class Bom
         int item = Math.Max(4, rows.Max(r => r.Item.Length));
         int kind = Math.Max(4, rows.Max(r => r.Kind.Length));
         int material = Math.Max(8, rows.Max(r => r.Material.Length));
+        int cut = Math.Max(8, rows.Max(r => r.Cut.Length));
         int unit = Math.Max(8, rows.Max(r => r.Unit.Length));
         int total = Math.Max(9, rows.Max(r => r.Total.Length));
 
@@ -276,6 +290,8 @@ public sealed class Bom
             .Append("KIND".PadRight(kind)).Append("  ");
         if (materials)
             text.Append("MATERIAL".PadRight(material)).Append("  ");
+        if (cuts)
+            text.Append("CUT (mm)".PadLeft(cut)).Append("  ");
         if (mass)
             text.Append("MASS (g)".PadLeft(unit)).Append("  ").Append("TOTAL (g)".PadLeft(total)).Append("  ");
         text.Append("WHERE").Append('\n');
@@ -286,6 +302,8 @@ public sealed class Bom
                 .Append(row.Kind.PadRight(kind)).Append("  ");
             if (materials)
                 text.Append(row.Material.PadRight(material)).Append("  ");
+            if (cuts)
+                text.Append(row.Cut.PadLeft(cut)).Append("  ");
             if (mass)
                 text.Append(row.Unit.PadLeft(unit)).Append("  ").Append(row.Total.PadLeft(total)).Append("  ");
             text.Append(row.Where).Append('\n');
@@ -294,6 +312,17 @@ public sealed class Bom
         text.Append('\n')
             .Append($"{Lines.Count} item{(Lines.Count == 1 ? "" : "s")}, ")
             .Append($"{TotalQuantity} occurrence{(TotalQuantity == 1 ? "" : "s")}");
+        if (cuts)
+        {
+            // The cut-list bottom line: total stock across quantities. Only the lines
+            // stating a cut length contribute, and like the mass footer it says so
+            // when some do not.
+            var cutLines = Lines.Where(l => l.CutLength is not null).ToList();
+            double stock = cutLines.Sum(l => l.CutLength!.Value * l.Quantity);
+            text.Append($", {stock:0.##} mm of stock");
+            if (cutLines.Count < Lines.Count)
+                text.Append($" over the {cutLines.Count} of {Lines.Count} items stating a cut length");
+        }
         if (mass)
         {
             // Sum only the lines that HAVE a mass, and say so when some do not: a total that
@@ -311,6 +340,9 @@ public sealed class Bom
     }
 
     private static string Grams(double? grams) => grams is { } g ? g.ToString("0.###") : "-";
+
+    private static string Millimetres(double? millimetres) =>
+        millimetres is { } mm ? mm.ToString("0.##") : "-";
 
     private static string Where(BomLine line, int pathsShown)
     {
@@ -332,9 +364,12 @@ public sealed class Bom
     public string ToCsv(bool mass = false)
     {
         bool materials = HasMaterials;
+        bool cuts = HasCutLengths;
         var csv = new StringBuilder("Quantity,Item,Kind");
         if (materials)
             csv.Append(",Material");
+        if (cuts)
+            csv.Append(",CutLengthMm");
         if (mass)
             csv.Append(",UnitMassGrams,TotalMassGrams");
         csv.Append(",Paths\n");
@@ -346,6 +381,8 @@ public sealed class Bom
                .Append(line.IsHardware ? "catalogue" : "made");
             if (materials)
                 csv.Append(',').Append(Quote(line.Material?.Name ?? ""));
+            if (cuts)
+                csv.Append(',').Append(Csv(line.CutLength)); // unknown = EMPTY cell, never a zero
             if (mass)
             {
                 csv.Append(',').Append(Csv(line.UnitMassGrams))

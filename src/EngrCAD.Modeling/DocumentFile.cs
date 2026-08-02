@@ -418,6 +418,8 @@ internal static class DocumentWriter
             json["hardware"] = hardware.Designation;
         if (part.Material is { } material)
             json["material"] = SaveMaterial(material);
+        if (part.CutLength is { } cutLength)
+            json["cutLength"] = cutLength; // write-only-when-stated: files without frames stay byte-identical
 
         json["geometry"] = SaveGeometry(part, options, quality);
 
@@ -873,6 +875,8 @@ internal static class DocumentReader
             part.Isolated = isolated.GetBoolean();
         if (element.TryGetProperty("material", out var material))
             part.Material = LoadMaterial(material);
+        if (element.TryGetProperty("cutLength", out var cutLength))
+            part.CutLength = cutLength.GetDouble();
         if (element.TryGetProperty("hardware", out var hardware))
         {
             warnings.Add($"part '{name}': it was placed from catalogue item " +
