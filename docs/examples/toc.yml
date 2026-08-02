@@ -32,6 +32,8 @@
   href: loft-draft-shell.md
 - name: Sheet metal
   href: sheet-metal.md
+- name: Frames & weldments
+  href: frames.md
 - name: Parametric features
   href: features.md
 - name: Geometry inputs for features
