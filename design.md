@@ -1060,11 +1060,13 @@ is one of exactly two things, and neither wants the matrix:
   `[a0 + (1+alpha)·a1·alpha_R]·M + [(1+alpha)(1 + a1·beta_R)]·K` — one `FeaAssembly.Combine`
   with two coefficients, which is why that overload exists.
 
-So forming `C` would cost a third sparse matrix to buy a slower operation. No damping matrix
-exists anywhere in this project and §3f's statement now stands unqualified. The general shape is
-worth keeping: **a prediction about what a future consumer will need is a hypothesis, and the
-consumer arriving is the experiment.** Four agents in a row have found a filed diagnosis wrong;
-this is the fifth.
+So forming `C` would cost a third sparse matrix to buy a slower operation. Under proportional
+damping no matrix is ever formed — the one damping matrix that has since arrived
+(`FeaAssembly.Damping`, for §3f's direct per-frequency harmonic solve) is the case whose
+factorization consumes VALUES rather than products, the exception that proves this finding
+rather than a reversal of it. The general shape is worth keeping: **a prediction about what a
+future consumer will need is a hypothesis, and the consumer arriving is the experiment.** Four
+agents in a row have found a filed diagnosis wrong; this is the fifth.
 
 ### The initial acceleration is a solve against M, and assuming it away is a modelling error
 
@@ -1437,15 +1439,61 @@ keeping: negating a load negates every solve and recovery output bit for bit —
 round-to-nearest commutes with negation — and the signed von Mises is odd in the stress,
 so the two halves cancel identically rather than to round-off.)
 
+### Rainflow over a transient run, and the two design questions it answered in code
+
+Variable amplitude landed as `Rainflow.Count` — ASTM E1049's three-point algorithm
+verbatim (X the range under consideration, Y the previous one, S the starting point;
+the standard's Fig. 6 worked example transcribed as a test, cycle for cycle, because a
+counting that gets the totals right can still pair the wrong points and the
+total-variation identity would pass it) — plus
+`FatigueAnalysis.Evaluate(TransientResults, curve, options)`, Miner's rule over each
+node's signed von Mises history with `EquivalentAlternating` reused verbatim per
+counted cycle. The filed entry named two design questions to settle at build time, and
+both are answered by arithmetic rather than preference.
+
+**(a) Every node, one pass, no hot-spot preselection.** The per-node footprint is one
+scalar per stored state (8 bytes), which is small beside the states the transient
+already retains — each holds full displacement, velocity, acceleration and reaction
+fields — so preselection would save a rounding error of memory and cost the "which node
+is worst" answer the published field exists to give. The honest caveat is the SAMPLING:
+the counting sees the STORED states, so a reversal falling between stored steps is
+never counted — a run that feeds fatigue stores every step, and the remarks say so.
+
+**(b) The open end is an option because E1049 names two honest readings.** One-shot by
+default: a transient is a load event with a beginning and an end, and the residual
+ranges the counting cannot close are the standard's HALF cycles, no more and no less.
+`AssumeRepeating` reads the history as one period of a repeating load — rearranged to
+begin at its largest-magnitude extremum (the standard's own prescription, under which
+every count closes) and the residual halves paired into full cycles by EXACT
+(range, mean) key, a pairing rather than a tolerance because both flanks of one closed
+excursion are computed from the same two point values. The rotation is of the RAW
+samples, not the turning points, because the turning-point structure at the seam
+differs between the two orderings. The two modes agree on damage for a
+constant-amplitude history; what changes is the reported cycle structure, which is the
+option's contract.
+
+**The degeneracy oracle runs through the real seam.** Internally-built transient states
+alternating between the `SolveAll` pair's two `StructuralResults` ARE a
+constant-amplitude history, and the counted cycle's amplitude and mean come out
+BIT-equal to the static pair's decomposition (same values through the same arithmetic —
+IEEE addition is commutative, so `0.5·(a + b)` cannot differ), making the damage
+exactly `count/life` as an identity rather than a tolerance. The second oracle with
+teeth is the total-variation identity `sum(2·count·range) = sum|Δ|` over the turning
+points, exact on a pseudo-random history — it holds for ANY input, so it catches a
+dropped or double-counted range on histories nobody hand-checked. What is deliberately
+absent is a variable-amplitude SAFETY factor: scaling the loads scales every cycle at
+once, so the factor to a damage target under a power-law line is an iteration against a
+stated target life — a different quantity from the static radial factor, filed rather
+than approximated.
+
 ### Refused by name
 
 Welds (hot-spot / nominal-stress category methods are their own discipline — a weld's
-life is governed by its detail class, not the parent metal's line), multiaxial criteria
-beyond von Mises equivalence (above), and variable amplitude (rainflow needs a time
-history two static cases cannot carry; `TransientResults`' stored states are the natural
-input, filed). Mixed inputs refuse loudly: results on different `AnalysisMesh` instances
-would pair unrelated nodes, and results answering with different `Recovery`/`Averaging`
-settings would book the recovery gap between two fields of different accuracy as
+life is governed by its detail class, not the parent metal's line) and multiaxial
+criteria beyond von Mises equivalence (above). Mixed inputs refuse loudly: results on
+different `AnalysisMesh` instances would pair unrelated nodes, and results answering
+with different `Recovery`/`Averaging` settings — including across one transient's
+stored states — would book the recovery gap between two fields of different accuracy as
 alternating stress.
 
 ## 4. Implicit engine

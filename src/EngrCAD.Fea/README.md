@@ -2359,6 +2359,42 @@ On the nu = 0 bar whose uniaxial state is exact in the element space (the
 | loads scaled by the measured safety factor | the critical node lands ON the line, min factor 1.0 to 1e-9 (Goodman AND Gerber) |
 | R = −1 at 400 MPa, full pipeline vs the hand-computed life | 5.92e3 cycles, log10 within 1e-6 of the Basquin inversion |
 
+## Variable amplitude: rainflow over `TransientResults`
+
+`Rainflow.Count` is ASTM E1049's three-point algorithm verbatim (X/Y/S rules; the
+standard's Fig. 6 worked example is transcribed as a test, cycle for cycle), and
+`FatigueAnalysis.Evaluate(transient, curve, options)` runs it over every node's signed
+von Mises history from a transient run's stored states, accumulating **Miner's-rule**
+damage with the mean-stress correction applied per counted cycle through the SAME
+`EquivalentAlternating` the static path uses — reuse, not restatement.
+
+Two design questions the backlog filed are answered in the code rather than before it.
+**(a) The series is extracted at every node in one pass over the states** — the per-node
+footprint is one scalar per stored state, small beside the full fields each state
+already retains, so hot-spot preselection would buy little and cost the "which node is
+worst" answer the field exists for. What the counting sees is the STORED states: a
+reversal between stored steps was never sampled, so a run that feeds fatigue stores
+every step. **(b) The open end is an option with both honest readings**
+(`RainflowFatigueOptions.AssumeRepeating`): one-shot by default — a transient is a load
+event, and the unclosable residual ranges are E1049 half cycles — or one period of a
+repeating load, rearranged to start at the largest-magnitude extremum (E1049's own
+prescription, under which every count closes) with the residual halves paired into full
+cycles. The modes agree on damage for constant amplitude; the cycle structure differs.
+
+`RainflowFatigueResults` publishes **damage per pass of the history** (the quantity that
+composes — k passes accumulate k·damage) and life as **log10(repetitions)** under the
+static path's spellings (NaN = infinite, one-repetition floor covers static failure);
+`CyclesAt(node)` recomputes one node's counted cycles for verification. Verified: the
+ASTM worked example cycle for cycle; the total-variation identity
+`sum(2·count·range) = sum|Δ|` over the turning points, exact on a pseudo-random history
+(the identity that catches a dropped or double-counted range on inputs nobody
+hand-checked); and a constant-amplitude history — internally-built transient states
+alternating between the SolveAll pair — degenerating to the static-pair answer with the
+counted amplitude and mean BIT-equal and damage exactly `count/life`. A
+variable-amplitude SAFETY FACTOR is deliberately absent: the factor to a damage target
+under a power-law line needs an iteration and a stated target life, filed rather than
+approximated.
+
 ## Refused by name, not approximated
 
 - **Welds** — hot-spot / nominal-stress category methods (IIW, Eurocode) are their own
@@ -2366,5 +2402,3 @@ On the nu = 0 bar whose uniaxial state is exact in the element space (the
 - **Multiaxial criteria beyond von Mises equivalence** — non-proportional paths need
   critical-plane methods (Findley, Fatemi–Socie): a different computation over a
   different input, with the reversed-pure-shear case above as the structural tell.
-- **Variable amplitude / rainflow** — needs a time history two static cases cannot
-  carry; `TransientResults`' stored states are the natural input, filed in todo.md.

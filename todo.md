@@ -903,17 +903,17 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
 
 ## Simulation
 
-- [ ] **Rainflow counting over `TransientResults` — the variable-amplitude fatigue the
-  static pair cannot express.** `FatigueAnalysis` (landed) takes exactly two load cases
-  because that is what a proportional min/max history is; a variable-amplitude history
-  needs ASTM E1049 rainflow over a per-node stress TIME SERIES plus Miner's-rule
-  accumulation against the same `SnCurve`, and the transient solver's stored states are
-  the natural input (each `TransientState` is a full `StructuralResults`, so the signed
-  von Mises per node per instant already exists). Two design questions to settle at
-  build time, not before: whether the series is extracted at every node (memory: states
-  × nodes) or at caller-selected hot spots first; and how a half-cycle at the history's
-  open end is closed (E1049 names the options). The mean-stress correction composes per
-  counted cycle, so `EquivalentAlternating` is reused verbatim.
+- [ ] **Variable-amplitude SAFETY factor over rainflow damage.** The rainflow path
+  (landed: `Rainflow.Count` + `FatigueAnalysis.Evaluate(TransientResults, ...)`)
+  publishes damage and life-in-repetitions but deliberately no safety factor: scaling
+  the loads scales every counted cycle at once, and under a power-law S-N line the
+  damage of a scaled history is not a simple power of the factor once mean corrections
+  and the endurance cutoff engage — cycles cross the endurance limit as the factor
+  grows, so the factor to a damage target is a bracketed 1-D root find (each probe
+  re-scales the counted cycles, no re-solve needed since the stress history is linear
+  in the load) against a REQUIRED target life in repetitions. The static pair's
+  verify-by-applying oracle carries over: scale the history by the found factor and the
+  damage must land ON the target.
 - [ ] **Log-scale colour mapping for `FieldDisplay`.** `FatigueResults` publishes life
   as log10(cycles) with the units string saying so, because `FieldRange.Normalize` is
   linear and raw cycles would spend the whole legend on the longest-lived node. A
