@@ -2963,6 +2963,38 @@ Design decisions:
   true roller law by 0.12 on that fixture at θ = π/2, three orders above the law's
   own fidelity, and the discriminating test asserts the shortcut DOES miss — without
   that half, the fixture would pass a roller law wired to the shortcut.
+  *Mechanism persistence restates nothing that is derived, and saves everything that
+  is history* (`MechanismPersistence.cs`). A joint's mates are a deterministic
+  function of its two ends, so the file stores the ends (the mate-end vocabulary
+  verbatim — path, pinned coordinates, query descriptor — through the same
+  `MateSet.SaveEnd`/`LoadEnd`, so the two files cannot drift) and loading re-runs the
+  constructor. Two things are NOT re-derivable and ride as data: the axis joints'
+  perpendicular reference directions, whose re-derivation at load would move the
+  angle coordinate's zero (the `MateRef` constructor keeps an already-unit direction
+  verbatim, so they round-trip bit-for-bit), and `JointSweepState` — the unwrapped
+  accumulated angle is a history of how many turns the crank has taken, which no
+  pose can recover. Loading re-ADDS each joint through the ordinary `Add`, which
+  re-asserts its nominal DOF against the solver's measured rank: a file valid when
+  written can legitimately fail on a changed model, and that is a load WARNING
+  naming the joint (the joint skipped, couplings referencing it skipped by their
+  SAVED index — the index list keeps nulls so a skipped joint never shifts its
+  neighbours under a coupling). Couplings save their FACTORY and arguments rather
+  than their implementation — a gear as tooth counts, a rack-and-pinion as itself
+  rather than the straight-law cam it is built as — and their construction zeros are
+  deliberately absent: a coupling constrains the CHANGE since its construction, and
+  for any pose that satisfies it (a saved converged pose does, by the solver's own
+  contract) re-zeroing at load is algebraically the same constraint, so saving the
+  zeros would be storing a number the arithmetic already implies. Cam laws follow
+  the `Feature.SaveInputs` precedent: catalogue factories stamp their kind + args on
+  the law they return (`FunctionCamLaw.Identity`), `Segments` recurses,
+  `FromSketch` saves its sampled lifts — the law IS the samples, and the spline
+  rebuild is deterministic so the loaded law evaluates bit-identically — and a
+  `FromFunction` lambda writes an `opaque` marker that loads as a warning naming
+  the coupling unless the caller's `resolveOpaqueLaw` hook supplies the instance.
+  The oracle is the byte-identical save→load→save fixed point, with the
+  FeatureHistory rider asserted separately: a file carrying an opaque record is
+  smaller the second time by exactly the record the warning named, then a fixed
+  point.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

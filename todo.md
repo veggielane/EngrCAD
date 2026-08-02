@@ -733,26 +733,6 @@ maxTravel)` (rigidly interpolated placements bounded by exact bounding-box-corne
 travel; 97%+ of the analytic disk from a 9-frame full-turn sweep). Remaining
 follow-ups:
 
-- [ ] **Joint/coupling persistence** — `MateSet.SaveMates` covers the mates but a
-  reloaded file loses the joint layer (coordinates, limits, couplings, derived
-  perpendicular references). Follow the FeatureHistory/mate conventions: a joints
-  section referencing joints' ends by the same descriptors mates use.
-  **Assessed while the multi-driver work was in the file; the shape of it:** a
-  `Mechanism` is (a) a joint list, each a NAMED combination of mates over two
-  `MateRef`s plus derived perpendicular references, (b) the axis joints' *unwrapped
-  coordinates* and limits, and (c) the couplings. (a) and (c) are pure declaration and
-  round-trip the way mates do — `MateRef` already serializes, the joint kind is an enum,
-  a coupling is a kind plus two joint indices plus its scalars. What does NOT round-trip
-  by declaration is (b): `JointSweepState.AccumulatedAngle` is a HISTORY (how many turns
-  the crank has taken), and a `CamLaw` may be code (`FromFunction`) or a spline sampled
-  from a sketch. So the file writes the coordinates as data and the laws follow the
-  `Feature.SaveInputs` precedent — `FromSketch` and the catalogue laws serialize, a
-  lambda law saves a marker and loads as a warning. The one genuinely new decision is
-  whether a reloaded mechanism should re-`Add` its joints (which re-asserts each joint's
-  DOF against the solver's measured rank — the check that makes a wrong definition fail
-  by name) or trust the file; re-asserting is right, and it means a load can legitimately
-  FAIL on a file that was valid when written, which is a load-result warning rather than
-  an exception. Roughly a day, mostly test.
 - [ ] **B-Rep-exact interference volumes** — `CheckInterference`'s opt-in volumes use
   the exact MESH boolean of the meshes that flagged the clash; for B-Rep-backed parts
   a `BrepBoolean.Intersection` of the posed solids would report the exact volume, at
@@ -2027,9 +2007,15 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     markers. The fix is not more serialization machinery but the vocabulary that already
     exists: overloads taking `FaceRef`/`EdgeSetRef`, whose `Descriptor` is the serialized
     form. Small, and it would make dimensions as persistent as features already are.
-  - [ ] **Joint/coupling persistence** (also filed under mechanisms) is the other layer a
-    document silently loses today: `Document` saves the `MateSet`s but not the `Joint`s
-    built on top of them.
+  - [ ] **Mechanisms in the document envelope.** The mechanism layer itself now
+    round-trips (`Mechanism.SaveMechanism`/`LoadMechanism` — joints with saved
+    reference directions and unwrap state, couplings by factory args, cam laws per
+    `Feature.SaveInputs`, save→load→save a byte fixed point), but a `Document` still
+    has no mechanism list to carry one in: a `Mechanism` OWNS its `MateSet` where a
+    `Document` owns loose `MateSet`s, so wiring it in means deciding whether a
+    document-carried mechanism replaces one of the document's mate sets or sits
+    beside them (and what `reload` does to it). The persistence layer is done; the
+    open question is the document's ownership model.
   - [ ] **The viewer's undo wiring wants a manual pass.** The stack, the edits and the
     grouping are covered headlessly, and the two edit paths the window offers (the tree's
     suppress toggle, the properties panel's `[Param]` fields) are routed through it — but

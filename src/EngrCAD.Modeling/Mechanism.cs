@@ -230,7 +230,7 @@ public sealed record MobilityReport(
 /// The solver writes nothing on failure, so a failed step leaves the previous pose
 /// intact and the sweep can halve its step and retry from exactly where it stood.</para>
 /// </summary>
-public sealed class Mechanism
+public sealed partial class Mechanism
 {
     private readonly List<Joint> _joints = [];
     private readonly List<AuxiliaryConstraint> _couplings = [];

@@ -463,3 +463,50 @@ composer having to know anything about the laws it is chaining. Continuity acros
 joint stays the segments' business: smoothing it centrally would hide the very property
 the catalogue exists to let you choose.
 
+## Saving a mechanism
+
+`Mechanism.SaveMechanism()` writes the whole joint layer as one JSON envelope —
+grounds, raw mates, joints, couplings — and `LoadMechanism` reads it back with
+warnings (never exceptions) for anything the model no longer matches. Joint *mates*
+are not restated (they are a deterministic function of the joint's two ends); what
+cannot be re-derived rounds trip as data: the axis joints' perpendicular reference
+directions, and the **unwrapped angle history** — a crank saved after two full turns
+reloads at 4π and keeps counting, which no fresh construction at the same pose could
+recover. Cam laws save their factory kind and arguments (a `FromSketch` law saves its
+samples; a `FromFunction` lambda saves an `opaque` marker that loads as a warning
+unless a `resolveOpaqueLaw` hook supplies it), and `save → load → save` is a
+byte-identical fixed point:
+
+```csharp run:mechanism-persistence
+var rig = new Assembly("gearbox");
+var housing = rig.Add(new Part("housing", MeshPrimitives.Box(4, 2, 1)));
+var gearA = rig.Add(new Part("gearA", MeshPrimitives.Box(4, 2, 1)));
+var gearB = rig.Add(new Part("gearB", MeshPrimitives.Box(4, 2, 1)),
+    Frame3d.FromXY((30, 0, 0), Vector3d.UnitX, Vector3d.UnitY));
+var z = Vector3d.UnitZ;
+var pinA = Joint.Revolute(
+    MateGeometry.Axis(housing, (0, 0, 0), z), MateGeometry.Axis(gearA, (0, 0, 0), z), "pin A");
+var pinB = Joint.Revolute(
+    MateGeometry.Axis(housing, (30, 0, 0), z), MateGeometry.Axis(gearB, (0, 0, 0), z), "pin B");
+var mechanism = new Mechanism(rig).Ground(housing).Add(pinA).Add(pinB)
+    .Add(Coupling.Gear(pinA, pinB, teethA: 20, teethB: 40));
+
+// Two full turns of history, then save mid-motion.
+mechanism.Sweep(MechanismDriver.Angle(pinA), 0, 4 * Math.PI, frames: 17);
+string file = mechanism.SaveMechanism();
+
+var reloaded = new Mechanism(rig);
+var warnings = reloaded.LoadMechanism(file);
+if (warnings.Count != 0) throw new Exception(string.Join("; ", warnings));
+if (reloaded.SaveMechanism() != file) throw new Exception("save-load-save must be a fixed point");
+
+var crank = (RevoluteJoint)reloaded.Joints[0];
+if (Math.Abs(crank.Angle - 4 * Math.PI) > 1e-8)
+    throw new Exception("the unwrapped history must survive: two turns is 4 pi, not 0");
+reloaded.SolveAt(MechanismDriver.Angle(crank), 4 * Math.PI + 0.5);   // and keeps counting
+```
+
+Loading **re-adds** every joint, which re-asserts its nominal DOF against the
+solver's measured rank — so a file that was valid when written can legitimately load
+with a warning if the model changed underneath it; the joint is skipped and any
+coupling referencing it is skipped by name, never guessed at.

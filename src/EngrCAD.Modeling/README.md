@@ -2077,6 +2077,37 @@ system with DOF > 0 plus a driver consuming them. No second solver exists.
   the textbook property that a positive offset reduces the rise-side pressure angle.
   A roller of radius 0 is bit-identical to the point follower (reach + 0.0 and an
   isolevel of 0.0 change no bits in the incumbent march).
+- **Mechanism persistence** (`MechanismPersistence.cs`:
+  `Mechanism.SaveMechanism()`/`LoadMechanism(json, resolveOpaqueLaw?)`): one JSON
+  envelope for the layer a `MateSet` file loses — grounds, the raw mates OUTSIDE the
+  joints, the joints, the couplings — following `MateSet.SaveMates`' conventions
+  (warnings back in, never exceptions; only a bad envelope or unknown version throws).
+  **Joint mates are derived, not restated**: a joint's mates are a deterministic
+  function of its ends, so the file stores the two ends exactly as mates do (path +
+  pinned coordinates + query descriptor, re-resolved eagerly with pinned fallback)
+  and loading re-runs the constructor. What CANNOT be re-derived rounds trip as
+  data: an axis joint's **perpendicular reference directions** (derived once at
+  construction — re-deriving at load would move the angle's zero; the `MateRef`
+  ctor keeps already-unit directions verbatim, so they round-trip bit-for-bit) and
+  its **sweep state** (`AccumulatedAngle` is a HISTORY — how many turns the crank has
+  taken — that no pose can recover; a crank saved at 4π reloads at 4π and keeps
+  counting). **Loading re-ADDS each joint**, re-asserting nominal DOF against the
+  solver's measured rank, so a load can legitimately fail on a file that was valid
+  when written — a warning naming the joint, the joint skipped, and couplings
+  referencing it skipped by index (saved indices are kept, so a skipped joint never
+  shifts its neighbours under a coupling). **Couplings save their FACTORY, not their
+  implementation** (a gear as `gear [20, 40]`, a rack-and-pinion as itself rather
+  than the straight-law cam it is built as), and their construction ZEROS are
+  deliberately not saved: each constrains the CHANGE since construction, and for any
+  pose that satisfies it — which a saved converged pose does — re-zeroing at load is
+  exactly the same constraint. **Cam laws follow `Feature.SaveInputs`**: catalogue
+  laws save kind + args and re-run the factory, `Segments` recurses, `FromSketch`
+  saves its sampled lifts (the law IS the samples; the spline rebuild is
+  deterministic, so the loaded law evaluates bit-identically), and a `FromFunction`
+  lambda saves an `opaque` marker that loads as a warning naming the coupling unless
+  the `resolveOpaqueLaw` hook supplies the instance. Save→load→save is a
+  byte-identical fixed point; a file carrying an opaque record is smaller the SECOND
+  time by exactly the record the warning named, then a fixed point.
 - **Interference & swept volume** (`MotionInterference.cs`):
   `study.CheckInterference()` — instance-bounds broad phase, `MeshIntersection.Crosses`
   narrow phase (transversal only: resting contact is not a clash), ranges per pair,
