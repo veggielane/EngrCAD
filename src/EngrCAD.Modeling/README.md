@@ -2351,6 +2351,100 @@ helical surfaces have no AP214 entity — `BrepArchive` round-trips it).
   rotated back by ψ(z), lands on the exact spur region's zero level, within a bound
   DERIVED from arc flattening + wall-panel chord + biarc fit, mutation-checked
   against a 5% twist error.
+### Cycloidal gears (`CycloidalGears.cs`)
+
+The clock and instrument tooth form. `CycloidalGearSpec` carries module, tooth count
+and the **generating (describing) circle** — what a cycloidal system has instead of a
+pressure angle — plus overridable proportion coefficients; `CycloidalGears.Spur`
+returns a `CycloidalProfile` (sketch + the fit contract), `SpurGear` the solid.
+
+- **The curves**: an epicycloid above the pitch circle (a circle of radius ρ rolling
+  OUTSIDE) and a hypocycloid below it (the same circle rolling INSIDE), both entering
+  the sketch vocabulary as biarc chains against their closed forms with the deviation
+  measured and REPORTED (`MaxFitDeviation`, default tolerance module·1e-4). Both
+  cusps at the pitch circle are radial, so face and flank meet tangent-continuously
+  with nothing to arrange. Points are written as `r + (a term exactly zero at t = 0)`
+  so the two hand over their shared point bit for bit, and the tangents come from the
+  half-angle factorization, which is *defined at the cusp* where the speed vanishes.
+- **Conjugacy is a property of the PAIR**: one describing circle traces the wheel's
+  face and the pinion's flank, so `CycloidalGears.Mesh(pinion, wheel)` refuses two
+  gears whose circles differ, by name. `CycloidalGears.Pair` defaults to the classic
+  clock choice — half the pinion's pitch diameter — which is the ρ = r/2 identity that
+  makes the pinion's hypocycloidal flanks **exactly straight radial lines**. Nothing
+  special-cases that; the general formula and the general biarc fit reach it, and the
+  test measures it off the generated sketch (< 1e-12 rad of drift, and literal
+  `Line2d` pieces) with a hypocycloidal flank drifting 1e-3 on the same instrument.
+- **Closed forms all the way down**: the roll angles at the tip and the root invert
+  with one `Acos` each (|E(t)|² and |H(t)|² each reduce to a single cosine of r·t/ρ),
+  and `ClosedFormArea` integrates both cycloid families exactly under Green's theorem —
+  ½(r+ρ)(r+2ρ)[t − (ρ/r)sin(rt/ρ)] for the epicycloid and ½(r−ρ)(r−2ρ)[…] for the
+  hypocycloid, the second reducing to exactly zero at the radial-flank identity, since
+  a line through the origin encloses nothing. The one thing with no closed form is the
+  root fillet's tangency (an involute's has one), and it is an honest bracketed root
+  solve, said so in place.
+- **Conjugate action verified from CONTACT, at the DESIGN centre distance** — a
+  cycloidal pair's describing circle must roll on both pitch circles, so unlike an
+  involute pair it is *not* centre-distance invariant. Backlash therefore comes from
+  THINNING the teeth, which is exact (rotating a cycloid about its own pitch centre is
+  the same cycloid at another phase). Measured: 4e-6 rad of spread through tooth
+  handover; a wheel cut with a 1.6× describing circle reads ~300× that on the same
+  instrument, and 0.3 mm of centre-distance error also reads ~300× — the honest
+  contrast with the involute, measured rather than warned about.
+- **Refusals by name**: a describing circle past half the pitch radius (the
+  hypocycloid then curls back and UNDERCUTS — the cycloidal counterpart of z_min), an
+  addendum past the 2ρ an epicycloid can reach, a dedendum past the |r − 2ρ| a
+  hypocycloid can reach, pointed teeth (a LENGTH at the weld tier), and fillets that
+  do not fit their gap or that reach the pitch circle.
+- **`ClockGearProportions`** transcribes the BS 978-2 addendum columns (⚠
+  verify-against-datasheet, the `StandardHoles` convention). Only the ADDENDUM columns
+  are stored: each member's dedendum is DERIVED as its mate's addendum plus a
+  clearance, since a second stored column could only drift from that (the fine-pitch
+  tap-drill rule).
+
+### Cycloidal drives (`CycloidalDrives.cs`)
+
+The pin-wheel reducer's lobed disc. `CycloidalDiscSpec` carries the pin count, pin
+circle, pin radius and eccentricity; `CycloidalDrives.Disc` returns the cut outline,
+`RollerCentreCurve` the curve the pin centres ride, and `DiscShape`/`PinShapes` the
+solids.
+
+- **The roller-centre curve is DERIVED, not transcribed**, and the derivation pays for
+  itself: with the disc centre at e·(cos φ, sin φ) and the disc turning at λφ, pin *j*
+  sits in the disc's frame at `Rot(−λφ)(P_j − O(φ))`, which collapses to
+  `C(s) = R(cos s, sin s) − e(cos Ns, sin Ns)` for EVERY pin at once exactly when
+  λ = −1/(N−1), because N·α_j is a whole number of turns. The lobe count N−1, the
+  peak-to-valley depth of exactly 2e and the counter-rotating rate all fall out rather
+  than being asserted.
+- **The lobe difference must be 1, structurally**: repeat the derivation for a
+  difference *d* and the phase is 2πj/d, a whole number of turns for every pin only at
+  d = 1 — so any other difference is refused by name with that reason rather than
+  approximated.
+- **The offset is free** because the sketch already knew it (the cam roller-follower
+  finding): an offset curve's unit tangent IS the base curve's, `D′ = (1 − R_r·κ)·C′`,
+  so the biarc fit gets exact tangents for nothing AND the same factor states the
+  validity condition — the pin must be under the lobe tip's radius of curvature
+  `(R + eN)²/(R + eN²)` or the offset cusps. That maximum is closed form too: both the
+  curvature numerator and |C′|² depend on the parameter only through u = cos((N−1)s),
+  so κ(u) = (A − Bu)/(P − Qu)^{3/2} has one critical point in closed form and no scan
+  is reached for.
+- **Two ratios, both named**: pins fixed with the disc as output is
+  `z_lobes/(z_pins − z_lobes)` = N−1 and counter-rotating (the sign rides on
+  `DiscTurnsPerInputTurn` so a caller cannot lose it); the disc held with the ring as
+  output is `z_pins/(z_pins − z_lobes)` = N and co-rotating. One geometry, two
+  arrangements, two numbers.
+- **Verified by the derivation's own identity**: every pin lies ON the roller-centre
+  curve at every input angle, so the disc sketch's exact signed distance reads exactly
+  the pin radius at every pin through a full input rotation — measured residual
+  3.06e-4 against a fit deviation of 3.06e-4, i.e. the pose relation contributes
+  nothing (asserted as that RATIO, 1.002, not only as a bound). That one number is
+  simultaneously the clash check (no pin ever reads less) and the ratio MEASUREMENT:
+  sweeping candidate rates −1/8, −1/9, −1/11, −1/12 and +1/10 drives the pins hundreds
+  of times the fit deviation into the disc. Areas ride closed forms too —
+  π(R² + e²N) for the roller-centre curve and the inward-offset identity
+  A − R_r·L + πR_r² for the disc, with L the one elliptic integral, taken by the
+  uniform trapezoid rule (spectrally accurate on a smooth periodic integrand).
+- v1 draws the lobe profile and an optional central bore; output roller holes, a
+  running clearance and the eccentric shaft are filed follow-ups.
 
 Docs: `docs/examples/mechanisms.md`. Deliberately out of scope: forces, masses,
 friction, contact dynamics — mechanisms answer "where does it go".

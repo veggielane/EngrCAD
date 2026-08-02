@@ -3439,6 +3439,43 @@ Design decisions:
   zero level. The bound is DERIVED (arc-flattening sagitta + wall-panel chord +
   biarc fit deviation, summed because all three are systematic) and the instrument
   mutation-checked at a 5% twist error, which reads over 100× the bound.
+  *Cycloidal profiles* (`CycloidalGears.cs`, `CycloidalDrives.cs`) follow the involute
+  file's shape — a fit into the arc vocabulary with the deviation reported — and add
+  four decisions of their own. **The shape parameter belongs to the PAIR, not to the
+  gear**: an involute gear is conjugate to any other of its module and pressure angle,
+  but a cycloidal wheel's epicycloidal face rolls against a pinion's hypocycloidal
+  flank only if ONE describing circle traced both, so `CycloidalGears.Mesh` refuses a
+  mismatched pair by name and `Pair` hands both members the same circle. That is also
+  why a single `GeneratingCircleDiameter` is the right field rather than a face/flank
+  pair: sharing one circle across a set satisfies conjugacy in both directions at once,
+  which is exactly the interchangeable-set practice. **The radial-flank identity is
+  reached, not special-cased**: ρ = r/2 makes the hypocycloid's y-term vanish
+  identically, so the general formula returns a straight line and the general biarc fit
+  returns literal `Line2d` pieces — and the test therefore MEASURES straightness off the
+  generated sketch (crossings within 1e-12 rad of one ray) instead of asserting the
+  formula it was built from, with a hypocycloidal flank reading 1e-3 on the same
+  instrument. **The centre-distance sensitivity is measured and documented rather than
+  warned about**: a cycloidal pair's describing circle must roll on BOTH pitch circles,
+  so unlike an involute pair it is not centre-distance invariant, which forces the
+  conjugacy test to the DESIGN distance and forces backlash to come from thinning the
+  teeth (exact — a cycloid rotated about its own pitch centre is the same cycloid at
+  another phase) rather than from mounting long. Measured 4e-6 rad of spread at the
+  design distance against 1.3e-3 at +0.3 mm, and the same 300× separation for a wheel
+  cut with a 1.6× describing circle — one instrument, two mutations, both seen. And
+  **the drive disc's pin locus is derived rather than transcribed**, which settles more
+  than it was asked to: substituting the orbit and the disc rotation into
+  `Rot(−λφ)(P_j − O(φ))` collapses to one curve for EVERY pin exactly at λ = −1/(N−1),
+  giving the lobe count, the 2e depth and the counter-rotating rate for free — and
+  repeating it for a lobe difference d leaves the pin phase at 2πj/d, a whole number of
+  turns only at d = 1, so the one-lobe-difference restriction is a THEOREM the refusal
+  can state rather than a v1 limit. The cut profile then costs nothing extra because the
+  cam roller-follower work had already found the shape of the answer: an offset curve's
+  unit tangent IS the base curve's, so the fit gets exact tangents free and the same
+  `(1 − R_r·κ)` factor states the cusp refusal. The verification is that derivation's own
+  identity — every pin reads exactly the pin radius from the disc sketch's signed
+  distance at every input angle, measured residual equal to the fit deviation to a ratio
+  of 1.002 — which is simultaneously the clash check and, swept over candidate rates,
+  the ratio MEASUREMENT.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;
