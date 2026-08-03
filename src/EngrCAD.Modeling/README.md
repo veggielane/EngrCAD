@@ -591,6 +591,46 @@ selectors (the rim features' `Faces`): validation skips it, because resolving ea
 would force a B-Rep lowering regeneration otherwise never pays for — the deferred
 resolution still names the input when it fails.
 
+### Design studies (`DesignStudy.cs`)
+
+`DesignStudy.Minimize` drives `[Param]` values by an optimizer against a **measured**
+objective — minimize mass subject to a deflection limit, find the largest fillet the
+kernel will build. Everything under the loop already existed; the study *is* the loop.
+
+```csharp
+var depth  = DesignVariable.On(beam, nameof(Beam.SectionDepth));   // box from [Param(Min=,Max=)]
+var result = DesignStudy.Minimize(
+    part, [depth], p => p.MassGrams()!.Value,
+    [StudyConstraint.AtMost("tip deflection", TipDeflection, 1.0)]);
+// result.ValueOf(depth)  -> 15.6201 mm  (closed form 15.6179)
+// result.Stop.Summary    -> "held by tip deflection"
+```
+
+- **Hooke–Jeeves pattern search**, derivative-free *by necessity*: a parameter change can
+  alter topology (a hole breaks through, a fillet stops fitting), so a finite-difference
+  gradient across such a step is meaningless rather than merely noisy. Chosen over
+  Nelder–Mead because the box is the point (a simplex cannot rest *on* a bound), a refused
+  design is just a poll that does not improve, and the step size **is** a distance in
+  parameter space — so `StudyResult.OptimumTolerance` states a bound on the answer
+  (`2 × StepTolerance` per axis) that a simplex diameter cannot.
+- **Constraints are a feasibility filter, not a penalty**: `(violation, objective)` compared
+  lexicographically, with violation relative to each constraint's own limit so MPa and mm
+  can be ranked with no weight from the caller. A penalty would need that weight, and could
+  *return* an infeasible design that merely scored well.
+- **A refused design is data**: recorded in the trajectory with the kernel's own message,
+  with the incumbent written back and rebuilt before the search moves on (`Part.Regenerate`
+  keeps the previous *body* but not the previous *parameter*). `RegenerationFailed` is a
+  feature refusing; `MeasurementFailed` is where most *geometric* refusals land, because a
+  `Shape` graph is lazy and the lowering runs inside the first measure.
+- **`StudyStop` names what stopped it**, epsilon-free: a bound is binding when the answer's
+  value *is* the bound (the clamp assigns it verbatim), a constraint when it refused a
+  neighbouring design that would have improved the objective in the final poll round.
+- **Deterministic** (no RNG; identical trajectories over two runs) and **not an edit** — the
+  study restores the part and hands back `StudyResult.Edits(part)`, one undoable
+  `SetParameters` per driven feature through the same JSON seam as `SaveParameters`.
+
+Docs: [`examples/design-studies.md`](../../docs/examples/design-studies.md).
+
 ## The construction tree: how a part was built
 
 `part.ConstructionTree()` answers "how was this made?" as a row tree any viewer (or

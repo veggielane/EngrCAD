@@ -3836,6 +3836,112 @@ coordinates already relative to the rotating line of centres — and the failure
 that is wrong is the dangerous kind: every individual coupling stays satisfied, the
 mechanism solves, and the assembled ratio is quietly wrong.
 
+### Design studies: driving `[Param]` values by an optimizer (`DesignStudy.cs`)
+
+`DesignStudy.Minimize` moves a part's `[Param]` values to minimize a measured objective
+under measured limits. Everything under the loop already existed — `FeatureHistory`
+regenerates with prefix caching, `[Param(Min =, Max =)]` already declares the box, and any
+measurement a caller can write over a `Part` is an objective — so the feature is the loop,
+and every decision in it is about *what the loop is allowed to assume*.
+
+**Derivative-free is not a preference, it is forced.** A regeneration can change TOPOLOGY:
+raise a plate's thickness past a blind hole's depth and the hole breaks through; raise a
+fillet radius past half the face and the rim surgery refuses. A finite-difference gradient
+taken across such a step is not noisy, it is *meaningless* — the two sides are different
+solids. So the objective is treated as a black box that may also simply refuse.
+
+**Hooke–Jeeves rather than Nelder–Mead**, and the three reasons are all about this problem
+rather than about convergence rates. (a) *The box is the point.* `[Param(Min =, Max =)]` is
+where a feature already states what it accepts, and a great many real answers sit ON a
+bound; a simplex has no way to rest on one, and clamping its reflections collapses it,
+whereas a compass poll clamps to the bound and keeps polling. (b) *A refused design is
+just a poll that does not improve* — a simplex vertex that cannot be evaluated has to be
+given a fictitious value and can degenerate the simplex. (c) *The step size IS a distance
+in parameter space*, so the stopping rule states a bound on the ANSWER rather than on the
+objective spread. That last one is what makes the verification possible at all: the search
+halves every step together, so the last poll that improved nothing did so at a step `s`
+with `tol < s <= 2·tol`, and it moved the incumbent by ±`s` along each axis with neither
+direction better — so for an objective unimodal along the axis the optimum is within
+`2·tol`. `StudyResult.OptimumTolerance` is exactly that, and it returns **infinity** when
+the search stopped on its evaluation budget, because then no such claim exists.
+
+**Constraints are a feasibility FILTER, not a penalty.** A penalty needs a weight, and a
+weight silently trades one gram against one micrometre — a number nobody can justify —
+but the deciding argument is the other one: a penalized search *returns* the minimizer of
+`f + mu·g`, which for any finite `mu` is infeasible, so the study would hand back a beam
+that fails its own deflection limit and merely scored well. The filter compares
+`(violation, objective)` lexicographically, so a feasible point always beats an infeasible
+one and the answer meets its limits or the study says by name that it could not; while
+nothing feasible is known the search descends on violation alone, which is what gets it in
+from an infeasible start. Violation and margin are relative to each constraint's **own**
+limit, the only dimensionless ranking that needs no weight from the caller.
+
+**What stopped the search is a measurement, not a judgement.** A bound is binding when the
+answer's value *is* the bound — exact, no epsilon, because the clamp assigns it verbatim.
+A constraint is binding when, in the final poll round, it refused a neighbouring design
+whose objective was strictly better; that is the definition of "this is what stopped it",
+read off the search's own last act rather than inferred from a tolerance on a margin. The
+complete poll (every direction, every round) is what makes that reading available, and is
+why the poll is not opportunistic.
+
+**Three findings came out of building it.**
+
+*(1) A `Shape` graph is LAZY, so a geometric refusal usually does not surface at
+`Regenerate`.* A feature's `Apply` typically only builds a graph node, so the kernel's
+refusal ("the rim feature consumes the edge … its mitered corner offsets cross") is raised
+by the LOWERING — which happens the first time something measures the part. Measured: a
+`FilletRimFeature { Radius = 11 }` on a 30×20 plate regenerates with
+`RegenerationResult.Succeeded == true` and throws from `GetMesh`. A study watching only
+`Succeeded` would call that design fine. Hence two outcomes rather than one
+(`RegenerationFailed` / `MeasurementFailed`), both carrying the kernel's own words, and the
+study does NOT force a lowering of its own, because only the caller's measures know which
+representation they need.
+
+*(2) Halving every step together freezes the diagonal directions' SLOPE, and that is what
+stops a pattern search on an active constraint.* On a constraint coupling two variables the
+descent direction runs ALONG the boundary — a beam wants to be deeper *and* narrower — so
+no single-axis move helps and the poll needs diagonals. But a diagonal `(+s_i, −s_j)` points
+at slope `s_j/s_i`, and a shared halving leaves that ratio fixed for the whole run, so every
+diagonal is either always too steep (leaves the feasible set) or always too shallow (heavier).
+Measured on a two-variable beam whose depth should reach its ceiling of 25: with a shared
+step it stops at **21.92**. The fix is to search the RATIO — halve one axis's step at a time
+— which makes the reachable slopes a dyadic grid `s_j·2^a / s_i·2^b` that refines as the
+search does, and it reaches the analytic answer (depth exactly 25, width within tolerance of
+the closed-form 4.876). It runs **only** when a constraint refused an improving poll, which
+is the only situation the ratio can matter in, and both halves of that claim are pinned by
+test: the 21.92 through an internal `AdaptStepRatios` seam, and bit-identical trajectories
+where no constraint holds the answer. The direction set is still finite, so this is not a
+completeness claim — a boundary whose slope never lands between two reachable ones can still
+stop the search, and the honest fix is a direction set that becomes dense (OrthoMADS, whose
+Halton generator is deterministic), filed rather than guessed at.
+
+*(3) A study is an ANALYSIS, not an edit.* It restores the part to the values it started
+from and returns the answer as data. Two reasons: a search evaluates hundreds of designs
+and none of them is history, so pushing them onto an `UndoStack` would be absurd; and
+adopting the answer has to be a deliberate act, which `StudyResult.Edits(part)` makes one
+undoable `SetParameters` per driven feature through the same JSON seam as `SaveParameters`
+and MCP `set_param`. The study writes through that same seam internally rather than
+composing `DocumentEdits`, because one edit per feature would rebuild once per feature.
+
+**Verification is against closed forms, not against "it improved."** The cantilever's
+minimum-mass depth for a stated tip deflection is analytic — `delta = 4PL³/(E·b·d³)` gives
+`d* = cbrt(4PL³/(E·b·delta))` — and the study lands on 15.6201 mm against 15.6179, from the
+FEASIBLE side and inside the optimizer's own criterion, with "tip deflection" named as
+binding; a second limit lands on its own closed form, which is what separates agreement
+from coincidence. A monotone objective rests EXACTLY on the box edge (asserted with `==`,
+since the clamp assigns it) with the bound named; an unreachable limit is
+`NoFeasibleDesign` by name with the miss quantified; a kernel refusal appears in the
+trajectory and the search converges onto the refusal's own analytic boundary
+(`Shape.Drill`'s "centres must be more than one diameter apart"); and determinism is
+asserted on the WHOLE trajectory bit for bit rather than on the answer, because two
+searches can reach one point by different routes and only the routes would show it.
+
+Not in v1, stated rather than implied: discrete (`int`) parameters are refused by name
+rather than rounded; there is no memoization of repeated design points, so the trajectory
+is exactly the list of evaluations performed (which is what makes the determinism
+comparison mean what it says); and there is no `Maximize` — negate the objective, so a
+report cannot disagree with itself about which way is better.
+
 ## 6c. Drawings (hidden lines, sheets, drafting)
 
 A drawing is a *document*, not a picture, and the whole design follows from that.
