@@ -321,7 +321,8 @@ public readonly record struct DesignValue(DesignVariable Variable, double Value)
 /// </summary>
 /// <param name="Index">Position in the trajectory, from 0.</param>
 /// <param name="Kind">Why the point was visited.</param>
-/// <param name="Variable">The variable a poll moved (null for the start and for pattern moves).</param>
+/// <param name="Variable">The variable a poll moved — the FIRST of them for a diagonal
+/// poll, which moves two; null for the start and for pattern moves.</param>
 /// <param name="Step">The signed distance a poll moved it (0 otherwise).</param>
 /// <param name="Values">The whole design vector, aligned with <see cref="StudyResult.Variables"/>.</param>
 /// <param name="Outcome">What happened here.</param>
@@ -515,7 +516,10 @@ public sealed class StudyResult
         foreach (var value in Values)
         {
             if (ReferenceEquals(value.Variable.Feature, feature))
-                json[value.Variable.Parameter] = value.Value;
+            {
+                json[value.Variable.Parameter] = JsonSerializer.SerializeToNode(
+                    FeatureHistory.SerializeValue(value.Value), FeatureHistory.JsonOptions);
+            }
         }
         return json.Count == 0 ? null : json.ToJsonString(FeatureHistory.JsonOptions);
     }
@@ -633,7 +637,7 @@ public sealed class StudyResult
 ///
 /// <para><b>The study does not edit the document.</b> It restores the part to the values it
 /// started from and returns the answer as data; <see cref="StudyResult.Edits"/> turns that
-/// into undoable <see cref="DocumentEdit"/>s. A search evaluates thousands of points, and
+/// into undoable <see cref="DocumentEdit"/>s. A search evaluates hundreds of designs, and
 /// none of them is history.</para>
 /// </summary>
 public static class DesignStudy

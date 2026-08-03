@@ -386,7 +386,12 @@ Every point is a full regeneration plus whatever the measures cost, and nothing 
 memoized — the trajectory is exactly the list of evaluations performed, which is what makes
 the determinism comparison mean what it says. Budget accordingly: the one-variable
 cantilever above takes 35 regenerations, the two-variable one 496 (the ratio adaptation
-re-polls). `StudyOptions.MaxEvaluations` caps it, and `DesignStudy.Minimize` takes an
+re-polls). A failed round costs `2n` polls, `2n(n-1)` more if the diagonals are reached,
+and up to `n` times that again when a constraint triggers the ratio search — so a
+*constrained* study grows roughly as `n³` per round and the default budget of 2000 will
+stop a five-variable one early. It says so when it does: the stop reason is
+`EvaluationBudget` and `OptimumTolerance` returns infinity rather than a claim it cannot
+make. `StudyOptions.MaxEvaluations` caps it, and `DesignStudy.Minimize` takes an
 optional `ProgressCancel` whose reported fraction is the share of the step-halving schedule
 completed — the only honest fraction available, since how many poll rounds a given step
 size takes is not known in advance.
