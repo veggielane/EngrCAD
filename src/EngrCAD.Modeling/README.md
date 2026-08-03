@@ -2609,6 +2609,86 @@ world bounds — plus notes for meshing failures (named, not thrown) and active 
 flags; `ToText()` is the aligned table the viewer's **Check** button shows, and
 `AllClean` is the one-line assertion for scripts.
 
+## Manufacturability checks (`Manufacturability.cs`)
+
+Three design-for-manufacture questions over a `Part` — draft angle against a mould pull,
+overhang area against a print build direction, wall thickness — with one deliverable
+shape: a **report** to assert on plus a **`MeshField`** the existing `FieldDisplay`
+machinery colours with no new rendering code. Each report carries a ready `Display`, so
+the whole loop is three lines:
+
+```csharp
+var draft = Manufacturability.CheckDraft(part, pull: Vector3d.UnitZ, minimumAngleDegrees: 3);
+part.AddResult(draft.Field);
+part.FieldDisplay = draft.Display;
+```
+
+**Every check answers twice, at two stated fidelities.** The VERDICT comes from the most
+exact source the part has; the PICTURE comes from the display mesh and says so. That
+split is the point rather than a caveat — a report that cries wolf on correct output is
+worse than no report (`TetQuality`'s lesson), and the two sources genuinely differ.
+
+- **Draft** (`CheckDraft` → `DraftReport`/`DraftFaceCheck`): the angle is
+  `asin(n · pull)` — a wall PARALLEL to the pull reads 0 (it cannot release), a face
+  square to it ±90, and the SIGN says which mould half. A **planar** face is exact (one
+  normal, `Samples == 1`); a **curved** face is SAMPLED over the trimmed parameter domain
+  plus its pulled boundary loops and the row says so (`Sampled`, `Samples`). A part with
+  no B-Rep falls back to its facets with a `Note`, a reading that is conservative on
+  convex curvature. What it deliberately cannot see is a global **undercut** — a face can
+  have ample draft and still be shadowed by material above it, which is a visibility
+  question along ±pull rather than a normal question.
+- **Overhangs** (`CheckOverhangs` → `OverhangReport`): `asin(-n · build)` per facet — a
+  vertical wall reads 0, a ceiling +90 — with the area totalled plus `ProjectedArea`, the
+  build-plane footprint support material would occupy. Pure mesh arithmetic, exact for
+  the mesh given. There is no build PLATE in the model, so a face resting on the bed is
+  reported like any other ceiling.
+- **Wall thickness** (`CheckThickness` → `ThicknessReport`): an OPPOSING-FACE ray cast
+  reporting `t · |n · n_hit|` — the perpendicular distance from the vertex to the plane
+  of the facet it hit, not the raw ray length. **Exact wherever the opposing surface is
+  planar** (plates, ribs, bosses, webs, shelled prisms), which is also what makes a
+  tapered wall read its true perpendicular thickness. It **under-reports** against a
+  locally convex opposite and **over-reports** against a concave one, and since the whole
+  surface is probed the conservative reading is the one the minimum keeps; it measures
+  ALONG the surface normal, so at a fillet or an inside corner the medial-axis thickness
+  is smaller. A ray that never leaves the material declines, loudly.
+
+**Three rules the measurements forced, worth keeping.**
+
+**(a) A threshold is compared on the DOT PRODUCT, never on the derived angle.** `asin` is
+monotone so the two are the same statement mathematically — but a wall built at exactly
+45° reports `SteepestDegrees = 45.000000000000007`, because `asin` round-trips
+`1/sqrt(2)` an ulp high, so a degree comparison calls a wall drawn at the stated angle an
+overhang and reports 848.5 of area. `-n·b` against `sin(threshold)` carries one fewer
+rounding and gets it right; the reported degrees exist for humans.
+
+**(b) An unmeasurable point takes the conservative end of the scale, not NaN.**
+`FieldRange` skips NaN when ranging, but a NaN still paints as the colour map's BOTTOM
+stop — which on a thickness plot is the colour of the thinnest wall in the part, i.e. the
+exact defect the check exists to find. Those points carry the model's diagonal and are
+counted in `UnmeasuredCount`.
+
+**(c) A curved surface reports the TESSELLATION's angle.** An inscribed n-gon pyramid's
+lateral faces are steeper than their cone by exactly `atan(cos(pi/n))`, so a 45° cone
+reads 44.8617° at 32 segments and 44.9915° at 128 (matched to 1e-12) and passes a 45°
+threshold for a reason that is about the mesh. The tie is therefore pinned on PLANAR
+fixtures, and the bias is recorded rather than tuned away.
+
+**A field is per-VERTEX and a facet quantity is not**, so each vertex carries the worst
+reading among its incident facets — right for a check, and it means the worse face's
+value bleeds one ring into its neighbour and a large planar face with no interior
+vertices is interpolated from its corners. The report is the verdict; the picture is a
+locator.
+
+Verified against closed forms: a drafted block's walls read the drafted angle to 4.4e-16
+of a degree with every sign inverting under a reversed pull; a shelled box reads its wall
+to 2.2e-16 relative at scales 1e-3, 1 and 1e3 (every guard here is RELATIVE); a
+right-triangular prism reads `a·b/hypot(a,b)` where the raw ray length is 2.7% longer; a
+45° cone's lateral area converges quadratically on `sqrt(2)·pi·r²`; and the lower
+hemisphere is exactly half the sphere with its projected area converging on `pi·R²`. The
+complement is recorded too — a cap whose boundary falls INSIDE a face has that boundary
+snapped to a facet band, so its area is first order with a sign set by where the cutoff
+lands. Docs: `docs/examples/manufacturability.md`.
+
 ## 2D interchange (DXF & SVG)
 
 `DxfDocument` reads and writes 2D profiles (LINE / ARC / CIRCLE / LWPOLYLINE / SPLINE /

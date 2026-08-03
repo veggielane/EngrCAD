@@ -46,6 +46,8 @@
   href: annotations.md
 - name: Results & fields
   href: fields.md
+- name: Manufacturability checks
+  href: manufacturability.md
 - name: Remeshing
   href: remeshing.md
 - name: Tessellation quality
