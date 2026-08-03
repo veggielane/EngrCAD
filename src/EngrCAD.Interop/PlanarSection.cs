@@ -288,24 +288,16 @@ public static class PlanarSection
         var order = new List<int>(faces.Count);
         for (int i = 0; i < faces.Count; i++)
         {
-            uint x = (uint)Math.Clamp((faces[i].Centre.X - minX) * scaleX, 0, 65535);
-            uint y = (uint)Math.Clamp((faces[i].Centre.Y - minY) * scaleY, 0, 65535);
-            keys[i] = Interleave(x) | (Interleave(y) << 1);
+            uint x = (uint)Math.Clamp((faces[i].Centre.X - minX) * scaleX, 0, Morton2d.MaxCoordinate);
+            uint y = (uint)Math.Clamp((faces[i].Centre.Y - minY) * scaleY, 0, Morton2d.MaxCoordinate);
+            // Morton2d owns the interleave: EngrCAD.Core.Geometry2.SpaceFillingCurve's Z-order
+            // member walks the same codes, and two spellings of one bijection would let the
+            // silhouette fold's merge order and that curve's visit order silently disagree.
+            keys[i] = Morton2d.Encode(x, y);
             order.Add(i);
         }
         order.Sort((p, q) => keys[p].CompareTo(keys[q]));
         return order;
-    }
-
-    /// <summary>Spreads the low 16 bits of x so every other bit is zero (Morton part1by1).</summary>
-    private static uint Interleave(uint x)
-    {
-        x &= 0x0000FFFF;
-        x = (x | (x << 8)) & 0x00FF00FF;
-        x = (x | (x << 4)) & 0x0F0F0F0F;
-        x = (x | (x << 2)) & 0x33333333;
-        x = (x | (x << 1)) & 0x55555555;
-        return x;
     }
 
     // ---- mesh helpers ----

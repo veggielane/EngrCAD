@@ -381,6 +381,50 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   no rotation or concavity nesting in v1 (stated, not implied). Docs:
   `docs/examples/packing.md` (packed-plate render + one-STL export).
 
+### Space-filling infill (`SpaceFillingInfill.cs`)
+
+`SpaceFillingInfill.Fill(sketch, spacing, family, clearance)` clips one of Core's
+`SpaceFillingCurve`s to a sketch — a printed infill, a pocket-clearing pass, an engraved
+fill, a serpentine heater track. The result is an `InfillPath`: the generator's own report
+(family, order, `RequestedSpacing` **and** the `Spacing` it achieved — read the second when
+you size a bead), the path broken into the RUNS the clip left, the drawn `Length`, and the
+measurements needed to believe it. Docs: `docs/examples/infill.md`.
+
+- **The clip needs no tolerance.** `SketchRegion` is the sketch's own exact 2D signed
+  distance, so "is this point at least `clearance` inside the wall" is a comparison against
+  an exact number rather than a tolerant containment test. `clearance` defaults to half the
+  ACHIEVED spacing, which is what stops a bead of that width running into the perimeter;
+  `clearance: 0` fills to the boundary. Holes fall out of the parity for free.
+- **Coverage is measured, never inferred from the length.** `Footprint(width, join)` strokes
+  the runs through `Region2dOffset.Stroke` — already the toolpath-footprint operation —
+  and `CoveredArea`/`CoveredFraction` intersect that with the region. It converges on 1 with
+  order rather than reaching it: the clearance band along every wall and the outer half-cell
+  ring (the curve visits cell CENTRES) are uncovered by design. `RegionArea` is deliberately
+  the FLATTENED area, not `Sketch.Area()`'s exact one, so both sides of the ratio are
+  measured the same way. Isolated single-point runs are counted (`IsolatedPoints`) *and*
+  contribute their round-cap disc, since a fill that quietly drops them quietly loses
+  coverage. The stroke is the POLYGONAL tier rather than `CurvedRegion2dOffset`: a clipped
+  curve is straight segments only, so the two differ solely in the round joins and caps —
+  inscribed fans here, exact sectors there — which makes the reported coverage a one-sided
+  UNDER-estimate, the safe direction for a coverage claim.
+- **Both silent misses are refused by name**, because a fill that misses part of the region
+  without saying so is the one failure it must not have: a region the clearance erodes to
+  nothing ("would miss it entirely", naming the achieved spacing and pointing at
+  `clearance: 0`), and a connected PIECE of the eroded region that catches no point ("stepped
+  over it") — the erosion has already said a pass fits there, so that one is the lattice's
+  phase rather than the geometry. **The honest limit is stated**: a thin NECK inside a piece
+  that is otherwise filled is not refused (the piece as a whole does catch passes) and shows
+  up in `CoveredFraction` instead.
+- **`SpaceFillingFamily.ZOrder` is refused for a fill by name** — it is a spatial ordering
+  whose consecutive cells are up to a grid width apart, so a path built from it would be
+  mostly rapid moves. A self-intersecting outline is refused by `Region2d`'s own simplicity
+  guard (which names the crossing segments); an open chain cannot be spelled, since a
+  `Sketch` validates closure when it is built.
+- The bounds the curve is laid over are the **polygons'**, not `Sketch.Bounds` — the latter
+  reads the outer loop alone, so a region that comes back in several pieces (a "hole" outside
+  its outer loop is a detached piece, not a hole) would otherwise have a piece the curve
+  never reached.
+
 **Fidelity contract — read this before using regions for curved sketches.** Arcs and
 béziers are FLATTENED to polylines within `chordTolerance` (default 1e-3 model units,
 sagitta-sized for arcs, adaptive de Casteljau for béziers); lines are exact. Anything
