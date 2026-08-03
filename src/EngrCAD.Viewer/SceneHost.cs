@@ -319,6 +319,32 @@ internal sealed class SceneHost
         annotations.IsCheckedChanged += (_, _) => Viewport.ShowAnnotations = annotations.IsChecked ?? true;
         toolbar.Children.Add(annotations);
 
+        // How the overlay treats material in front of it — the section-axis cycler's
+        // idiom (a button whose label IS the state), beside the toggle it qualifies.
+        // Separate from that toggle deliberately: "is this dimension shown" and "which
+        // side of the part is it on" are different questions, and folding both into one
+        // three-state button would make hiding annotations cost two clicks.
+        Viewport.AnnotationDepth = EngrCad.CurrentOptions.AnnotationDepth;
+        var annotationDepth = new Button
+        {
+            Content = Viewport.AnnotationDepth == AnnotationDepth.Occluded ? "Depth" : "Top",
+            Padding = new Thickness(8, 4),
+            FontSize = 12,
+        };
+        ToolTip.SetTip(annotationDepth,
+            "3D-annotation depth - click to cycle: Top (the whole overlay over the model) / "
+            + "Depth (lines behind material recede; the values stay legible)");
+        annotationDepth.Click += (_, _) =>
+        {
+            bool occluded = Viewport.AnnotationDepth == AnnotationDepth.AlwaysOnTop;
+            Viewport.AnnotationDepth = occluded ? AnnotationDepth.Occluded : AnnotationDepth.AlwaysOnTop;
+            annotationDepth.Content = occluded ? "Depth" : "Top";
+            _statusText!.Text = occluded
+                ? "annotations: depth-tested (hidden stretches dimmed)"
+                : "annotations: always on top";
+        };
+        toolbar.Children.Add(annotationDepth);
+
         // Simulation results: on by default — a scene whose parts state a FieldDisplay
         // shows it. Switching off returns every part to its own colour and undeformed
         // shape, which is how a geometry view is taken of a model that carries results.

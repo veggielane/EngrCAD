@@ -49,6 +49,18 @@ public sealed class DrawCall
     /// fills the frame regardless of what is already in the depth buffer.</summary>
     [JsonPropertyName("depthTest")] public bool DepthTest { get; init; } = true;
 
+    /// <summary>
+    /// Depth comparison for this draw: null (the default) means <c>LESS</c>, GL's own
+    /// default and what every other draw assumes. The occlusion-aware annotation overlay
+    /// is the one consumer, and it needs BOTH spellings: <c>"lequal"</c> keeps the
+    /// fragments nothing hides, <c>"greater"</c> keeps exactly the rest, so one buffer
+    /// drawn twice partitions itself against the scene already in the depth buffer.
+    /// <para>A string rather than an int because the GL enum values are the browser's to
+    /// know — C# decides WHICH comparison, <c>engrcad-gl.js</c> maps the name, and no
+    /// numeric constant is duplicated across the interop boundary.</para>
+    /// </summary>
+    [JsonPropertyName("depthFunc")] public string? DepthFunc { get; init; }
+
     [JsonPropertyName("cull")] public bool Cull { get; init; } = true;
 
     /// <summary>Polygon offset (factor, units) — the fills-behind-edges trick the

@@ -91,6 +91,69 @@ scene.Add(part);
 
 ![A drafted bracket with an angular dimension, a toleranced width, hole-table balloons and the table note](images/annotations-extras.png)
 
+## Which side of the part is it on?
+
+By default the overlay is drawn **on top of everything**, so no dimension can ever be
+obscured. That is safe and says nothing: a dimension line placed at mid-thickness — the
+default placement for a face-to-face width — really runs *inside* the plate, and drawn
+over the top face it reads as though it were lying on it.
+
+`AnnotationDepth.Occluded` depth-tests the line work instead. Stretches with material in
+front of them are drawn dimmed; the **values stay at full strength wherever they sit**,
+because a dimension's number is what you are there to read and a half-obscured "40" is
+worth nothing. Compare the plate above with the same plate below: the width dimension
+sinks into the material and stops crossing its own text, while the bore leader — which
+lies *in* the top face — still reads as being on it.
+
+```csharp render:annotations-occluded
+var plate = Shape.Box(40, 20, 5)
+    .Drill(StandardHoles.Clearance(5), [new(-12, 0), new(12, 0)], depth: 6,
+        SketchPlane.At((0, 0, 2.5), Vector3d.UnitX, Vector3d.UnitY));
+
+var part = new Part("plate", plate);
+
+part.Annotate(LinearDimension.BetweenFaces(
+    s => s.PlanarFacesWithNormal(-Vector3d.UnitX).First(),
+    s => s.PlanarFacesWithNormal(Vector3d.UnitX).First()));
+
+var thickness = LinearDimension.BetweenFaces(
+    s => s.PlanarFacesWithNormal(Vector3d.UnitZ).First(),
+    s => s.PlanarFacesWithNormal(-Vector3d.UnitZ).First());
+thickness.Offset = new Vector3d(0, -16, 0);
+part.Annotate(thickness);
+
+part.Annotate(RadialDimension.OnEdge(
+    s => s.Faces.SelectMany(f => f.Edges()).Distinct()
+        .First(e => e.IsCircular(out var c, out _, out _) && c.X > 0 && c.Z > 2),
+    diameter: true));
+part.Annotate(HoleCallout.From(StandardHoles.Clearance(5), (-12, -2.75, 2.5), depth: 6));
+part.Annotate(new DatumLabel((-20, 8, 2.5), "A"));
+
+// The one line that differs from the render above.
+var annotationDepth = AnnotationDepth.Occluded;
+
+var scene = new Scene();
+scene.Add(part);
+```
+
+![The same plate with depth-tested annotations: the width dimension line dims where it runs inside the material, the values stay crisp](images/annotations-occluded.png)
+
+Reach it from the **Top / Depth** button beside the viewer's `Annot` toggle, from
+`EngrCad.Configure().WithAnnotationDepth(AnnotationDepth.Occluded)`, from
+`EngrCad.RenderToImage(..., annotationDepth:)`, from the MCP `screenshot` tool's
+`annotationDepth: "occluded"`, or — as above — by declaring an `annotationDepth`
+variable in a docs `render:` fence.
+
+Two properties are worth knowing because they are decisions rather than accidents:
+
+- **Nothing ever disappears.** A hidden stretch is dimmed, never dropped, so the
+  overlay stays complete and clicking still selects an annotation you can see
+  (picking is deliberately depth-blind, and stays so under either mode).
+- **An annotation lying exactly in a face counts as visible.** A radial dimension's
+  leader is coplanar with the face whose bore it measures; the overlay is pulled one
+  pixel toward the eye so that case is settled by decision rather than by which of two
+  rasterizations rounded further.
+
 ## The pieces
 
 - **`LinearDimension`** — between two *parallel planar* faces
@@ -131,7 +194,8 @@ scene.Add(part);
   line or leader (leave it zero for a screen-space default).
 
 In the viewer, annotations are on by default whenever a scene carries any (the
-**Annot** toolbar toggle hides them), always drawn on top of the model, and posed by
+**Annot** toolbar toggle hides them), drawn on top of the model unless the **Top /
+Depth** cycler beside it asks for the depth-tested reading above, and posed by
 the instance transform — assembly instances show their part's annotations in place.
 The **Measure** toggle turns clicks into surface-point picks: two picks create a
 transient point-to-point dimension, Escape clears it. Annotations are **pickable**:

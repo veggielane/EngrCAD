@@ -64,18 +64,98 @@ public readonly record struct AnnotationCamera(
 
     /// <summary>World length of <paramref name="px"/> style pixels at a world point.</summary>
     public double PxToWorld(double px, in Vector3d at) => px * PixelScale * WorldPerPixel(at);
+
+    /// <summary>
+    /// The point moved toward the eye until its view depth has fallen by
+    /// <paramref name="px"/> style pixels of world size — the depth bias
+    /// <see cref="AnnotationDepth.Occluded"/> applies (see
+    /// <see cref="AnnotationGeometry.OccludedDepthBiasPx"/> for why it exists).
+    /// <para><b>It moves the point ALONG ITS OWN EYE RAY, which is what makes it a pure
+    /// depth change.</b> Translating along the view direction instead is the obvious
+    /// form and is wrong under perspective: it slides the point off its ray, so the
+    /// projected position shifts by a fraction of a pixel — measured, enough to
+    /// redistribute an anti-aliased 1-pixel line's coverage and put 134 changed pixels
+    /// into a render whose overlay has nothing in front of it at all. Scaling about the
+    /// eye leaves the screen position exact and the depth reduced by exactly the bias,
+    /// so the only thing the mode can change is colour.</para>
+    /// <para>The scale factor is a CONSTANT for the whole overlay, because a perspective
+    /// pixel's world size is itself proportional to depth — the depth ratio cancels.
+    /// Under an orthographic projection the rays are parallel, so there the plain
+    /// translation IS the ray-preserving move.</para>
+    /// </summary>
+    public Vector3d PulledTowardEye(in Vector3d at, double px)
+    {
+        if (Orthographic)
+            return at - Forward * PxToWorld(px, at);
+        double shrink = px * PixelScale * 2 * Math.Tan(FovY / 2) / ViewportHeightPx;
+        return Eye + (at - Eye) * (1 - shrink);
+    }
 }
 
 /// <summary>
 /// Pure geometry for the annotation overlay (no GL — unit-testable): builds the line
 /// segments of dimension lines, extension lines, arrowheads, leaders, datum boxes,
 /// and stroke-font text, billboarded to the camera and sized in screen pixels.
+/// <para><b>Visible and hidden are never decided here.</b> Under
+/// <see cref="AnnotationDepth.Occluded"/> the SAME buffer is drawn twice by the front
+/// end, once accepting the fragments the model is in front of and once accepting the
+/// rest — the depth buffer already holds the scene, so occlusion costs no second build,
+/// no depth pre-pass and no CPU classification that three front ends could disagree
+/// about. What this file does own is the one split the depth buffer cannot make: the
+/// dimension's VALUE goes into a separate list from its POINTER (see
+/// <see cref="Build"/>'s <c>text</c> parameter).</para>
 /// </summary>
 public static class AnnotationGeometry
 {
     /// <summary>The overlay's line colour, shared by every front end (a second
     /// definition of what a dimension looks like would drift).</summary>
     public static readonly (float R, float G, float B) Color = (0.92f, 0.93f, 0.97f);
+
+    /// <summary>
+    /// The colour a stretch with material in front of it is drawn in under
+    /// <see cref="AnnotationDepth.Occluded"/> — <see cref="Color"/> darkened, so a
+    /// dimension behind the part recedes rather than disappearing.
+    /// <para><b>Darker rather than lighter, and that is not a taste call.</b> A hidden
+    /// fragment is by definition drawn over the occluder, never over empty space, so it
+    /// only ever has to read against MATERIAL — and material here is a lit fill from the
+    /// mid-tone part palette, always brighter than the background gradient. Darkening
+    /// therefore gains contrast in every case the mode can produce, where lightening
+    /// would lose it. Measured against the docs plate's top face at (0.51, 0.59, 0.69):
+    /// a first attempt at (0.44, 0.46, 0.52) left a channel-sum contrast of 93 and the
+    /// dimension line read as a smudge; this reads 231.</para>
+    /// <para><b>Dimmed rather than dashed.</b> A dashed hidden line is the drafting
+    /// convention this repo's own sheet output follows (<c>LineClass.Hidden</c>), and it
+    /// works there because a sheet's hidden lines are model EDGES. It also has no
+    /// orientation-free screen-space form: a stipple keyed on <c>gl_FragCoord</c> is
+    /// constant along some screen direction, so a line parallel to it comes out solid or
+    /// vanishes entirely — a real dash needs an along-the-line coordinate, which means a
+    /// per-vertex attribute reaching all three front ends. Dimming needs one uniform
+    /// that is already set per draw, and on line work reads the same.
+    /// <para>Only the line work is dimmed; the value is exempt (see
+    /// <see cref="Build"/>).</para></para>
+    /// </summary>
+    public static readonly (float R, float G, float B) HiddenColor = (0.28f, 0.30f, 0.36f);
+
+    /// <summary>
+    /// How far, in style pixels of world size, <see cref="AnnotationDepth.Occluded"/>
+    /// pulls the built overlay toward the eye.
+    /// <para><b>It exists because the interesting annotations are COPLANAR with the face
+    /// they document.</b> A radial dimension's leader lies exactly in the plane of the
+    /// face whose bore it measures, and a callout's arrow touches the surface it points
+    /// at; drawn without a bias, those fragments carry the same depth as the triangle
+    /// under them up to two different rasterizations' round-off, so a depth-tested
+    /// overlay speckles along the whole run instead of reading as "on the face". A bias
+    /// toward the eye settles it by DECISION rather than by rounding: coplanar means
+    /// visible.</para>
+    /// <para>Measured in screen pixels rather than in model units because that is the
+    /// one scale-free choice available to a screen-constant overlay — it is 0.09 model
+    /// units on a 40 mm plate framed at distance 60 (geometrically nothing, since the
+    /// hidden stretches this has to classify are millimetres deep) and over a hundred
+    /// depth-buffer bits at every distance a scene is normally framed at, because
+    /// depth resolution falls as z-squared while a pixel's world size grows only as z.
+    /// </para>
+    /// </summary>
+    public const double OccludedDepthBiasPx = 1.0;
 
     // Style, in logical pixels (multiplied by the camera's PixelScale).
 
@@ -117,11 +197,40 @@ public static class AnnotationGeometry
 
     /// <summary>Builds the whole overlay into <paramref name="segments"/> (cleared
     /// first). World-space output; layers draw it with an identity model matrix.</summary>
-    public static void Build(
+    /// <param name="segments">Output list, cleared first. Receives the whole overlay when
+    /// <paramref name="text"/> is null, and the LINE WORK only when it is not.</param>
+    /// <param name="items">Resolved annotations with their instance transforms.</param>
+    /// <param name="camera">Billboarding camera.</param>
+    /// <param name="depthBiasPx">How far toward the eye to pull the finished overlay, in
+    /// style pixels of world size — <see cref="OccludedDepthBiasPx"/> under
+    /// <see cref="AnnotationDepth.Occluded"/>, and exactly 0 (an exact-zero semantic
+    /// test, so the arithmetic is untouched and the geometry is bit-identical) for the
+    /// always-on-top default, which has no depth test for a bias to matter to.</param>
+    /// <param name="text">When supplied (cleared first), the stroke-font glyphs and datum
+    /// boxes go here instead of into <paramref name="segments"/>, so a front end can draw
+    /// the two with different depth behaviour.
+    /// <para><b>The split exists because of a MEASUREMENT, not a preference.</b> A
+    /// dimension's anatomy is a pointer and a value: the extension lines, dimension line,
+    /// leaders and arrowheads say WHERE, and which side of the material they run on is
+    /// real information; the text says WHAT, and its 3D position is a placement rather
+    /// than a measurement. Depth-treating the whole overlay on the docs plate turned
+    /// "40" and "&#x2300;5.5" into smudges — the two figures a reader is there for — while the
+    /// lines it dimmed read exactly as intended. So the value is exempt and the pointer
+    /// is not; a viewer that hid the number to show where the number was would have
+    /// spent the only thing it had.</para></param>
+    /// <returns>The number of segments written to <paramref name="segments"/> — the line
+    /// work — so a caller that concatenates the two lists into one upload knows where the
+    /// text range starts.</returns>
+    public static int Build(
         List<(Vector3d A, Vector3d B)> segments, IReadOnlyList<AnnotationItem> items,
-        in AnnotationCamera camera)
+        in AnnotationCamera camera, double depthBiasPx = 0,
+        List<(Vector3d A, Vector3d B)>? text = null)
     {
         segments.Clear();
+        text?.Clear();
+        // Null means "one list for everything", which is the incumbent behaviour and
+        // keeps the emission ORDER identical - what Pick and every always-on-top draw see.
+        var glyphs = text ?? segments;
         foreach (var item in items)
         {
             var annotation = item.Annotation;
@@ -131,23 +240,48 @@ public static class AnnotationGeometry
             switch (annotation.Kind)
             {
                 case AnnotationKind.LinearDimension:
-                    BuildLinear(segments, a, b, offset, annotation.Text, camera);
+                    BuildLinear(segments, glyphs, a, b, offset, annotation.Text, camera);
                     break;
                 case AnnotationKind.RadialDimension:
-                    BuildRadial(segments, a, b, offset, annotation.Text, camera);
+                    BuildRadial(segments, glyphs, a, b, offset, annotation.Text, camera);
                     break;
                 case AnnotationKind.LeaderNote:
-                    BuildLeader(segments, a, offset, annotation.Text, boxed: false, camera);
+                    BuildLeader(segments, glyphs, a, offset, annotation.Text, boxed: false, camera);
                     break;
                 case AnnotationKind.DatumLabel:
-                    BuildLeader(segments, a, offset, annotation.Text, boxed: true, camera);
+                    BuildLeader(segments, glyphs, a, offset, annotation.Text, boxed: true, camera);
                     break;
                 case AnnotationKind.AngularDimension:
-                    BuildAngular(segments, a, b,
+                    BuildAngular(segments, glyphs, a, b,
                         item.World.TransformPoint(annotation.AnchorC), offset,
                         annotation.Text, camera);
                     break;
             }
+        }
+
+        if (depthBiasPx != 0)
+        {
+            ApplyDepthBias(segments, camera, depthBiasPx);
+            if (text is not null)
+                ApplyDepthBias(text, camera, depthBiasPx);
+        }
+        return segments.Count;
+    }
+
+    /// <summary>
+    /// Pulls every built point toward the eye by <paramref name="depthBiasPx"/> style
+    /// pixels of view depth, through <see cref="AnnotationCamera.PulledTowardEye"/> —
+    /// which owns the rule that the move must be along the point's own eye ray, so the
+    /// overlay's screen position is untouched and only its depth changes.
+    /// </summary>
+    private static void ApplyDepthBias(
+        List<(Vector3d A, Vector3d B)> segments, in AnnotationCamera camera, double depthBiasPx)
+    {
+        for (int i = 0; i < segments.Count; i++)
+        {
+            var (a, b) = segments[i];
+            segments[i] = (camera.PulledTowardEye(a, depthBiasPx),
+                           camera.PulledTowardEye(b, depthBiasPx));
         }
     }
 
@@ -156,7 +290,8 @@ public static class AnnotationGeometry
     /// the arc's midpoint. The arc radius is the author's offset length when set, else
     /// three quarters of the shorter ray.</summary>
     private static void BuildAngular(
-        List<(Vector3d A, Vector3d B)> segments, in Vector3d a, in Vector3d b,
+        List<(Vector3d A, Vector3d B)> segments, List<(Vector3d A, Vector3d B)> glyphs,
+        in Vector3d a, in Vector3d b,
         in Vector3d vertex, in Vector3d offset, string text, in AnnotationCamera camera)
     {
         var va = a - vertex;
@@ -164,7 +299,7 @@ public static class AnnotationGeometry
         if (!va.TryNormalize(Tolerance.Default, out var dirA)
             || !vb.TryNormalize(Tolerance.Default, out var dirB))
         {
-            AddBillboardText(segments, vertex, text, camera);
+            AddBillboardText(glyphs, vertex, text, camera);
             return;
         }
         double angle = Math.Acos(Math.Clamp(dirA.Dot(dirB), -1, 1));
@@ -173,7 +308,7 @@ public static class AnnotationGeometry
         {
             // Parallel rays span no plane; the resolver refuses these, so this is
             // belt-and-braces for hand-built resolved annotations.
-            AddBillboardText(segments, vertex, text, camera);
+            AddBillboardText(glyphs, vertex, text, camera);
             return;
         }
 
@@ -206,7 +341,7 @@ public static class AnnotationGeometry
         var midDir = Rotate(dirA, axis, angle * 0.5);
         var arcMid = vertex + midDir * radius;
         var textCenter = arcMid + midDir * camera.PxToWorld(TextGapPx + TextHeightPx * 0.5, arcMid);
-        AddBillboardText(segments, textCenter, text, camera);
+        AddBillboardText(glyphs, textCenter, text, camera);
     }
 
     /// <summary>Rodrigues rotation of a vector about a unit axis.</summary>
@@ -285,7 +420,8 @@ public static class AnnotationGeometry
     /// <summary>The classic dimension: extension lines from the anchors, a dimension
     /// line between them with arrowheads at both ends, text centered above it.</summary>
     private static void BuildLinear(
-        List<(Vector3d A, Vector3d B)> segments, in Vector3d a, in Vector3d b,
+        List<(Vector3d A, Vector3d B)> segments, List<(Vector3d A, Vector3d B)> glyphs,
+        in Vector3d a, in Vector3d b,
         in Vector3d offset, string text, in AnnotationCamera camera)
     {
         var mid = (a + b) * 0.5;
@@ -293,7 +429,7 @@ public static class AnnotationGeometry
         if (!span.TryNormalize(Tolerance.Default, out var measureDir))
         {
             // Degenerate (zero-length) dimension: just show the text at the point.
-            AddBillboardText(segments, mid, text, camera);
+            AddBillboardText(glyphs, mid, text, camera);
             return;
         }
 
@@ -333,13 +469,14 @@ public static class AnnotationGeometry
         // Text centered above the dimension line (along the offset direction).
         var textCenter = (a2 + b2) * 0.5
             + offDir * camera.PxToWorld(TextGapPx + TextHeightPx * 0.5, (a2 + b2) * 0.5);
-        AddBillboardText(segments, textCenter, text, camera);
+        AddBillboardText(glyphs, textCenter, text, camera);
     }
 
     /// <summary>Radius/diameter dimension: arrow touching the circle pointing at the
     /// center, a radial leader outward, a short horizontal tail, text at its end.</summary>
     private static void BuildRadial(
-        List<(Vector3d A, Vector3d B)> segments, in Vector3d onCircle, in Vector3d center,
+        List<(Vector3d A, Vector3d B)> segments, List<(Vector3d A, Vector3d B)> glyphs,
+        in Vector3d onCircle, in Vector3d center,
         in Vector3d offset, string text, in AnnotationCamera camera)
     {
         var radial = onCircle - center;
@@ -355,13 +492,14 @@ public static class AnnotationGeometry
             ? onCircle + offset
             : onCircle + outward * camera.PxToWorld(LeaderLengthPx, onCircle);
         segments.Add((onCircle, elbow));
-        FinishLeaderText(segments, elbow, outward, text, boxed: false, camera);
+        FinishLeaderText(segments, glyphs, elbow, outward, text, boxed: false, camera);
     }
 
     /// <summary>Leader note / datum: arrow at the anchor, leader to the text
     /// (screen-space up-right by default), optional datum box around the text.</summary>
     private static void BuildLeader(
-        List<(Vector3d A, Vector3d B)> segments, in Vector3d anchor,
+        List<(Vector3d A, Vector3d B)> segments, List<(Vector3d A, Vector3d B)> glyphs,
+        in Vector3d anchor,
         in Vector3d offset, string text, bool boxed, in AnnotationCamera camera)
     {
         var leader = offset.LengthSquared > 0
@@ -372,7 +510,7 @@ public static class AnnotationGeometry
 
         AddArrowhead(segments, anchor, leaderDir, PerpendicularOnScreen(leaderDir, camera), camera);
         segments.Add((anchor, elbow));
-        FinishLeaderText(segments, elbow, leaderDir, text, boxed, camera);
+        FinishLeaderText(segments, glyphs, elbow, leaderDir, text, boxed, camera);
     }
 
     /// <summary>Shared leader ending: a short horizontal tail on the side the leader
@@ -381,7 +519,8 @@ public static class AnnotationGeometry
     /// on the right side and right-aligned against the tail on the left side, with the
     /// box (when boxed) spanning every line.</summary>
     private static void FinishLeaderText(
-        List<(Vector3d A, Vector3d B)> segments, in Vector3d elbow, in Vector3d leaderDir,
+        List<(Vector3d A, Vector3d B)> segments, List<(Vector3d A, Vector3d B)> glyphs,
+        in Vector3d elbow, in Vector3d leaderDir,
         string text, bool boxed, in AnnotationCamera camera)
     {
         double side = leaderDir.Dot(camera.Right) < 0 ? -1 : 1;
@@ -404,7 +543,7 @@ public static class AnnotationGeometry
                     ? tailEnd + camera.Right * gap
                     : tailEnd - camera.Right * (gap + lineWidth))
                 - camera.Up * (height * 0.5 + i * lineStep);
-            StrokeFont.AppendText(segments, lines[i], lineOrigin, camera.Right, camera.Up, height);
+            StrokeFont.AppendText(glyphs, lines[i], lineOrigin, camera.Right, camera.Up, height);
         }
 
         if (boxed)
@@ -417,7 +556,7 @@ public static class AnnotationGeometry
                     : tailEnd - camera.Right * (gap + maxWidth))
                 - camera.Up * (height * 0.5 + (lines.Length - 1) * lineStep);
             double boxHeight = height + (lines.Length - 1) * lineStep;
-            AddBox(segments, boxOrigin, camera.Right, camera.Up, maxWidth, boxHeight, pad);
+            AddBox(glyphs, boxOrigin, camera.Right, camera.Up, maxWidth, boxHeight, pad);
         }
     }
 
@@ -425,7 +564,7 @@ public static class AnnotationGeometry
     /// multi-line text (split on '\n') is stacked and centered as a block, each line
     /// centered within it.</summary>
     private static void AddBillboardText(
-        List<(Vector3d A, Vector3d B)> segments, in Vector3d center, string text,
+        List<(Vector3d A, Vector3d B)> glyphs, in Vector3d center, string text,
         in AnnotationCamera camera)
     {
         string[] lines = text.Split('\n');
@@ -437,7 +576,7 @@ public static class AnnotationGeometry
             double width = StrokeFont.TextWidth(lines[i]) * height;
             var origin = center - camera.Right * (width * 0.5)
                 + camera.Up * (blockHeight * 0.5 - height - i * lineStep);
-            StrokeFont.AppendText(segments, lines[i], origin, camera.Right, camera.Up, height);
+            StrokeFont.AppendText(glyphs, lines[i], origin, camera.Right, camera.Up, height);
         }
     }
 
@@ -456,17 +595,17 @@ public static class AnnotationGeometry
 
     /// <summary>A rectangle around a laid-out text run (the datum box), padded.</summary>
     private static void AddBox(
-        List<(Vector3d A, Vector3d B)> segments, in Vector3d origin,
+        List<(Vector3d A, Vector3d B)> glyphs, in Vector3d origin,
         in Vector3d right, in Vector3d up, double width, double height, double pad)
     {
         var bl = origin - right * pad - up * pad;
         var br = origin + right * (width + pad) - up * pad;
         var tr = origin + right * (width + pad) + up * (height + pad);
         var tl = origin - right * pad + up * (height + pad);
-        segments.Add((bl, br));
-        segments.Add((br, tr));
-        segments.Add((tr, tl));
-        segments.Add((tl, bl));
+        glyphs.Add((bl, br));
+        glyphs.Add((br, tr));
+        glyphs.Add((tr, tl));
+        glyphs.Add((tl, bl));
     }
 
     /// <summary>A screen-plane direction perpendicular to <paramref name="direction"/>

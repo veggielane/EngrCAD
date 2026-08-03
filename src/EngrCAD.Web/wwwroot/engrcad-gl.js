@@ -332,6 +332,12 @@ function drawFrame(ctx, frame) {
 
         gl.depthMask(call.depthWrite !== false);
         if (call.depthTest === false) gl.disable(gl.DEPTH_TEST); else gl.enable(gl.DEPTH_TEST);
+        // Depth comparison: LESS unless the call names another. Only the names C# can
+        // send are mapped -- WHICH comparison a draw wants is a .NET decision, this is
+        // the enum lookup the browser owns.
+        gl.depthFunc(call.depthFunc === 'lequal' ? gl.LEQUAL
+            : call.depthFunc === 'greater' ? gl.GREATER
+            : gl.LESS);
         if (call.blend) {
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);

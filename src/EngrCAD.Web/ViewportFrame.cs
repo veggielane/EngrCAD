@@ -116,7 +116,15 @@ public readonly record struct ViewportContours(
 /// </summary>
 /// <param name="Key">Upload key of the annotation line vertices.</param>
 /// <param name="VertexCount">Vertices in that upload (segments x 2).</param>
-public readonly record struct ViewportAnnotations(string Key, int VertexCount);
+/// <param name="LineWorkVertexCount">How many LEADING vertices of that upload are line
+/// work (extension lines, dimension lines, arrowheads, leaders); the rest is stroke-font
+/// text and datum boxes. One buffer, two ranges — the field legend's trick — because
+/// <see cref="AnnotationDepth.Occluded"/> draws the two differently: the line work says
+/// where and is depth-tested, the text says what and is not. Zero means "text range
+/// only", which never happens; equal to <paramref name="VertexCount"/> is the
+/// always-on-top build, where the whole upload is one undivided range.</param>
+public readonly record struct ViewportAnnotations(
+    string Key, int VertexCount, int LineWorkVertexCount = 0);
 
 /// <summary>
 /// The view cube's frame inputs: the canvas size (CSS pixels — the region maths is in
@@ -265,10 +273,16 @@ public static class ViewportFrame
     /// <param name="cube">The view cube, or null. Drawn last of all (the desktop rule:
     /// the cube is window chrome sitting on top of everything), into its own top-right
     /// sub-viewport with the depth buffer cleared first.</param>
-    /// <param name="annotations">The annotation overlay, or null. Drawn depth-off
-    /// (always-on-top v1) in the shared <c>AnnotationGeometry.Color</c>, never
-    /// section-clipped — annotations are documentation, not model geometry — after the
-    /// isolines and before the cube, the desktop pass order.</param>
+    /// <param name="annotations">The annotation overlay, or null. Drawn in the shared
+    /// <c>AnnotationGeometry.Color</c>, never section-clipped — annotations are
+    /// documentation, not model geometry — after the isolines and before the cube, the
+    /// desktop pass order.</param>
+    /// <param name="annotationDepth">How that overlay treats material in front of it —
+    /// the shared <see cref="AnnotationDepth"/> rule. AlwaysOnTop (default) is one
+    /// depth-off draw; Occluded is three over the SAME upload (line work at LEQUAL in
+    /// the normal colour, the same range at GREATER in
+    /// <c>AnnotationGeometry.HiddenColor</c>, then the text depth-off), which is the
+    /// desktop <c>AnnotationLayer.DrawBatches</c> transcribed as values.</param>
     public static FrameDescription Build(
         IReadOnlyList<ViewportInstance> instances,
         CameraState camera,
@@ -286,7 +300,8 @@ public static class ViewportFrame
         ViewportAnnotations? annotations = null,
         ViewportLegend? legend = null,
         double deformFactor = 1,
-        ShadingStyle shading = ShadingStyle.Lit)
+        ShadingStyle shading = ShadingStyle.Lit,
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
     {
         ArgumentNullException.ThrowIfNull(instances);
         ArgumentNullException.ThrowIfNull(camera);
@@ -540,30 +555,12 @@ public static class ViewportFrame
             }
         }
 
-        // Pass 6: the annotation overlay — depth test OFF (always-on-top v1, so
-        // dimensions read over the model from any angle) and never section-clipped
-        // (documentation, not model geometry). The desktop draws it at the same point:
-        // after the scene and its overlays, before the view cube.
+        // Pass 6: the annotation overlay — never section-clipped (documentation, not
+        // model geometry). The desktop draws it at the same point: after the scene and
+        // its overlays, before the view cube. Depth behaviour is the shared
+        // AnnotationDepth rule; see AppendAnnotations.
         if (annotations is { VertexCount: > 0 } pmi)
-        {
-            var uniforms = new Dictionary<string, object>
-            {
-                ["uModel"] = ColumnMajor(Matrix4d.Identity),
-                ["uColor"] = Rgb(AnnotationGeometry.Color),
-            };
-            if (sectionActive)
-                uniforms["uSectionEnabled"] = 0f;
-            draws.Add(new DrawCall
-            {
-                Program = LineProgram,
-                Geometry = pmi.Key,
-                First = 0,
-                Count = pmi.VertexCount,
-                DepthTest = false,
-                Cull = false,
-                Uniforms = uniforms,
-            });
-        }
+            AppendAnnotations(draws, pmi, annotationDepth, sectionActive);
 
         // Pass 6b: the field legend — with the annotations and before the cube, because
         // it is documentation about what the colours mean. Depth test off, its own
@@ -768,6 +765,66 @@ public static class ViewportFrame
                 Uniforms = uniforms,
             });
         }
+    }
+
+    /// <summary>
+    /// The annotation overlay's draws — the desktop <c>AnnotationLayer.DrawBatches</c>
+    /// rule as values.
+    /// <para><b>AlwaysOnTop</b>: one draw, depth test off, the whole upload.
+    /// <b>Occluded</b>: three draws over the SAME upload — the line-work range at
+    /// <c>LEQUAL</c> in <see cref="AnnotationGeometry.Color"/> (what nothing hides), the
+    /// same range at <c>GREATER</c> in <see cref="AnnotationGeometry.HiddenColor"/>
+    /// (exactly the rest, since the two comparisons partition the fragments with no
+    /// overlap), then the text range depth-off at full strength because a dimension's
+    /// VALUE is not a statement about where it sits.</para>
+    /// <para>Depth writes are off throughout: the overlay must not push the view cube or
+    /// the legend, which are drawn after it, out of the frame — and a disabled depth
+    /// test does not write depth either, so the two modes stay comparable.</para>
+    /// </summary>
+    private static void AppendAnnotations(
+        List<DrawCall> draws, ViewportAnnotations pmi, AnnotationDepth depth, bool sectionActive)
+    {
+        var identity = ColumnMajor(Matrix4d.Identity);
+        string key = pmi.Key;
+
+        DrawCall Range((float R, float G, float B) color, int first, int count, string? depthFunc)
+        {
+            var uniforms = new Dictionary<string, object>
+            {
+                ["uModel"] = identity,
+                ["uColor"] = Rgb(color),
+            };
+            if (sectionActive)
+                uniforms["uSectionEnabled"] = 0f;
+            return new DrawCall
+            {
+                Program = LineProgram,
+                Geometry = key,
+                First = first,
+                Count = count,
+                DepthTest = depthFunc is not null,
+                DepthWrite = false,
+                DepthFunc = depthFunc,
+                Cull = false,
+                Uniforms = uniforms,
+            };
+        }
+
+        if (depth != AnnotationDepth.Occluded)
+        {
+            draws.Add(Range(AnnotationGeometry.Color, 0, pmi.VertexCount, depthFunc: null));
+            return;
+        }
+
+        int lineWork = Math.Clamp(pmi.LineWorkVertexCount, 0, pmi.VertexCount);
+        if (lineWork > 0)
+        {
+            draws.Add(Range(AnnotationGeometry.Color, 0, lineWork, "lequal"));
+            draws.Add(Range(AnnotationGeometry.HiddenColor, 0, lineWork, "greater"));
+        }
+        if (lineWork < pmi.VertexCount)
+            draws.Add(Range(AnnotationGeometry.Color, lineWork, pmi.VertexCount - lineWork,
+                depthFunc: null));
     }
 
     /// <summary>

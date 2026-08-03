@@ -373,16 +373,62 @@ Dark-themed layout around one shared GL viewport:
   GL), billboarding is CPU-side and rebuilt **only when the camera pose, viewport,
   or annotation set changes** (value-equality on `AnnotationCamera` is the cache
   key — a static view costs one struct comparison per frame), and the batch draws
-  through the existing line program. Depth behavior is **always-on-top** in v1 (the
-  pass disables the depth test — dimensions read from any angle; occlusion-aware is
-  a follow-up), and annotations are never section-clipped (documentation, not model
-  geometry). Annotations pose with the instance transform, so assembly instances
+  through the existing line program. Annotations are never section-clipped
+  (documentation, not model geometry). Annotations pose with the instance transform, so assembly instances
   show their part's annotations in place; per-part resolution failures (a selector
   broken by an edit) surface in the status bar instead of killing the scene. The
   toolbar **Annot** toggle (`ViewportControl.ShowAnnotations`, default on) hides
   them, and **hiding a part hides its annotations with it** (the overlay's item set is
   rebuilt from the visible instances, so dimensions never float over an absent part). **Unlike the view cube, annotations DO render in headless offscreen output**
   — they are documentation content, so docs images can carry dimensions.
+- **Occlusion-aware annotations** (`AnnotationDepth`, in Viewer.Core beside
+  `ShadingStyle`; `ViewportControl.AnnotationDepth`, the toolbar's **Top / Depth**
+  cycler, `EngrCadOptions.AnnotationDepth`/`WithAnnotationDepth`,
+  `RenderToImage(annotationDepth:)`, the MCP `screenshot` tool's `annotationDepth`,
+  and a docs `annotationDepth` fence variable). `AlwaysOnTop = 0` is the default and
+  the incumbent look — the `ShadingStyle.Lit = 0` rule, so a front end that says
+  nothing renders what it always did. `Occluded` draws stretches with material in
+  front of them dimmed (`AnnotationGeometry.HiddenColor`).
+  - **The mechanism is two depth FUNCTIONS over one buffer, not a depth pre-pass.**
+    The scene is already in the depth buffer by the time the overlay draws, so the
+    line-work range is drawn at `LEQUAL` in the normal colour and the SAME range again
+    at `GREATER` in the hidden one. The two comparisons partition the fragments with
+    no overlap (LEQUAL takes equality, GREATER does not), so nothing is drawn twice,
+    nothing is dropped, and there is no CPU classification three front ends could
+    disagree about. `AnnotationLayer.DrawBatches` is the one rule; the browser's
+    `ViewportFrame.AppendAnnotations` emits it as values.
+  - **The dimension's VALUE is exempt**, and that came out of a measurement rather
+    than a preference: depth-treating the whole overlay turned "40" and "⌀5.5" on the
+    docs plate into smudges — the two figures a reader is there for — so
+    `AnnotationGeometry.Build` takes an optional second list for the stroke-font
+    glyphs and datum boxes, and the front ends draw that range depth-off at full
+    strength (one upload, two ranges — the field legend's trick). Passing null is the
+    incumbent single-list build in the incumbent order, which is what keeps
+    always-on-top and `AnnotationGeometry.Pick` bit-identical.
+  - **A one-pixel depth bias, moved along each point's own EYE RAY.** The interesting
+    annotations are coplanar with the face they document (a radial leader lies in the
+    plane of the face whose bore it measures), and without a bias those fragments are
+    classified by which of two rasterizations rounded further. `AnnotationCamera.PulledTowardEye`
+    owns the rule, and the ray is the load-bearing half: translating along the view
+    direction is the obvious form and slides a perspective point off its ray, which
+    redistributed an anti-aliased line's coverage and put **134 changed pixels** into a
+    render whose overlay had nothing in front of it. Scaled about the eye instead, the
+    screen position is exact, so the mode is a colour change and nothing else —
+    measured **663 darker pixels and 0 lighter** on the docs plate, and a free-space
+    annotation renders **byte-identically** in both modes.
+  - **Dimmed rather than dashed**, with a reason beyond the text: a screen-space
+    stipple keyed on `gl_FragCoord` — the "stippled shader variant" the backlog
+    proposed — is constant along some screen direction, so a line parallel to it comes
+    out solid or vanishes entirely. A real dash needs an along-the-line vertex
+    attribute reaching all three front ends; dimming needs a uniform already set per
+    draw. `HiddenColor` is DARKER than `Color`, which is not a taste call: a hidden
+    fragment is by definition drawn over the occluder, and every part colour is a lit
+    mid-tone brighter than the background, so darkening gains contrast in every case
+    the mode can produce.
+  - Picking stays **depth-blind** and is unchanged, which is consistent rather than a
+    leftover: nothing is hidden, so an annotation you can see is still pickable. The
+    selection highlight also stays always-on-top in both modes — a selection is UI
+    state, not documentation about the part.
 - **Measure tool** (toolbar **Measure**, `ViewportControl.MeasureMode`): while on,
   clicks pick **surface points** (the existing pick raycast, returning the exact
   hit point) instead of selecting parts; two picks create a **transient

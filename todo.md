@@ -2485,11 +2485,8 @@ honest no) is recorded in design.md §6b with the comparison committed as
 - [ ] **3D-annotation (PMI) residuals** (angular dimensions incl. `BetweenFaces`
   included-angle measurement, chain/ordinate styles, multi-line stroke-font layout
   with callout continuation lines, `ToleranceSpec` text sugar, `HoleTable` +
-  `HoleAnnotations.AutoAttach`, and pickable annotations ✅ landed):
-  - **Occlusion-aware rendering** (v1 is always-on-top with the depth test off;
-    depth-tested with a "hidden = dashed/dimmed" pass is the classic upgrade —
-    needs a second line batch split by a depth pre-pass or a stippled shader
-    variant, so it is real render-path work, not an overlay tweak).
+  `HoleAnnotations.AutoAttach`, pickable annotations, and **occlusion-aware
+  rendering** ✅ landed):
   - **Annotation editing from the viewport** (picking ✅ — selection reports the
     text; dragging a picked dimension's offset would be the next affordance).
   - True leader-less ordinate dimensioning (datum zero point + aligned coordinate
@@ -2497,6 +2494,23 @@ honest no) is recorded in design.md §6b with the comparison committed as
     baseline/running style.
   - Annotation persistence (JSON alongside `FeatureHistory.SaveParameters`) and
     STEP AP242 PMI export (far future).
+  - **Dashed hidden annotation line work** — residual of the occlusion pass, which
+    dims instead. Filed with its measurement rather than as a preference: a
+    screen-space stipple keyed on `gl_FragCoord` (the shape the backlog originally
+    proposed) is CONSTANT along some screen direction, so a line parallel to it comes
+    out solid or vanishes entirely — there is no orientation-free fragment form. A
+    real dash needs an along-the-line coordinate, and the cheap place for it is the
+    shared `AnnotationGeometry.Build`, which already rebuilds per camera and already
+    measures everything in screen pixels: chop each hidden-side segment into dashes
+    there and no shader, attribute or upload plumbing changes in any of the three
+    front ends. It would apply to the LINE WORK list only (the text list is exempt for
+    the reason the value/pointer split exists at all). Worth doing only if dimming
+    proves too weak on light part colours; `HiddenColor` is currently chosen against
+    the mid-tone palette and stated so.
+  - **Occlusion-aware hover/pick** is deliberately NOT open: nothing is hidden, so
+    depth-blind picking stays correct. It only becomes a question if a future mode
+    DROPS hidden stretches rather than dimming them, and that mode should not exist —
+    a dimension you cannot see is a dimension you cannot check.
 - [ ] **Construction-tree residuals** (rollback marker + suppress-from-tree +
   `[Param]` properties-panel editing + preview-restore-by-path + **typed editors**
   ✅ landed — `ParamEditors.KindFor` in Viewer.Core decides checkbox / enum dropdown /

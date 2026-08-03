@@ -250,6 +250,8 @@ public sealed class SceneTools(SceneSession session)
     /// pure <c>Animation.At(t)</c> the window scrubs and every export samples.</param>
     /// <param name="shading">How fills are lit: lit (default), clay, or metal — the
     /// analytic matcaps, the same <c>ShadingStyle</c> the window's toolbar offers.</param>
+    /// <param name="annotationDepth">How 3D annotations treat material in front of them:
+    /// top (default) or occluded — the same <c>AnnotationDepth</c> the window offers.</param>
     public CallToolResult Screenshot(
         [Description("Standard view: iso (default), front, back, left, right, top, bottom.")]
         string? view = null,
@@ -288,7 +290,11 @@ public sealed class SceneTools(SceneSession session)
         double? t = null,
         [Description("How fills are lit: lit (the standard directional light, default), clay, or "
                    + "metal (analytic matcaps).")]
-        string? shading = null)
+        string? shading = null,
+        [Description("How 3D annotations treat material in front of them: top (the whole overlay over "
+                   + "the model, default) or occluded (lines behind the part are dimmed; the values "
+                   + "stay legible).")]
+        string? annotationDepth = null)
     {
         // Arguments are validated before the GL check so a typo is reported as a typo
         // even on a machine with no GPU (and so the validation is testable there).
@@ -298,6 +304,8 @@ public sealed class SceneTools(SceneSession session)
             return Error(styleError);
         if (!TryResolveShading(shading, out var shadingStyle, out string? shadingError))
             return Error(shadingError);
+        if (!TryResolveAnnotationDepth(annotationDepth, out var pmiDepth, out string? pmiError))
+            return Error(pmiError);
         bool explicitCamera = cameraYaw is not null || cameraPitch is not null
             || cameraDistance is not null || cameraTarget is not null || cameraEye is not null;
         if (view is not null && explicitCamera)
@@ -388,7 +396,7 @@ public sealed class SceneTools(SceneSession session)
                     // still at t would show the model at the wrong exaggeration — the
                     // same value EngrCad.RenderToImage(scene, animation, t) sends.
                     deformFactor: animation?.At(t!.Value).DeformFactor ?? 1,
-                    shading: shadingStyle);
+                    shading: shadingStyle, annotationDepth: pmiDepth);
             }
             png = File.ReadAllBytes(temporary);
         }
@@ -971,6 +979,21 @@ public sealed class SceneTools(SceneSession session)
             default:
                 result = ShadingStyle.Lit;
                 error = $"Unknown shading '{shading}' — use lit, clay, or metal.";
+                return false;
+        }
+    }
+
+    private static bool TryResolveAnnotationDepth(
+        string? depth, out AnnotationDepth result, out string? error)
+    {
+        error = null;
+        switch (depth?.ToLowerInvariant())
+        {
+            case null or "" or "top": result = AnnotationDepth.AlwaysOnTop; return true;
+            case "occluded": result = AnnotationDepth.Occluded; return true;
+            default:
+                result = AnnotationDepth.AlwaysOnTop;
+                error = $"Unknown annotationDepth '{depth}' — use top or occluded.";
                 return false;
         }
     }

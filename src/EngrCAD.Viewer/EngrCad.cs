@@ -154,6 +154,9 @@ public static class EngrCad
     /// <para><paramref name="shading"/> selects how fills are lit — the standard
     /// directional light (default) or one of the analytic matcaps; see
     /// <see cref="ShadingStyle"/>.</para>
+    /// <para><paramref name="annotationDepth"/> selects how the 3D-annotation overlay
+    /// treats material in front of it — over the model (default) or depth-tested with
+    /// hidden stretches dimmed; see <see cref="AnnotationDepth"/>.</para>
     /// </summary>
     public static void RenderToImage(
         Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null,
@@ -165,7 +168,8 @@ public static class EngrCad
         ConstructionPreviewRequest? preview = null,
         double explode = 0,
         bool fields = true,
-        ShadingStyle shading = ShadingStyle.Lit)
+        ShadingStyle shading = ShadingStyle.Lit,
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
     {
         scene.PreMesh(); // tessellate before touching GL
         // Exact-zero semantic test: only an explode ASKED FOR derives offsets, so a plain
@@ -184,7 +188,8 @@ public static class EngrCad
             : (null, Matrix4d.Identity);
         OffscreenRenderer.RenderToImage(instances, path, width, height, camera,
             furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine, segments, world, fields, shading: shading);
+            sectionPlanes, sectionCombine, segments, world, fields, shading: shading,
+            annotationDepth: annotationDepth);
     }
 
     /// <summary>
@@ -210,7 +215,8 @@ public static class EngrCad
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         bool fields = true,
-        ShadingStyle shading = ShadingStyle.Lit)
+        ShadingStyle shading = ShadingStyle.Lit,
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
     {
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(animation);
@@ -235,7 +241,7 @@ public static class EngrCad
             sectionPlanes, sectionCombine, preview: null, previewWorld: null, fields,
             // A deformation track reaches the pass as one scalar; with no such track the
             // factor is 1, so a still of a pose-only animation is unchanged.
-            animation.At(t).DeformFactor, shading);
+            animation.At(t).DeformFactor, shading, annotationDepth);
     }
 
     /// <summary>
@@ -606,7 +612,7 @@ public static class EngrCad
         RenderToImage(scene, path, options.RenderWidth, options.RenderHeight, camera: null,
             options.RenderStyle, options.SectionAxis, options.SectionOffset, options.AmbientOcclusion,
             options.SectionPlanes, options.SectionCombine, preview: null, options.Explode,
-            shading: options.Shading);
+            shading: options.Shading, annotationDepth: options.AnnotationDepth);
         Log.WroteImage(log, path, scene.AllParts.Count());
         return 0;
     }
