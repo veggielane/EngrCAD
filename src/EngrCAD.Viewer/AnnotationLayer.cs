@@ -29,8 +29,8 @@ namespace EngrCAD.Viewer;
 /// <summary>
 /// GL-side owner of the annotation overlay: holds the resolved items (persistent
 /// per-instance annotations plus the measure tool's transient dimension), rebuilds
-/// billboarded geometry only when the camera or item set changes, and draws one line
-/// batch on top of the scene (depth test off — always-on-top v1; never
+/// billboarded geometry only when the camera, item set or depth mode changes, and draws
+/// it over the scene at the caller's <see cref="AnnotationDepth"/> (never
 /// section-clipped). All GL calls require a current context (render pass).
 /// </summary>
 internal sealed class AnnotationLayer

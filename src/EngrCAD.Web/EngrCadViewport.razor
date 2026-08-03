@@ -131,7 +131,8 @@
     /// <summary>3D annotations (PMI) — dimensions, leaders, datum labels resolved from
     /// each part's own <c>Part.Annotations</c> (on, the desktop's Annot default).
     /// Rendering is the shared <c>AnnotationGeometry</c>: billboarded, screen-constant,
-    /// always-on-top, never section-clipped. Hiding a part hides its annotations.</summary>
+    /// never section-clipped, and drawn at whatever <see cref="AnnotationDepth"/> says.
+    /// Hiding a part hides its annotations.</summary>
     [Parameter] public bool ShowAnnotations { get; set; } = true;
 
     /// <summary>How that overlay treats model geometry in front of it — the shared
