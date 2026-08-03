@@ -17,7 +17,12 @@
         </header>
     }
 
-    <EngrCadSceneView @ref="_view" Scene="_scene" Height="@Height" Class="viewport"
+    @* An `animate:` fence's own `animation` variable rides along, so the transport row
+       appears for exactly the examples the docs build renders as an APNG — and the frame
+       at t is the frame that APNG's frame at t was rendered from, both being
+       `Animation.At(t)`. *@
+    <EngrCadSceneView @ref="_view" Scene="_scene" Animation="_example?.Animation"
+                      Height="@Height" Class="viewport"
                       ShowTree="false" ShowStatus="@(!Embed)"
                       OnRendered="OnViewportRendered" />
 

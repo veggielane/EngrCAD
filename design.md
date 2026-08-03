@@ -4526,6 +4526,89 @@ and the live WebAssembly demo at `/live/`. CI merges the three trees into one `_
   committed `package-lock.json`, and `docs/writing-examples.md` tells a contributor how to
   build the site locally.
 
+## 8c. Live documentation examples
+
+Every example page carries a committed screenshot; each one whose snippet can run in a
+browser now also carries a **Run it in your browser** button that swaps the picture for the
+geometry kernel building *that* model in the reader's tab. The pieces are
+`tools/EngrCAD.DocsGen/LiveExamples.cs` (compile and emit), `src/EngrCAD.Web/LiveExample.cs`
+(load and run), `docs/site/src/live-examples.mjs` (the poster) and
+`samples/EngrCAD.WebDemo`'s `?example=<id>` (the host).
+
+- **The screenshot stays, and the viewer starts on a CLICK.** Three arguments, and the
+  first is the one that settles it: the committed PNGs are this repository's regression
+  oracle for anything that changes what a reader sees — an ambient-occlusion change moved 7
+  of 106, a 2D-stroke corner fix moved exactly the 2 stroke-derived figures, and a
+  whole-render refactor was validated by all 108 being byte-identical. A live-only page
+  throws that away. Second, it is a payload decision with numbers behind it: the app is
+  **2.8 MB brotli** and even without AOT the kernel runs ~19× slower than native, so
+  charging every reader of every page for a picture would be a bad trade, while a reader
+  who asked to interact has agreed to wait — and the runtime is then cached for every other
+  example they open. Third, the site keeps building with no GPU and the page degrades to
+  exactly the screenshot it always was with no JavaScript.
+- **The kernel RUNS; a baked mesh was the alternative and was declined.** `GltfWriter`
+  already exists, so shipping glTF per example would have been easy and would have made the
+  page a model viewer rather than a kernel demonstration — the interesting claim is that the
+  same code produces the same geometry in a browser, and only running it makes that claim.
+  What made running it affordable is that **the docs build already compiles every snippet**:
+  it compiles each one a second time and emits what it compiled (mean **6.0 KB**, max 12.0
+  KB, 710 KB for all 118), so the browser needs no Roslyn — which would be several megabytes
+  — and fetches one small file.
+- **The reference set IS the rule, so the C# compiler decides what is live.** The browser
+  compilation sees exactly the transitive closure `EngrCAD.Web` ships (Core, Mesh, Implicit,
+  BRep, Interop, Modeling, Viewer.Core) and no globals. A snippet reaching for `EngrCAD.Fea`,
+  for the desktop viewer's `EngrCad.RenderToImage` or `ConstructionPreviewRequest`, or for
+  the docs-only `Scratch` directory simply does not compile, and the refusal carries the
+  compiler's own words into the manifest. That is a maintained list nobody maintains: it
+  cannot go stale against a payload change, because it *is* the payload. Measured: **118 of
+  132** rendered examples run, the other 14 recorded with their reasons.
+- **The one thing a reference set cannot catch is an empty filesystem**, since the browser's
+  is an in-memory FS holding only the app's own assets. That is a short named list
+  (`System.IO.File`/`Directory`/`FileInfo`/`DirectoryInfo`/`FileStream`, `System.Environment`)
+  resolved through the **semantic model** rather than by scanning text — `heightmaps.md`
+  names `Heightmap.ReadPng` in a comment while computing its grid entirely procedurally, and
+  a substring scan refuses that page wrongly. Two `text.md` figures load a system font and
+  are the only examples it removes.
+- **A globals-less script cannot see `object`'s statics** — a real finding, because it looks
+  like a capability refusal and is a scope one. Roslyn puts a script's globals type's
+  members in scope, inherited ones included, so a submission compiled with no globals fails
+  on a bare `ReferenceEquals(a, b)`, which is legal in every ordinary C# class and is used by
+  `chamfer-fillet.md`'s drafted block. Passing `object` as the globals type restores exactly
+  that scope and nothing else: no assembly reference is added and `Scratch` still does not
+  exist, so the snippet that needs it is still refused for the right reason. That took the
+  live count from 117 to 118.
+- **The submission ABI is what neither side's compiler checks, so the round trip is the
+  test.** A snippet is a C# *script*: Roslyn compiles one into a type with a static
+  `<Factory>(object[])` returning `Task<object>`, where slot 0 of the array is the globals
+  and the factory parks the submission INSTANCE in slot 1 — and every top-level variable is a
+  **field on that instance**, which is exactly how `ScriptState.Variables` finds `scene`. The
+  loader reads the same fields without Roslyn, finding the factory by SHAPE rather than by
+  the `Submission#0` type name. `tests/EngrCAD.DocsGen.Tests` emits, loads, runs and compares
+  the *geometry* (a plate with a through bore against its own closed form), which is what a
+  "a scene came back" assertion would not.
+- **The trimmer is why it works, and it works by default — which is why it is now said out
+  loud.** A dynamically loaded example calls the kernel by reflection and the trimmer cannot
+  see it. Blazor WebAssembly trims in `partial` mode, leaving assemblies not marked
+  `IsTrimmable` alone, and none of ours is; the demo therefore lists the kernel assemblies as
+  `TrimmerRootAssembly`, which measured **costs nothing** (identical published size). Without
+  that, a default change would break every example that uses an API the demo itself does not
+  — which is most of them, and it would break at run time in the reader's browser.
+- **The manifest is the committed artifact and the assemblies are not.** `live-examples.json`
+  sits beside the markdown so a plain `npm run build` produces the same site CI does, and it
+  is deterministic on purpose — no timings, no byte counts (the informational-field rule the
+  document format already follows), so it is not dirty after every run. The assemblies go to
+  the demo's `wwwroot/examples/`, gitignored, where the publish picks them up as ordinary
+  static assets; CI's assemble step then asserts every live id in the manifest has its file,
+  because losing them is otherwise silent — the pages build, the buttons appear and every one
+  of them 404s.
+- **The poster's iframe URL is relative AND built in the browser**, from a `data-src`
+  attribute. Relative keeps the app path-portable (root, `/EngrCAD/`, local preview);
+  building it at click time keeps it out of the markup, so `check-links.mjs` — which resolves
+  every emitted `href` and `src` against the emitted files — does not fail on `live/`, a
+  directory CI merges in afterwards. What the checker *does* verify is the one thing a data
+  attribute can still get wrong: the number of `../` steps, asserted to resolve to
+  `<base>live/` from a page at any depth, and shown to fire.
+
 ## 9. Further capabilities
 
 - **A matcap is PROCEDURAL here, and the reason is the parity rule, not the look.**

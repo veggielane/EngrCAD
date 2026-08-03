@@ -14,7 +14,7 @@
       "id": "animate-load-ramp",
       "page": "examples/animation.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The name \u0027TetMesher\u0027 does not exist in the current context"
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
     },
     {
       "id": "animate-planetary",
@@ -90,7 +90,7 @@
       "id": "construction-preview",
       "page": "examples/viewer.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The type or namespace name \u0027ConstructionPreviewRequest\u0027 could not be found (are you missing a using directive or an assembly reference?)"
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'ConstructionPreviewRequest' could not be found (are you missing a using directive or an assembly reference?)"
     },
     {
       "id": "cycloidal-drive",
@@ -161,55 +161,55 @@
       "id": "fea-buckling-column",
       "page": "examples/fea-buckling.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The name \u0027TetMesher\u0027 does not exist in the current context"
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
     },
     {
       "id": "fea-fatigue-bracket",
       "page": "examples/fea-fatigue.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The type or namespace name \u0027StructuralModel\u0027 could not be found (are you missing a using directive or an assembly reference?)"
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'StructuralModel' could not be found (are you missing a using directive or an assembly reference?)"
     },
     {
       "id": "fea-fatigue-life-log",
       "page": "examples/fea-fatigue.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The type or namespace name \u0027StructuralModel\u0027 could not be found (are you missing a using directive or an assembly reference?)"
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'StructuralModel' could not be found (are you missing a using directive or an assembly reference?)"
     },
     {
       "id": "fea-modal-blade",
       "page": "examples/fea-modal.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The name \u0027TetMesher\u0027 does not exist in the current context"
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
     },
     {
       "id": "fea-sizing-field",
       "page": "examples/fea-meshing.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The name \u0027TetMesher\u0027 does not exist in the current context"
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
     },
     {
       "id": "fea-structural-bracket",
       "page": "examples/fea-structural.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The name \u0027TetMesher\u0027 does not exist in the current context"
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
     },
     {
       "id": "fea-tet-cutaway",
       "page": "examples/fea-meshing.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The name \u0027TetMesher\u0027 does not exist in the current context"
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
     },
     {
       "id": "fea-thermal-spreader",
       "page": "examples/fea-thermal.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The name \u0027TetMesher\u0027 does not exist in the current context"
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
     },
     {
       "id": "fea-transient-cantilever",
       "page": "examples/fea-transient.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The type or namespace name \u0027StructuralModel\u0027 could not be found (are you missing a using directive or an assembly reference?)"
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'StructuralModel' could not be found (are you missing a using directive or an assembly reference?)"
     },
     {
       "id": "feature-history",
@@ -315,7 +315,7 @@
       "id": "import-drilled",
       "page": "examples/import.md",
       "live": false,
-      "reason": "does not compile against the browser\u0027s assemblies: The name \u0027Scratch\u0027 does not exist in the current context"
+      "reason": "does not compile against the browser's assemblies: The name 'Scratch' does not exist in the current context"
     },
     {
       "id": "infill-hilbert",
@@ -621,13 +621,13 @@
       "id": "text-nameplate",
       "page": "examples/text.md",
       "live": false,
-      "reason": "reads the build machine\u0027s environment (System.Environment), and the browser\u0027s filesystem holds only the app\u0027s own assets"
+      "reason": "reads the build machine's environment (System.Environment), and the browser's filesystem holds only the app's own assets"
     },
     {
       "id": "text-on-path",
       "page": "examples/text.md",
       "live": false,
-      "reason": "reads the build machine\u0027s environment (System.Environment), and the browser\u0027s filesystem holds only the app\u0027s own assets"
+      "reason": "reads the build machine's environment (System.Environment), and the browser's filesystem holds only the app's own assets"
     },
     {
       "id": "thread-brep",

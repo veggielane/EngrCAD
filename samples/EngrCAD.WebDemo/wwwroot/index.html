@@ -41,6 +41,13 @@
         tr.total th, tr.total td { border-top: 1px solid #3a3d45; color: #dde1e6; font-weight: 600; }
         .error { background: #2b1f1f; color: #e07b6b; padding: .9rem; border-radius: 4px; white-space: pre-wrap; }
         .busy { color: #9aa0aa; }
+        /* ?example=<id>: one documentation example. Full-page it reads like the demo above;
+           embedded it fills the iframe the docs page sized to the screenshot's own aspect
+           ratio, so the live view frames the model the way the picture it replaced did. */
+        .example { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.5rem; }
+        .example.embed { max-width: none; margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; }
+        .example.embed > .viewport { flex: 1 1 auto; min-height: 0; margin: 0; border: 0; border-radius: 0; }
+        .example.embed > .error, .example.embed > .busy { margin: 0; padding: .6rem 1rem; }
         footer { margin-top: 2rem; border-top: 1px solid #2a2d33; padding-top: 1rem; }
         #blazor-error-ui { display: none; position: fixed; bottom: 0; width: 100%;
             background: #b03a2e; color: #fff; padding: .6rem 1rem; }

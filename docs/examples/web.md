@@ -63,38 +63,62 @@ A flange rather than a box on purpose: between them the boolean, face-splitting 
 trimmed-tessellation paths dominate kernel time, so the timings the panel reports mean
 something.
 
+## Run any example on this site
+
+Every other page's screenshot carries a **Run it in your browser** button. It swaps the
+picture for this same kernel, building *that page's* example in your tab — the model is
+not baked, it is built. 118 of the 132 rendered examples run; the rest are listed with
+their reasons in [Writing examples](../writing-examples.md#why-an-example-might-not-run).
+
+The screenshot stays the default and the viewer starts on a click, which is a payload
+decision with the numbers below behind it: the runtime is megabytes, so a reader who
+never clicks should not pay for it, and one who does gets it cached for every other
+example they open. The documentation build compiles each snippet a second time against
+exactly the assemblies this app ships and emits it as a **6 KB** assembly the page fetches
+on demand.
+
 ## What it costs
 
-Headless Edge on win-arm64, best of three page loads each running best-of-five builds,
-from **clean** publishes, with the desktop control interleaved so all three rows share
-one machine state (this laptop swings ~2× between runs of the *same* binary, so a ratio
+Headless Edge on **win-x64**, best-of-five builds per page load, from **clean** publishes,
+with the desktop control interleaved so all three rows share one machine state (a ratio
 taken across sittings would be noise with units):
 
-| | lower to B-Rep | tessellate | total | payload (brotli) |
+| | lower to B-Rep | tessellate | total | app payload (brotli) |
 | --- | --- | --- | --- | --- |
-| Desktop (native) | 36.4 ms | 52.3 ms | **88.7 ms** | — |
-| WASM, no AOT | 818.6 ms | 858.6 ms | **1677.3 ms** (18.9×) | **1.9 MB** |
-| WASM, AOT | 178.8 ms | 206.4 ms | **385.2 ms** (4.3×) | **4.6 MB** |
+| Desktop (native) | 107.6 ms | 111.5 ms | **219.1 ms** | — |
+| WASM, no AOT | 2294.1 ms | 2326.6 ms | **4620.8 ms** (21.1×) | **2.84 MB** |
+| WASM, AOT | 392.4 ms | 420.7 ms | **813.2 ms** (3.7×) | **7.03 MB** |
 
-Three things worth taking from that:
+These supersede an earlier win-arm64 table (88.7 / 1677.3 / 385.2 ms at 1.9 / 4.6 MB) that
+was measured on a different machine *and* against a much smaller kernel — the absolute
+figures have moved with both, and the ratios have barely moved at all, which is the part
+that was ever transferable. Four things worth taking from them:
 
 - **Correctness is not in question.** The browser produces 1 560 triangles, a closed
-  mesh and volume 41 573.0 mm³ — the same numbers as the desktop run, to the precision
-  displayed. There is no WASM-specific code path in the kernel, and no trouble from the
-  `ArrayPool` / `stackalloc` / `Vector<double>` machinery the performance mandates rely
-  on. WebAssembly is a **speed tier, not a port**.
-- **AOT buys 4.4× for 2.4× the download** (`wasm-tools` plus
-  `-p:RunAOTCompilation=true`). Which side of that trade to take is a deployment
-  decision. This page ships the *non*-AOT build for two reasons: AOT compilation adds
-  several minutes to every documentation deploy, and a slider that rebuilds the whole
-  model on release is a *transitional* demo — once the WebGL viewer lands you will orbit
-  a cached mesh rather than re-lower a B-Rep, and the rebuild cost stops being what the
-  page is about. An interactive editor would choose the other way.
-- **The kernel is a fifth of the download, and the runtime is the rest.** All nine
-  EngrCAD assemblies come to 1.14 MB uncompressed and 0.41 MB brotli, against a 1.9 MB
-  total; the single largest items are `System.Private.CoreLib` (1.53 MB) and
-  `dotnet.native.wasm` (1.43 MB) uncompressed. Trimming our own code could win at most
-  a few hundred kilobytes.
+  mesh and volume 41 573.0 mm³ — the same numbers as the desktop run in the same sitting,
+  to the precision displayed. There is no WASM-specific code path in the kernel, and no
+  trouble from the `ArrayPool` / `stackalloc` / `Vector<double>` machinery the performance
+  mandates rely on. WebAssembly is a **speed tier, not a port**.
+- **AOT buys 5.7× for 2.5× the download** (`wasm-tools` plus
+  `-p:RunAOTCompilation=true`). Which side of that trade to take is a deployment decision,
+  and this page still ships the *non*-AOT build — AOT compilation adds nearly four minutes
+  to every documentation deploy, and the interactive examples are things you *orbit* far
+  more than things you rebuild: the build happens once per click, the frames after it are
+  the same WebGL2 the desktop draws. An interactive editor would choose the other way.
+- **Time to a picture is not the row above**, and it is what a reader feels. The build is
+  only the first half; the second is meshing, which the viewport does after. Measured
+  through the live-example beacon (`?example=<id>&report`) on a warm runtime, from "the
+  iframe started" to "a finished frame is on the canvas": an extrusion **369 ms**, a sheet
+  metal bracket **461 ms**, a four-bar linkage **604 ms**, a B-Rep thread **1 075 ms**, a
+  sectioned housing with SDF isolines **1 093 ms**, a helical gear **6 712 ms**. So the
+  button is worth clicking and is worth *not* being automatic.
+- **The kernel is now most of our own share of the download, and the runtime is still the
+  rest.** The nine EngrCAD assemblies come to 2.87 MB uncompressed / 1.14 MB gzipped
+  against a 2.84 MB brotli total, the largest single items being `System.Private.CoreLib`
+  (0.51 MB brotli), `dotnet.native.wasm` (0.47 MB) and `EngrCAD.Modeling` (0.34 MB). The
+  live examples add **58 KB brotli** to the app — 48.8 of it `System.Net.Http`, which was
+  in the assembly list already and trimmed to nothing until something used it, and 7.6 the
+  reflection surface in `System.Private.CoreLib` — plus 6 KB per example, fetched on demand.
 
 ## No GLSL in JavaScript
 
@@ -162,6 +186,8 @@ the per-plane SDF isolines on each exposed cut face — the view cube with rotat
 3D annotations, the measure tool, exploded views, animation playback, a properties panel
 and a BOM view — all through the same shaders, the same `CameraMath`, the same
 mode-precedence rule, the same clip rule and the same pose table the desktop window and
-the headless renderer use. Still to build: construction-tree rows and their rollback
-previews — the parity ladder is in `todo.md`. The [Viewer](viewer.md) page describes
-what the desktop client already does, which is the target.
+the headless renderer use. It also hosts every other page's live example
+(`?example=<id>`), including the transport row for the ones an `animate:` fence renders as
+a clip. Still to build: construction-tree rows and their rollback previews — the parity
+ladder is in `todo.md`. The [Viewer](viewer.md) page describes what the desktop client
+already does, which is the target.
