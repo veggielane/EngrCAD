@@ -118,6 +118,68 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Interop / meshing (EngrCAD.Interop)
 
+- [ ] **STL → STEP: mesh → B-Rep RECONSTRUCTION — the one edge of the conversion triangle
+  that is missing, and the only one that is not a discretisation** (requested 2026-08-03,
+  and asked for AMBITIOUSLY, which is the whole point of the entry). Implicit→mesh,
+  B-Rep→mesh and mesh→implicit all THROW INFORMATION AWAY in a controlled manner. This
+  direction has to put information BACK, which is why it is a different kind of problem
+  and why it must not be filed as "one more converter".
+  - **Name the fake version first, because it is what "STL to STEP" usually means and it
+    is worthless.** Emitting one planar STEP face per triangle is nearly free —
+    `StepWriter` already writes planar faces — and produces a valid file that no CAD
+    system can fillet, no CAM system can machine and no human can edit: a 100k-face
+    "solid" that is the mesh wearing a different extension. **The headline metric is
+    therefore the FACE COUNT**: a drilled plate must come back with about seven faces,
+    not five thousand, and that single number separates this feature from its impostor.
+  - **The two input families are different problems and only one is v1.** A tessellation
+    of CAD geometry has vertices lying EXACTLY on the original surface, so a fit's
+    residual is the chord error and nothing else; a 3D SCAN has noise, outliers and
+    missing regions, and reverse-engineering it is a different product. v1 is the
+    tessellated case, said out loud. Note the hard floor either way: binary STL stores
+    float32, and CLAUDE.md already records that cracks below one float32 ulp cannot
+    exist — so **float32 quantisation bounds every recovered radius and angle**, and the
+    entry should state that bound rather than let a test discover it.
+  - **Five stages, and this repo already owns three of them.**
+    1. **Segmentation** — partition the mesh into regions that came from one surface.
+       `MeshFeatureEdges` (sharp dihedral) gives the creases, `MeshConnectedComponents`
+       the pieces, and per-vertex curvature the rest; region growing on normals and
+       curvature signs is the standard route.
+    2. **Primitive fitting** — plane / cylinder / cone / sphere / torus per region,
+       **with the residual REPORTED** (the `BiArcFit.MaxDeviation` convention). A region
+       is only called a cylinder when its residual says so; otherwise it is named as
+       unfitted rather than forced.
+    3. **Edge recovery — THE STAGE THAT DECIDES WHETHER THE RESULT CLOSES.** A region
+       boundary must become the EXACT INTERSECTION of the two fitted surfaces, never the
+       polyline the mesh happened to give: trim two analytic faces with a chordal
+       polyline and they do not meet, the solid does not close, and the failure surfaces
+       far downstream. `SurfaceIntersection` already computes those curves analytically
+       for exactly the pairs the fitter produces.
+    4. **Assembly** — build the `BrepSolid`, weld, `SealSeams`, `Validate()`. This is
+       what `ShapeHealing` was written for (its stated case is a third-party face soup
+       with duplicated edges and merely-coincident vertices), so the stage has a home.
+    5. **Freeform fallback** — a region fitting no analytic primitive wants a NURBS
+       surface fit. `NurbsSurface` exists; a SURFACE fitter does not (`NurbsCurve.
+       InterpolatePoints` is the curve twin). This is the genuinely new numerical work.
+  - **The verification bar is exact and needs no external data, which is what makes the
+    ambition affordable**: take a `BrepSolid` this kernel BUILT, tessellate it, convert
+    back, and compare against the original. The recovered surfaces must be the same
+    analytic TYPES with the same parameters to within the chord error; the face count
+    must match; the volume must agree to the tessellation's own convergence; and the
+    recovered radius of a cylinder tessellated at 32 / 64 / 128 / 256 segments must
+    converge — predictably, since an inscribed n-gon's vertices lie ON the cylinder, so
+    a vertex-fitted radius should be recovered essentially EXACTLY at every density, and
+    a fit that instead reports the inscribed radius is measurably wrong rather than
+    merely imprecise. That distinction is the test worth writing first.
+  - **Refuse by name**: feature recognition (calling something a counterbore is a
+    further and different problem), scan data (above), self-intersecting or non-manifold
+    input (`MeshRepair`/`AutoRepair` is the documented front door and should be pointed
+    at rather than silently invoked), and any claim of an exact result where a region
+    fell back to a NURBS fit — that face carries its residual and the report says so.
+  - **The honest closing note**: this is the entry most likely to produce a
+    plausible-looking wrong answer, because a STEP file that opens is persuasive. The
+    face count, the round-trip type comparison and `Validate()` are the three things
+    that stop it, and none of them is optional.
+
 - ~~**A grid quad's diagonal is chosen by CORNER ORDER, not geometry.**~~ ✅ **done** —
   `PolygonFan` is now the one rule (shorter 3D diagonal for quads, corner-0 fan for
   n-gons) and every consumer goes through it: `Triangulated`, `SignedVolume` via
