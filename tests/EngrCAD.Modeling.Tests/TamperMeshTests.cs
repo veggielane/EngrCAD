@@ -476,6 +476,12 @@ public class TamperMeshTests
             () => TamperMesh.Over(Wall(), pitch: 0.05, traceWidth: 0.01));
         Assert.Contains("cell cap", refusal.Message);
         Assert.Contains("FINEST pitch", refusal.Message);
+
+        // An absurdly fine pitch must REPORT the cap rather than walk to it one block at a
+        // time: the block count is estimated in floating point and checked against the cap
+        // before any integer refinement runs.
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => TamperMesh.Over(Wall(), pitch: 1e-12, traceWidth: 1e-13));
     }
 
     [Theory]

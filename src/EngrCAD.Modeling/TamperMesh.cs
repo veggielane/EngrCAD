@@ -200,10 +200,10 @@ public static class TamperMesh
             throw new ArgumentOutOfRangeException(nameof(maxCells), "The cell cap must be at least 1.");
 
         int m = 1 << blockOrder;
-        int blocksX = BlocksFor(width, m, pitch);
-        int blocksY = BlocksFor(height, m, pitch);
-        long cellsX = (long)blocksX * m;
-        long cellsY = (long)blocksY * m;
+        long blocksX = BlocksFor(width, m, pitch, maxCells);
+        long blocksY = BlocksFor(height, m, pitch, maxCells);
+        long cellsX = blocksX * m;
+        long cellsY = blocksY * m;
         if (cellsX * cellsY > maxCells)
         {
             throw new ArgumentOutOfRangeException(
@@ -227,34 +227,40 @@ public static class TamperMesh
                 nameof(traceWidth));
         }
 
-        var route = TiledHilbertRoute.Build(blockOrder, blocksX, blocksY);
+        var route = TiledHilbertRoute.Build(blockOrder, (int)blocksX, (int)blocksY);
         var origin = new Vector2d(footprint.Min.X, footprint.Min.Y);
 
         var built = new TamperNet[nets];
         for (int k = 0; k < nets; k++)
         {
-            // Spread the nets evenly ACROSS the corridor and keep the pattern centred on the
-            // route: net k sits at (k + 0.5)/N - 0.5 of a cell to the left of it. One net is
-            // therefore the bare route (delta exactly 0), and every gap between neighbouring
-            // conductors - within a corridor and across the boundary between two - is 1/N of
-            // a cell, which is what makes IsolationGap a single number.
+            // Spread the nets evenly ACROSS the corridor: net k sits (k + 0.5)/N - 0.5 of a
+            // cell to the left of the route. Every gap between neighbouring conductors -
+            // within a corridor and across the boundary between two - is then 1/N of a cell,
+            // which is what makes IsolationGap a single number. The set is SYMMETRIC about the
+            // route, so the pattern stays centred on the footprint: an ODD net count puts one
+            // net on the bare route (delta exactly 0), an even one straddles it.
             double delta = (k + 0.5) / nets - 0.5;
             var path = Place(OffsetRoute(route, delta), origin, pitchX, pitchY);
             built[k] = new TamperNet(k, path, traceWidth);
         }
         return new TamperMeshLayout(
-            footprint, blockOrder, blocksX, blocksY, (int)cellsX, (int)cellsY,
+            footprint, blockOrder, (int)blocksX, (int)blocksY, (int)cellsX, (int)cellsY,
             pitch, pitchX, pitchY, traceWidth, gap, built, route);
     }
 
     /// <summary>The smallest whole number of blocks whose cells are at or under
     /// <paramref name="pitch"/>. Decided by the SAME comparison that defines it — no epsilon,
     /// the generator's rule — so a footprint landing exactly on a block boundary is honoured
-    /// exactly.</summary>
-    private static int BlocksFor(double extent, int cellsPerBlock, double pitch)
+    /// exactly. The floating estimate is checked against <paramref name="cap"/> BEFORE the
+    /// integer refinement, so an absurdly fine pitch reports the cell cap instead of walking
+    /// to it one block at a time.</summary>
+    private static long BlocksFor(double extent, int cellsPerBlock, double pitch, long cap)
     {
         double perBlock = cellsPerBlock * pitch;
-        int blocks = Math.Max(1, (int)Math.Ceiling(extent / perBlock));
+        double estimate = Math.Ceiling(extent / perBlock);
+        if (!(estimate <= cap))
+            return cap + 1;
+        long blocks = Math.Max(1, (long)estimate);
         while (blocks * perBlock < extent)
             blocks++;
         while (blocks > 1 && (blocks - 1) * perBlock >= extent)
@@ -292,7 +298,7 @@ public static class TamperMesh
     }
 
     private static Vector2d LeftNormal(in Vector2i from, in Vector2i to) =>
-        new(-(to.Y - from.Y), to.X - from.X);
+        new Vector2d(to.X - from.X, to.Y - from.Y).Perpendicular;
 
     /// <summary>Lattice coordinates to model space: site (i, j) is the centre of its cell.</summary>
     private static Vector2d[] Place(Vector2d[] lattice, in Vector2d origin, double pitchX, double pitchY)
@@ -327,7 +333,7 @@ public sealed class TamperMeshLayout
     internal TamperMeshLayout(
         in Aabb footprint, int blockOrder, int blocksX, int blocksY, int cellsX, int cellsY,
         double requestedPitch, double pitchX, double pitchY, double traceWidth,
-        double isolationGap, IReadOnlyList<TamperNet> nets, IReadOnlyList<Vector2i> route)
+        double conductorSpacing, IReadOnlyList<TamperNet> nets, IReadOnlyList<Vector2i> route)
     {
         Footprint = footprint;
         BlockOrder = blockOrder;
@@ -339,7 +345,8 @@ public sealed class TamperMeshLayout
         PitchX = pitchX;
         PitchY = pitchY;
         TraceWidth = traceWidth;
-        IsolationGap = isolationGap - traceWidth;
+        // Centre to centre less one full width: the two half-widths facing each other.
+        IsolationGap = conductorSpacing - traceWidth;
         Nets = nets;
         Route = route;
     }
@@ -568,12 +575,8 @@ public sealed class TamperNet
         return offset;
     }
 
-    private static Vector2d UnitLeftNormal(in Vector2d from, in Vector2d to)
-    {
-        var d = to - from;
-        var n = new Vector2d(-d.Y, d.X);
-        return n / n.Length;
-    }
+    private static Vector2d UnitLeftNormal(in Vector2d from, in Vector2d to) =>
+        (to - from).Perpendicular.Normalized();
 }
 
 /// <summary>

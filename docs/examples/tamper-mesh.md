@@ -124,9 +124,10 @@ interleaved nets**, monitored for continuity *and* for mutual isolation, so a by
 conductive paint, or a probe — that spans the gap shorts the nets together and is seen.
 
 The nets are the same route offset evenly across each corridor, which is what makes the
-interleaving structural rather than arranged: one net is the bare route, and every gap between
-neighbouring conductors, inside a corridor and across the boundary between two, is the same
-number.
+interleaving structural rather than arranged: every gap between neighbouring conductors —
+inside a corridor and across the boundary between two — is the same number. The offsets are
+symmetric about the route, so the pattern stays centred on the footprint; an odd net count
+puts one net on the bare route and an even one straddles it.
 
 ```csharp run:tamper-mesh-nets
 var wall = Sketch.Rectangle(120, 80);
