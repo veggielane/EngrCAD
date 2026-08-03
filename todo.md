@@ -862,9 +862,14 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
       - **`BevelPair.PhaseFor(member)`** — the pair's TOOTH phasing is not solved, so a
         caller placing two members must phase them by hand (the docs example asserts the
         condition its own counts satisfy: contact at the pinion's 90° azimuth needs
-        z₁ % 4 == 0 and z₂ % 4 == 2). The `PlanetarySet` phase solve is the pattern —
-        same tooth-opposite-space relation, on the shared cone element instead of a
-        line of centres — and the contact instrument to verify it with already exists.
+        z₁ % 4 == 0 and z₂ % 4 == 2). **`GearMeshing` is now the pattern rather than
+        `PlanetarySet`** — the tooth-index coordinate `u(θ) = z(θ − φ − τ)/2π` and the
+        rolling invariant it makes are stated once there, and the contact instrument to
+        verify a phase with already exists (`GearMeshingTests`). It was deliberately NOT
+        landed with the parallel-axis rules, because a bevel's mesh happens on the shared
+        cone ELEMENT rather than on a line of centres, so the invariant has to be derived
+        for spherical rolling and then pulled back through Tredgold's projection —
+        genuinely a fourth derivation, not a fourth call of the third.
       - **Conical end faces** — the loft's sections must be planar, so the ends are
         planes rather than the back and front cones, which makes the heel section
         deeper than the real tooth (×2.4 at δ = 65°) and is what caps the cone angle
@@ -896,7 +901,15 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
       and a phased **two-disc stack** at 180° for balance; (e) a cycloidal-drive
       `Coupling` so a `MotionStudy` can drive the disc — the pose relation is already
       a closed form on `CycloidalDiscSpec` (`DiscRotation`/`DiscCentre`), so this is
-      wiring rather than kinematics; (f) `Curve2dChains.Fit` is the SAME recursive
+      wiring rather than kinematics. **It is also the one gear ANIMATION that would
+      not alias**: the docs' planetary clip has to run 30° of carrier and not loop,
+      because a seamless 120° loop puts a planet at 1.08 tooth pitches per frame at
+      24 frames (see `docs/examples/gears.md`), whereas a cycloidal drive turns its
+      disc only −36° — exactly one lobe, so ONE input turn is a seamless loop — over
+      a whole input revolution, i.e. 0.04 lobes per frame with nothing to alias.
+      Without the coupling there is no `MotionStudy` to hand `MechanismTrack`, and a
+      hand-rolled `PoseTrack` in a docs snippet would be the wrong place to put
+      kinematics; (f) `Curve2dChains.Fit` is the SAME recursive
       biarc fitter as `Gears.FitFlank` (exact points and tangents, split at the worst
       interior sample, deviation measured afterwards) — the involute file predates it
       and should delegate, one algorithm in one place.
@@ -920,11 +933,15 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
     - **A meshing PHASE for a crossed-helical pair** — `CrossedHelicalPair` places
       the two members at the right centre distance and shaft angle with their pitch
       cylinders tangent, but not at the angular phase that would put a tooth of one
-      in the gap of the other. That is a mate or a mechanism driver rather than a
-      property of the pairing (which flank drives is the caller's), and the same gap
-      exists for the spur pair, whose docs snippet phases by hand with a
-      `RotateZ(π − π/z)`. A `Mates`-level "mesh these two gear placements" helper
-      would serve both.
+      in the gap of the other. **The parallel-axis half of this is DONE**
+      (`GearMeshing`: external, internal and rack, verified from contact); what is
+      left is genuinely different, because on SKEW axes the members do not share a
+      transverse plane, so the tooth-index coordinates are taken in each member's own
+      plane and the relation between them carries the shaft angle. The rolling
+      invariant is the thing to derive; the tooth-index machinery and the contact
+      instrument then serve unchanged. Note the honest scope: a crossed pair touches
+      at a POINT, so "in mesh" means the two helicoids are tangent there rather than
+      a tooth filling a space, and the phase is only defined at the contact point.
     - **Non-circular/elliptical gears** — refuse by name for now: conjugacy for a
       stated centre-distance function is an integral condition, a different problem
       from fitting a known curve; file only if a consumer appears.

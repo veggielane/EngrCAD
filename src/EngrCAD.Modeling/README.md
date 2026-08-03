@@ -2279,6 +2279,75 @@ diameter z·m·cos α, tooth thickness m·(π/2 + 2x·tan α), the undercut limi
   outline's exact Green's-theorem area (the involute term is r_b²·t³/6), held
   against `Sketch.Area()` in tests.
 
+### Meshing a pair (`GearMeshing.cs`)
+
+Where a gear's centre goes and how far it must be TURNED for its teeth to enter
+another's spaces — the arithmetic every gear layout used to re-derive at the call
+site as a `RotateZ(π − π/z)`. `GearMeshing.External`/`Internal`/`Rack` return a
+`GearMesh` (a `Vector3d Centre` and a `double Phase`) with `Place(Shape)`,
+`Transform`, `Frame` and `RolledBy(radians)`.
+
+- **The rule depends on the tooth COUNTS and the drawing datum, not on the tooth
+  form** — two gears mesh when the pitch circles roll together and a tooth of one
+  sits in a space of the other, and neither statement mentions the flank curve. So
+  one helper serves involute, cycloidal and anything else drawn to the same datum;
+  the datum is stated rather than assumed (`Gears.Spur`/`CycloidalGears.Spur` draw
+  a TOOTH on +X, `PlanetaryGears.RingProfile` a tooth SPACE) and each half is
+  MEASURED in the tests off the region's own signed distance.
+- **The derivation is one idea used three times.** A gear of z teeth turned by φ
+  from a datum whose tooth centre lies at τ has the tooth-index coordinate
+  `u(θ) = z(θ − φ − τ)/2π` along a direction θ in its own frame — integer at a
+  tooth centre, half-integer at a space centre. What makes a mesh a CONSTRAINT is
+  that a combination of the two members' coordinates is invariant under rolling,
+  and which combination depends on how they roll: an external pair
+  counter-rotates, so `u_A(ψ) + u_B(ψ+π) ≡ ½`; an internal pair co-rotates and
+  engages along ψ from BOTH centres (the pinion's engaging tooth points outward),
+  so `u_R(ψ) − u_P(ψ) ≡ ½`; a rack ties `x = −r·φ`, so the pinion's coordinate at
+  −π/2 minus x/p is constant and the phase reduces to `φ = −π/2 − x/r`.
+- **External and internal depend on the azimuth with OPPOSITE signs, and the
+  planetary assembly condition is exactly the statement that they agree.** The two
+  differ by `2ψ(z_A + z_B)/z_B`, which is a whole tooth pitch — the same placement
+  — for every planet exactly when N divides `z_sun + z_ring`. That is why
+  `PlanetarySet` can satisfy both of a planet's meshes with one number, and why
+  the sign was unobservable in the code that already had it: what `PlanetPhase`
+  solved was the INTERNAL half, and it now delegates to `GearMeshing.InternalPhase`
+  bit-identically. Pinned both ways — three assembling sets agree to 1e-9 of a
+  pitch, and a five-planet set violating divisibility lands 16.8 pitches apart.
+- **Which flank drives is the caller's.** The phase returned is the SYMMETRIC one
+  (the tooth centred in the space, which at the standard centre distance and
+  standard proportions is zero-backlash contact on both flanks at once);
+  `RolledBy` moves onto one flank and nothing guesses which.
+- **A helical pair needs nothing extra**, and the reason is worth keeping: a
+  twisted extrusion's transverse section at height z is the drawn section turned
+  by ψ(z) = z·tan β / r, so the mesh condition holds at every section at once iff
+  `ψ_A·z_A + ψ_B·z_B` is constant in z — which, since ψ·z = 2z·tan β/m, is exactly
+  the equal-and-opposite helix requirement. Measured: clearance 0.141 mm at 0, ¼,
+  ½ and the full face width.
+- **Refusals by name**: a mismatched module or pressure angle, a ring with no more
+  teeth than the pinion inside it, and profile shifts that do not sum to zero —
+  that last one because `x₁ + x₂ = 0` is what KEEPS the standard centre distance
+  (the two pitch-circle thicknesses then sum to the circular pitch, so one
+  member's tooth exactly fills the other's space and the centres coincide), while
+  any other sum needs the involute-function solve for the operating distance. The
+  phase rule itself is unaffected, so the refusal names the tooth-count overload,
+  which takes the distance as an argument.
+- **Verified from CONTACT, never through `Coupling.Gear`** (which enforces a ratio
+  and says nothing about phase): one member's outline probed against the other's
+  exact 2D signed distance. Nominal external clearance 0.1413 mm at 0.4 mm of
+  extra centre distance; a half-pitch phase error reads −1.66 mm; the WRONG SIGN
+  on the azimuth term reads −0.017 to −1.67 mm, the smallest being the deliberate
+  near miss at ψ = 0.7 rad where the wrong sign lands 10.03 tooth pitches from the
+  right answer and still bites by eighty times the flank fit deviation.
+- **`GearTrainMotionTests` drives a meshed pair and checks every pose of the
+  sweep**, because a still only has to be right at one instant. Two mutations keep
+  the instrument honest: half a tooth pitch of phase error (the ratio still exact,
+  so the coupling is perfectly satisfied) reads −1.66 mm at every frame, and one
+  tooth of ratio error starts CLEAR at +0.14 mm and walks to −0.39 mm by the end
+  of the sweep — the failure a single still structurally cannot show.
+  `MotionStudy.CheckInterference` is cross-checked on the same rig and agrees; it
+  is the secondary instrument because it answers a boolean off the display
+  tessellation where the probe answers a depth off the exact profile.
+
 ### Racks (`Gears.Rack.cs`)
 
 The involute's straight-line limit, and so the DEFINITION of the tooth system
