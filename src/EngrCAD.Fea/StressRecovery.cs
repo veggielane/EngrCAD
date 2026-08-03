@@ -120,22 +120,62 @@ public readonly record struct ErrorEstimate(
 /// contributes nothing and any node left with no contribution keeps its averaged value.
 /// <see cref="RecoveredStress.FallbackNodes"/> counts them, because "the recovery quietly
 /// did not happen" and "the recovery happened" must not look the same.</para>
+///
+/// <para><b>A patch never spans a MATERIAL INTERFACE, and that restriction is not cosmetic.</b>
+/// At a bonded interface the stress tensor is genuinely discontinuous — only the traction
+/// across the interface is continuous, the components parallel to it jump with the modulus —
+/// and a polynomial fitted across the jump is wrong on both sides. What makes that worse than
+/// the smoothing plain averaging does is REACH: averaging is local, so only the shared node is
+/// blended, while a patch is written to every node of every element it contains, so one
+/// cross-interface fit corrupts a whole element layer of nodes that touch ONE material and
+/// have an unambiguous right answer. So patches are assembled at corner nodes touching exactly
+/// one region, contributions are accumulated per (node, region) SLOT, and the boundary fill
+/// walks within a region. A node on the interface then carries one recovered value per
+/// material (<see cref="StructuralResults.NodalStressIn"/>); the node-indexed field averages
+/// them, because a field with one value per node has nowhere else to go.</para>
 /// </summary>
 internal static class SuperconvergentRecovery
 {
     /// <summary>The recovered nodal stress and how much of it is genuinely recovered.</summary>
+    /// <param name="Stress">One value per NODE: the average of every patch that reached it,
+    /// across regions — the field a colour map shows.</param>
+    /// <param name="SlotStress">One value per (node, region) slot, indexed by
+    /// <see cref="AnalysisMesh.RegionSlot"/>. Equal to <paramref name="Stress"/> at every node
+    /// touching one region, by identical arithmetic rather than by tolerance.</param>
+    /// <param name="SlotContributions">Patch evaluations that reached each slot; zero means
+    /// that slot fell back.</param>
+    /// <param name="SlotsAreNodes">True when a slot index IS a node index, so
+    /// <paramref name="SlotStress"/> may be indexed by node. A consumer must read this rather
+    /// than ask the mesh: a recovery run with regions collapsed has node-indexed slots on a
+    /// mesh whose own slots are not nodes.</param>
+    /// <param name="FallbackNodes">Nodes no viable patch reached at all.</param>
+    /// <param name="RankDeficientPatches">Patches whose normal equations were singular.</param>
     internal readonly record struct RecoveredStress(
-        SymmetricTensor3[] Stress, int FallbackNodes, int RankDeficientPatches);
+        SymmetricTensor3[] Stress,
+        SymmetricTensor3[] SlotStress,
+        int[] SlotContributions,
+        bool SlotsAreNodes,
+        int FallbackNodes,
+        int RankDeficientPatches);
 
     /// <summary>
     /// Recovers a nodal stress field from a solved model.
     /// </summary>
     /// <param name="results">The solved results — the source of both the element stress and
     /// the fallback values.</param>
-    /// <param name="averaged">The directly averaged nodal stress, used wherever a node is
-    /// reached by no viable patch.</param>
+    /// <param name="averaged">The per-SLOT directly averaged stress, used wherever a slot is
+    /// reached by no viable patch. Indexed by slot, which is the node index whenever
+    /// <see cref="AnalysisMesh.RegionSlotsAreNodes"/>.</param>
+    /// <param name="respectRegions">
+    /// False collapses every element into ONE region, which is exactly the algorithm before
+    /// material interfaces were handled — a test seam, so the defect the region rule fixes can
+    /// be measured rather than asserted. Production never passes false; the single-region case
+    /// takes the same code path either way, which is what makes the identity checkable.
+    /// </param>
     public static RecoveredStress Recover(
-        StructuralResults results, IReadOnlyList<SymmetricTensor3> averaged)
+        StructuralResults results,
+        IReadOnlyList<SymmetricTensor3> averaged,
+        bool respectRegions = true)
     {
         var mesh = results.Mesh;
         int nodes = mesh.NodeCount;
@@ -150,8 +190,15 @@ internal static class SuperconvergentRecovery
         var isCorner = CornerNodes(mesh);
         var isBoundary = BoundaryNodes(mesh);
 
-        var accumulated = new SymmetricTensor3[nodes];
-        var contributions = new int[nodes];
+        // One slot per (node, region). Collapsing to one region reproduces the pre-interface
+        // algorithm exactly, because the slot of a node is then the node.
+        int slotCount = respectRegions ? mesh.RegionSlotCount : nodes;
+        (int Start, int End) SlotsAt(int node) =>
+            respectRegions ? mesh.RegionSlotRange(node) : (node, node + 1);
+        int SlotOf(int node, int region) => respectRegions ? mesh.RegionSlot(node, region) : node;
+
+        var accumulated = new SymmetricTensor3[slotCount];
+        var contributions = new int[slotCount];
 
         // Per-patch scratch, sized for the largest patch we might meet. Grown on demand.
         var normal = new double[terms * terms];
@@ -172,8 +219,8 @@ internal static class SuperconvergentRecovery
         var patchOrigin = new List<Vector3d>();
         var patchScale = new List<double>();
         var patchCoefficients = new List<double[]>();
-        // Which patch reached each node first, for the fill's breadth-first walk.
-        var source = new int[nodes];
+        // Which patch reached each SLOT first, for the fill's breadth-first walk.
+        var source = new int[slotCount];
         Array.Fill(source, -1);
 
         int rankDeficient = 0;
@@ -182,6 +229,14 @@ internal static class SuperconvergentRecovery
         {
             if (!isCorner[node] || isBoundary[node])
                 continue;
+            // A node on a material interface gets no patch of its own: a patch there would
+            // either span the jump or be one-sided, and a one-sided fit is exactly what the
+            // boundary exclusion above exists to avoid. Its values come from its neighbours'
+            // patches instead, one per region, as a boundary corner's do.
+            var (slotStart, slotEnd) = SlotsAt(node);
+            if (slotEnd - slotStart != 1)
+                continue;
+            int patchRegion = respectRegions ? mesh.RegionOfSlot(slotStart) : 0;
             var (start, end) = adjacency.Range(node);
             int patchElements = end - start;
             if (patchElements == 0)
@@ -259,8 +314,11 @@ internal static class SuperconvergentRecovery
                 var element = mesh.Element(adjacency.Items[k]);
                 for (int i = 0; i < perElement; i++)
                 {
-                    int target = element[i];
-                    Evaluate(terms, origin, inv, coefficients, mesh.Position(target), basis, value);
+                    // Every element of this patch is in patchRegion, so the slot always
+                    // exists — a node on the interface takes its patchRegion slot here and
+                    // the other material's from the other side's patches.
+                    int target = SlotOf(element[i], patchRegion);
+                    Evaluate(terms, origin, inv, coefficients, mesh.Position(element[i]), basis, value);
                     accumulated[target] += TetElement.ToTensor(value, engineeringShear: false);
                     contributions[target]++;
                     if (source[target] < 0)
@@ -271,23 +329,47 @@ internal static class SuperconvergentRecovery
 
         FillFromNearestPatch(
             mesh, adjacency, terms, patchOrigin, patchScale, patchCoefficients,
-            source, accumulated, contributions, basis, value);
+            source, accumulated, contributions, basis, value, respectRegions);
 
         int fallbacks = 0;
+        var slotStress = new SymmetricTensor3[slotCount];
         var recovered = new SymmetricTensor3[nodes];
         for (int v = 0; v < nodes; v++)
         {
-            if (contributions[v] > 0)
+            var (from, to) = SlotsAt(v);
+            // Summed from the FIRST slot rather than from a zero tensor, so a node with one
+            // slot reproduces the pre-interface expression bit for bit (adding a zero is not
+            // the identity on a negative zero).
+            var sum = from < to ? accumulated[from] : default;
+            int total = from < to ? contributions[from] : 0;
+            for (int s = from; s < to; s++)
             {
-                recovered[v] = accumulated[v] * (1.0 / contributions[v]);
+                if (s > from)
+                {
+                    sum += accumulated[s];
+                    total += contributions[s];
+                }
+                slotStress[s] = contributions[s] > 0
+                    ? accumulated[s] * (1.0 / contributions[s])
+                    : averaged[s];
+            }
+
+            if (total > 0)
+            {
+                recovered[v] = sum * (1.0 / total);
             }
             else
             {
-                recovered[v] = averaged[v];
+                // No patch reached this node in ANY of its regions, so it keeps the directly
+                // averaged value. A node in NO element has no slot and no average either —
+                // zero is what the averaging pass leaves there, so it is what this leaves too.
+                recovered[v] = from < to ? averaged[from] : default;
                 fallbacks++;
             }
         }
-        return new RecoveredStress(recovered, fallbacks, rankDeficient);
+        return new RecoveredStress(
+            recovered, slotStress, contributions,
+            !respectRegions || mesh.RegionSlotsAreNodes, fallbacks, rankDeficient);
     }
 
     /// <summary>Evaluates a fitted patch polynomial at a physical point.</summary>
@@ -326,6 +408,11 @@ internal static class SuperconvergentRecovery
     /// It degrades with distance, which is why the walk takes the NEAREST patch in graph
     /// distance rather than any patch, and why nodes are filled in rounds rather than all
     /// from one seed.</para>
+    ///
+    /// <para><b>The walk stays inside one material.</b> It fills SLOTS, and a slot's region
+    /// admits only elements of that region and only patches fitted in it — otherwise the
+    /// interface exclusion above would be undone one round later, by extrapolating the other
+    /// material's polynomial into this one.</para>
     /// </summary>
     private static void FillFromNearestPatch(
         AnalysisMesh mesh,
@@ -338,40 +425,58 @@ internal static class SuperconvergentRecovery
         SymmetricTensor3[] accumulated,
         int[] contributions,
         Span<double> basis,
-        Span<double> value)
+        Span<double> value,
+        bool respectRegions)
     {
         if (patchOrigin.Count == 0)
             return;
 
+        int nodes = mesh.NodeCount;
         var pending = new List<int>();
+        var pendingNode = new List<int>();
         var assigned = new List<int>();
         while (true)
         {
             pending.Clear();
+            pendingNode.Clear();
             assigned.Clear();
-            for (int node = 0; node < contributions.Length; node++)
+            for (int node = 0; node < nodes; node++)
             {
-                if (contributions[node] > 0)
-                    continue;
-                // The nearest already-covered neighbour's patch. Index order throughout, so
-                // the answer does not depend on a traversal the caller cannot see.
-                int found = -1;
-                var (start, end) = adjacency.Range(node);
-                for (int k = start; k < end && found < 0; k++)
+                var (slotStart, slotEnd) =
+                    respectRegions ? mesh.RegionSlotRange(node) : (node, node + 1);
+                for (int slot = slotStart; slot < slotEnd; slot++)
                 {
-                    foreach (int neighbour in mesh.Element(adjacency.Items[k]))
+                    if (contributions[slot] > 0)
+                        continue;
+                    int region = respectRegions ? mesh.RegionOfSlot(slot) : 0;
+
+                    // The nearest already-covered neighbour's patch, within this region.
+                    // Index order throughout, so the answer does not depend on a traversal
+                    // the caller cannot see.
+                    int found = -1;
+                    var (start, end) = adjacency.Range(node);
+                    for (int k = start; k < end && found < 0; k++)
                     {
-                        if (source[neighbour] >= 0)
+                        int element = adjacency.Items[k];
+                        if (respectRegions && mesh.RegionOf(element) != region)
+                            continue;
+                        foreach (int neighbour in mesh.Element(element))
                         {
-                            found = source[neighbour];
-                            break;
+                            int neighbourSlot =
+                                respectRegions ? mesh.RegionSlot(neighbour, region) : neighbour;
+                            if (source[neighbourSlot] >= 0)
+                            {
+                                found = source[neighbourSlot];
+                                break;
+                            }
                         }
                     }
-                }
-                if (found >= 0)
-                {
-                    pending.Add(node);
-                    assigned.Add(found);
+                    if (found >= 0)
+                    {
+                        pending.Add(slot);
+                        pendingNode.Add(node);
+                        assigned.Add(found);
+                    }
                 }
             }
             if (pending.Count == 0)
@@ -379,14 +484,14 @@ internal static class SuperconvergentRecovery
 
             for (int i = 0; i < pending.Count; i++)
             {
-                int node = pending[i];
+                int slot = pending[i];
                 int patch = assigned[i];
                 Evaluate(
                     terms, patchOrigin[patch], patchScale[patch], patchCoefficients[patch],
-                    mesh.Position(node), basis, value);
-                accumulated[node] = TetElement.ToTensor(value, engineeringShear: false);
-                contributions[node] = 1;
-                source[node] = patch;
+                    mesh.Position(pendingNode[i]), basis, value);
+                accumulated[slot] = TetElement.ToTensor(value, engineeringShear: false);
+                contributions[slot] = 1;
+                source[slot] = patch;
             }
         }
     }
