@@ -65,10 +65,14 @@ The report names them:
 
 ```text
 Draft against pull (0, 0, 1), minimum 3.00 deg
-! face 6 (Cylindrical) at (-18, 0, 0): 0.00 deg over 763.407 area (640 samples)
-! face 7 (Cylindrical) at (18, 0, 0): 0.00 deg over 763.407 area (640 samples)
+! face 6 (Cylindrical) at (-18, 4.44089E-16, 0): 0.00 deg over 763.407 area (640 samples)
+! face 7 (Cylindrical) at (18, 4.44089E-16, 0): 0.00 deg over 763.407 area (640 samples)
 2 of 8 face(s) under 3.00 deg, 1526.81 of area; worst 0.00 deg.
 ```
+
+Each failing row carries the face's `Bounds().Center` — a face is located by its bounds,
+never by a plane's stored origin, which is an arbitrary in-plane point — its area, and
+whether the angle was read off one exact normal or measured over N samples.
 
 `Display` uses the **diverging** map over a range centred on zero and saturating at twice
 the minimum, so the two mould halves take the two colours and the neutral midpoint is
