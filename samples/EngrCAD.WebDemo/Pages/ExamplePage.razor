@@ -1,0 +1,215 @@
+@using System.Diagnostics
+@using System.Text.RegularExpressions
+@using EngrCAD.Viewer
+@using EngrCAD.Web
+@inject HttpClient Http
+
+<div class="example @(Embed ? "embed" : null)">
+    @if (!Embed)
+    {
+        <header>
+            <h1>@Id</h1>
+            <p>
+                A documentation example, compiled by the docs build and run here: the geometry
+                below was built by the kernel in this tab. Drag to orbit, shift+drag to pan,
+                scroll to zoom.
+            </p>
+        </header>
+    }
+
+    @* An `animate:` fence's own `animation` variable rides along, so the transport row
+       appears for exactly the examples the docs build renders as an APNG — and the frame
+       at t is the frame that APNG's frame at t was rendered from, both being
+       `Animation.At(t)`. *@
+    <EngrCadSceneView @ref="_view" Scene="_scene" Animation="_example?.Animation"
+                      Height="@Height" Class="viewport"
+                      ShowTree="false" ShowStatus="@(!Embed)"
+                      OnRendered="OnViewportRendered" />
+
+    @if (_error is not null)
+    {
+        <pre class="error">@_error</pre>
+    }
+    else if (_scene is null)
+    {
+        <p class="busy">@_stage&hellip;</p>
+    }
+
+    @if (_beacon is not null)
+    {
+        <img src="@_beacon" alt="" width="1" height="1" style="position:absolute; opacity:0" />
+    }
+</div>
+
+@code {
+    // The host for one live documentation example.
+    //
+    // The whole feature is: fetch the assembly EngrCAD.DocsGen emitted for this example id,
+    // run it, and hand the Scene it produced to the ordinary viewer component. Nothing about
+    // the geometry is special -- it is the same Scene the committed screenshot was rendered
+    // from, built here rather than on the docs build machine.
+    //
+    // The example pages activate this on a CLICK, never on page load, and the committed PNG
+    // stays the poster. That is a payload decision with numbers behind it (see
+    // docs/examples/web.md): the runtime is megabytes, and making every reader of every page
+    // pay it to look at a picture would be a bad trade -- while a reader who asked to
+    // interact is a reader who has agreed to wait, and the runtime is then cached for every
+    // other example they open.
+
+    /// <summary>The example id, as it appears in the fence (<c>render:&lt;id&gt;</c>).</summary>
+    [Parameter, EditorRequired] public string Id { get; set; } = "";
+
+    /// <summary>Drops the page furniture, for the iframe the docs site embeds.</summary>
+    [Parameter] public bool Embed { get; set; }
+
+    /// <summary>Emit the timing/pixel beacon after the first frame (the <c>?report</c>
+    /// self-check, measured under a real clock — see Home.razor for why a beacon exists).</summary>
+    [Parameter] public bool Report { get; set; }
+
+    /// <summary>Viewport height; the docs screenshots are 1600x1120, so the iframe is sized
+    /// to that ratio by the site and this fills it.</summary>
+    [Parameter] public string Height { get; set; } = "100%";
+
+    private static readonly Regex SafeId = new("^[a-z0-9][a-z0-9-]*$", RegexOptions.Compiled);
+
+    private EngrCadSceneView? _view;
+    private Scene? _scene;
+    private LiveExampleScene? _example;
+    private string? _error;
+    private string _stage = "Fetching the example";
+    private string? _beacon;
+    private bool _applied;
+    private bool _checked;
+    private double _fetchMs, _runMs;
+    private int _bytes;
+    private long _started;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _started = Stopwatch.GetTimestamp();
+
+        // The id comes from a query string, so it is checked before it reaches a URL.
+        if (!SafeId.IsMatch(Id))
+        {
+            Fail($"'{Id}' is not an example id.");
+            return;
+        }
+
+        try
+        {
+            var clock = Stopwatch.StartNew();
+            byte[] assembly = await Http.GetByteArrayAsync($"examples/{Id}.dll");
+            _fetchMs = clock.Elapsed.TotalMilliseconds;
+            _bytes = assembly.Length;
+
+            // Repaint in the pending state and let the browser actually draw it before the
+            // synchronous kernel work starts: WebAssembly is single-threaded, so the build
+            // freezes the tab, and a visitor with no sign of life reads that as a hang.
+            _stage = "Building the model";
+            StateHasChanged();
+            await Task.Delay(1);
+
+            clock.Restart();
+            _example = await LiveExample.RunAsync(assembly);
+            _runMs = clock.Elapsed.TotalMilliseconds;
+            _scene = _example.Scene;
+        }
+        catch (HttpRequestException e)
+        {
+            Fail($"No live copy of '{Id}' was published ({e.StatusCode}). "
+               + "The screenshot on the documentation page is the example's output.");
+            return;
+        }
+        catch (Exception e)
+        {
+            // A kernel refusal is a real answer: show it rather than a blank frame.
+            Fail($"{e.GetType().Name}: {e.Message}");
+            return;
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>Shows a failure AND beacons it. A self-check that goes quiet on the failure
+    /// path reports success and failure the same way, which is the one thing it must not
+    /// do — a missing example would read as a slow one.</summary>
+    private void Fail(string message)
+    {
+        _error = message;
+        if (Report)
+            Beacon($"error={Uri.EscapeDataString(message)}");
+        StateHasChanged();
+    }
+
+    private void Beacon(string fields)
+    {
+        _beacon = $"/report?example={Uri.EscapeDataString(Id)}"
+                + $"&total={Stopwatch.GetElapsedTime(_started).TotalMilliseconds:F1}&{fields}";
+        Console.WriteLine($"[engrcad-report] {_beacon}");
+    }
+
+    /// <summary>
+    /// The render inputs a snippet may declare are applied AFTER the first frame, through the
+    /// viewport's own direct setters. The scene parameter carries the geometry; a camera, a
+    /// section-plane set, an exploded-view factor and a shading style are viewer state, and
+    /// applying them here is the same path the desktop's own DocsGen render takes when it
+    /// passes them to <c>RenderToImage</c> — so the live view and the committed screenshot are
+    /// looking at the same thing from the same place.
+    /// </summary>
+    private async Task OnViewportRendered()
+    {
+        var viewport = _view?.Viewport;
+        if (viewport is null || _example is null)
+            return;
+
+        if (!_applied)
+        {
+            _applied = true;
+            if (_example.SectionPlanes is { Count: > 0 } planes)
+                await viewport.SetSectionPlanesAsync(planes, _example.SectionCombine);
+            if (_example.Explode != 0)
+                await viewport.SetExplodeAsync(_example.Explode);
+            if (_example.Shading != ShadingStyle.Lit)
+                await viewport.SetShadingAsync(_example.Shading);
+            if (_example.Camera is { } camera)
+                await viewport.SetCameraAsync(camera);
+        }
+
+        if (!Report || _checked)
+            return;
+        _checked = true;
+
+        // Reading the canvas back is the only honest evidence that anything drew: a black
+        // canvas raises no error, so an error-free console proves nothing at all.
+        int lit = 0;
+        string buffer = "none";
+        try
+        {
+            var shot = await viewport.CapturePixelsAsync();
+            buffer = $"{shot.Width}x{shot.Height}";
+            for (int i = 0; i + 3 < shot.Rgba.Length; i += 4)
+            {
+                // Above the background gradient's ceiling (46/255), the classifier the
+                // demo's own self-check uses, so the two front ends' numbers compare.
+                if (shot.Rgba[i] > 90 || shot.Rgba[i + 1] > 90 || shot.Rgba[i + 2] > 90)
+                    lit++;
+            }
+        }
+        catch (Exception e)
+        {
+            buffer = $"{e.GetType().Name}:{e.Message}";
+        }
+
+        // `total` is the number a reader feels: the whole way from "the iframe started" to
+        // "a finished frame is on the canvas", meshing included. `run` is only the snippet's
+        // own graph building, which for most examples is the small half.
+        Beacon($"fetch={_fetchMs:F1}&run={_runMs:F1}&bytes={_bytes}&lit={lit}&buffer={buffer}");
+        StateHasChanged();
+    }
+}

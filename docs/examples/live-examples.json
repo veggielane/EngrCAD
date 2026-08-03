@@ -1,0 +1,678 @@
+{
+  "examples": [
+    {
+      "id": "animate-explode",
+      "page": "examples/animation.md",
+      "live": true
+    },
+    {
+      "id": "animate-fourbar",
+      "page": "examples/animation.md",
+      "live": true
+    },
+    {
+      "id": "animate-load-ramp",
+      "page": "examples/animation.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
+    },
+    {
+      "id": "animate-planetary",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "animate-turntable",
+      "page": "examples/animation.md",
+      "live": true
+    },
+    {
+      "id": "annotations",
+      "page": "examples/annotations.md",
+      "live": true
+    },
+    {
+      "id": "annotations-extras",
+      "page": "examples/annotations.md",
+      "live": true
+    },
+    {
+      "id": "annotations-occluded",
+      "page": "examples/annotations.md",
+      "live": true
+    },
+    {
+      "id": "assembly",
+      "page": "examples/assemblies.md",
+      "live": true
+    },
+    {
+      "id": "assembly-exploded",
+      "page": "examples/assemblies.md",
+      "live": true
+    },
+    {
+      "id": "booleans",
+      "page": "examples/booleans.md",
+      "live": true
+    },
+    {
+      "id": "booleans-machined",
+      "page": "examples/booleans.md",
+      "live": true
+    },
+    {
+      "id": "chamfer-angle",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "chamfer-fillet",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "chamfer-fillet-round",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "chamfer-variable",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "cone",
+      "page": "examples/primitives.md",
+      "live": true
+    },
+    {
+      "id": "construction-preview",
+      "page": "examples/viewer.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'ConstructionPreviewRequest' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
+      "id": "cycloidal-drive",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "debug-ghost",
+      "page": "examples/viewer.md",
+      "live": true
+    },
+    {
+      "id": "dfm-draft",
+      "page": "examples/manufacturability.md",
+      "live": true
+    },
+    {
+      "id": "dfm-overhang",
+      "page": "examples/manufacturability.md",
+      "live": true
+    },
+    {
+      "id": "dfm-thickness",
+      "page": "examples/manufacturability.md",
+      "live": true
+    },
+    {
+      "id": "draft-boss",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "draft-cylinder",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "draft-two-angles",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "drop-down",
+      "page": "examples/representations.md",
+      "live": true
+    },
+    {
+      "id": "extrude",
+      "page": "examples/extrude-revolve-sweep.md",
+      "live": true
+    },
+    {
+      "id": "extrude-twist",
+      "page": "examples/extrude-revolve-sweep.md",
+      "live": true
+    },
+    {
+      "id": "extrude-until",
+      "page": "examples/extrude-revolve-sweep.md",
+      "live": true
+    },
+    {
+      "id": "fastener-stack",
+      "page": "examples/components.md",
+      "live": true
+    },
+    {
+      "id": "fea-buckling-column",
+      "page": "examples/fea-buckling.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
+    },
+    {
+      "id": "fea-fatigue-bracket",
+      "page": "examples/fea-fatigue.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'StructuralModel' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
+      "id": "fea-fatigue-life-log",
+      "page": "examples/fea-fatigue.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'StructuralModel' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
+      "id": "fea-modal-blade",
+      "page": "examples/fea-modal.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
+    },
+    {
+      "id": "fea-sizing-field",
+      "page": "examples/fea-meshing.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
+    },
+    {
+      "id": "fea-structural-bracket",
+      "page": "examples/fea-structural.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
+    },
+    {
+      "id": "fea-tet-cutaway",
+      "page": "examples/fea-meshing.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
+    },
+    {
+      "id": "fea-thermal-spreader",
+      "page": "examples/fea-thermal.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
+    },
+    {
+      "id": "fea-transient-cantilever",
+      "page": "examples/fea-transient.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'StructuralModel' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
+      "id": "feature-history",
+      "page": "examples/features.md",
+      "live": true
+    },
+    {
+      "id": "field-deformed",
+      "page": "examples/fields.md",
+      "live": true
+    },
+    {
+      "id": "field-edge-distance",
+      "page": "examples/fields.md",
+      "live": true
+    },
+    {
+      "id": "fillet-all-edges",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "fillet-all-edges-general",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "fillet-edge-selection",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "fillet-partial-run",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "fillet-sharp-corners",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "fillet-variable",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "frames-stand",
+      "page": "examples/frames.md",
+      "live": true
+    },
+    {
+      "id": "gear-helical",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "geometry-inputs",
+      "page": "examples/geometry-inputs.md",
+      "live": true
+    },
+    {
+      "id": "hardware-breadth",
+      "page": "examples/components.md",
+      "live": true
+    },
+    {
+      "id": "heightmap-cut",
+      "page": "examples/heightmaps.md",
+      "live": true
+    },
+    {
+      "id": "heightmap-terrain",
+      "page": "examples/heightmaps.md",
+      "live": true
+    },
+    {
+      "id": "holes-section",
+      "page": "examples/holes.md",
+      "live": true
+    },
+    {
+      "id": "holes-spec",
+      "page": "examples/holes.md",
+      "live": true
+    },
+    {
+      "id": "holes-standard",
+      "page": "examples/holes.md",
+      "live": true
+    },
+    {
+      "id": "holes-tip",
+      "page": "examples/holes.md",
+      "live": true
+    },
+    {
+      "id": "hull",
+      "page": "examples/booleans.md",
+      "live": true
+    },
+    {
+      "id": "import-drilled",
+      "page": "examples/import.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'Scratch' does not exist in the current context"
+    },
+    {
+      "id": "infill-hilbert",
+      "page": "examples/infill.md",
+      "live": true
+    },
+    {
+      "id": "lattice",
+      "page": "examples/implicit.md",
+      "live": true
+    },
+    {
+      "id": "location-sets",
+      "page": "examples/transforms-patterns.md",
+      "live": true
+    },
+    {
+      "id": "loft-along",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "loft-ruled",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "loft-transition",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "materials-rig",
+      "page": "examples/materials.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-bevel",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-cam",
+      "page": "examples/mechanisms.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-crossed-helical",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-cycloidal",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-fourbar",
+      "page": "examples/mechanisms.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-herringbone",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-involute",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-planetary",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-swept",
+      "page": "examples/mechanisms.md",
+      "live": true
+    },
+    {
+      "id": "mechanism-worm",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "mirror",
+      "page": "examples/transforms-patterns.md",
+      "live": true
+    },
+    {
+      "id": "offset",
+      "page": "examples/implicit.md",
+      "live": true
+    },
+    {
+      "id": "packing-plate",
+      "page": "examples/packing.md",
+      "live": true
+    },
+    {
+      "id": "pattern-circular",
+      "page": "examples/transforms-patterns.md",
+      "live": true
+    },
+    {
+      "id": "pattern-linear",
+      "page": "examples/transforms-patterns.md",
+      "live": true
+    },
+    {
+      "id": "planar-section",
+      "page": "examples/2d-views.md",
+      "live": true
+    },
+    {
+      "id": "planar-silhouette",
+      "page": "examples/2d-views.md",
+      "live": true
+    },
+    {
+      "id": "primitives",
+      "page": "examples/primitives.md",
+      "live": true
+    },
+    {
+      "id": "quality-adaptive",
+      "page": "examples/quality.md",
+      "live": true
+    },
+    {
+      "id": "rack-and-pinion",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "remesh-plate",
+      "page": "examples/remeshing.md",
+      "live": true
+    },
+    {
+      "id": "rep-brep",
+      "page": "examples/representations.md",
+      "live": true
+    },
+    {
+      "id": "rep-implicit",
+      "page": "examples/representations.md",
+      "live": true
+    },
+    {
+      "id": "rep-mesh",
+      "page": "examples/representations.md",
+      "live": true
+    },
+    {
+      "id": "resize",
+      "page": "examples/transforms-patterns.md",
+      "live": true
+    },
+    {
+      "id": "revolve-partial",
+      "page": "examples/extrude-revolve-sweep.md",
+      "live": true
+    },
+    {
+      "id": "revolve-vase",
+      "page": "examples/extrude-revolve-sweep.md",
+      "live": true
+    },
+    {
+      "id": "round-edges",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "scripting-components",
+      "page": "examples/scripting.md",
+      "live": true
+    },
+    {
+      "id": "section-cutaway",
+      "page": "examples/viewer.md",
+      "live": true
+    },
+    {
+      "id": "section-isolines",
+      "page": "examples/viewer.md",
+      "live": true
+    },
+    {
+      "id": "section-oblique",
+      "page": "examples/viewer.md",
+      "live": true
+    },
+    {
+      "id": "section-unsectioned-fasteners",
+      "page": "examples/viewer.md",
+      "live": true
+    },
+    {
+      "id": "selection-vocabulary",
+      "page": "examples/selection.md",
+      "live": true
+    },
+    {
+      "id": "shading-metal",
+      "page": "examples/viewer.md",
+      "live": true
+    },
+    {
+      "id": "sheet-metal-bracket",
+      "page": "examples/sheet-metal.md",
+      "live": true
+    },
+    {
+      "id": "sheet-metal-tabs",
+      "page": "examples/sheet-metal.md",
+      "live": true
+    },
+    {
+      "id": "shell",
+      "page": "examples/implicit.md",
+      "live": true
+    },
+    {
+      "id": "shell-cup",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "shell-tray",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "sketch-booleans",
+      "page": "examples/sketch-booleans.md",
+      "live": true
+    },
+    {
+      "id": "sketch-booleans-exact",
+      "page": "examples/sketch-booleans.md",
+      "live": true
+    },
+    {
+      "id": "sketch-constraints",
+      "page": "examples/sketching.md",
+      "live": true
+    },
+    {
+      "id": "sketch-ellipse",
+      "page": "examples/sketching.md",
+      "live": true
+    },
+    {
+      "id": "sketch-offset",
+      "page": "examples/2d-views.md",
+      "live": true
+    },
+    {
+      "id": "sketch-plate",
+      "page": "examples/sketching.md",
+      "live": true
+    },
+    {
+      "id": "sketch-primitives",
+      "page": "examples/sketching.md",
+      "live": true
+    },
+    {
+      "id": "smart-fasteners",
+      "page": "examples/components.md",
+      "live": true
+    },
+    {
+      "id": "smooth-blend",
+      "page": "examples/implicit.md",
+      "live": true
+    },
+    {
+      "id": "stroke-curved",
+      "page": "examples/2d-views.md",
+      "live": true
+    },
+    {
+      "id": "stroke-toolpath",
+      "page": "examples/2d-views.md",
+      "live": true
+    },
+    {
+      "id": "sweep",
+      "page": "examples/extrude-revolve-sweep.md",
+      "live": true
+    },
+    {
+      "id": "tamper-mesh",
+      "page": "examples/tamper-mesh.md",
+      "live": true
+    },
+    {
+      "id": "text-nameplate",
+      "page": "examples/text.md",
+      "live": false,
+      "reason": "reads the build machine's environment (System.Environment), and the browser's filesystem holds only the app's own assets"
+    },
+    {
+      "id": "text-on-path",
+      "page": "examples/text.md",
+      "live": false,
+      "reason": "reads the build machine's environment (System.Environment), and the browser's filesystem holds only the app's own assets"
+    },
+    {
+      "id": "thread-brep",
+      "page": "examples/threads.md",
+      "live": true
+    },
+    {
+      "id": "thread-chamfered",
+      "page": "examples/threads.md",
+      "live": true
+    },
+    {
+      "id": "thread-hole",
+      "page": "examples/threads.md",
+      "live": true
+    },
+    {
+      "id": "thread-left-hand",
+      "page": "examples/threads.md",
+      "live": true
+    },
+    {
+      "id": "thread-stud",
+      "page": "examples/threads.md",
+      "live": true
+    },
+    {
+      "id": "three-reps",
+      "page": "examples/representations.md",
+      "live": true
+    },
+    {
+      "id": "transforms",
+      "page": "examples/transforms-patterns.md",
+      "live": true
+    },
+    {
+      "id": "viewer-scene",
+      "page": "examples/viewer.md",
+      "live": true
+    },
+    {
+      "id": "wedge",
+      "page": "examples/2d-views.md",
+      "live": true
+    }
+  ]
+}

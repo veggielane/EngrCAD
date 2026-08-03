@@ -22,4 +22,21 @@
     <ProjectReference Include="..\..\src\EngrCAD.Web\EngrCAD.Web.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The live documentation examples (`?example=<id>`) load an assembly the docs build
+         emitted and call into the kernel by reflection, so the trimmer cannot see what they
+         will use. Today nothing is lost anyway — Blazor WebAssembly trims in `partial` mode,
+         which leaves assemblies not marked `IsTrimmable` alone, and none of ours is — but
+         that is a DEFAULT, and a feature whose correctness rests on one is a feature waiting
+         for the default to change. Rooting them says it out loud and, measured, costs
+         nothing: the published payload is byte-for-byte the same size with and without. -->
+    <TrimmerRootAssembly Include="EngrCAD.Core" />
+    <TrimmerRootAssembly Include="EngrCAD.Mesh" />
+    <TrimmerRootAssembly Include="EngrCAD.Implicit" />
+    <TrimmerRootAssembly Include="EngrCAD.BRep" />
+    <TrimmerRootAssembly Include="EngrCAD.Interop" />
+    <TrimmerRootAssembly Include="EngrCAD.Modeling" />
+    <TrimmerRootAssembly Include="EngrCAD.Viewer.Core" />
+  </ItemGroup>
+
 </Project>

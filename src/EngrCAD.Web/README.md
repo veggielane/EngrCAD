@@ -457,7 +457,58 @@ and no repository name baked into the artifact. `.github/workflows/docs.yml` doe
 `?embed` drops the page heading and footer for that iframe; `?report` runs the timing and
 pixel self-check described above; `?tab=N` deep-links a tab, which exists so a headless
 run can screenshot the Assembly tab's tree — without a real click there is no other way
-in, and a feature nothing can reach is a feature nothing checks.
+in, and a feature nothing can reach is a feature nothing checks. `?example=<id>` shows one
+documentation example instead of the flange demo (below), and composes with both the
+others.
+
+## Live documentation examples
+
+`LiveExample.RunAsync(byte[])` loads one of the assemblies `EngrCAD.DocsGen` emitted for a
+documentation snippet and returns the `Scene` it built, plus the render inputs the snippet
+declared (`camera`, `sectionPlanes`, `sectionCombine`, `explode`, `shading`). That is what
+puts a **Run it in your browser** button under every example screenshot on the docs site:
+the reader gets the model built in their own tab rather than a mesh baked at docs-build
+time, and the committed PNG stays the poster because the runtime is megabytes and the PNGs
+are the build's own regression oracle.
+
+**Why an assembly rather than source.** A browser cannot cheaply compile C# — Roslyn in
+the payload is several megabytes — but the documentation build compiles every snippet
+anyway, so it emits what it compiled. The half that decides *which* examples are offered
+lives there (`tools/EngrCAD.DocsGen/README.md`): the browser's reference set is the rule,
+so the C# compiler answers it.
+
+**The submission ABI is the load-bearing detail, and nothing on either side checks it.** A
+snippet is a C# *script*; Roslyn compiles one into a type with a static
+`<Factory>(object[])` returning `Task<object>`, whose array is the submission state — slot
+0 the globals, slot 1 the instance the factory constructs. Every top-level variable of the
+script is a **field on that instance**, which is exactly how the docs harness reads `scene`
+back out of a `ScriptState`; this reads the same fields without needing Roslyn to do it,
+and finds the factory by SHAPE rather than by the `Submission#0` type name. The round trip
+— emit here, load there, compare the geometry — is pinned by
+`tests/EngrCAD.DocsGen.Tests`.
+
+Two findings from building it:
+
+- **A globals-less script cannot see `object`'s statics.** Roslyn puts a script's globals
+  type's members in scope, inherited ones included, so a submission compiled with no
+  globals at all fails on a bare `ReferenceEquals(a, b)` — legal in every ordinary C#
+  class, and used by `chamfer-fillet.md`. Handing over `object` as the globals type
+  restores exactly that scope and nothing else: it adds no assembly reference and the
+  docs-only `Scratch` still does not exist, so the one snippet needing it is still refused
+  for the reason it should be.
+- **The trimmer is why it works, and it works by default.** A dynamically loaded example
+  calls the kernel by reflection, which the trimmer cannot see. Blazor WebAssembly trims in
+  `partial` mode, leaving assemblies not marked `IsTrimmable` alone, and none of ours is —
+  but that is a default, so the demo lists the kernel assemblies as `TrimmerRootAssembly`
+  to say it out loud. Measured, that costs nothing: the published payload is the same size
+  with and without.
+
+Measured time to a finished frame, warm runtime, headless Edge on win-x64, out of the
+`?example=<id>&report` beacon: extrusion **369 ms**, sheet metal bracket **461 ms**,
+four-bar linkage **604 ms**, B-Rep thread **1 075 ms**, sectioned housing with isolines
+**1 093 ms**, helical gear **6 712 ms**. A refused id beacons its error rather than going
+quiet — a self-check that reports failure and success the same way is one that cannot tell
+a missing example from a slow one.
 
 ## Proving it drew, headlessly
 
@@ -604,13 +655,30 @@ The `?report` self-check covers the new rungs as pixel relationships (cube and
 annotations start OFF under `?report`, like the furniture, because their near-white
 strokes would land in the "steel" class and skew the comparative counts): sectioning at
 the scene centre removed **32 374 → 20 593** body pixels with **676** gold d = 0
-isoline pixels on the cut; toggling the flange's dimension changed **786** pixels; the
+isoline pixels on the cut; toggling the flange's dimension changed **34 317** pixels (this
+one was re-measured on win-x64 and had gone stale at 786 — see the note below); the
 cube lit **4 770** pixels in its corner region, claimed a click on the region
 (`cubeClaimed=1`) and landed the camera EXACTLY on a shared-pose-table orientation
 (`cubeSnapped=1` — checkable without naming the face, because the animation's final
 step returns the target). The drawing buffer is 693×393 now that the toolbar takes a
 row, so absolute counts are not comparable with the older tables above — the
 relationships are the point, and all of the pre-toolbar checks reproduce.
+
+**One of those numbers had gone stale, and finding it is what a control is for.** The
+live-examples work needed to show it had moved nothing, so the whole beacon was captured
+against the commit before it and against the commit after: **all 44 fields identical**.
+The same pair of runs showed `annotationPixels` reading **34 317** where this file said
+786 — an order of magnitude more than the dimension's own strokes, and more than the whole
+model's silhouette (32 374), so the toggle is repainting the frame rather than adding an
+overlay to it. It is *not* the live-examples change (identical on both sides) and the
+buffer is the same 693×393, so the comparison is like for like. The occlusion-aware
+annotation work was the first suspect and is RULED OUT — `AnnotationDepth` defaults to
+`AlwaysOnTop`, the demo never sets it, and that branch is one depth-off draw, so the
+browser has never run the two-pass path. And the count EXCEEDS the silhouette, so
+background pixels moved, which no overlay draw can do: look at the camera and the
+section state either side of the toggle first. Filed in
+`todo.md` for whoever has that context — the check still fires, it is just no longer
+measuring only what its name says.
 
 Notes for whoever takes the next rung:
 

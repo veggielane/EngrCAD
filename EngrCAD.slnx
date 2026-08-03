@@ -36,5 +36,6 @@
     <Project Path="tests/EngrCAD.Web.Tests/EngrCAD.Web.Tests.csproj" />
     <Project Path="tests/EngrCAD.Mcp.Tests/EngrCAD.Mcp.Tests.csproj" />
     <Project Path="tests/EngrCAD.Mcp.TestModel/EngrCAD.Mcp.TestModel.csproj" />
+    <Project Path="tests/EngrCAD.DocsGen.Tests/EngrCAD.DocsGen.Tests.csproj" />
   </Folder>
 </Solution>

@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, passthroughImageService } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { rewriteDocLinks } from './src/rewrite-doc-links.mjs';
+import { liveExamples, readLiveManifest } from './src/live-examples.mjs';
 
 // GitHub Pages serves a project site from https://<user>.github.io/<repo>/, so the site
 // needs a base path -- but a custom domain serves it from the root, and a local build
@@ -14,6 +15,11 @@ const site = process.env.DOCS_SITE || undefined;
 
 // The markdown lives in `docs/`, one level up; see src/content.config.ts for why.
 const contentRoot = fileURLToPath(new URL('../', import.meta.url));
+
+// Which example screenshots also get a "Run it" button, from the manifest EngrCAD.DocsGen
+// writes. Absent (a checkout that has never run the generator) means no buttons and an
+// otherwise identical site.
+const { live } = readLiveManifest(contentRoot);
 
 export default defineConfig({
   site,
@@ -28,7 +34,12 @@ export default defineConfig({
   // sharp would silently drop every frame after the first. Passthrough still resolves and
   // fingerprints the assets; it just does not touch the bytes.
   image: { service: passthroughImageService() },
-  markdown: { rehypePlugins: [rewriteDocLinks({ contentRoot, base })] },
+  markdown: {
+    rehypePlugins: [
+      rewriteDocLinks({ contentRoot, base }),
+      liveExamples({ contentRoot, live }),
+    ],
+  },
   vite: {
     // The content collection's base is `../`, so the dev server has to be allowed to read
     // the images that sit beside the markdown.
@@ -41,6 +52,52 @@ export default defineConfig({
         'A hybrid B-Rep / implicit / mesh geometry kernel for modern .NET, with executable documentation.',
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/veggielane/EngrCAD' },
+      ],
+      // The live-example poster. Both halves are deliberately tiny and inline: the whole
+      // feature is one click handler that swaps an <img> for an <iframe>, and the iframe's
+      // URL comes from the element's own data attribute (see src/live-examples.mjs) so the
+      // repository name is never written into the source and the link checker never sees a
+      // reference to a directory CI merges in later.
+      head: [
+        {
+          tag: 'style',
+          content: `
+.engrcad-live { position: relative; }
+.engrcad-live > img, .engrcad-live > iframe { display: block; width: 100%; border-radius: .3rem; }
+.engrcad-live > iframe { border: 0; aspect-ratio: 10 / 7; background: #1c1e22; }
+.engrcad-live-run {
+  position: absolute; right: .5rem; bottom: .5rem;
+  font: inherit; font-size: .8rem; line-height: 1.2;
+  padding: .35rem .7rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--sl-color-gray-5); color: var(--sl-color-white);
+  background: color-mix(in srgb, var(--sl-color-black) 78%, transparent);
+}
+.engrcad-live-run:hover { border-color: var(--sl-color-accent); }
+@media (prefers-reduced-motion: no-preference) { .engrcad-live-run { transition: border-color .15s; } }
+`,
+        },
+        {
+          tag: 'script',
+          content: `
+document.addEventListener('click', function (event) {
+  var button = event.target.closest && event.target.closest('.engrcad-live-run');
+  if (!button) return;
+  var box = button.parentElement;
+  var image = box.querySelector('img');
+  var frame = box.querySelector('iframe');
+  if (frame) { frame.remove(); image.hidden = false; button.textContent = 'Run it in your browser'; return; }
+  frame = document.createElement('iframe');
+  frame.src = box.dataset.src;
+  frame.title = 'Live example: ' + box.dataset.example;
+  if (image.naturalWidth && image.naturalHeight) {
+    frame.style.aspectRatio = image.naturalWidth + ' / ' + image.naturalHeight;
+  }
+  image.hidden = true;
+  box.insertBefore(frame, button);
+  button.textContent = 'Show the screenshot';
+});
+`,
+        },
       ],
       sidebar: [
         { label: 'Getting started', slug: 'getting-started' },

@@ -14,8 +14,31 @@ build — examples cannot drift from the code.
   false), rendering is skipped with a warning and the committed PNGs are kept —
   correctness failures still fail the build.
 
+## Live examples
+
+Each rendered snippet is compiled a **second** time — against exactly the assemblies
+`EngrCAD.Web` ships, with no globals — and emitted as a standalone assembly the
+WebAssembly viewer loads on demand, so an example page's screenshot can be swapped for
+the kernel building that model in the reader's tab (`LiveExamples.cs`; the loading half is
+`EngrCAD.Web`'s `LiveExample`, and the round trip between them is pinned by
+`tests/EngrCAD.DocsGen.Tests`).
+
+**The reference set is the rule.** "Can a reader run this?" is answered by the C#
+compiler rather than by a maintained list: a snippet reaching for `EngrCAD.Fea`, for the
+desktop viewer, or for the `Scratch` global does not compile there and the refusal carries
+the compiler's own words. The one thing a reference set cannot catch is code that compiles
+and then fails on the browser's EMPTY filesystem, which is a short named list resolved
+through the **semantic** model — `heightmaps.md` names `Heightmap.ReadPng` in a comment
+while being entirely procedural, and a text scan refuses it wrongly.
+
+Assemblies go to `samples/EngrCAD.WebDemo/wwwroot/examples/` (build output, gitignored).
+The committed artifact is `docs/examples/live-examples.json`, which the site reads to
+decide which screenshot gets a Run button — deterministic on purpose, so it is not dirty
+after every run, which is why it carries no timings or byte counts.
+
 ```
-dotnet run --project tools/EngrCAD.DocsGen -- docs [--images <dir>] [--no-render]
+dotnet run --project tools/EngrCAD.DocsGen -- docs
+      [--images <dir>] [--no-render] [--live <dir>] [--no-live]
 ```
 
 The docs root is an argument, so the generator does not care where the markdown lives;

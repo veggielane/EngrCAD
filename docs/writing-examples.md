@@ -72,6 +72,46 @@ its own section plane would be a trap. See
 [the viewer page](examples/viewer.md#several-planes-and-oblique-ones) for a worked
 oblique quarter cut.
 
+## Running an example in the browser
+
+Most rendered examples carry a **Run it in your browser** button under their screenshot.
+It swaps the picture for the geometry kernel itself, compiled to WebAssembly, building
+*that example's* model in the reader's tab — see [In the browser](examples/web.md).
+
+Nothing in the markdown asks for this and there is no fence option for it. The
+documentation build compiles every snippet already, so it compiles each one a **second
+time against exactly the assemblies the WebAssembly viewer carries** and emits the result
+as a small standalone assembly (about 6 KB); the site reads
+`docs/examples/live-examples.json` to decide which screenshot gets a button.
+
+**The screenshot stays, and stays the default.** It is what the page is for, it is the
+build's own regression oracle, and the runtime is megabytes — so the viewer starts on a
+click, never on page load, and is then cached for every other example the same reader
+opens.
+
+### Why an example might not run
+
+The browser's reference set *is* the rule: whether an example can run there is answered by
+the C# compiler, not by a list somebody maintains. An example is refused, by name and with
+the refusing tool's own words, when it:
+
+| Reason | Examples affected today |
+| --- | --- |
+| uses `EngrCAD.Fea` — the simulation layer is not in the browser payload | the seven FEA pages' figures |
+| uses the desktop viewer (`EngrCad.RenderToImage`, `ConstructionPreviewRequest`) rather than its UI-free half | `construction-preview` |
+| uses the docs-only `Scratch` directory (the browser build supplies no globals) | `import-drilled` |
+| reads the build machine's filesystem or environment, which the browser has no copy of | the two `text.md` figures, which load a system font |
+
+`run:` and `svg:` fences are not offered at all — they define no `scene`.
+
+The declared render inputs travel with the example: `camera`, `sectionPlanes`,
+`sectionCombine`, `explode` and `shading` are applied to the live viewport, so it is
+looking at the same thing from the same place the screenshot was taken.
+
+The button is a progressive enhancement. With no JavaScript, or in a local `npm run dev`
+preview where `/live/` has not been merged in, the page is exactly the screenshot it
+always was.
+
 ## The harness contract
 
 Each tagged snippet runs as an isolated C# *script* (Roslyn scripting) with:
@@ -101,6 +141,11 @@ dotnet run --project tools/EngrCAD.DocsGen -- docs
 - Scans `docs/**/*.md` (excluding generated trees — `api/`, `_apisite/`, and the site's
   own `node_modules/`, `dist/`, `.astro/`), executes every tagged snippet in file order,
   writes PNGs to `docs/examples/images/<id>.png`.
+- Also emits each runnable example's browser copy into
+  `samples/EngrCAD.WebDemo/wwwroot/examples/` (build output, gitignored — the demo's
+  publish picks them up as static assets) and rewrites the committed
+  `docs/examples/live-examples.json`. `--no-live` skips that pass; `--live <dir>` sends
+  the assemblies somewhere else.
 - **Exit code is nonzero** if any snippet fails to compile or run, a `render:`
   snippet defines no `scene`, an id is duplicated, or a page never references its
   generated image.

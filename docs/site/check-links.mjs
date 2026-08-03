@@ -120,6 +120,26 @@ for (const page of pages) {
   }
 }
 
+// The live-example posters carry their iframe URL in a `data-src` attribute rather than in
+// an `src`, deliberately: it points into `live/`, which CI merges in after this build, and
+// building the frame in the browser is also what makes the whole feature degrade to a plain
+// screenshot with no JavaScript. That keeps it out of the scan above -- so it is checked
+// HERE, as the one thing a data attribute can still get wrong: the number of `../` steps.
+// A page one level deeper resolving to `<base>examples/live/` would 404 for every reader
+// and nothing else in this build would notice.
+let posters = 0;
+for (const page of pages) {
+  const pagePath = relative(dist, page).split('\\').join('/');
+  const pageUrl = base + pagePath.replace(/index\.html$/, '');
+  const pageDir = pageUrl.endsWith('/') ? pageUrl : `${posix.dirname(pageUrl)}/`;
+  for (const [, src] of readFileSync(page, 'utf8').matchAll(/data-src="([^"]*)"/g)) {
+    posters++;
+    const resolved = posix.resolve(pageDir, src.split('?')[0]);
+    if (`${resolved}/` !== `${base}live/`)
+      problems.push(`${pagePath}: data-src="${src}" resolves to ${resolved}/, not ${base}live/`);
+  }
+}
+
 // A page missing from the sidebar still builds and is still reachable by URL, so nothing
 // complains — it is simply invisible, which is how a nav and a page set drift apart. The
 // ordering used to live in docs/toc.yml and now lives in astro.config.mjs's `sidebar`;
@@ -147,4 +167,5 @@ if (problems.length > 0) {
   console.error(`\n${checked} pages checked against ${present.size} emitted files.\n`);
   process.exit(1);
 }
-console.log(`links: ${checked} pages checked against ${present.size} emitted files, all references resolve.`);
+console.log(`links: ${checked} pages checked against ${present.size} emitted files, all references resolve`
+  + ` (${posters} live-example posters).`);

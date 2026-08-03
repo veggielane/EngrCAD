@@ -7,7 +7,10 @@
 #           regenerated from the C# snippets embedded in the markdown.
 #   /api/   DocFX (docs/docfx.json) — the generated .NET API reference, and nothing else.
 #   /live/  samples/EngrCAD.WebDemo — the geometry kernel compiled to WebAssembly, which
-#           docs/examples/web.md embeds in an iframe.
+#           docs/examples/web.md embeds in an iframe, and which also serves every example
+#           page's "Run it in your browser" button. DocsGen emits one small assembly per
+#           runnable example into the demo's wwwroot BEFORE the publish, so they travel as
+#           ordinary static assets — which is why the step order below matters.
 #
 # Pages must be enabled once in the repository settings with "Source: GitHub Actions"
 # (Settings -> Pages). No gh-pages branch is used — this is the modern Pages flow.
@@ -60,6 +63,9 @@ jobs:
       - name: Build solution
         run: dotnet build EngrCAD.slnx -c Release
 
+      # Also emits the browser-runnable copy of each example into
+      # samples/EngrCAD.WebDemo/wwwroot/examples/, which the publish below picks up. It has
+      # to run BEFORE that publish, and it does.
       - name: Run example snippets and generate screenshots
         run: dotnet run --project tools/EngrCAD.DocsGen -c Release --no-build -- docs
 
@@ -121,6 +127,18 @@ jobs:
           foreach ($page in "index.html", "api/index.html", "live/index.html") {
             if (-not (Test-Path "$site/$page")) { throw "the assembled site is missing $page" }
           }
+
+          # Every "Run it in your browser" button the site emitted needs its assembly to be
+          # here. Losing them is silent otherwise -- the pages still build, the buttons still
+          # appear, and every one of them 404s.
+          $manifest = Get-Content docs/examples/live-examples.json | ConvertFrom-Json
+          $wanted = @($manifest.examples | Where-Object live | ForEach-Object id)
+          $missing = @($wanted | Where-Object { -not (Test-Path "$site/live/examples/$_.dll") })
+          if ($missing.Count -gt 0) {
+            throw "the assembled site is missing $($missing.Count) live example(s): $($missing -join ', ')"
+          }
+          Write-Host "live examples: $($wanted.Count) published"
+
           Write-Host "assembled $((Get-ChildItem $site -Recurse -File).Count) files into $site"
 
       - uses: actions/upload-pages-artifact@v3

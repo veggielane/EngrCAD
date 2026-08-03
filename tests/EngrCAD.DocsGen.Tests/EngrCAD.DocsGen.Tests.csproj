@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The documentation toolchain's two halves, tested against each other. DocsGen
+         COMPILES a snippet for the browser and EngrCAD.Web LOADS what it emitted; between
+         them sits a Roslyn script-submission ABI that no compiler checks, so the only
+         honest test is the round trip. -->
+    <ProjectReference Include="..\..\tools\EngrCAD.DocsGen\EngrCAD.DocsGen.csproj" />
+    <ProjectReference Include="..\..\src\EngrCAD.Web\EngrCAD.Web.csproj" />
+  </ItemGroup>
+</Project>

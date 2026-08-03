@@ -2766,38 +2766,82 @@ UI dependencies, which makes this unusually feasible.
   and the `?report` self-check should grow pose/measure relationships (the pose seam
   is unit tested, but "the canvas changed when the slider moved" is the check this
   front end's culture asks for).
-- [ ] **Docs-site embedding, the general form** — one page embeds the demo today
-  (`docs/examples/web.md`). The payoff synergy is DocsGen emitting an interactive WASM
-  viewer block *per example* instead of (or alongside) static PNGs — spin-the-model
-  documentation, all statically hosted on the existing GitHub Pages deployment. Needs the
-  scene-to-frame layer first (✅ landed), plus a way to ship one runtime shared by every
-  embed rather than a 1.9 MB payload per page.
-  **Assessed; the shape, and why it is bigger than it looks.** The runtime sharing is
-  the easy half and is already solved by the deployment: `_site/live/` holds ONE published
-  app, so every page iframes the same origin and the browser caches the 1.9 MB once —
-  what is missing is a way for a page to say WHICH scene that one app should build.
-  Three options, in increasing order of what they buy:
-  (a) **A snippet id in the query string** (`/live/?example=fillet-corners`), with the
-  demo app carrying a switch over the docs' snippet ids. Cheapest, and wrong for the same
-  reason a second copy of a shader is: the snippet's source would live in the markdown
-  AND in the app, and they would drift.
-  (b) **Ship the compiled snippets as a data file.** DocsGen already compiles and runs
-  every fence through Roslyn; it could emit the snippet SOURCES into `_site/live/` and the
-  app could compile one in the browser — but that means shipping Roslyn to WASM, which is
-  several times the payload of the kernel and defeats the shared-runtime argument.
-  (c) **Emit each scene as data, not as code.** The document format now exists
-  (`Document.Save`), so DocsGen could save each `render:` snippet's scene as a `.json`
-  document beside its PNG and the demo app could `Document.Load` one by id. Payload is a
-  few KB per example, the app needs no compiler, and the scene is provably the one the
-  PNG was rendered from because both come from one evaluation. The cost is that a
-  document is geometry-or-history rather than the snippet's own code, so a page's
-  interactive block and its code fence are two representations of one model rather than
-  one — acceptable, and honest, if the page says so.
-  Recommendation: **(c)**, once someone wants it; it is a DocsGen change plus a load-by-id
-  route in the demo, not a viewer change. Filed rather than built because it is a docs
-  *infrastructure* project with its own deployment questions (cache busting per docs
-  build, and what an embed does when a document names geometry this build cannot
-  rebuild), and nothing depends on it.
+- [x] **Docs-site embedding, the general form — landed, and by an option this entry did
+  not consider.** Every example screenshot whose snippet can run in a browser now carries a
+  **Run it in your browser** button that swaps the picture for the kernel building that
+  model in the reader's tab (`tools/EngrCAD.DocsGen/LiveExamples.cs`,
+  `src/EngrCAD.Web/LiveExample.cs`, `docs/site/src/live-examples.mjs`, the demo's
+  `?example=<id>`; design.md §8c).
+  **The filed recommendation was (c), emit each scene as a document, and the reason it was
+  chosen was wrong about (b).** (b) was rejected as "shipping Roslyn to WASM" — but the
+  compile does not have to happen in the browser: the docs build already compiles every
+  snippet, so it emits the compiled ASSEMBLY and the browser only loads it. That costs
+  **6.0 KB mean per example** (max 12.0 KB, 710 KB for all 118), no compiler in the
+  payload, and it keeps the thing (c) gives up: a page's interactive block IS its code
+  fence, run, rather than a second representation of the same model. Two prices, both paid
+  in full: the browser must reflect over Roslyn's script-submission layout (pinned by a
+  round-trip test rather than trusted), and only the examples that compile against the
+  browser's own assembly set are offered — which turns out to be the feature's best
+  property, since the refusal is the compiler's and cannot go stale against a payload
+  change. 118 of 132.
+- [ ] **The 14 examples that do not run, each with what it would take.** They are named in
+  `docs/examples/live-examples.json` with the refusing tool's own words; none is a defect.
+  - **Seven FEA figures** need `EngrCAD.Fea` in the browser payload. Measure that first —
+    it is not obviously small, and the snippets themselves are the heaviest in the docs
+    (tet meshing plus a solve), so at ~19× they may be minutes rather than seconds. If it
+    lands, the honest version states the wait before the click.
+  - **Two `text.md` figures** load a system font off the build machine. The fix is to ship
+    one font as an app asset and give the docs a `Fonts` global the browser build can also
+    supply — which is really "the docs harness needs a globals type both sides can see",
+    the same question `Scratch` raises.
+  - **`import-drilled`** uses `Scratch`. It would work as-is on the browser's in-memory
+    filesystem (it writes an STL and reads it straight back), so this one is purely the
+    globals question above.
+  - **`construction-preview`** needs `ConstructionPreviewRequest`, which lives in
+    `EngrCAD.Viewer` rather than `Viewer.Core`. Moving it down is the same
+    shared-render-model step the camera and the cube already took, and the browser has no
+    construction-tree rows to preview from yet anyway (the parity rung above).
+- [ ] **A live example's assembly has no cache-busting name.** `examples/<id>.dll` is
+  fetched by a stable path, so a reader who ran an example before a docs deploy can get the
+  previous build's geometry from their HTTP cache while looking at the new screenshot. The
+  framework assets are fingerprinted and these are not, because they are ordinary wwwroot
+  content. Fix by putting the content hash in the manifest and in the filename — the
+  manifest is already the thing the page reads to build the URL, so nothing else changes.
+- [ ] **A page whose example cannot run says nothing about it.** The manifest carries the
+  reason; the site drops the button and prints no note. Stating it (a one-line caption under
+  the screenshot, from the same manifest) would make the boundary visible to a reader rather
+  than only to whoever opens the JSON — and would put pressure on the four causes above.
+- [ ] **`?report`'s `annotationPixels` stopped measuring what its name says.** The
+  live-examples work captured the whole beacon against the commit before it and after it to
+  show it moved nothing (all 44 fields identical, win-x64), and the same pair showed
+  `annotationPixels` reading **34 317** where the Web README and CLAUDE.md both said 786.
+  That is more than the whole model's silhouette (32 374) in the same 693×393 buffer, so
+  toggling the overlay is repainting the frame rather than adding to it — the check still
+  fires, but it can no longer tell "the dimension appeared" from "everything was redrawn".
+  Not the live-examples change (identical both sides) and not a buffer-size difference. The
+  recorded figures are updated to what it measures today; what is wanted is either the cause
+  or a classifier that counts only overlay-coloured pixels.
+  - **The filed suspect — the occlusion-aware annotation work's two depth passes — is
+    RULED OUT, so do not start there.** `EngrCadViewport.AnnotationDepth` defaults to
+    `AlwaysOnTop` and the demo never sets it, and `ViewportFrame.AppendAnnotations` takes
+    a single `depthFunc: null` draw over the whole buffer on that branch and returns
+    before the two-pass code exists. The browser has never executed the occluded path.
+  - **The sharper reading of the number points AWAY from the overlay entirely**: 34 317
+    EXCEEDS the whole silhouette (32 374), so pixels outside the body changed too, and no
+    overlay draw can repaint background. That is the signature of the CAMERA or the scene
+    furniture moving between the two captures, not of an annotation. Note what runs
+    immediately before: `CheckSectionAsync` ends by clearing the planes
+    (`SetSectionPlanesAsync(null)`, `SetSectionAsync(false)`), and the isoline rebuild is
+    a generation-stamped BACKGROUND task, so the `without` capture is only a clean
+    baseline if every one of those has landed. **The next probe is one line** — record
+    the camera state and the section state either side of the toggle and compare them,
+    before touching any drawing code.
+- [ ] **The Run button quotes no cost.** A reader clicking one has no idea whether it is a
+  half-second or ten. DocsGen already times each snippet's desktop execution and could carry
+  a projected browser figure, but the honest number is time-to-first-FRAME (meshing
+  included, which the snippet's own execution does not cover) and that is not measured on
+  the desktop side today. Measure it in the browser instead — the `?example=<id>&report`
+  beacon already reports `total` — and bake a band rather than a number.
 - [ ] **Out of scope until later**: editing/sketching in the browser, collaboration,
   server-side model storage. This is a *viewer* first.
 
