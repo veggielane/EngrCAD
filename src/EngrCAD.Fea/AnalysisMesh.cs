@@ -49,6 +49,7 @@ public sealed class AnalysisMesh
     private IReadOnlyList<int>? _facetTagsView;
     private object? _bounds;
     private object? _volume;
+    private object? _regionSlots;
 
     private AnalysisMesh(
         ElementOrder order,
@@ -127,6 +128,173 @@ public sealed class AnalysisMesh
     public IReadOnlyList<int> FacetTags =>
         Publish(ref _facetTagsView, static self => Array.AsReadOnly(
             self._facetTags.Distinct().Order().ToArray()), this);
+
+    // ---- material regions per node ------------------------------------------------------
+
+    /// <summary>
+    /// Which material regions each node touches, as a CSR table over the nodes: the distinct
+    /// region ids of the elements meeting at a node, ascending. A "slot" is one (node, region)
+    /// pair, and it is the index a per-region nodal quantity is stored under.
+    /// </summary>
+    /// <param name="Starts">Slot range per node (length <c>NodeCount + 1</c>).</param>
+    /// <param name="Regions">Region id per slot.</param>
+    /// <param name="InterfaceNodes">Nodes touching more than one region.</param>
+    /// <param name="SlotsAreNodes">True when every node touches exactly one region, so a slot
+    /// index IS a node index. The single-region case, and the reason a region-aware pass over
+    /// slots is bit-for-bit the pass over nodes it replaced.</param>
+    private sealed record RegionSlotTable(
+        int[] Starts, int[] Regions, int InterfaceNodes, bool SlotsAreNodes);
+
+    private RegionSlotTable Slots =>
+        (RegionSlotTable)Publish(ref _regionSlots, static self => (object)BuildRegionSlots(self), this);
+
+    /// <summary>
+    /// The distinct material regions the elements at one node belong to, ascending.
+    ///
+    /// <para>More than one means the node sits on a material INTERFACE, where the stress
+    /// tensor is genuinely discontinuous: only the traction across the interface is
+    /// continuous, and the components parallel to it jump with the modulus. A field indexed
+    /// by node holds one value there and therefore cannot hold the truth — see
+    /// <see cref="StructuralResults.NodalStressIn"/> for the per-region value and
+    /// <see cref="InterfaceNodeCount"/> for how many nodes are affected.</para>
+    /// </summary>
+    public ReadOnlySpan<int> RegionsAt(int node)
+    {
+        var table = Slots;
+        return table.Regions.AsSpan(table.Starts[node], table.Starts[node + 1] - table.Starts[node]);
+    }
+
+    /// <summary>
+    /// How many nodes touch more than one material region — the size of the material
+    /// interface, and <b>zero for every mesh with one region and for disjoint bodies</b>
+    /// (which share no node by construction).
+    /// </summary>
+    public int InterfaceNodeCount => Slots.InterfaceNodes;
+
+    /// <summary>Total (node, region) slots — the length of a per-region nodal array.</summary>
+    internal int RegionSlotCount => Slots.Regions.Length;
+
+    /// <summary>True when a slot index is a node index (see
+    /// <see cref="RegionSlotTable.SlotsAreNodes"/>).</summary>
+    internal bool RegionSlotsAreNodes => Slots.SlotsAreNodes;
+
+    /// <summary>First slot of one node, and one past its last.</summary>
+    internal (int Start, int End) RegionSlotRange(int node)
+    {
+        var table = Slots;
+        return (table.Starts[node], table.Starts[node + 1]);
+    }
+
+    /// <summary>The region id of one slot.</summary>
+    internal int RegionOfSlot(int slot) => Slots.Regions[slot];
+
+    /// <summary>
+    /// The slot holding one node's values for one region. Refused BY NAME when the node
+    /// touches no element of that region, because the alternative — returning some other
+    /// region's value, or a sentinel — is a wrong number where the question has no answer.
+    /// </summary>
+    internal int RegionSlot(int node, int region)
+    {
+        var table = Slots;
+        int start = table.Starts[node], end = table.Starts[node + 1];
+        for (int k = start; k < end; k++)
+        {
+            if (table.Regions[k] == region)
+                return k;
+        }
+        throw new ArgumentException(
+            $"Node {node} touches no element of region {region} (it touches "
+            + (end > start
+                ? $"region(s) {string.Join(", ", table.Regions[start..end])})."
+                : "no element at all)."),
+            nameof(region));
+    }
+
+    private static RegionSlotTable BuildRegionSlots(AnalysisMesh mesh)
+    {
+        int nodes = mesh.NodeCount;
+
+        // The overwhelmingly common case, and worth its own path: one region means one slot
+        // per node, PROVIDED every node is in an element. A node in none would otherwise be
+        // handed a region it does not touch, which is exactly the wrong number RegionSlot
+        // exists to refuse.
+        if (mesh.Regions.Count == 1)
+        {
+            var touched = new bool[nodes];
+            for (int e = 0; e < mesh.ElementCount; e++)
+            {
+                foreach (int node in mesh.Element(e))
+                    touched[node] = true;
+            }
+            if (Array.TrueForAll(touched, static t => t))
+            {
+                int only = mesh.Regions[0];
+                var identity = new int[nodes + 1];
+                var one = new int[nodes];
+                for (int v = 0; v < nodes; v++)
+                {
+                    identity[v] = v;
+                    one[v] = only;
+                }
+                identity[nodes] = nodes;
+                return new RegionSlotTable(identity, one, 0, true);
+            }
+        }
+
+        // Region id per element-node incidence, in a CSR over nodes; then each node's slice is
+        // sorted and deduplicated. No hashing and no per-node allocation - the same counting
+        // shape the recovery's node-to-element adjacency uses.
+        var incidence = new int[nodes + 1];
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            foreach (int node in mesh.Element(e))
+                incidence[node + 1]++;
+        }
+        for (int v = 0; v < nodes; v++)
+            incidence[v + 1] += incidence[v];
+
+        var cursor = (int[])incidence.Clone();
+        var flat = new int[incidence[nodes]];
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            int region = mesh.RegionOf(e);
+            foreach (int node in mesh.Element(e))
+                flat[cursor[node]++] = region;
+        }
+
+        var starts = new int[nodes + 1];
+        for (int v = 0; v < nodes; v++)
+        {
+            var slice = flat.AsSpan(incidence[v], incidence[v + 1] - incidence[v]);
+            slice.Sort();
+            int distinct = 0;
+            for (int k = 0; k < slice.Length; k++)
+            {
+                if (k == 0 || slice[k] != slice[k - 1])
+                    distinct++;
+            }
+            starts[v + 1] = starts[v] + distinct;
+        }
+
+        var regions = new int[starts[nodes]];
+        int interfaceNodes = 0;
+        bool slotsAreNodes = starts[nodes] == nodes;
+        for (int v = 0; v < nodes; v++)
+        {
+            var slice = flat.AsSpan(incidence[v], incidence[v + 1] - incidence[v]);
+            int at = starts[v];
+            for (int k = 0; k < slice.Length; k++)
+            {
+                if (k == 0 || slice[k] != slice[k - 1])
+                    regions[at++] = slice[k];
+            }
+            if (starts[v + 1] - starts[v] > 1)
+                interfaceNodes++;
+            if (starts[v] != v)
+                slotsAreNodes = false;
+        }
+        return new RegionSlotTable(starts, regions, interfaceNodes, slotsAreNodes);
+    }
 
     /// <summary>Axis-aligned bounds of the nodes. Cached like <see cref="Regions"/>.</summary>
     public Aabb Bounds

@@ -310,12 +310,13 @@ stiffness matrix's condition number — the number that tells a badly shaped mes
 badly posed model.
 
 Beyond the report, `StructuralResults` gives nodal `Displacement`, averaged `NodalStress`
-and `NodalVonMises`, `PrincipalStress`, per-element `ElementStress`/`ElementStrain`, and
-`Reactions`. **Element values are kept public on purpose**: the nodal values are a
-volume-weighted average of the elements meeting at a node, which is what a colour map
-wants and what converges — and it also smooths a genuine discontinuity at a material
-interface or a re-entrant corner. The jump between neighbouring elements is the standard
-error indicator, and averaging is the standard way to hide a mesh that is too coarse.
+and `NodalVonMises`, per-material `NodalStressIn`/`NodalVonMisesIn`, `PrincipalStress`,
+per-element `ElementStress`/`ElementStrain`, and `Reactions`. **Element values are kept
+public on purpose**: the nodal values are a volume-weighted average of the elements meeting
+at a node, which is what a colour map wants and what converges — and it also smooths a
+genuine discontinuity at a material interface or a re-entrant corner. The jump between
+neighbouring elements is the standard error indicator, and averaging is the standard way to
+hide a mesh that is too coarse.
 
 ## Is the mesh good enough? Stress recovery and the error estimate
 
@@ -358,8 +359,37 @@ if (!(estimate.RelativeError > 0)) throw new Exception("a coarse mesh should rep
 
 `Direct` remains the default: every verification figure in this project was measured through
 it, and a recovered field is smooth by construction, so at a *genuine* discontinuity — a
-material interface, a re-entrant corner — it smooths harder than averaging does. Recovery is
-a better answer for the common case, not a better answer.
+re-entrant corner, where the true stress is singular — it smooths harder than averaging does.
+Recovery is a better answer for the common case, not a better answer.
+
+A **material interface** used to be the other example on that list and no longer is. A patch
+is never fitted across one: patches are assembled from the elements of a single region, so a
+node on the interface carries one recovered value per material rather than one wrong value for
+both. That matters more than the smoothing plain averaging does because of *reach* — averaging
+blends the shared node and nothing else, while a patch is written to every node of every
+element it contains, so one cross-interface fit puts a ramp into nodes a whole element layer
+inside each material. Measured on a bi-material cube whose exact stress is piecewise constant:
+34 single-material nodes wrong, the worst by 92.9%, against exact to 4.5e-15 with the rule.
+
+```csharp
+// One value per node - so at an interface node this is the average of the materials.
+var blended = results.NodalStress[node];
+
+// The honest per-material value. Equal to the above, bit for bit, at any node touching one
+// region; refused by name at a node touching no element of that region.
+foreach (int region in model.Mesh.RegionsAt(node))
+    Console.WriteLine($"region {region}: {results.NodalVonMisesIn(region, node):F1} MPa");
+
+// How many nodes the node-indexed field blends. Zero for a single-material part and for
+// disjoint bodies, which share no node.
+Console.WriteLine($"{model.Mesh.InterfaceNodeCount} interface nodes");
+```
+
+> [!NOTE]
+> **No mesh the public API can build has an interface node yet.** `TetMesher` meshes disjoint
+> bodies and refuses two that mate along a face, so no node is ever shared between two
+> materials — the per-region recovery is a precondition for conforming interfaces rather than
+> a fix to something reachable today, and `InterfaceNodeCount` is currently zero everywhere.
 
 > [!IMPORTANT]
 > **The estimate reports `NaN`, not zero, when it cannot estimate.** A mesh with no interior
@@ -639,8 +669,13 @@ MPa — three genuinely different numbers — to 3.6e-15.
   a per-element stress cannot be exported or displayed directly; `ElementStress` is
   available in code.
 - Stress at a quadratic element's nodes is evaluated directly rather than extrapolated
-  from the integration points. Superconvergent recovery is the standard refinement and is
-  filed.
+  from the integration points; `StressRecovery.Superconvergent` is the opt-in that does the
+  latter (above).
+- **A material interface is a per-node answer a per-node field cannot hold.** The recovery
+  never fits across one and `NodalStressIn` gives each material's own value, but the
+  published `MeshField`s and `.vtu` still carry the blended node value, so a colour plot
+  smooths the interface. Unreachable today — no mesh the public API builds has a shared node
+  between two materials.
 - No contact, no plasticity, no large deformation. Every one of those is a different
   mathematical problem rather than a bigger version of this one. **Modal analysis has
   landed** and reuses this assembly unchanged — see [natural frequencies and mode

@@ -1334,14 +1334,94 @@ mesh-quality indicator to be wrong in. `RelativeError` is NaN there, following t
 `FallbackNodes` counts the partial case so a recovery that quietly did not happen cannot look
 like one that did.
 
+### A patch may not span a material interface, and the argument is REACH
+
+todo.md filed this as "recovery makes it worse [than averaging] and the fix is standard and
+small", which is right about the fix and understates why it matters. **Averaging is local**:
+it blends the shared node and touches nothing else, which is the smoothing the section above
+already documents. **A patch is not local**: it is fitted over every element at its node and
+then written to *every node of every one of them*, so a single fit taken across a genuine
+stress jump puts a ramp into nodes a whole element layer inside each material — nodes that
+touch ONE material and have an unambiguous right answer. That is a different kind of error
+from a blurred interface value, and it is the one worth fixing.
+
+Measured on a **parallel** bi-material cube (see the fixture note below), where the exact
+stress is piecewise constant and a region-pure fit therefore reproduces it exactly: with the
+regions collapsed, **34 single-material nodes are wrong, the worst by 92.9%**, every one of
+them in that single adjacent layer and none beyond it; with the rule, every node in every
+material is exact to 4.5e-15. The estimator has its own stake: the manufactured jump inside an
+interface element is booked as discretization error, so the ZZ figure reads **20.6% on a field
+whose true error is zero**.
+
+So patches are assembled at corner nodes touching exactly one region, contributions accumulate
+per **(node, region) slot**, and the boundary fill of the previous section walks *within* a
+region — without that last part the exclusion is undone one round later, by extrapolating the
+other material's polynomial into this one. `AnalysisMesh` owns the slot table
+(`RegionsAt`/`InterfaceNodeCount`), so the averaging pass and the recovery ask one rule rather
+than restating it, and an element reads its own material's values in the error estimate.
+
+**The decision the entry left open was what a node-indexed field then reports.** A node on the
+interface has one right answer per material and `NodalStress` has one slot for it. Three
+shapes were weighed. *Per-region nodal fields* (`NodalStress(region)` as whole arrays, the
+entry's own guess, mirroring the per-region laws) costs nodes x regions of storage where only
+the interface nodes are multi-valued at all, and needs an answer for every node outside the
+region — NaN would be the repo's spelling, but most of the array would then be NaN. *Indexing
+by (element, node)*, the discontinuity's own indexing and always single-valued, is the
+VTK cell-data idiom and would mirror `ElementStressAtNode` — but it makes every caller iterate
+elements to ask about a node. What shipped is the third: **`NodalStress` keeps one value per
+node and averages the materials there, because a display field must have one value per node
+and nothing else is honest about being a display field; the multi-valued answer is reachable
+as `NodalStressIn(region, node)`; and the blending is REPORTED rather than left to be
+discovered, by `AnalysisMesh.InterfaceNodeCount`.** Two properties make the pair safe to mix:
+away from an interface the blend is a blend of one value and is therefore the per-region value
+*bit for bit* (a sum started from the first slot rather than from a zero tensor, since adding
+a zero is not the identity on a negative zero), and asking for a region a node does not touch
+is refused by name rather than answered with a neighbouring material's number.
+
+**Scope, and both boundaries are stated because both are easy to get wrong.** This fixes the
+*recovery* and not `Direct` averaging, and the reason is not deference to the default: for a
+node-indexed field there is nothing per-region averaging could change, since only the
+interface node itself is affected and it must still publish one value. What the region work
+adds to `Direct` is the per-material *accessor*, which it now has. And a connected
+multi-region mesh is **not reachable from the public API today** — `TetMesher` refuses mating
+bodies, disjoint ones share no node, and `TetMesh`'s region-carrying constructor is internal —
+so this is a precondition for conforming interfaces rather than a live defect. Both ends are
+pinned by test (`MaterialInterfaceRecoveryTests`), the `TrimmedFaceRefusalTests` pattern.
+
+### The recorded oracle could not see it, and the fixture that can
+
+CLAUDE.md's two-material oracle is a bar in **series** — the interface perpendicular to the
+load — chosen with Poisson's ratio zero in both halves so the exact field is in the linear-tet
+space. It is exact and it is useless here: force equilibrium makes the axial stress `F/A` in
+*both* halves, so the STRAIN jumps and the stress does not, and a recovery reproduces a
+uniform field exactly whatever it does at the interface. Measured: the two recoveries differ
+by 2.1e-13 of 62.5 MPa.
+
+The arrangement with a stress jump is **parallel** — two materials side by side under a
+uniform stretch share the strain, so the stress jumps with the modulus. The same nu = 0 device
+carries it: `u = (eps·x, 0, 0)` is then the exact solution with no body force, because the
+stress `(E_i·eps, 0, 0)` has zero divergence and the traction across the interface
+(`sigma_xy`, `sigma_yy`, `sigma_yz`) is zero on both sides. A nonzero nu would make
+`sigma_yy` jump, which is a traction discontinuity — not a solution at all.
+
+One trap paid for while building it, of the recorded fixture family: **prescribing that same
+uniform stretch on a SERIES bar's boundary is not the series problem**, because it imposes the
+same strain on both halves, which is the parallel condition wearing the series geometry. The
+control fixture duly measured a 25.4% difference between the two recoveries and reported that
+the series bar *does* see the interface rule; driving it by a force instead — which is what
+makes the stress uniform — put it at 1e-15. **A fixture named after an arrangement must be
+loaded the way that arrangement is defined, or it is the other arrangement.**
+
 ### Direct stays the default
 
 For `FeaSolveMethod.Direct`'s reason rather than a new one: every verification figure this
 project quotes was measured through the simple path, and promoting the better answer would
 silently move all of them. There is also a real counterweight — a recovered field is smooth by
-construction, so at a genuine discontinuity (a material interface, a re-entrant corner) it
-smooths harder than averaging does, and averaging already smooths more than
-`ElementStress` does. The option is a better answer for the common case, not a better answer.
+construction, so at a genuine discontinuity it smooths harder than averaging does, and
+averaging already smooths more than `ElementStress` does. A *material* interface has stopped
+being an example of that; a re-entrant corner has not and never will be, since the true stress
+there is singular and no polynomial fit can say so. The option is a better answer for the
+common case, not a better answer.
 
 ### One fixture trap, of the recorded family
 

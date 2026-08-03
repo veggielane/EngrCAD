@@ -39,7 +39,7 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `QuadraticTetMesh` | The 10-node (quadratic) layer, a pure function of the linear mesh |
 | `DelaunayTetrahedralization` | Internal: incremental Bowyer–Watson over exact predicates |
 | `SurfacePatch` / `SurfacePatches` | Internal: coplanar same-tag triangle groups, the unit recovery works in |
-| `AnalysisMesh` | The analysis view of a tet mesh: nodes, elements, tagged facets, linear or quadratic |
+| `AnalysisMesh` | The analysis view of a tet mesh: nodes, elements, tagged facets, per-node material regions, linear or quadratic |
 | `AnalysisBody` | One body of a multi-material model: a closed surface **and what it is made of** — the list `TetMesher.Mesh` and `StructuralModel.For` / `ThermalModel.For` BOTH read, so a region id is never restated |
 | `Material` / `Materials` | **Lives in `EngrCAD.Core`**, not here — see below |
 | `ElasticLaw` | The constitutive law: isotropic (from a `Material`), transversely isotropic, orthotropic or fully anisotropic, with a material FRAME applied once at construction — the directional half `Material` deliberately cannot carry |
@@ -259,7 +259,10 @@ treated as a constrained boundary, plus a decision about whether a facet selecto
 (it would be visited from both sides, so a pressure applied there would double-count). That
 is a feature, and it is filed as one; until it lands, a bonded bi-material part is meshed as
 one surface with one material, and `AnalysisBody` serves genuinely separate bodies in one
-analysis.
+analysis. One consequence is worth naming because it is easy to assume the opposite: since
+disjoint bodies share no node, **`AnalysisMesh.InterfaceNodeCount` is zero for every mesh the
+public API can build today** — the per-region stress recovery decision (e) above is a
+precondition for conforming interfaces, not a fix to something a caller can currently reach.
 
 ## Directional materials: `ElasticLaw`
 
@@ -363,7 +366,7 @@ var peak = results.MaxVonMises;                  // one order more accurate
 Console.WriteLine(results.ErrorEstimate);        // "estimated error 4.31% (...)"
 ```
 
-Zienkiewicz–Zhu patch recovery, with four decisions.
+Zienkiewicz–Zhu patch recovery, with five decisions.
 
 **(a) Vertex patches, evaluated at every node they touch.** A patch is the elements meeting
 at one corner node; a polynomial of the displacement's own degree is fitted to its samples
@@ -393,6 +396,46 @@ scaled by the patch radius, so the normal equations are O(1) and their condition
 property of the patch's SHAPE rather than of where the part sits in space. It also makes the
 answer free — the recovered value at the patch node is exactly the fitted constant term.
 
+**(e) A patch never spans a MATERIAL INTERFACE, and the reason it matters more than
+averaging's own smoothing is REACH.** At a bonded interface the stress tensor is genuinely
+discontinuous — only the traction across it is continuous, the components parallel to it jump
+with the modulus — so a polynomial fitted across the jump is wrong on both sides. Averaging is
+*local*: it blends the shared node and nothing else. A patch is not: it is fitted over every
+element at its node and then written to every node of every one of them, so one cross-interface
+fit puts a ramp into nodes a whole element layer inside each material — nodes that touch a
+single material and have an unambiguous right answer. Measured on a parallel bi-material cube
+whose exact stress is piecewise constant (and therefore reproduced exactly by a region-pure
+fit): **34 single-material nodes wrong, the worst by 92.9%**, all of them in that one layer;
+and the ZZ estimate reporting **20.6% error on a field with none**, because the manufactured
+jump inside an interface element is booked as discretization error.
+
+So patches are assembled at corner nodes touching exactly one region, contributions accumulate
+per **(node, region) slot**, and the boundary fill of (c) walks *within* a region — otherwise
+the exclusion would be undone one round later by extrapolating the other material's polynomial
+into this one. `AnalysisMesh` owns the slot table (`RegionsAt`, `InterfaceNodeCount`), so the
+averaging pass and the recovery ask one rule rather than restating it.
+
+**What a node on the interface then reports is the decision this forced.** It has one right
+answer per material, and `NodalStress` is indexed by node, so it holds one value and reports
+the average of them — which is a property of a node-indexed field rather than of the recovery,
+and is why a colour map cannot be the whole answer. It is stated rather than left to be
+discovered: `AnalysisMesh.InterfaceNodeCount` says how many nodes blend (zero for a
+single-region mesh and for disjoint bodies, which share no node), and
+`StructuralResults.NodalStressIn(region, node)` / `NodalVonMisesIn` give the per-material
+value — equal to `NodalStress` at every node touching one region *by identical arithmetic*, so
+mixing the two accessors cannot move an answer away from an interface. Asking for a region a
+node does not touch is refused by name, naming the regions it does.
+
+**A single-region mesh takes the same code path either way, bit for bit**, which is the safety
+argument for touching the recovery at all — asserted through an internal `respectRegions` seam
+that also lets the defect above be *measured* rather than asserted. Two boundaries are worth
+stating: this fixes the *recovery*, since `Direct` averaging's interface node was already a
+documented blend that a per-node field cannot improve on (what `NodalStressIn` adds there is
+the honest per-material value); and a connected multi-region mesh is **not reachable from the
+public API today** — `TetMesher` refuses mating bodies, disjoint ones share no node, and
+`TetMesh`'s region-carrying constructor is internal — so this is a precondition for conforming
+interfaces rather than a live defect, pinned by test at both ends so the finding cannot rot.
+
 **The error estimate is the more valuable half.** `StructuralResults.ErrorEstimate` is the
 energy-norm distance between the element stress field and its recovery: per element (the map
 an adaptive scheme refines against) and globally (the answer to "is this mesh good enough",
@@ -410,7 +453,9 @@ to assess. `RelativeError` is `NaN` there, following the same "not small, unknow
 `Direct` stays the default. Every verification figure this project quotes was measured
 through it, so promoting the better answer would silently move all of them; and recovery is
 not better *everywhere* — a recovered field is smooth by construction, so at a genuine
-discontinuity (a material interface, a re-entrant corner) it smooths harder than averaging.
+discontinuity it smooths harder than averaging. A *material* interface is no longer an example
+of that, per (e); a re-entrant corner still is, and always will be, since the true stress
+there is singular and no polynomial fit says so.
 
 ## Contracts
 
@@ -1074,14 +1119,17 @@ Release, and re-measure where the time goes after every win.
 ## Results
 
 `StructuralResults` carries nodal `Displacement` and `Reactions`, per-element
-`ElementStress`/`ElementStrain`, averaged `NodalStress`/`NodalVonMises`, and
-`PrincipalStress`. Nodal values are a **volume-weighted** average of the elements meeting
-at a node (`NodalAveraging`), which is what a colour map wants and what converges — and it
-also smooths a genuine discontinuity at a material interface or a re-entrant corner, which
-is why the element values stay public: their jump is the standard error indicator, and
-averaging it away is the standard way to hide a mesh that is too coarse. Quadratic stress
-is evaluated **at** the nodes rather than extrapolated from the integration points;
-superconvergent recovery is filed.
+`ElementStress`/`ElementStrain`, averaged `NodalStress`/`NodalVonMises`, per-material
+`NodalStressIn`/`NodalVonMisesIn`, and `PrincipalStress`. Nodal values are a
+**volume-weighted** average of the elements meeting at a node (`NodalAveraging`), which is
+what a colour map wants and what converges — and it also smooths a genuine discontinuity at
+a material interface or a re-entrant corner, which is why the element values stay public:
+their jump is the standard error indicator, and averaging it away is the standard way to
+hide a mesh that is too coarse. At a material interface the per-material value is available
+without that blend (see *Stress recovery* above, decision (e)), and
+`AnalysisMesh.InterfaceNodeCount` says how many nodes the node-indexed field blends.
+Quadratic stress is evaluated **at** the nodes rather than extrapolated from the integration
+points; `StressRecovery.Superconvergent` is the opt-in that does the latter.
 
 `SampleOnto(displayMesh)` closes the gap between a solver's vertex set and a display
 mesh's. A display vertex whose position matches an analysis boundary node **bit for bit**

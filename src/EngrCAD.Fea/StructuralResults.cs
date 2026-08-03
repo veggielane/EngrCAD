@@ -50,6 +50,7 @@ public sealed class StructuralResults
     private IReadOnlyList<SymmetricTensor3>? _nodalStress;
     private IReadOnlyList<double>? _nodalVonMises;
     private SymmetricTensor3[]? _averagedStress;
+    private SymmetricTensor3[]? _averagedStressPerRegion;
     // The recovery and the error estimate are readonly record STRUCTS, cached boxed: an
     // object reference publishes atomically where a Nullable<T> write of a multi-word struct
     // can tear, and tearing would hand a concurrent reader half of one value and half of
@@ -175,6 +176,7 @@ public sealed class StructuralResults
             _nodalStress = null;
             _nodalVonMises = null;
             _averagedStress = null;
+            _averagedStressPerRegion = null;
             // The recovery and the estimate consume AveragedStress too (boundary nodes fall
             // back to it), so they are stale under a changed averaging as well — clearing
             // only the averaged caches would let a later superconvergent read pair a fresh
@@ -246,23 +248,73 @@ public sealed class StructuralResults
         return StressAt(element, r, s, t);
     }
 
-    /// <summary>The nodal stress field, by whichever <see cref="Recovery"/> is selected.
-    /// A read-only view — the array behind it is a cache shared with the error
-    /// estimator.</summary>
+    /// <summary>
+    /// The nodal stress field, by whichever <see cref="Recovery"/> is selected. A read-only
+    /// view — the array behind it is a cache shared with the error estimator.
+    ///
+    /// <para><b>One value per node, which at a MATERIAL INTERFACE is one value too few.</b>
+    /// Stress is genuinely discontinuous where two materials meet — only the traction across
+    /// the interface is continuous — so a node on that interface has one right answer per
+    /// material and this field averages them. That is a property of a node-indexed field
+    /// rather than of the recovery, and it is reported rather than left to be discovered:
+    /// <see cref="AnalysisMesh.InterfaceNodeCount"/> says how many nodes are affected (zero
+    /// for a single-region mesh and for disjoint bodies) and
+    /// <see cref="NodalStressIn"/> gives the per-material value.</para>
+    /// </summary>
     public IReadOnlyList<SymmetricTensor3> NodalStress =>
         Publish(ref _nodalStress, () => Array.AsReadOnly(
             Recovery == StressRecovery.Direct ? AveragedStress : RecoveredNodalStress.Stress));
+
+    /// <summary>
+    /// The nodal stress at one node <b>as seen from one material region</b> — the honest
+    /// value where <see cref="NodalStress"/> can only report a blend.
+    ///
+    /// <para>Equal to <see cref="NodalStress"/> at every node touching one region, by
+    /// identical arithmetic rather than by tolerance, so switching to this accessor cannot
+    /// move an answer away from an interface. Refused by name when the node touches no
+    /// element of that region; <see cref="AnalysisMesh.RegionsAt"/> says which regions it
+    /// does touch.</para>
+    /// </summary>
+    /// <param name="region">A material region id (see <see cref="AnalysisMesh.Regions"/>).</param>
+    /// <param name="node">The node.</param>
+    public SymmetricTensor3 NodalStressIn(int region, int node)
+    {
+        RequireNode(node);
+        int slot = Mesh.RegionSlot(node, region);
+        return Recovery == StressRecovery.Direct
+            ? AveragedStressPerRegion[slot]
+            : RecoveredNodalStress.SlotStress[slot];
+    }
+
+    /// <summary>The von Mises stress at one node as seen from one material region — the
+    /// per-material reading of <see cref="NodalVonMises"/> (see
+    /// <see cref="NodalStressIn"/>).</summary>
+    public double NodalVonMisesIn(int region, int node) =>
+        TetElement.VonMises(NodalStressIn(region, node));
 
     /// <summary>The directly averaged nodal stress, whatever <see cref="Recovery"/> says —
     /// the fallback the recovery itself uses, and the field the error estimator's residual
     /// is measured against having replaced.</summary>
     private SymmetricTensor3[] AveragedStress =>
-        Publish(ref _averagedStress, ComputeNodalStress);
+        Publish(ref _averagedStress, () => ComputeNodalStress(perRegion: false));
+
+    /// <summary>
+    /// The directly averaged stress per (node, region) SLOT — the same rule
+    /// <see cref="Averaging"/> states, restricted to one material.
+    /// <para>Where a slot IS a node (every mesh with one region, and every mesh of disjoint
+    /// bodies) this is <see cref="AveragedStress"/> itself rather than a second array holding
+    /// the same numbers: the two accumulations would be the same additions in the same order,
+    /// so computing it twice would buy nothing but a chance to drift.</para>
+    /// </summary>
+    private SymmetricTensor3[] AveragedStressPerRegion =>
+        Mesh.RegionSlotsAreNodes
+            ? AveragedStress
+            : Publish(ref _averagedStressPerRegion, () => ComputeNodalStress(perRegion: true));
 
     private SuperconvergentRecovery.RecoveredStress RecoveredNodalStress =>
         (SuperconvergentRecovery.RecoveredStress)Publish(
             ref _recovered,
-            () => (object)SuperconvergentRecovery.Recover(this, AveragedStress));
+            () => (object)SuperconvergentRecovery.Recover(this, AveragedStressPerRegion));
 
     /// <summary>
     /// First-publish-wins lazy initialization (the <see cref="AnalysisMesh"/> pattern):
@@ -290,7 +342,24 @@ public sealed class StructuralResults
     /// markedly weaker form of the same idea.</para>
     /// </summary>
     public ErrorEstimate ErrorEstimate =>
-        (ErrorEstimate)Publish(ref _errorEstimate, () => (object)ComputeErrorEstimate());
+        (ErrorEstimate)Publish(
+            ref _errorEstimate, () => (object)ComputeErrorEstimate(RecoveredNodalStress));
+
+    /// <summary>
+    /// The recovery, with the material-region rule optionally switched OFF — the test seam
+    /// that lets the defect the rule fixes be MEASURED rather than asserted. Production never
+    /// asks for false; on a single-region mesh the two agree bit for bit, which is what makes
+    /// the comparison a measurement of the interface and of nothing else.
+    /// </summary>
+    internal SuperconvergentRecovery.RecoveredStress RecoverStress(bool respectRegions) =>
+        respectRegions
+            ? RecoveredNodalStress
+            : SuperconvergentRecovery.Recover(this, AveragedStress, respectRegions: false);
+
+    /// <summary><see cref="ErrorEstimate"/> over a recovery the caller supplies — the same
+    /// seam, so the estimate's own sensitivity to a cross-interface fit is measurable.</summary>
+    internal ErrorEstimate ErrorEstimateFrom(SuperconvergentRecovery.RecoveredStress recovered) =>
+        ComputeErrorEstimate(recovered);
 
     /// <summary>Averaged von Mises stress at every node — what a colour map shows.</summary>
     public IReadOnlyList<double> NodalVonMises =>
@@ -504,9 +573,8 @@ public sealed class StructuralResults
         }
     }
 
-    private ErrorEstimate ComputeErrorEstimate()
+    private ErrorEstimate ComputeErrorEstimate(SuperconvergentRecovery.RecoveredStress recovered)
     {
-        var recovered = RecoveredNodalStress;
         int perElement = Mesh.NodesPerElement;
         // The integrand is the SQUARE of a difference between a degree-p field and a
         // degree-(p-1) one, i.e. degree 2p; the rule is chosen to be exact for it rather
@@ -526,11 +594,19 @@ public sealed class StructuralResults
         Span<double> shape = stackalloc double[10];
         Span<Vector3d> grad = stackalloc Vector3d[10];
 
+        // Read from the RECOVERY, not from the mesh: a recovery run with regions collapsed
+        // has node-indexed slots whatever the mesh's own slots are.
+        bool perRegion = !recovered.SlotsAreNodes;
+
         for (int e = 0; e < Mesh.ElementCount; e++)
         {
             Gather(e, positions, ue);
             var compliance = Model.ElasticityOf(e).ComplianceMatrix;
             var nodes = Mesh.Element(e);
+            // An element reads its OWN material's recovered values, never the node-indexed
+            // blend: at an interface element the blend carries the other material's stress,
+            // and the estimator would book that modelling jump as this element's error.
+            int region = perRegion ? Mesh.RegionOf(e) : 0;
             double error = 0, energy = 0;
 
             for (int q = 0; q < rule.Count; q++)
@@ -550,7 +626,9 @@ public sealed class StructuralResults
                 smooth.Clear();
                 for (int i = 0; i < perElement; i++)
                 {
-                    var value = recovered.Stress[nodes[i]];
+                    var value = perRegion
+                        ? recovered.SlotStress[Mesh.RegionSlot(nodes[i], region)]
+                        : recovered.Stress[nodes[i]];
                     double n = shape[i];
                     smooth[0] += n * value.Xx;
                     smooth[1] += n * value.Yy;
@@ -622,11 +700,20 @@ public sealed class StructuralResults
         return sum;
     }
 
-    private SymmetricTensor3[] ComputeNodalStress()
+    /// <summary>
+    /// The averaged nodal stress, indexed either by NODE or by (node, region) SLOT.
+    /// <para>One implementation for both: the per-region pass is the same loop writing to a
+    /// different index, so the two cannot disagree about the averaging rule, the thermal
+    /// subtraction or the constitutive law — and for a mesh whose slots are its nodes the
+    /// index expression is the node itself, so the two are the same additions in the same
+    /// order.</para>
+    /// </summary>
+    private SymmetricTensor3[] ComputeNodalStress(bool perRegion)
     {
         int perElement = Mesh.NodesPerElement;
-        var accumulated = new SymmetricTensor3[Mesh.NodeCount];
-        var weights = new double[Mesh.NodeCount];
+        int slots = perRegion ? Mesh.RegionSlotCount : Mesh.NodeCount;
+        var accumulated = new SymmetricTensor3[slots];
+        var weights = new double[slots];
 
         Span<Vector3d> positions = stackalloc Vector3d[10];
         Span<double> ue = stackalloc double[30];
@@ -638,6 +725,7 @@ public sealed class StructuralResults
             var nodes = Mesh.Element(e);
             Gather(e, positions, ue);
             var law = Model.ElasticityOf(e);
+            int region = perRegion ? Mesh.RegionOf(e) : 0;
             double weight = Averaging == NodalAveraging.VolumeWeighted ? Mesh.ElementVolume(e) : 1.0;
             if (!(weight > 0))
                 continue;
@@ -654,8 +742,9 @@ public sealed class StructuralResults
                 // from disagreeing under a thermal load.
                 SubtractThermalStrain(e, r, s, t, strain);
                 law.Stress(strain, stress);
-                accumulated[nodes[i]] += TetElement.ToTensor(stress, engineeringShear: false) * weight;
-                weights[nodes[i]] += weight;
+                int target = perRegion ? Mesh.RegionSlot(nodes[i], region) : nodes[i];
+                accumulated[target] += TetElement.ToTensor(stress, engineeringShear: false) * weight;
+                weights[target] += weight;
             }
         }
 
