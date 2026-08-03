@@ -8,6 +8,8 @@
   href: 2d-views.md
 - name: Space-filling curves & 2D infill
   href: infill.md
+- name: Anti-drill tamper mesh
+  href: tamper-mesh.md
 - name: DXF & SVG (2D interchange)
   href: dxf-svg.md
 - name: Drawings (hidden lines, sheets, dimensions)
