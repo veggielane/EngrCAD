@@ -418,8 +418,18 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     curve** — an 80 × 12 plate at spacing 3 generates 1024 cells and keeps ~160, and an
     80 × 1.5 one is refused outright because the achieved spacing is set by the LENGTH.
     Neither of the two placement readings helps (they give the same order); what would is a
-    footprint that is not one square — tiled Hilbert blocks with their ends linked, which is
-    the same linker the item below wants.
+    footprint that is not one square — tiled Hilbert blocks with their ends linked.
+    **That linker now EXISTS**, as `TiledHilbertRoute` in Modeling (built for `TamperMesh`):
+    a block enters and leaves at two adjacent corners of its square, so the eight symmetries
+    supply whichever pair the neighbours need and a boustrophedon over the block grid links
+    them into one Hamiltonian path over any `p × q` rectangle, reducing to Core's own lattice
+    site for site at `1 × 1`. Two things are left. (a) It is **in the wrong project** — its
+    natural home is beside `SpaceFillingCurve` in Core, where `SpaceFillingCurve.Over` could
+    take a rectangle rather than a bounding square and every consumer would get the tight fit;
+    moving it is a rename plus making `Vector2i` symmetry helpers public, and the tamper mesh
+    should then delegate. (b) It is **Hilbert only** — Peano's block ends are at the same two
+    adjacent corners so it would tile identically, Moore's closed loop has no ends to link at
+    all, and Gosper's island does not tile a rectangle in the first place.
   - **The RUN LINKER is not built.** `InfillPath.Runs` comes back in curve order and the
     travel between runs is the caller's business. The original entry was right that this is
     the same problem the 2.5D CAM entry names, and it should be ONE linker; filing it here
@@ -448,6 +458,22 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     option rather than a change: it gives the SAME order, so it costs nothing, and it suits
     a caller sizing a bead more than a caller reproducing a phase. Recorded with the
     finding rather than built, since nothing in the repo asks for it yet.
+- [ ] **`Region2dOffset.Stroke` drops the outer corner fill at every CLOCKWISE turn** — a
+  real defect, measured while cross-checking the tamper mesh's boolean-free ribbon against
+  it. `Stroke` offers the join on both sides as `AddCornerJoin(v, left0, left1)` and
+  `AddCornerJoin(v, -left0, -left1)`, but **negating both normals does not flip the turn's
+  sign** (`cross(-a, -b) == cross(a, b)`), so `AddCornerJoin`'s `if (cross < 0) return` gate
+  either admits both wedges or refuses both — and at a clockwise corner the one it refuses is
+  the genuine outer gap. The fix is one line, `AddCornerJoin(v, -left1, -left0, …)`: swapping
+  the order as well as negating flips the cross product. The loop-offset path
+  (`AddLoopPrimitives`) is INNOCENT — it passes one side's outward normals, where the gate is
+  the correct reflex-corner test. Confirmed exactly rather than approximately: the area
+  deficit is `(clockwise corners) × w²/4` and nothing else, matching on six paths (all-left U
+  0, all-right U 2 corners, Z 1, S 1, left spiral 0, right spiral 4). It is not a wrong-shape
+  bug, only a missing wedge, so `InfillPath.Footprint` keeps its documented one-sided
+  under-estimate — but the footprint carries a notch at roughly half a Hilbert route's
+  corners, which is wrong for a caller using it as a real toolpath footprint. **Not fixed
+  here**: the fix moves `infill-hilbert.png`, so it wants to land with the re-take.
 - [ ] **A PIVOTED real sparse symmetric-indefinite factorization, if a consumer ever needs
   one.** `SparseLdlt` ✅ landed the symmetric-indefinite family (real + complex symmetric
   L·D·Lᵀ over `SparseCholesky`'s shared symbolic pass — see design.md §2(d) for the
@@ -2852,6 +2878,38 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   - Verification: save→load→save stays a byte fixed point with configurations present,
     and switching away and back regenerates bit-identical geometry — the cache-key
     property the undo stack already asserts, asked of a new consumer.
+- [ ] **Tamper-mesh follow-ups** (`TamperMesh.cs` + `TiledHilbertRoute.cs` landed: an
+  anti-drill conductive serpentine over a rectangular wall, N interleaved nets, and a
+  `DrillGuarantee` that is derived AND measured by certified branch and bound; docs
+  `examples/tamper-mesh.md`, design.md §6b). Five residuals, roughly in the order they pay:
+  - **A wall that is not a rectangle is refused outright**, because the route would break
+    into runs and a broken net cannot be monitored for continuity. The common real cases are
+    a connector cutout and a rounded corner, and both want the same thing: a Hamiltonian path
+    over an ARBITRARY set of lattice cells rather than a rectangle. That is a real algorithm
+    (a Hamiltonian path in a grid subgraph is NP-hard in general but polynomial for
+    solid/simply-connected grid graphs — Umans–Lenhart), and it should return the honest
+    refusal when the cell set has no path (a checkerboard-parity obstruction is the usual
+    cause and is cheap to detect first). Until then `SpaceFillingInfill` is the answer where
+    runs are acceptable.
+  - **The terminals are wherever the snake ends**, which is on the footprint boundary in
+    every case but only at the two ends of ONE edge for a single row of blocks or an even
+    number of rows. A caller who wants both terminals at a STATED edge (where the connector
+    is) has no way to ask. The block snake could run in columns instead of rows, or reverse,
+    which covers the four edges — a small routing choice, not a new construction.
+  - **`Guarantee` measures over the whole footprint, including its own corners**, which for
+    two or more nets is always the weakest point — so the reported number is dominated by the
+    boundary rather than by the pattern. Honest, and documented with the "make the footprint
+    overhang what you protect" remedy, but an `interior` variant (the same branch and bound
+    over an inset rectangle) would let a designer see both numbers instead of inferring one.
+  - **`IsolationGap` is derived, not measured.** It is `min(pitch)/nets − width`, which is
+    exactly right for the offset construction and is cross-checked by a test that measures
+    the closest approach between two nets' centrelines — but if a future net layout stops
+    being a uniform offset family, the derived number would silently stop being the measured
+    one. The measurement exists in the test; moving it onto the type is the change.
+  - **No electrical model at all**: no resistance, no trace-length matching between nets, no
+    via/terminal pads, no impedance. Deliberate — this is a geometry kernel — but a caller
+    sizing a monitor wants `Length × sheet resistance` at least, which is arithmetic over
+    numbers the layout already reports.
 - [ ] **Manufacturability follow-ups** (`Manufacturability.cs` landed: draft / overhangs /
   wall thickness, each a report plus a `MeshField` the existing `FieldDisplay` colours;
   docs `examples/manufacturability.md`). Four residuals, in the order they would pay:

@@ -425,6 +425,71 @@ measurements needed to believe it. Docs: `docs/examples/infill.md`.
   its outer loop is a detached piece, not a hole) would otherwise have a piece the curve
   never reached.
 
+### Anti-drill tamper mesh (`TamperMesh.cs`, `TiledHilbertRoute.cs`)
+
+`TamperMesh.Over(face, pitch, traceWidth, nets)` lays the conductive serpentine an enclosure
+wall carries for tamper detection: drill through to reach the protected circuit and you sever
+a net, which a continuity monitor sees. ("Mesh" is the security term — the output is 2D line
+work.) Docs: `docs/examples/tamper-mesh.md`; design.md §6b.
+
+- **The deliverable is a GUARANTEE, and it is derived AND measured.** Every cell has the route
+  through its centre, so no point of the footprint is further from the route than a cell's
+  circumradius `R = ½·hypot(PitchX, PitchY)` — and that bound is *attained*. A drill of
+  diameter `d` at `c` misses the copper exactly when `dist(c, route) > d/2 + w/2`, so the
+  largest drill that CAN pass is `2R − w` (`DrillGuarantee.TouchDiameter`) and the smallest
+  that MUST cut a net wherever it lands is `2R + w` (`SeverDiameter`). Between them it is
+  position-dependent, so the honest answer is a BAND; the design equation is the sever end,
+  `pitch ≤ (d − w)/√2`, which is `TamperMesh.PitchForDrill`.
+- **`Guarantee` is a branch-and-bound measurement, not the formula restated.** Distance to a
+  polyline is 1-Lipschitz (the `SurfaceCull` argument), so a cell whose centre reads `d` holds
+  nothing above `d + halfDiagonal`; `Uncertainty` is a CERTIFIED bracket and `WeakestPoint`
+  says where the gap is. The measurement is held against the closed form by test, and against
+  an independent dense scan, so a plausible formula cannot ship wrong.
+- **The `√2` is a corner effect, and the corner is shown to EXIST rather than assumed.** A
+  dual-grid corner is only `h/2` from the route when one of the four cell pairs meeting there
+  is consecutive on it, and the full circumradius when none is. Both occur: the footprint's own
+  four corners touch a single cell so they always reach it, and **blind interior corners**
+  appear from block order 3 and multiply (counted on a plain Hilbert block: 0 / 1 / 9 / 47 at
+  orders 2–5). With two or more nets the weakest point moves to the footprint boundary, since
+  no conductor then rides the route through a corner cell's centre — so a mesh should overhang
+  the volume it protects, the `Shape.Drill` overshoot doctrine again.
+- **Hilbert's locality is a LIABILITY here and is stated, not sold.** The open curve is right
+  because a monitor needs two terminals (Moore's loop would have to be cut) and both ends sit
+  on the footprint's outer boundary. But points near in space are near in path order, so a
+  short bridge across a break restores a long stretch — which no curve fixes. The
+  countermeasure is `nets: 2` or more, monitored for continuity AND mutual isolation, so any
+  conductive bridge wider than `IsolationGap` shorts them. The nets are the same route offset
+  evenly across each corridor, so the interleaving is structural; they are NOT independent
+  detectors (they run parallel half a pitch apart), and the README says so because an isolation
+  monitor is what they are for.
+- **What the curve buys is the CHANNEL, and that is a number**: `LongestStraightRun` is 4 cells
+  for any tiled Hilbert route and the whole row for a serpentine (block order 0, a legitimate
+  member). The drill guarantee is the same for both at the same achieved pitch — it depends
+  only on the cell — so the channel is the whole reason to prefer Hilbert.
+- **`TiledHilbertRoute` covers a RECTANGLE with one Hamiltonian path**, which is the "tiled
+  Hilbert blocks with their ends linked" the infill residuals name: a block enters and leaves
+  at two adjacent corners of its square, so the eight symmetries supply whichever pair the
+  neighbours need and a boustrophedon over the block grid links them. `1 × 1` is Core's own
+  Hilbert lattice site for site (asserted). It is what makes the achieved pitch land near the
+  request instead of the next power of two, at the cost of a stated trade: small blocks fit
+  tightly and keep cells square, large blocks are more isotropic and quantise coarsely
+  (`Anisotropy` reports it).
+- **The copper is BUILT, not booleaned.** `TamperNet.Outline` is one simple polygon from the
+  two ±w/2 mitered offsets — `Region2dOffset.Stroke` would union a slab per segment, `O(E²)`
+  in the arrangement and minutes at mesh scale. The construction's oracle is an identity: a
+  mitered ribbon's area is exactly `Length × TraceWidth`, because at every corner the outer
+  miter triangle is congruent to the inner notch. `Region2d`'s own simplicity guard runs on the
+  loop, so a self-crossing ribbon would be named rather than silently filled.
+- **Refused by name**: a trace at or above the corridor share (an electrical short, not a
+  tolerance question), a drill no wider than the trace (`PitchForDrill` has no positive
+  solution — such a drill passes through the conductor without removing a cross-section), a
+  face that is not a rectangle or has a cutout (the route would break into runs and a broken
+  net cannot be monitored — `SpaceFillingInfill` is the answer when runs are acceptable), a
+  clearance that eats the wall, and a pitch past the cell cap (naming the finest it allows).
+  **Conformal placement on a doubly-curved wall is not offered at all** rather than
+  approximated: it is the open surface-decoration consumer, and `MeshLocalParam`'s 2–5%
+  distortion would land in the pitch and therefore in the guarantee.
+
 **Fidelity contract — read this before using regions for curved sketches.** Arcs and
 béziers are FLATTENED to polylines within `chordTolerance` (default 1e-3 model units,
 sagitta-sized for arcs, adaptive de Casteljau for béziers); lines are exact. Anything

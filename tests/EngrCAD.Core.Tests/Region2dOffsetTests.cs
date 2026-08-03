@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using EngrCAD.Core.Geometry2;
 using Xunit;
 
@@ -425,5 +427,45 @@ public class Region2dOffsetTests
             () => Region2dOffset.Stroke([new Vector2d(0, 0), new Vector2d(1, 0)], 0));
         Assert.Throws<ArgumentException>(
             () => Region2dOffset.Stroke([new Vector2d(1, 1), new Vector2d(1, 1)], 1));
+    }
+
+    // ---- turn handedness ----
+
+    /// <summary>
+    /// A stroke's area cannot depend on which way the path turns: mirroring a path maps
+    /// every left turn to a right turn and is an isometry, so the two footprints are
+    /// congruent. That is the assertion a same-handed fixture structurally cannot make,
+    /// and it is what caught the right side's corner joins being dropped —
+    /// <c>Cross(-a, -b) == Cross(a, b)</c> exactly, so negating both normals did not flip
+    /// the turn and the gate admitted both wedges or refused both. The deficit was
+    /// exactly (clockwise corners) x w^2/4, invisible to every left-turning test.
+    /// </summary>
+    [Theory]
+    [InlineData(OffsetJoin.Miter)]
+    [InlineData(OffsetJoin.Round)]
+    [InlineData(OffsetJoin.Chamfer)]
+    public void Stroke_AreaIsIndependentOfTurnHandedness(OffsetJoin join)
+    {
+        // A U with two LEFT turns, and its mirror in x, which has two RIGHT turns.
+        Vector2d[] left = [new(0, 0), new(10, 0), new(10, 8), new(0, 8)];
+        var right = left.Select(p => new Vector2d(-p.X, p.Y)).ToArray();
+
+        const double width = 2.0;
+        double leftArea = TotalArea(Region2dOffset.Stroke(left, width, StrokeCap.Butt, join));
+        double rightArea = TotalArea(Region2dOffset.Stroke(right, width, StrokeCap.Butt, join));
+
+        Assert.Equal(leftArea, rightArea, 9);
+
+        // And the fills are genuinely PRESENT rather than both missing, which is the way
+        // the defect passed a same-handed test. The three slabs total 56 and overlap in a
+        // half-width square at each of the two corners, so the bare union is 54; a miter
+        // adds the full (w/2)^2 corner square at each one.
+        double bareSlabs = (10 + 8 + 10) * width - 2 * (width / 2) * (width / 2);
+        Assert.Equal(54.0, bareSlabs, 9);
+        if (join == OffsetJoin.Miter)
+            Assert.Equal(bareSlabs + 2 * (width / 2) * (width / 2), leftArea, 9);
+        else
+            Assert.True(leftArea > bareSlabs,
+                $"{join} corner fills are missing: {leftArea} is the bare slab union");
     }
 }

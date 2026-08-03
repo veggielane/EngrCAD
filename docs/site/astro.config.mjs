@@ -73,6 +73,7 @@ export default defineConfig({
             { label: '3D annotations (PMI)', slug: 'examples/annotations' },
             { label: 'Results & fields', slug: 'examples/fields' },
             { label: 'Manufacturability checks', slug: 'examples/manufacturability' },
+            { label: 'Anti-drill tamper mesh', slug: 'examples/tamper-mesh' },
             { label: 'Remeshing', slug: 'examples/remeshing' },
             { label: 'Tessellation quality', slug: 'examples/quality' },
             { label: 'Tetrahedral meshing (FEA)', slug: 'examples/fea-meshing' },

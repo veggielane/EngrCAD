@@ -195,8 +195,22 @@ public static class Region2dOffset
         {
             var left0 = directions[i - 1].Perpendicular;
             var left1 = directions[i].Perpendicular;
+            // Each side is offered in BOTH orders, because `AddCornerJoin`'s gate admits a
+            // pair only when its sweep is counter-clockwise — so which ORDER spells a
+            // side's sector depends on which way the path turns. Exactly two of these four
+            // survive the gate (one per side) at any real corner, and the inner one lies
+            // inside its own slabs so the union is unchanged.
+            //
+            // Offering only (left0, left1) and (-left0, -left1) was wrong, and silently:
+            // Cross(-a, -b) == Cross(a, b) EXACTLY, so negating both normals does not flip
+            // the turn, and the two calls always agreed. At a left turn both are proper
+            // sectors and the result is correct; at a RIGHT turn both are clockwise and
+            // both are refused, so every right-hand corner lost its outer fill — a deficit
+            // of exactly (clockwise corners) × w²/4 that no left-turning fixture can see.
             AddCornerJoin(points[i], left0, left1, half, join, miterLimit, arcTolerance, primitives);
+            AddCornerJoin(points[i], left1, left0, half, join, miterLimit, arcTolerance, primitives);
             AddCornerJoin(points[i], -left0, -left1, half, join, miterLimit, arcTolerance, primitives);
+            AddCornerJoin(points[i], -left1, -left0, half, join, miterLimit, arcTolerance, primitives);
         }
 
         // Caps.

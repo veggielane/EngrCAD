@@ -4231,6 +4231,84 @@ sign set by where the cutoff happens to land. **An integral over a facet-classif
 region converges like its boundary, not like its area** — so a closed form for such a
 region is a sanity band, not a tolerance.
 
+### The tamper mesh: the deliverable is a guarantee, not a pattern
+
+`TamperMesh` draws the conductive serpentine an enclosure wall carries for anti-drill tamper
+detection. Anyone can draw a squiggle; what makes it engineering is the number it ships with,
+so every decision here is about what that number is allowed to rest on.
+
+**The derivation, and why the bound is the answer rather than a bound.** Every cell of the
+lattice has the route through its centre, so no point of the footprint is further from the
+route than a cell's circumradius `R = ½·hypot(pitchX, pitchY)`. A drill of diameter `d`
+centred at `c` misses the copper exactly when `dist(c, route) > d/2 + w/2`, which gives two
+thresholds: the largest drill that CAN pass is `2R − w`, and the smallest that MUST cut a net
+wherever it lands — its disc spanning the trace's full width at some point of the centreline —
+is `2R + w`. Between them it is position-dependent, so the honest answer is a **band**, and
+the design equation is the sever end, `pitch ≤ (d − w)/√2`. That is only a guarantee if the
+bound is ATTAINED, which is a claim about the route rather than about the cell, so it is
+**measured rather than assumed**. A dual-grid corner is only `h/2` from the route whenever one
+of the (up to four) cell pairs meeting there is consecutive on it, and the full circumradius
+when none is — the **blind corner**. Both cases exist: the footprint's own four corners touch
+a single cell and always reach it, and blind INTERIOR corners appear from block order 3 and
+multiply (0 / 1 / 9 / 47 at orders 2–5 on a plain Hilbert block, counted). Below order 3 the
+interior worst case really is `h/2` and only the boundary reaches `√2`; the guarantee is the
+same either way, and knowing which is which is what `WeakestPoint` is for.
+
+**The measurement is certified, not sampled.** `DrillGuarantee` comes from a branch and bound
+over the footprint: distance to a polyline is 1-Lipschitz, so a cell whose centre reads `d`
+can hold nothing above `d + halfDiagonal` — the argument `SurfaceCull` already stands on — and
+`Uncertainty` is the bracket rather than a hope. It is held against the closed form by test
+AND against an independent dense scan, which is what stops a plausible formula shipping wrong.
+
+**The route is a TILING of Hilbert blocks, which is what makes it cover a wall.** A block
+enters and leaves at two adjacent corners of its own square, so under the eight symmetries of
+the square it can be asked for whichever entry and exit its neighbours need, and a
+boustrophedon over the block grid links them into one Hamiltonian path over a rectangle —
+the "tiled Hilbert blocks with their ends linked" the infill residuals name, and the reason
+the achieved pitch lands near the request instead of the next power of two. `1 × 1` is Core's
+own Hilbert lattice site for site, which is the reduction that makes it a generalisation
+rather than a second curve. The block order is then a **stated trade**: small blocks fit an
+arbitrary rectangle tightly and keep the cells nearly square, large blocks are more isotropic
+and quantise the fit coarsely (reported as `Anisotropy`, and the guarantee follows
+`hypot(pitchX, pitchY)` rather than `√2·pitch` once cells stop being square).
+
+**Hilbert's locality is a liability here, and the design says so.** The open curve is right
+because a continuity monitor needs two terminals — Moore's closed loop would have to be cut —
+and both ends land on the footprint's outer boundary where a connector wants them. But points
+near in space are near in path order, so an attacker who exposes a small window can bridge
+across a break with a short wire, and **no choice of curve fixes that**. The countermeasure is
+two or more interleaved nets watched for continuity AND mutual isolation, built as the same
+route offset evenly across each corridor so the interleaving is structural and every gap
+between neighbouring conductors is one number (`IsolationGap`). They are deliberately NOT sold
+as independent detectors: they run parallel half a pitch apart, so a drill that cuts one cuts
+the other. What they buy is the SHORT — any conductive bridge wider than the gap joins them.
+A symmetric offset set (`(k + ½)/N − ½` of a cell) was chosen over one that keeps a net on the
+route: it centres the pattern on the footprint, and the measurement says it also narrows the
+gap rather than widening it (0.78 / 0.73 / 0.71 of the single-net gap at 2 / 3 / 4 nets), so
+the bound that the on-route spelling would have preserved by construction is not needed.
+
+**What the curve actually buys is a CHANNEL, and that is the honest comparison.** A plain
+serpentine at the same achieved pitch measures the SAME circumradius — the bound depends only
+on the cell and on every cell being visited — so the drill guarantee is not the reason. The
+difference is that a serpentine's free space contains a straight channel the width of the
+wall, where a tiled Hilbert route's longest straight run is 4 cells at every block order above
+zero. Block order 0 IS the serpentine (every block one cell), which is what makes the
+comparison a member of the family rather than a strawman.
+
+**The copper is built, not booleaned.** `TamperNet.Outline` is one simple polygon from the two
+±w/2 mitered offsets, because `Region2dOffset.Stroke` unions a slab per segment and is `O(E²)`
+in the arrangement — minutes of work at mesh scale for a shape with a closed form. The oracle
+is an identity rather than a tolerance: a mitered ribbon's area is exactly `length × width`,
+since at every corner the outer miter triangle is congruent to the inner notch, and that only
+holds if the ribbon does not overlap itself — so the area check IS the simplicity check.
+
+**Scope, refused rather than approximated.** A wall that is not a rectangle breaks the route
+into runs, and a broken net cannot be monitored at all, so it is refused by name and pointed
+at `SpaceFillingInfill`, which reports runs honestly. Conformal placement on a doubly-curved
+wall is not offered: `MeshLocalParam`'s exp map carries 2–5% distortion, which would land
+directly in the pitch and therefore in the guarantee, and a guarantee derived from a distorted
+pitch is not one.
+
 ## 6c. Drawings (hidden lines, sheets, drafting)
 
 A drawing is a *document*, not a picture, and the whole design follows from that.
