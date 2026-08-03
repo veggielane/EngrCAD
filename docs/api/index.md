@@ -2,8 +2,15 @@
 
 Generated from the XML documentation comments in the `src/*` projects. This subtree is
 built by DocFX; the rest of the documentation — the guides and the executable examples —
-is [back at the site root](../). (The link is relative on purpose: it works whether the
-site is served from a domain root or from a repository subpath.)
+is [back at the site root](../).
+
+<!-- docfx warns "InvalidFileLink: (~/)" on that link and that is EXPECTED, the same way
+     it used to on docs/examples/web.md's ../live/ links: the target is the Astro Starlight
+     build, which .github/workflows/docs.yml merges AROUND this subtree afterwards, so no
+     such file exists while docfx runs. The link is emitted verbatim, which is all that
+     matters. Keep it RELATIVE -- an absolute /EngrCAD/ path would bake the repository name
+     into the source and break the moment the site moves to a domain root. -->
+
 
 Start with these types:
 
