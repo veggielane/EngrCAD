@@ -510,27 +510,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
-- [ ] **`SketchRegion.SignedDistance` returns the wrong SIGN in a ~1e-13 band at a full
-  circle's parity seam** (found 2026-08-02 while measuring planetary ring geometry; the
-  MAGNITUDE is right and only the parity flips, however far the point is from the
-  boundary). Measured on a plain `Sketch.Circle(70.5)`: the point (60, 0) reads
-  **−10.5** (inside, correct) and **(60, −1.47e-14) reads +10.5** (outside, wrong);
-  (60, −1e-9) is correct again, so the band is narrow and sits at the seam's own
-  ordinate. It is reachable from ordinary code without anyone writing a tiny number:
-  `sin(2π)` is −2.45e-16, so sampling a full turn INCLUSIVELY (`θ = 2πi/n`, `i` up to
-  `n`) lands the last sample exactly in it — which is how it surfaced, as an **odd 121
-  boundary transitions** around a 60-tooth ring, combinatorially impossible on a closed
-  curve. This is the recorded closed-curve seam family (CLAUDE.md: "a +x parity ray
-  whose ordinate falls INSIDE it counts the seam piece's two endpoints on opposite
-  sides"), so the fix is likely the same one — the full-turn arc's end point must BE its
-  start point exactly, and the first/last y-monotone piece must take its ordinate from
-  the STORED endpoints — applied to whichever path `Sketch.Circle` takes into
-  `SketchRegion`. Both gear test files currently sample `[0, 2π)` and close the cycle
-  explicitly to route around it; **those workarounds should come out when this lands**,
-  since they are the evidence it was here. Worth checking whether `Sdf.ExtrudedRegion`
-  and `RevolvedRegion` inherit it (a prism's field does not vary along z, so a whole
-  scan line at the seam ordinate would be wrong, not one point).
-
 - [ ] **Threads follow-ups** (B-Rep-native external threads AND threaded holes ✅
   landed — `HelicalSurface`/`SpiralArc3d`/`MakeThreadedRod`, boolean-free lateral
   sweep, clipped-pilot hole tool; **left-hand threads and the ISO 261 fine-pitch

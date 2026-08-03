@@ -119,25 +119,21 @@ public class PlanetaryGearTests
         Assert.True(region.SignedDistance(new Vector2d(r, 0)) > 0,
             "+X is a tooth SPACE on the ring, so it must be outside material");
 
-        // Sample theta in [0, 2*pi) and close the cycle explicitly - never evaluate at
-        // 2*pi. sin(2*pi) is -2.4e-16, so that sample lands ~1.5e-14 BELOW the +X axis,
-        // which is the seam ordinate of the blank's full outer circle, and SketchRegion
-        // returns the wrong SIGN there (measured: on a plain disc of radius 70.5, the
-        // point (60, 0) reads -10.5 and (60, -1.47e-14) reads +10.5 - the magnitude is
-        // right and only the parity flips, ten units from any boundary). That is a kernel
-        // defect rather than a property of gears; it showed up here as an odd 121
-        // transitions, which is combinatorially impossible on a closed curve.
+        // Sampled INCLUSIVELY of 2*pi on purpose. That last sample lands ~1.5e-14 below
+        // the +X axis (sin(2*pi) is -2.4e-16), which is the seam ordinate of the blank's
+        // full outer circle - the band where SketchRegion used to return the wrong SIGN.
+        // This test carried a [0, 2*pi) workaround while that defect stood; sampling the
+        // seam is now the point, so a regression shows up here as an ODD transition
+        // count, which is combinatorially impossible on a closed curve.
         int transitions = 0;
         const int samples = 23999;
-        bool first = Inside(0);
-        bool previous = first;
-        for (int i = 1; i < samples; i++)
+        bool previous = Inside(0);
+        for (int i = 1; i <= samples; i++)
         {
             bool inside = Inside(2 * Math.PI * i / samples);
             if (inside != previous) transitions++;
             previous = inside;
         }
-        if (previous != first) transitions++;
         Assert.Equal(2 * set.RingTeeth, transitions);
 
         bool Inside(double theta) =>

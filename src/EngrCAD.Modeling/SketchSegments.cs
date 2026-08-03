@@ -122,7 +122,16 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
         center + new Vector2d(Math.Cos(angle), Math.Sin(angle)) * radius;
 
     public override Vector2d Start => PointAt(startAngle);
-    public override Vector2d End => PointAt(startAngle + sweep);
+
+    /// <summary>
+    /// A full turn's end point <b>IS</b> its start point — an exact substitution, not a
+    /// snap. <c>sin(2π)</c> is −2.449e-16, so <c>PointAt(startAngle + sweep)</c> lands
+    /// r·2.4e-16 away from <see cref="Start"/>, and a closed curve whose two ends merely
+    /// evaluate near each other is not closed: the gap is a band no parity ray can cross
+    /// (see <see cref="MonotonePieces"/>), and it also leaves <c>End − Start</c> as noise
+    /// in <see cref="SignedAreaContribution"/> where the exact answer is zero.
+    /// </summary>
+    public override Vector2d End => IsFullCircle ? Start : PointAt(startAngle + sweep);
 
     // Angular round-off slack: full circles are constructed with sweep = ±2π exactly,
     // so 1e-12 only absorbs arithmetic noise (tighter than Tolerance.Default.Angular).
@@ -214,10 +223,18 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
         }
         breaks.Add(a1);
 
+        // The two OUTER ordinates come from the stored endpoints rather than from
+        // PointAt, so a closed arc's last piece ends exactly where its first began.
+        // Interior breaks need no such care: consecutive pieces call PointAt with the
+        // same argument, so they already agree bit for bit. Which stored endpoint is
+        // which depends on the sweep's sign, since a0/a1 are ordered by angle.
+        var atA0 = sweep >= 0 ? Start : End;
+        var atA1 = sweep >= 0 ? End : Start;
+
         for (int i = 0; i + 1 < breaks.Count; i++)
         {
-            var from = PointAt(breaks[i]);
-            var to = PointAt(breaks[i + 1]);
+            var from = i == 0 ? atA0 : PointAt(breaks[i]);
+            var to = i + 2 == breaks.Count ? atA1 : PointAt(breaks[i + 1]);
             if (Math.Abs(from.Y - to.Y) <= 0)
                 continue;
             // The branch (left/right half of the circle) is fixed within a piece.
