@@ -153,47 +153,58 @@ public sealed record RemeshOptions(double TargetEdgeLength)
 
     /// <summary>
     /// Refuse a valence flip that would leave an edge longer than
-    /// <see cref="MaxEdgeLength"/> — the <b>bounded-maximum</b> mode. Off by default, so
-    /// every existing remesh stays bit-identical.
+    /// <see cref="MaxEdgeLength"/> — the <b>bounded-maximum</b> rule. <b>On by default.</b>
     /// <para>
-    /// A plain remesh converges its edge-length <i>distribution</i> fast and its
-    /// <i>maximum</i> hardly at all: measured on a Ø20 × 20 cylinder at a 2 mm target, 95% of
-    /// edges reach the <c>[0.66 L, 1.33 L]</c> band within 14 passes while the longest sits
-    /// near 2 L however many passes are spent. <b>The cause is the flip stage, and only the
-    /// flip stage.</b> It is not a collapse leaving a long edge for the next pass to find,
-    /// and it is not smoothing or projection — with flips switched off the same run ends at
-    /// exactly 1.33 L with nothing out of band, because a sweep already splits everything too
-    /// long. The flip predicate is pure valence arithmetic that never looks at a length, so
-    /// on an elongated quad it swaps the short diagonal for the long one and manufactures
-    /// exactly the edge the split stage exists to remove.
+    /// Without it a remesh converges its edge-length <i>distribution</i> fast and its
+    /// <i>maximum</i> hardly at all: on a Ø20 × 20 cylinder at a 2 mm target, 95% of edges
+    /// reach the <c>[0.66 L, 1.33 L]</c> band within 14 passes while the longest sits near
+    /// 2 L however many passes are spent. <b>The cause is the flip stage, and only the flip
+    /// stage.</b> It is not a collapse leaving a long edge for the next pass to find, and it
+    /// is not smoothing or projection — with flips switched off the same run ends at exactly
+    /// 1.33 L with nothing out of band, because a sweep already splits everything too long.
+    /// The flip predicate is pure valence arithmetic that never looks at a length, so on an
+    /// elongated quad it swaps the short diagonal for the long one and manufactures exactly
+    /// the edge the split stage exists to remove.
     /// </para>
     /// <para>
     /// <b>The rule is monotone, not absolute, and that distinction is the whole of it.</b>
     /// A flip is refused only when the edge it would create is out of band <i>and no shorter
     /// than the one it replaces</i>. Refusing every out-of-band flip instead — the obvious
     /// form — strands the sliver whose only remedy was a flip from 2.5 L to 1.5 L, measured
-    /// as a worst triangle angle of <b>0.02°</b> on a remeshed box against 28.9° for the
+    /// as a worst triangle angle of <b>0.02°</b> on a remeshed box against 31.7° for the
     /// monotone form. What the monotone form buys is an invariant: a flip can no longer raise
     /// the longest edge, so the maximum falls monotonically toward
     /// <see cref="MaxEdgeLength"/> under the sweep instead of being churned upward every
-    /// pass.
-    /// </para>
-    /// <para>
-    /// <b>It is a bound approached over passes, not a guarantee at pass one</b> (a 4 L edge
+    /// pass. It is a bound approached over passes rather than a cap at pass one (a 4 L edge
     /// still needs two passes to halve twice), and the smoothing and projection stages run
-    /// after the sweep and move vertices by their own damped step. Measured maxima on the
-    /// cylinder: 2.26 / 2.01 / 2.08 / 1.60 L at 10 / 14 / 20 / 40 passes without it,
-    /// 1.64 / 1.46 / 1.30 / 1.31 L with.
+    /// after the sweep and move vertices by their own damped step.
     /// </para>
     /// <para>
-    /// Nothing measured trades against it — on a cylinder, a box and a UV sphere it improves
-    /// the in-band share, the maximum, the minimum and the run time together — with one
-    /// exception worth stating: on the cylinder the <i>worst triangle angle</i> is slightly
-    /// poorer (0.58° against 0.89°), because a refused flip is a valence left irregular. On
-    /// the box and the sphere that measure improves several fold.
+    /// <b>It shipped opt-in and became the default on measurement, and the numbers are the
+    /// argument.</b> Over a box, a cylinder, two UV spheres and an open height-field grid at
+    /// 10 / 14 / 40 passes, <i>every</i> measure improves and none trades — maximum 1.37–2.65
+    /// → 1.27–1.67 L, shortest 0.03–0.26 → 0.10–0.67 L, out of band 2.5–11.8% → 0.0–0.9%,
+    /// worst free triangle angle 0.24–17.1° → 22.8–36.3°, worst radius ratio 0.0001–0.30 →
+    /// 0.38–0.81, slivers 4–226 → 0–7 — and the run is <i>faster</i> every time (a box at
+    /// 10 passes, 79 ms → 22 ms), because a mesh full of slivers is a mesh full of work.
+    /// The one filed counter-example, a cylinder whose worst triangle angle was said to go
+    /// 0.89° → 0.58°, <b>does not reproduce</b>: swept over 32 / 48 / 64 segments and nine
+    /// pass counts it reads 0.20 → 29.19, 0.03 → 0.11 and 0.24 → 2.81, better in all 27 rows.
+    /// </para>
+    /// <para>
+    /// The deciding argument is downstream, though, and it arrived after the option did:
+    /// <c>TetMesher</c>'s boundary recovery needs a Delaunay-clean surface, and this is
+    /// exactly the difference between every refused remeshed-sphere row and every
+    /// zero-recovery-round one — a valence flip can replace a Delaunay diagonal with a longer
+    /// one, and refusing that is what stops it. A default that produces surfaces the
+    /// project's own tet mesher refuses is the wrong default.
+    /// </para>
+    /// <para>
+    /// Set it false to get the pre-existing behaviour back bit for bit; the only reason to is
+    /// to reproduce an older result.
     /// </para>
     /// </summary>
-    public bool PreventLongEdgeFlips { get; init; }
+    public bool PreventLongEdgeFlips { get; init; } = true;
 
     /// <summary>Which smoothing rule the per-pass smoothing uses.</summary>
     public RemeshSmoothing Smoothing { get; init; } = RemeshSmoothing.Uniform;
@@ -289,6 +300,25 @@ public sealed record RemeshResult(HalfEdgeMesh Mesh, int Splits, int Collapses, 
     /// the first fixture tried. Zero for any other projection mode.
     /// </summary>
     internal int FacesAccumulated { get; init; }
+
+    /// <summary>
+    /// The output mesh's triangle SHAPE, measured with the remesher's own final pinned set as
+    /// the constrained population.
+    /// <para>
+    /// Everything else on this record and every length figure the remesher reports is about
+    /// edge <i>length</i>, which says nothing about slivers: a remeshed box can sit at 95% of
+    /// edges inside the <c>[0.66 L, 1.33 L]</c> band with a worst triangle angle of 5.6°.
+    /// This is the measure that sees it, and it is computed once at the end — one pass over
+    /// the faces, against however many passes the remesh itself ran.
+    /// </para>
+    /// <para>
+    /// The pinned set is why it lives here rather than being left to the caller: only the
+    /// remesher knows which vertices its own constraints froze, and a triangle it was never
+    /// free to change should not be rated against one it was
+    /// (<see cref="TriangleQualityReport.ConstrainedCount"/>).
+    /// </para>
+    /// </summary>
+    public TriangleQualityReport Quality { get; init; } = null!;
 }
 
 /// <summary>
@@ -406,9 +436,14 @@ public static class Remesher
         }
         progress?.ThrowIfCancelled();
 
-        return new RemeshResult(editable.ToMesh(), state.Splits, state.Collapses, state.Flips, options.Iterations)
+        // The pins are re-derived from the FINAL geometry (feature edges are recomputed every
+        // pass, so the set the last pass used may not be the set the output deserves) and
+        // carried across the compaction by ToMesh's own map rather than by a second walk.
+        var result = editable.ToMesh(out var vertexMap);
+        return new RemeshResult(result, state.Splits, state.Collapses, state.Flips, options.Iterations)
         {
             FacesAccumulated = state.FacesAccumulated,
+            Quality = TriangleQuality.Analyze(result, state.FinalConstrainedVertices(vertexMap)),
         };
     }
 
@@ -503,6 +538,26 @@ public static class Remesher
             RefreshAllVertices();
             SmoothPass(_vertices);
             ProjectPass(_vertices);
+        }
+
+        /// <summary>
+        /// The pinned vertices, re-derived from the final geometry and mapped into the output
+        /// mesh's indices — the constrained population <see cref="RemeshResult.Quality"/>
+        /// measures separately. Re-deriving rather than reading the last pass's array is the
+        /// same rule the pass itself follows: constraints are stateless and come from the
+        /// dihedral angles the mesh has NOW, and the last pass's topological sweep moved
+        /// geometry after computing them.
+        /// </summary>
+        public IReadOnlyCollection<int> FinalConstrainedVertices(int[] vertexMap)
+        {
+            RecomputeFixedVertices();
+            var pinned = new List<int>();
+            for (int v = 0; v < _mesh.VertexCapacity && v < _fixed.Length; v++)
+            {
+                if (_fixed[v] && _mesh.IsVertex(v) && vertexMap[v] >= 0)
+                    pinned.Add(vertexMap[v]);
+            }
+            return pinned;
         }
 
         private void RefreshAllVertices()

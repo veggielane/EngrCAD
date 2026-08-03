@@ -49,13 +49,15 @@ if (before > 0.5) throw new Exception($"the tessellation should be uneven, was {
 if (after < 0.85) throw new Exception($"the remesh should be even, was {after:P0}");
 ```
 
-Note what that measures and what it does not. The **distribution** converges quickly;
-the single **longest** edge lags well behind it, sitting near 2 L however many passes
-are spent. Judge a plain remesh by the share in band, not by its extremes.
+Note what that measures and what it does not. The **distribution** is only half the
+story: an edge-length band says nothing about triangle *shape*, and the two can disagree
+sharply. `RemeshResult.Quality` is the other half — minimum angle and radius ratio, with
+the triangles the remesher was not free to change counted separately.
 
 ## Bounding the longest edge
 
-Spending more passes does not fix the maximum, because the cause is not a shortage of
+Left to itself the remesher converges its distribution fast and its **maximum** hardly at
+all, and spending more passes does not fix it, because the cause is not a shortage of
 passes. It is the **flip stage**: the flip rule is pure valence arithmetic that never
 looks at a length, so on an elongated quad it swaps the short diagonal for the long one
 and manufactures exactly the edge the split stage exists to remove. Switch flips off and
@@ -64,7 +66,8 @@ along.
 
 `PreventLongEdgeFlips` refuses a flip that would leave an edge above the split threshold,
 unless it is shorter than the edge it replaces (a flip from 2.5 L to 1.5 L is progress,
-and refusing it strands slivers). It is opt-in, so an existing remesh is unchanged:
+and refusing it strands slivers). **It is on by default**; switching it off is how you
+reproduce a pre-existing result, and it is what the comparison below does:
 
 ```csharp run:remesh-bounded
 var cylinder = Shape.Cylinder(10, 20);
@@ -72,19 +75,51 @@ var cylinder = Shape.Cylinder(10, 20);
 static double MaxEdge(HalfEdgeMesh mesh) => mesh.Edges.Max(e => e.Vector.Length);
 
 var options = new RemeshOptions(2.0) { Iterations = 14 };
-double plain = MaxEdge(cylinder.Remeshed(options).ToMesh());
-double bounded = MaxEdge(cylinder.Remeshed(options with { PreventLongEdgeFlips = true }).ToMesh());
+double bounded = MaxEdge(cylinder.Remeshed(options).ToMesh());
+double plain = MaxEdge(cylinder.Remeshed(options with { PreventLongEdgeFlips = false }).ToMesh());
 
-// Measured 4.02 mm (2.01 L) against 2.92 mm (1.46 L) — the threshold is 1.33 L = 2.66 mm.
-if (plain < 3.5) throw new Exception($"the plain maximum should stall high, was {plain:F2}");
-if (bounded > 3.0) throw new Exception($"the bounded maximum should reach the band, was {bounded:F2}");
+// Measured 4.02 mm (2.01 L) unguarded against 2.68 mm (1.34 L) — the threshold is 2.66 mm.
+if (plain < 3.5) throw new Exception($"the unguarded maximum should stall high, was {plain:F2}");
+if (bounded > 3.0) throw new Exception($"the default maximum should reach the band, was {bounded:F2}");
 ```
 
-It costs nothing measurable: on a cylinder, a box and a UV sphere it improves the in-band
-share, the maximum, the shortest edge *and* the run time together. The one measure that
-can go the other way is the worst triangle angle, because a refused flip is a valence left
-irregular — on the box and the sphere it improves several fold (5.6° → 28.9°, 5.2° → 30.9°)
-and on the cylinder it is slightly poorer (0.89° → 0.58°).
+It shipped opt-in and became the default on measurement. Over a box, a cylinder, two UV
+spheres and an open height-field grid at 10 / 14 / 40 passes, **every** measure improves
+and none trades: maximum 1.37–2.65 → 1.27–1.67 L, shortest edge 0.03–0.26 → 0.10–0.67 L,
+out of band 2.5–11.8% → 0.0–0.9%, worst triangle angle 0.24–17.1° → 22.8–36.3°, worst
+radius ratio 0.0001–0.30 → 0.38–0.81 — and the run is *faster* every time (a box at ten
+passes, 79 ms → 22 ms), because a mesh full of slivers is a mesh full of work.
+
+The deciding argument is downstream, though: [tet meshing](fea-meshing.md)'s boundary
+recovery needs a surface that is already the boundary of the Delaunay tetrahedralization
+of its own vertices, and a valence flip can replace a Delaunay diagonal with a longer one.
+This flag is the difference between a remeshed sphere that meshes in zero recovery rounds
+and one that is refused — and a default that produces surfaces the kernel's own tet mesher
+will not accept is the wrong default.
+
+## Measuring the shape, not just the lengths
+
+```csharp run:remesh-quality
+var plate = Shape.Box(60, 40, 8);
+
+var remesh = Remesher.Remesh(plate.ToMesh(), new RemeshOptions(3.0) { Iterations = 14 });
+var quality = remesh.Quality;
+
+// Minimum angle and radius ratio (1 = equilateral), over the triangles the remesher was
+// actually free to change. Triangles every corner of which is pinned — a crease chain
+// finer than the target cannot be coarsened, because a collapse needs a free end — are
+// counted separately rather than rated against the same bar.
+if (quality.MinAngleDegrees < 20)
+    throw new Exception($"worst free angle {quality.MinAngleDegrees:F1} degrees");
+if (quality.MinRadiusRatio < 0.3)
+    throw new Exception($"worst radius ratio {quality.MinRadiusRatio:F3}");
+```
+
+What that partition can and cannot tell you is worth stating: a constrained sliver and a
+free one are the *same triangle*, and the only difference is which vertices you pinned,
+which is intent rather than shape. A partially pinned triangle counts as free — the
+conservative side, since the alternative hides real defects behind constraints that were
+not binding.
 
 ## What it keeps, and what it does not
 

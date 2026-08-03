@@ -9,7 +9,8 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
 - **`HalfEdgeMesh`** — half-edge (DCEL) structure over struct-of-arrays storage.
   Boundary edges get explicit half-edges chained into boundary loops, so `Twin` always
   exists. `Build(positions, faces)` validates manifoldness (rejects non-manifold edges,
-  inconsistent winding, bow-tie vertices); `Validate()` checks structural invariants.
+  inconsistent winding, bow-tie boundary vertices — and deliberately *not* pinch vertices;
+  see below); `Validate()` and `NonManifoldVertices()` cover the rest.
   Metrics: surface area, signed volume (`Volume` requires closed topology,
   `SignedVolume` doesn't), Euler characteristic, boundary loops, bounds.
   Topology is immutable after `Build`; algorithms produce new meshes.
@@ -35,6 +36,39 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     half-edge at one vertex IS the bow-tie). Measured on Surface Nets output: **3.3–3.7×**
     on assembly (47.5 → 13.4 ms at 129 268 vertices), whole-polygonization 1.2–1.5×; see
     `SurfaceNetsBenchmark.AssemblyShareByResolution`.
+  - **What `Build` does NOT check, and why — the contract stated exactly.** A *pinch*
+    vertex, one whose link is two or more fans (two closed cones meeting at their apexes),
+    passes every test above: no directed edge repeats, no edge has three faces, and with
+    nothing open there is no boundary for the bow-tie check to see. It is accepted
+    **deliberately**, because a pinch vertex is sometimes the *correct answer* — the
+    difference of two tangent equal-radius perpendicular cylinders pinches at exactly the
+    two tangency points because the SET does, and `MeshBoolean` returns that at every
+    tessellation density (the B-Rep boolean refuses the same configuration instead). It is
+    also a different kind of defect from the ones `Build` rejects: a repeated directed edge
+    genuinely cannot be stored and a bow-tie genuinely breaks the boundary-loop chaining,
+    whereas a pinch vertex stores and traverses perfectly. Cost is *not* the reason —
+    measured at **5–12% of a build** on a 129 538-vertex mesh
+    (`HalfEdgeBuildBenchmark.VertexManifoldCheckCost`), one allocation-free pass.
+  - **The consequence is precise, and so is the instrument.** Every half-edge array is
+    correct and every per-half-edge or per-face walk is unaffected; what under-reports is a
+    per-vertex *fan* walk, which sees only the fan containing that vertex's stored outgoing
+    half-edge — `Vertex.OutgoingHalfEdges`, `Vertex.Valence`, `Vertex.IsBoundary`.
+    `NonManifoldVertices()` names them (early-out: one fan walk and no allocation on a clean
+    mesh) and `Validate()` throws. That check is **free in `Validate`**, riding the vertex
+    walk it already does: the outgoing map `he → Twin(Prev(he))` is a *permutation* whose
+    cycles ARE the vertex fans, so the fan sizes can only sum to `HalfEdgeCount` when every
+    link is a single fan — one scalar comparison is the whole test. It also brings the
+    immutable mesh into line with `EditableMesh.Validate`, which has always made this check
+    ("disconnected fan") while its immutable twin did not.
+  - **Two producers here make pinch vertices today** — the filed premise that "nothing has
+    produced one" was wrong, measured. `MeshBoolean.Difference` of equal-radius crossed
+    cylinders does, correctly, at 8/12/16/24/32/48/64/96 segments and only at *exactly*
+    equal radii (0.95 and 1.05 give none). Surface Nets does too, and there it is a
+    **defect**, not an answer: `Sphere(10).Shell(0.6)` carries 984 of them at resolution 44
+    and 528 at 56 (none at 22/32/64/88/128), `Sphere(16) & Gyroid(12, 1.2)` 174/18/30/18/18
+    at 44/64/88/96/112, `Box(10) & Gyroid(8, 0.2)` up to 3 066 at 64. Both counts were
+    cross-checked against an independent union-find over the raw polygon soup, which agrees
+    on every row.
 - **`PolygonFan`** — the one rule for how an n-gon face becomes triangles, shared by
   everything that needs them: `Triangulated`, `SignedVolume` (via the internal
   `FaceFanStart`), `MeshMassProperties`, `MeshConnectedComponents`, `RenderMesh`, and the
@@ -534,7 +568,7 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     scheduling measured **slower** than the sweep it exists to beat (783 vs 747 ms) — all of
     the sweep's work plus the bookkeeping. A scheduler whose wake-up rule never fires is a
     pure overhead.
-  - **Bounded maximum** (`RemeshOptions.PreventLongEdgeFlips`, opt-in) — a remesh converges
+  - **Bounded maximum** (`RemeshOptions.PreventLongEdgeFlips`, **on by default**) — a remesh converges
     its edge-length *distribution* fast and its *maximum* hardly at all: on a Ø20 × 20
     cylinder at a 2 mm target, 95% of edges reach the band within 14 passes while the longest
     sits near 2 L however many passes are spent. **The cause is the flip stage, and only the
@@ -554,25 +588,38 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     toward `MaxEdgeLength` under the sweep instead of being churned upward every pass. The
     comparison is exact `<` on squared lengths, a monotone-decrease rule rather than a
     tolerance; permitting an equal length would let a pair of flips ping-pong.
-  - Measured (Release, win-x64, target 2.0, 14 passes, `MeshProjectionTarget` of the input),
-    baseline → `PreventLongEdgeFlips`:
+  - **It shipped opt-in and is now the DEFAULT, decided on measurement.** Release, win-x64,
+    target 2.0, `MeshProjectionTarget` of the input, `PreventLongEdgeFlips = false` →
+    default. "min angle" is the worst FREE triangle angle from `RemeshResult.Quality`:
 
-    | fixture | max/L | in band | min angle | ms |
-    |---|---|---|---|---|
-    | cylinder Ø20 × 20 | 2.01 → **1.46** | 94.6% → **99.6%** | 0.89° → 0.58° | 24 → **18** |
-    | box 20³ | 2.22 → **1.32** | 95.1% → **99.8%** | 5.57° → **28.93°** | 21 → **15** |
-    | UV sphere r10 | 1.83 → **1.31** | 96.4% → **99.9%** | 5.21° → **30.93°** | 12 → **10** |
+    | fixture | passes | max/L | out of band | min angle | min ratio | slivers | ms |
+    |---|---|---|---|---|---|---|---|
+    | box 20³ | 10 | 2.17 → **1.67** | 9.3% → **0.9%** | 0.24° → **22.80°** | 0.0001 → **0.377** | 226 → **7** | 79 → **22** |
+    | box 20³ | 14 | 2.65 → **1.34** | 5.5% → **0.1%** | 1.97° → **31.69°** | 0.0037 → **0.583** | 125 → **0** | 49 → **31** |
+    | cylinder Ø20 × 20 | 14 | 2.20 → **1.34** | 8.9% → **0.2%** | 4.81° → **29.19°** | 0.019 → **0.516** | 90 → **1** | 50 → **22** |
+    | UV sphere r10 | 14 | 1.83 → **1.31** | 3.6% → **0.1%** | 14.25° → **30.93°** | 0.161 → **0.575** | 20 → **0** | 14 → **12** |
+    | UV sphere r10 (48×32) | 14 | 1.84 → **1.29** | 6.7% → **0.2%** | 11.93° → **33.19°** | 0.176 → **0.714** | 39 → **0** | 19 → **15** |
+    | open height-field grid | 14 | 1.37 → **1.32** | 3.5% → **0.2%** | 12.95° → **34.18°** | 0.228 → **0.675** | 9 → **0** | 3 → **3** |
 
-    At 40 passes the cylinder reads 1.60 → **1.31** L and the box 1.70 → **1.33** L. It is a
-    bound *approached over passes*, not a cap at pass one (a 4 L edge still needs two passes
-    to halve twice), and the smoothing and projection stages run after the sweep and move
-    vertices by their own damped step, so the end-of-pass maximum sits a fraction of a percent
-    over the threshold. **Nothing measured trades against it** — in-band share, maximum,
-    minimum and run time all improve together — with one exception worth stating: on the
-    cylinder the worst triangle angle is slightly poorer (0.58° against 0.89°), because a
-    refused flip is a valence left irregular. It is nonetheless **opt-in**, so every existing
-    remesh stays bit-identical; whether it should become the default is filed in `todo.md`
-    with these numbers attached.
+    It is a bound *approached over passes*, not a cap at pass one (a 4 L edge still needs two
+    passes to halve twice), and the smoothing and projection stages run after the sweep and
+    move vertices by their own damped step, so the end-of-pass maximum sits a fraction of a
+    percent over the threshold. **Nothing measured trades against it**, including the shortest
+    edge (0.03–0.26 → 0.10–0.67 L) and the run time — a mesh full of slivers is a mesh full of
+    work.
+  - **The one filed counter-example does not reproduce**, and that is why the default moved.
+    It recorded the cylinder's worst triangle angle going 0.89° → 0.58°; swept over 32 / 48 /
+    64 segments and nine pass counts each, the same measure reads 0.20 → 29.19, 0.03 → 0.11
+    and 0.24 → 2.81 — better in all 27 rows, and better in every row of the box and sphere
+    sweeps too. The UV sphere's own recorded figures (5.21° → 30.93°) reproduce *exactly*,
+    which is what makes this a stale-number finding rather than a different machine.
+  - **The deciding argument is downstream and arrived after the option did.**
+    `TetMesher`'s boundary recovery needs a surface that is already the boundary of the
+    Delaunay tetrahedralization of its own vertices, and a valence flip can replace a Delaunay
+    diagonal with a longer one — this flag is the difference between every refused
+    remeshed-sphere row and every zero-recovery-round one. A default that produces surfaces
+    the project's own tet mesher refuses is the wrong default. Set it false for the previous
+    behaviour bit for bit; the only reason to is reproducing an older result.
   - **Face-aligned (RZN-flow) reprojection** (`RemeshOptions.Projection =
     RemeshProjection.FaceAligned`, g3's `RemesherPro.SharpEdgeReprojectionRemesh`) — the
     projection pass that keeps sharp features. Each TRIANGLE is moved rigidly onto the target
@@ -621,6 +668,38 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     failure modes are now caught: dropping a contributing face, and visiting the contributors
     in a different order (which shows up only in the last bits — `…4258002` against
     `…42581595` — and would sail through any tolerance comparison).
+- **`TriangleQuality` / `TriangleQualityReport`** — triangle SHAPE as a value, and
+  `RemeshResult.Quality` carries one for every remesh (`TetQuality` in `EngrCAD.Fea` is the
+  precedent). It exists because everything else the remesher reports is edge *length*, which
+  says nothing about slivers: a remeshed box can sit at 95% of edges inside the
+  `[0.66 L, 1.33 L]` band with a worst triangle angle of **5.6°**, and a plausible-looking
+  variant of the flip guard reached 99.7% in band at **0.02°**.
+  - **Two measures, because neither alone is honest.** The minimum angle is what solver
+    conditioning and interpolation error depend on and is what sees a needle; the radius ratio
+    `2r/R` (exactly 1 equilateral, 0 degenerate) sees a triangle that is merely *flat* — a wide
+    obtuse cap whose smallest angle is unremarkable while its circumcircle is enormous. Angles
+    come from `atan2(|u × v|, u · v)` on raw edge vectors, exact at any magnitude with no
+    normalization and no epsilon; the ratio is written `8A²/(s·abc)` and is dimensionless, so
+    it needs no relative degeneracy floor — there is no absolute quantity in it to compare.
+  - **The partition, and its honest limit.** A remesher cannot improve a triangle whose every
+    vertex is pinned (a collapse needs a free end, a flip needs one, smoothing and projection
+    skip fixed vertices), so those are counted separately rather than rated against the same
+    bar — the `TetQuality` cries-wolf rule. What it *cannot* do is tell a constrained sliver
+    from a free one geometrically: they are the same triangle, and the difference is which
+    vertices the caller pinned, which is intent, not shape. A *partially* pinned triangle is
+    genuinely in between and counts as FREE — the conservative side, since the alternative
+    hides real defects behind constraints that were not binding.
+  - **It earns its keep immediately.** A remeshed 48-segment cylinder ends with 52 fully
+    constrained triangles at **0.11°** beside a free population at **28.11°**, and the
+    un-partitioned figure had been reporting the former all along. The mechanism the numbers
+    point at: the rim circle starts at 1.31 mm spacing against a 1.32 mm collapse threshold, a
+    pinned crease chain cannot be coarsened because a collapse needs a free end, and triangles
+    spanning three rim vertices are then frozen — which is why the 32-segment cylinder (1.96 mm
+    ≈ the 2.0 target) ends with **zero** constrained triangles and the 64-segment one (0.98 mm)
+    with 89. Stated as the diagnosis the correlation points to rather than as a proven cause.
+  - Faces that are not triangles are measured through `PolygonFan`, so what is reported is what
+    rendering, export, mass properties and every solver actually get; a face with a zero-length
+    edge scores 0 on both measures rather than being skipped.
 - **`RegionRemesher`** — isotropic remeshing of one face selection, in place (g3's
   `RegionRemesher`): `MeshRegionOperator.Extract` → remesh the patch with its seam pinned →
   `Reinsert`. The rest of the model is untouched, which is what makes remeshing usable on a

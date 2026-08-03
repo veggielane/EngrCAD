@@ -165,12 +165,12 @@ spacing has no structure. Measured, that was wrong in two directions (win-x64, R
 
 | input | worst angle | worst radius-edge | patches / triangles | rounds |
 | --- | ---: | ---: | ---: | ---: |
-| remeshed sphere, `PreventLongEdgeFlips`, t = 2 | 36.3° | 0.84 | 832 / 832 | **0** |
-| remeshed sphere, `PreventLongEdgeFlips`, t = 3 | 37.8° | 0.82 | 310 / 310 | **0** |
-| remeshed sphere, `PreventLongEdgeFlips`, t = 4 | 23.1° | 1.27 | 138 / 138 | **0** |
-| remeshed sphere, plain, t = 2 | 14.6° | 1.99 | — | *refused* |
-| remeshed sphere, plain, t = 4 | 27.9° | 1.07 | — | *refused* |
-| remeshed box, plain, t = 2 | 0.145° | 198 | 7 / 1638 | **0** |
+| remeshed sphere, default guard, t = 2 | 36.3° | 0.84 | 832 / 832 | **0** |
+| remeshed sphere, default guard, t = 3 | 37.8° | 0.82 | 310 / 310 | **0** |
+| remeshed sphere, default guard, t = 4 | 23.1° | 1.27 | 138 / 138 | **0** |
+| remeshed sphere, guard OFF, t = 2 | 14.6° | 1.99 | — | *refused* |
+| remeshed sphere, guard OFF, t = 4 | 27.9° | 1.07 | — | *refused* |
+| remeshed box, guard OFF, t = 2 | 0.145° | 198 | 7 / 1638 | **0** |
 | remeshed cylinder, every setting tried | 0.013–7.7° | 3.7–2124 | — | *refused* |
 | structured cylinder (no remesh) | 3.74° | 7.66 | 50 / 188 | **0** |
 
@@ -195,7 +195,9 @@ The practical rule is one flag on the remesher. Its flip stage is valence-driven
 length term**, so it can replace a Delaunay diagonal with a longer one, and a surface triangle
 that is not locally Delaunay cannot be a face of the tetrahedralization.
 `RemeshOptions.PreventLongEdgeFlips` stops that, and it is the difference between every
-"refused" and every "0" in the sphere rows above.
+"refused" and every "0" in the sphere rows above. **That measurement is why the flag became the
+remesher's default**, so the "guard OFF" rows now take an explicit `PreventLongEdgeFlips =
+false` to reach at all: a default that produces surfaces this mesher refuses was the wrong one.
 
 **Recovery does not merely fail to clear the rest — it does not converge, in two distinct
 ways**, and both are now detected instead of being spent on:

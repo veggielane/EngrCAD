@@ -156,10 +156,30 @@ public class ExactBooleanTests
         var intersection = MeshBoolean.Intersection(vertical, horizontal);
 
         foreach (var result in new[] { union, difference, intersection })
-        {
-            result.Validate();
             Assert.True(result.IsClosed);
+        union.Validate();
+        intersection.Validate();
+
+        // The DIFFERENCE is legitimately NON-MANIFOLD, and asserting that is the point.
+        // Equal radii make the two cylinders TANGENT at (+/-1, 0, 0) — the two points where
+        // their intersection ellipses cross — so A - B genuinely pinches there: two lobes
+        // meeting at a point, which is a property of the SET rather than of the tessellation.
+        // The boolean returns it; the B-Rep engine refuses the same configuration by name
+        // instead. Measured identical at 8/12/16/24/32/48/64/96 segments (systematic, not an
+        // alignment accident) and gone the moment the radii differ (0.95 and 1.05 both give
+        // zero), so the fixture is pinned to the exact points rather than to a count.
+        var pinched = difference.NonManifoldVertices();
+        Assert.Equal(2, pinched.Count);
+        foreach (int v in pinched)
+        {
+            var p = difference.GetPosition(v);
+            Assert.Equal(1.0, Math.Abs(p.X), 9);
+            Assert.Equal(0.0, p.Y, 9);
+            Assert.Equal(0.0, p.Z, 9);
         }
+        Assert.Throws<InvalidOperationException>(difference.Validate);
+        Assert.Empty(union.NonManifoldVertices());
+        Assert.Empty(intersection.NonManifoldVertices());
 
         double a = vertical.Volume(), b = horizontal.Volume(), both = intersection.SignedVolume();
         Assert.True(both > 0, "the crossing region is a solid, not an empty result");

@@ -7,9 +7,11 @@ namespace EngrCAD.Mesh;
 /// Half-edge (doubly connected edge list) polygon mesh. Every edge is a pair of opposite
 /// half-edges; boundary edges get an explicit half-edge with <c>face = -1</c> whose Next
 /// links trace the boundary loop, so <c>Twin</c> always exists and traversal never
-/// branches. Faces are arbitrary planar polygons (n ≥ 3). The structure is manifold by
-/// construction: <see cref="Build"/> rejects non-manifold edges, inconsistent winding,
-/// and non-manifold (bow-tie) boundary vertices.
+/// branches. Faces are arbitrary planar polygons (n ≥ 3). <see cref="Build"/> rejects
+/// non-manifold edges, inconsistent winding and bow-tie boundary vertices; what it
+/// deliberately does <b>not</b> reject — a vertex where the surface pinches to a point — is
+/// stated exactly in its own remarks and reported by <see cref="NonManifoldVertices"/> and
+/// <see cref="Validate"/>.
 /// Topology is immutable after <see cref="Build"/>; algorithms produce new meshes.
 /// </summary>
 public sealed class HalfEdgeMesh
@@ -61,7 +63,31 @@ public sealed class HalfEdgeMesh
     /// Builds a mesh from shared vertex positions and per-face vertex index loops
     /// (counter-clockwise when viewed from outside). Throws <see cref="ArgumentException"/>
     /// on degenerate faces, repeated directed edges (non-manifold or inconsistent winding),
-    /// edges shared by more than two faces, or non-manifold boundary vertices.
+    /// edges shared by more than two faces, or non-manifold (bow-tie) boundary vertices.
+    /// <para>
+    /// <b>What it does not check, and why.</b> A <i>pinch</i> vertex — one whose link is two
+    /// or more fans, which two closed cones meeting at their apexes produce — passes every
+    /// test above: no directed edge repeats, no edge has three faces, and with nothing open
+    /// there is no boundary for the bow-tie check to see. It is not rejected because
+    /// <b>a pinch vertex is sometimes the correct answer</b>: the difference of two tangent
+    /// equal-radius perpendicular cylinders pinches at exactly the two tangency points
+    /// because the SET does, and <see cref="MeshBoolean"/> produces that answer at every
+    /// tessellation density (the B-Rep boolean refuses the same configuration instead).
+    /// Refusing it here would make the right answer unrepresentable. It is a different kind
+    /// of defect from the ones above, too: a repeated directed edge genuinely cannot be
+    /// stored and a bow-tie genuinely breaks the boundary-loop chaining, whereas a pinch
+    /// vertex stores and traverses perfectly.
+    /// </para>
+    /// <para>
+    /// <b>The consequence for callers is precise.</b> Every half-edge array is correct and
+    /// every per-half-edge or per-face walk is unaffected; what under-reports is a per-vertex
+    /// <i>fan</i> walk, which sees only the fan containing that vertex's stored outgoing
+    /// half-edge — <see cref="Vertex.OutgoingHalfEdges"/>, <see cref="Vertex.Valence"/>,
+    /// <see cref="Vertex.IsBoundary"/> and anything built on them. Ask
+    /// <see cref="NonManifoldVertices"/> (or <see cref="Validate"/>) when that matters.
+    /// Cost is not what keeps the test out: measured on a 129 538-vertex mesh it is 5–12% of
+    /// a build (<c>HalfEdgeBuildBenchmark</c>), one allocation-free pass.
+    /// </para>
     /// </summary>
     public static HalfEdgeMesh Build(IReadOnlyList<Vector3d> positions, IEnumerable<IReadOnlyList<int>> faces)
     {
@@ -246,6 +272,77 @@ public sealed class HalfEdgeMesh
         return mesh;
     }
 
+    /// <summary>
+    /// Half-edges reachable by the outgoing walk <c>he → Twin(Prev(he))</c> summed over every
+    /// vertex's stored outgoing half-edge.
+    /// <para>
+    /// That walk is a <b>permutation</b> of the half-edges — <c>Prev</c> inverts the
+    /// <c>Next</c> permutation whose cycles are the faces and boundary loops, and <c>Twin</c>
+    /// is an involution — and every one of its cycles stays at a single origin, so the cycles
+    /// <i>are</i> the vertex fans. The fans are therefore disjoint and this sum can only
+    /// equal <see cref="HalfEdgeCount"/> when each vertex's link is exactly ONE fan. One
+    /// scalar comparison is the whole non-manifold-vertex test; nothing has to be counted per
+    /// vertex on the success path.
+    /// </para>
+    /// </summary>
+    internal int VertexFanTotal()
+    {
+        int total = 0;
+        for (int v = 0; v < _positions.Count; v++)
+        {
+            int start = _vertexOut[v];
+            if (start < 0)
+                continue;
+            int he = start;
+            do
+            {
+                total++;
+                he = _heTwin[_hePrev[he]];
+            }
+            while (he != start);
+        }
+        return total;
+    }
+
+    /// <summary>
+    /// Vertices where the surface <b>pinches to a point</b>: their link is two or more
+    /// separate fans instead of one, so the outgoing walk from
+    /// <see cref="Vertex.OutgoingHalfEdges"/> reaches only the fan it starts in. Empty for a
+    /// mesh whose every vertex is manifold, which is the normal case — the early-out means a
+    /// clean mesh pays one fan walk and no allocation.
+    /// <para>
+    /// <see cref="Build"/> deliberately does not reject these; see its remarks for why, and
+    /// for exactly which per-vertex queries under-report when one is present. This is the
+    /// instrument for asking.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<int> NonManifoldVertices()
+    {
+        if (VertexFanTotal() == HalfEdgeCount)
+            return [];
+
+        var incident = new int[_positions.Count];
+        for (int he = 0; he < HalfEdgeCount; he++)
+            incident[_heOrigin[he]]++;
+        var pinched = new List<int>();
+        for (int v = 0; v < _positions.Count; v++)
+        {
+            int start = _vertexOut[v];
+            if (start < 0)
+                continue;
+            int fan = 0, he = start;
+            do
+            {
+                fan++;
+                he = _heTwin[_hePrev[he]];
+            }
+            while (he != start);
+            if (fan != incident[v])
+                pinched.Add(v);
+        }
+        return pinched;
+    }
+
     private void CreateBoundaryHalfEdges()
     {
         int interiorCount = HalfEdgeCount;
@@ -329,6 +426,11 @@ public sealed class HalfEdgeMesh
             }
         }
 
+        // The fan totals ride along on the walk this loop already does, so checking that every
+        // vertex link is a SINGLE fan — the non-manifold pinch point, which the twin pairing
+        // cannot see because every directed edge there is still distinct — costs one increment
+        // per step. See VertexFanTotal for why comparing the totals is the whole test.
+        int fanTotal = 0;
         for (int v = 0; v < VertexCount; v++)
         {
             int start = _vertexOut[v];
@@ -341,10 +443,20 @@ public sealed class HalfEdgeMesh
                     throw new InvalidOperationException($"Vertex {v}: outgoing-cycle does not close.");
                 if (_heOrigin[he] != v)
                     throw new InvalidOperationException($"Vertex {v}: outgoing walk reached half-edge {he} with origin {_heOrigin[he]}.");
+                fanTotal++;
                 he = _heTwin[_hePrev[he]];
                 if (he == start)
                     break;
             }
+        }
+        if (fanTotal != HalfEdgeCount)
+        {
+            // Failure path only: one more pass to name the vertex, in EditableMesh.Validate's
+            // own words so the mutable and immutable halves state ONE rule.
+            int first = NonManifoldVertices() is [int v, ..] ? v : -1;
+            throw new InvalidOperationException(
+                $"Vertex {first}: outgoing ring covers fewer half-edges than exist (disconnected fan) — " +
+                $"the surface pinches to a point there; vertex fans cover {fanTotal} of {HalfEdgeCount} half-edges.");
         }
     }
 

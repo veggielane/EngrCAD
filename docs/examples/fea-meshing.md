@@ -564,10 +564,10 @@ wrong in two directions. Measured:
 
 | input | worst angle | worst radius-edge | patches / triangles | recovery rounds |
 | --- | ---: | ---: | ---: | ---: |
-| remeshed sphere, `PreventLongEdgeFlips` | 36.3° | 0.84 | 832 / 832 | **0** |
-| remeshed sphere, plain | 14.6° | 1.99 | — | *refused* |
-| remeshed sphere, plain, coarser | 27.9° | 1.07 | — | *refused* |
-| remeshed box, plain | 0.145° | 198 | 7 / 1638 | **0** |
+| remeshed sphere, default guard | 36.3° | 0.84 | 832 / 832 | **0** |
+| remeshed sphere, guard OFF | 14.6° | 1.99 | — | *refused* |
+| remeshed sphere, guard OFF, coarser | 27.9° | 1.07 | — | *refused* |
+| remeshed box, guard OFF | 0.145° | 198 | 7 / 1638 | **0** |
 | structured cylinder (no remesh) | 3.74° | 7.66 | 50 / 188 | **0** |
 
 Two things fall out of that table. A remesh is **not** the obstacle — the sphere meshes in zero
@@ -588,7 +588,9 @@ tetrahedralization of its own vertices**:
 The practical rule is one flag. The remesher's flip stage is valence-driven with **no length
 term**, so it can replace a Delaunay diagonal with a longer one;
 [`RemeshOptions.PreventLongEdgeFlips`](remeshing.md) stops that, and with it a remeshed curved
-surface tetrahedralizes with no recovery at all.
+surface tetrahedralizes with no recovery at all. **This measurement is why that flag is now the
+remesher's default** — the "guard OFF" rows above take an explicit `PreventLongEdgeFlips = false`
+to reach.
 
 ```csharp run:fea-remesh-clean
 var raw = Shape.Sphere(10).ToMesh(new MeshQuality { SegmentsPerCircle = 32 });
