@@ -318,6 +318,37 @@ public class GearMeshingTests
         }
     }
 
+    // ---- the value's three spellings must agree ----
+
+    [Fact]
+    public void Transform_Frame_And_Place_AreTheSamePlacement()
+    {
+        var mesh = GearMeshing.External(
+            new GearSpec(2, 18), new GearSpec(2, 27), azimuth: 0.6, driverPhase: 0.2);
+
+        // A Frame3d for an Occurrence and a Matrix4d for a Shape must be one placement,
+        // or a mechanism rig and a static layout would draw the same pair differently.
+        // Compare them by what they DO to points rather than entry by entry.
+        var fromFrame = mesh.Frame.ToMatrix();
+        foreach (var p in new[]
+                 {
+                     Vector3d.Zero, new Vector3d(5, 0, 0), new Vector3d(0, 7, 0), new Vector3d(1, -2, 3),
+                 })
+        {
+            var a = mesh.Transform.TransformPoint(p);
+            var b = fromFrame.TransformPoint(p);
+            Assert.Equal(a.X, b.X, 12);
+            Assert.Equal(a.Y, b.Y, 12);
+            Assert.Equal(a.Z, b.Z, 12);
+        }
+
+        // Spin first, then carry out: a point on the member's own +X lands at the centre
+        // plus the TURNED radius, never at the un-turned one.
+        var probe = mesh.Transform.TransformPoint(new Vector3d(5, 0, 0));
+        Assert.Equal(mesh.Centre.X + 5 * Math.Cos(mesh.Phase), probe.X, 12);
+        Assert.Equal(mesh.Centre.Y + 5 * Math.Sin(mesh.Phase), probe.Y, 12);
+    }
+
     // ---- refusals, by name ----
 
     [Fact]

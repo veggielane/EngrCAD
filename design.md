@@ -3917,9 +3917,10 @@ ratio.** The docs' planetary clip wants to be a seamless loop, and the smallest 
 turn that is one is 120° (the three planets swap places, each having advanced a whole
 number of teeth). At 24 frames that puts the sun at 1.17 and a planet at 1.08 tooth
 pitches per frame; both alias to a slow forward creep and a viewer reads the sun as
-turning *slower* than the carrier it drives at 3.5×. The frame count that would fix it is
-`z_planet + z_ring` = 78, three times the committed file for a clip that is no more
-informative — and it cannot be fixed by choosing better tooth counts either, since the
+turning *slower* than the carrier it drives at 3.5×. Restoring the same comfort takes
+`z_planet + z_ring` = 78 frames (bare Nyquist would need 52), three times the committed
+file for a clip that is no more informative — and it cannot be fixed by choosing better
+tooth counts either, since the
 requirement `z_sun + 3·z_planet ≤ 24` is below the undercut limit for any real pair. So
 the clip runs 30° and does **not** loop, exactly as `animate-explode` does not: the
 honest reading beat the seamless one. Same family as `DeformationTracks.Oscillate`'s

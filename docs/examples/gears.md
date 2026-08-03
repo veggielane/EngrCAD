@@ -785,9 +785,12 @@ var camera = new CameraState(-Math.PI / 2, 1.15, 200, (0, 0, 0));
 > the clip a *seamless loop*, since the three planets swap places and each has
 > advanced a whole number of teeth — and the same 24 frames put the sun at 1.17
 > and a planet at 1.08 pitches per frame. Both alias to a slow forward creep, and
-> a viewer would read the sun as turning *slower* than the carrier. The frame
-> count that would fix it is `z_planet + z_ring` = 78, i.e. three times the file
-> for a clip that is no more informative. **So this clip does not loop, by
+> a viewer would read the sun as turning *slower* than the carrier. Restoring the
+> same comfort takes `z_planet + z_ring` = 78 frames (bare Nyquist would need 52)
+> — three times the committed file for a clip that is no more informative — and
+> no choice of tooth counts helps, because fitting 24 frames needs
+> `z_sun + 3·z_planet ≤ 24` where the 20° undercut limit already forces 72.
+> **So this clip does not loop, by
 > choice**, exactly as `animate-explode` does not: the honest reading beat the
 > seamless one. It is the same family as the mode-shape caveat on
 > [the animation page](animation.md) — a clip's *timing* is a viewing parameter,
