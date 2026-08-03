@@ -66,6 +66,36 @@ public enum ShadingStyle
 }
 
 /// <summary>
+/// How the 3D-annotation (PMI) overlay treats model geometry standing in front of it —
+/// a whole-pass choice like <see cref="ShadingStyle"/>, shared by the window, the
+/// headless renderer and the browser client so a dimension cannot behave differently
+/// between them.
+/// <para>The numeric values matter the way <c>ShadingStyle.Lit = 0</c> does:
+/// <see cref="AlwaysOnTop"/> is 0, so a front end that says nothing renders the
+/// incumbent overlay.</para>
+/// </summary>
+public enum AnnotationDepth
+{
+    /// <summary>
+    /// The whole overlay is drawn with the depth test OFF, so every dimension reads over
+    /// the model from any angle. Nothing is ever hidden and nothing is ever ambiguous —
+    /// which is why it stays the default — but the picture says nothing about which side
+    /// of the part a dimension is on.
+    /// </summary>
+    AlwaysOnTop = 0,
+
+    /// <summary>
+    /// Depth-tested: stretches with material in front of them are drawn <b>dimmed</b>
+    /// (<see cref="AnnotationGeometry.HiddenColor"/>) instead of at full strength, the
+    /// drafting-honest reading — a dimension on the far side of the part recedes.
+    /// <para>Nothing disappears, which is the load-bearing property: the overlay is
+    /// still complete, so picking stays depth-blind (an annotation you can SEE is
+    /// pickable) and no dimension can be lost behind a boss.</para>
+    /// </summary>
+    Occluded = 1,
+}
+
+/// <summary>
 /// Which world axis a section plane is perpendicular to (v1 restricts section planes
 /// to the three world axes). The plane keeps everything at
 /// <c>coordinate &lt;= offset</c> along the axis and clips what lies above.

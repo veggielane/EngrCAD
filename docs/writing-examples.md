@@ -61,6 +61,7 @@ snippet may **declare them as variables**, exactly the way it already declares
 | `camera` | `CameraState` | An explicit pose instead of the auto-framed iso view. |
 | `explode` | `double` | Exploded-view factor (0 assembled → 1 fully exploded). Derives occurrence offsets via `Assembly.AutoExplode` if the design has not set them. |
 | `shading` | `ShadingStyle` | How fills are lit: `Lit` (default), or the analytic matcaps `Clay`/`Metal`. |
+| `annotationDepth` | `AnnotationDepth` | How 3D annotations treat material in front of them: `AlwaysOnTop` (default) or `Occluded` (lines behind the part are dimmed; the values stay legible). |
 | `preview` | `ConstructionPreviewRequest` | One construction-tree row (`new(part, part.ConstructionTree()!.Find(path)!)`) drawn over the render as the model tree's rollback view — construction-cyan edges, always on top. A row that cannot be lowered fails the build. |
 
 `EngrCAD.Viewer` is imported for exactly these types. A variable of the right name but

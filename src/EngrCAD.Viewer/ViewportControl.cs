@@ -906,6 +906,25 @@ public sealed class ViewportControl : OpenGlControlBase
     /// toolbar affordances).</summary>
     public bool HasAnnotations => _annotations.HasItems;
 
+    private AnnotationDepth _annotationDepth = AnnotationDepth.AlwaysOnTop;
+
+    /// <summary>
+    /// How the annotation overlay treats model geometry in front of it —
+    /// <see cref="AnnotationDepth.AlwaysOnTop"/> (default, the whole overlay over the
+    /// model) or <see cref="AnnotationDepth.Occluded"/> (dimension lines and leaders
+    /// behind material recede; the values stay legible). The same setting the headless
+    /// renderer takes, so a screenshot and the viewport agree.
+    /// </summary>
+    public AnnotationDepth AnnotationDepth
+    {
+        get => _annotationDepth;
+        set
+        {
+            _annotationDepth = value;
+            RequestNextFrameRendering();
+        }
+    }
+
     /// <summary>
     /// Measure mode: while on, clicks pick surface points instead of selecting parts —
     /// two picks create a transient point-to-point dimension shown immediately.
@@ -1022,7 +1041,7 @@ public sealed class ViewportControl : OpenGlControlBase
         var camera = AnnotationCamera.From(
             new CameraState(_yaw, _pitch, _distance, _target), _orthographic, heightPx, scaling);
         _annotations.Draw(gl, camera, _showAnnotations,
-            _lineProgram, _uLineModel, _uLineColor, _uLineSectionEnabled, matrix);
+            _lineProgram, _uLineModel, _uLineColor, _uLineSectionEnabled, matrix, _annotationDepth);
     }
 
     // ---- construction-tree preview (all overlay logic lives in PreviewLayer.cs) ----

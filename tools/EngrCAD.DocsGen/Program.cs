@@ -312,6 +312,7 @@ foreach (var s in snippets)
         || !TryReadVariable<CameraState>(state, "camera", s, errors, out var declaredCamera)
         || !TryReadVariable<double?>(state, "explode", s, errors, out var declaredExplode)
         || !TryReadVariable<ShadingStyle?>(state, "shading", s, errors, out var declaredShading)
+        || !TryReadVariable<AnnotationDepth?>(state, "annotationDepth", s, errors, out var declaredPmiDepth)
         || !TryReadVariable<ConstructionPreviewRequest?>(state, "preview", s, errors, out var declaredPreview))
         continue;
 
@@ -337,7 +338,8 @@ foreach (var s in snippets)
                 sectionCombine: declaredCombine ?? SectionCombine.Intersection,
                 preview: declaredPreview,
                 explode: declaredExplode ?? 0,
-                shading: declaredShading ?? ShadingStyle.Lit);
+                shading: declaredShading ?? ShadingStyle.Lit,
+                annotationDepth: declaredPmiDepth ?? AnnotationDepth.AlwaysOnTop);
             rendered++;
         }
         catch (Exception ex)

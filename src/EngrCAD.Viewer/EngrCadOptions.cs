@@ -122,6 +122,16 @@ public sealed class EngrCadOptions
     public ShadingStyle Shading { get; set; } = ShadingStyle.Lit;
 
     /// <summary>
+    /// How the 3D-annotation (PMI) overlay treats model geometry in front of it
+    /// (default <see cref="AnnotationDepth.AlwaysOnTop"/> — nothing is ever obscured).
+    /// <see cref="AnnotationDepth.Occluded"/> is the drafting-honest reading: dimension
+    /// lines and leaders behind material recede while the values stay legible. Seeds
+    /// <see cref="ViewportControl.AnnotationDepth"/> (the window's Top/Depth cycler
+    /// drives the same property) and every headless render.
+    /// </summary>
+    public AnnotationDepth AnnotationDepth { get; set; } = AnnotationDepth.AlwaysOnTop;
+
+    /// <summary>
     /// The shipped default for on-demand tab meshing: ON. A document's tabs are meshed
     /// when they are first VIEWED, so the window opens immediately instead of waiting
     /// for tabs the user may never open (measured on the demo scene: 54 s to a window,
@@ -205,6 +215,14 @@ public sealed class EngrCadBuilder
     public EngrCadBuilder WithShading(ShadingStyle shading)
     {
         Options.Shading = shading;
+        return this;
+    }
+
+    /// <summary>Sets how the annotation overlay treats material in front of it; see
+    /// <see cref="EngrCadOptions.AnnotationDepth"/>.</summary>
+    public EngrCadBuilder WithAnnotationDepth(AnnotationDepth depth)
+    {
+        Options.AnnotationDepth = depth;
         return this;
     }
 

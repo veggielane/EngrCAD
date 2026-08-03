@@ -5122,11 +5122,49 @@ for `in`-parameters being illegal in expression trees.
     struct comparison per frame; orbiting rebuilds a few hundred segments, far below
     one part draw). Screen-constant sizing = style pixels × world-per-pixel at each
     element's own depth (perspective) or the frustum constant (ortho).
-  - **Always-on-top v1** (depth test off for the pass, never section-clipped):
-    dimensions must read from any angle; occlusion-aware dashing is a follow-up.
-    And unlike the view-cube widget, annotations **do** render in the headless pass
-    — they are documentation content, which is exactly what offscreen renders are
-    for (the docs example page exercises it).
+  - **Never section-clipped**, and unlike the view-cube widget annotations **do**
+    render in the headless pass — they are documentation content, which is exactly
+    what offscreen renders are for (the docs example page exercises it).
+  - **Occlusion-awareness is a whole-pass choice (`AnnotationDepth`), and the
+    mechanism is two depth FUNCTIONS rather than either shape the backlog proposed.**
+    `AlwaysOnTop` (the default, and 0 for the `ShadingStyle.Lit = 0` reason) draws the
+    overlay with the depth test off; `Occluded` dims what has material in front of it.
+    Neither a depth pre-pass nor a second line batch is needed, because *the scene is
+    already in the depth buffer by the time the overlay draws*: one buffer is drawn at
+    `LEQUAL` in the normal colour and again at `GREATER` in the hidden one, and the two
+    comparisons partition the fragments with no overlap (LEQUAL takes equality, GREATER
+    does not). That is what keeps three front ends honest — there is no CPU
+    classification for them to disagree about, only a draw list.
+    - **The dimension's VALUE is exempt, and the measurement is what settled it.**
+      Depth-treating the whole overlay turned "40" and "⌀5.5" on the docs plate into
+      smudges — the two figures a reader is there for — while the lines it dimmed read
+      exactly as intended. A dimension is a POINTER and a VALUE: which side of the
+      material the pointer runs on is real information, whereas the text's 3D position
+      is a placement, so occluding it destroys information instead of conveying it. So
+      `Build` takes an optional second list for glyphs and datum boxes and the value's
+      range draws depth-off at full strength (one upload, two ranges — the field
+      legend's trick). Passing null is the incumbent single-list build in the incumbent
+      order, which is what leaves `Pick` and every always-on-top render bit-identical.
+    - **The depth bias moves each point along its OWN EYE RAY.** It exists because the
+      interesting annotations are coplanar with the face they document (a radial
+      leader lies in the plane of the face whose bore it measures), so without one they
+      are classified by which of two rasterizations rounded further — the bias makes
+      *coplanar means visible* a decision. The trap is that translating along the view
+      direction, the obvious form, slides a perspective point off its ray: measured
+      **134 changed pixels** in a render whose overlay had nothing in front of it,
+      purely from an anti-aliased 1-pixel line's coverage redistributing. Scaling about
+      the eye leaves the screen position exact, so the mode becomes a colour change and
+      nothing else (**663 darker, 0 lighter**; a free-space annotation is byte-identical
+      in both modes) — and the scale factor is one constant for the whole overlay,
+      since a perspective pixel's world size is itself proportional to depth.
+    - **Dimmed rather than dashed, for a reason that is not about taste.** A
+      screen-space stipple keyed on `gl_FragCoord` is constant along some screen
+      direction, so a line parallel to it draws solid or vanishes entirely; there is no
+      orientation-free fragment form, and a real dash needs an along-the-line vertex
+      attribute reaching all three front ends. And the dim is DARKER, which is forced:
+      a hidden fragment is always drawn over the occluder, and every part colour is a
+      lit mid-tone brighter than the background, so darkening is the one direction that
+      gains contrast in every case the mode can produce.
   - The **measure tool** is interactive dimensioning, not a separate feature: two
     surface picks (the existing raycast, now returning the hit point) build a
     transient point-to-point `LinearDimension` through the same layer.
@@ -5140,8 +5178,10 @@ for `in`-parameters being illegal in expression trees.
     centroids' midpoint, so the graphic lands beside the faces instead of at the
     line's arbitrary origin.
   - **Annotation picking is depth-blind on purpose, and tests the DRAWN segments.**
-    The overlay renders always-on-top, so an annotation you can see must be
-    clickable even when model geometry sits in front of its anchors — the pick
+    An annotation you can see must be clickable even when model geometry sits in
+    front of its anchors — which stays true under `AnnotationDepth.Occluded`
+    precisely because that mode dims rather than hides, so the rule needed no
+    revision when occlusion landed. The pick
     (`AnnotationGeometry.Pick`) measures the ray's distance to the same segments
     `Build` emits (what you see is exactly what you can click), converted to style
     pixels at each segment's own depth. A claimed click never falls through to the

@@ -74,10 +74,11 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit) =>
+        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit,
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop) =>
         Render([.. parts.Select(p => new PartInstance(p, p.Transform, p.Name))],
             width, height, camera, furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor, shading);
+            sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor, shading, annotationDepth);
 
     /// <summary>
     /// Renders posed part instances (<c>Tab.Instances()</c> / <c>Scene.AllInstances</c>
@@ -94,7 +95,8 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit)
+        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit,
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -109,7 +111,7 @@ public static class OffscreenRenderer
         var cache = new PassCache(gl);
         var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera, furniture,
             style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample,
-            preview, previewWorld, fields, deformFactor, shading);
+            preview, previewWorld, fields, deformFactor, shading, annotationDepth);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -134,7 +136,8 @@ public static class OffscreenRenderer
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
-        bool fields = true, ShadingStyle shading = ShadingStyle.Lit)
+        bool fields = true, ShadingStyle shading = ShadingStyle.Lit,
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
     {
         ArgumentNullException.ThrowIfNull(frames);
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
@@ -152,7 +155,7 @@ public static class OffscreenRenderer
         {
             var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera,
                 furniture, style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine,
-                supersample, preview: null, previewWorld: null, fields, deformFactor, shading);
+                supersample, preview: null, previewWorld: null, fields, deformFactor, shading, annotationDepth);
             pixels.Add(Downsample(oversized, width, height, supersample));
         }
         return pixels;
@@ -204,11 +207,12 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit)
+        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit,
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
     {
         var pixels = Render(parts, width, height, camera, furniture, style, sectionAxis, sectionOffset,
             ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor,
-            shading);
+            shading, annotationDepth);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -223,11 +227,12 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit)
+        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit,
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
     {
         var pixels = Render(instances, width, height, camera, furniture, style, sectionAxis, sectionOffset,
             ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor,
-            shading);
+            shading, annotationDepth);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -288,7 +293,7 @@ public static class OffscreenRenderer
         ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion,
         IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld, bool fields,
-        double deformFactor, ShadingStyle shading)
+        double deformFactor, ShadingStyle shading, AnnotationDepth annotationDepth)
     {
         uint meshProgram = cache.MeshProgram;
         uint lineProgram = cache.LineProgram;
@@ -666,7 +671,7 @@ public static class OffscreenRenderer
         // is the pixel scale so text keeps its on-image size.
         AnnotationLayer.DrawOffscreen(gl, instances,
             AnnotationCamera.From(cam, orthographic: false, height, supersample),
-            lineProgram, uLineModel, uLineColor, uLineSectionEnabled, matrix);
+            lineProgram, uLineModel, uLineColor, uLineSectionEnabled, matrix, annotationDepth);
 
         // Construction-tree preview, in the same pass position as the window and through
         // the SAME PreviewLayer — the layer owns the colour, the depth-off rule and the

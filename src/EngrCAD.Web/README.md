@@ -282,9 +282,20 @@ desktop's `ViewCubeClick` is.
 Annotations resolve per instance through `Part.TryResolveAnnotations` at load (cached
 lowering; a broken selector becomes a status message) and build through
 `AnnotationGeometry` — billboarded, screen-constant, rebuilt only when the
-`AnnotationCamera` VALUE or the visibility set changes, the desktop layer's exact
-rebuild key — then draw depth-off in the shared colour, never section-clipped. Hiding a
-part hides its annotations; the toolbar's Annot toggle matches the desktop's.
+`AnnotationCamera` VALUE, the visibility set or the depth mode changes, the desktop
+layer's exact rebuild key — then draw in the shared colour, never section-clipped.
+Hiding a part hides its annotations; the toolbar's Annot toggle matches the desktop's.
+
+`AnnotationDepth` (the `AnnotationDepth` parameter, default `AlwaysOnTop`) reaches the
+frame as **draw calls rather than as a flag**: `Occluded` emits three over ONE upload —
+the line-work range at `lequal` in `AnnotationGeometry.Color`, the same range at
+`greater` in `HiddenColor`, then the text range depth-off — which is
+`AnnotationLayer.DrawBatches` transcribed, and the reason `DrawCall` gained a
+`depthFunc`. It travels as a **name** (`"lequal"`/`"greater"`), not a number: WHICH
+comparison a draw wants is a .NET decision and the GL enum values are the browser's, so
+no numeric constant is duplicated across the boundary. The split between the two ranges
+comes from `AnnotationGeometry.Build`'s optional text list, which the component
+concatenates before uploading and reports as `ViewportAnnotations.LineWorkVertexCount`.
 
 ## Simulation results (colour maps, legend, deformed shape)
 

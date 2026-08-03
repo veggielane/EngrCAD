@@ -134,6 +134,12 @@
     /// always-on-top, never section-clipped. Hiding a part hides its annotations.</summary>
     [Parameter] public bool ShowAnnotations { get; set; } = true;
 
+    /// <summary>How that overlay treats model geometry in front of it — the shared
+    /// <see cref="AnnotationDepth"/> rule, default <c>AlwaysOnTop</c> exactly as on the
+    /// desktop. <c>Occluded</c> dims the dimension lines and leaders behind material
+    /// while leaving the values at full strength.</summary>
+    [Parameter] public AnnotationDepth AnnotationDepth { get; set; } = AnnotationDepth.AlwaysOnTop;
+
     /// <summary>CSS size of the viewport element.</summary>
     [Parameter] public string Width { get; set; } = "100%";
 
@@ -214,6 +220,9 @@
     private readonly List<(int Instance, AnnotationItem Item)> _annotationItems = [];
     private readonly List<AnnotationItem> _annotationScratch = [];
     private readonly List<(Vector3d A, Vector3d B)> _annotationSegments = [];
+    private readonly List<(Vector3d A, Vector3d B)> _annotationText = [];
+    private int _annotationLineWork;
+    private bool _builtAnnotationsOccluded;
     private AnnotationCamera _builtAnnotationCamera;
     private bool _annotationsDirty = true;
     private bool _shownAnnotations = true;
@@ -1272,7 +1281,9 @@
             {
                 var annotationCamera = AnnotationCamera.From(
                     _camera, orthographic: false, height * pixelScale, pixelScale);
-                if (_annotationsDirty || annotationCamera != _builtAnnotationCamera)
+                bool occluded = AnnotationDepth == AnnotationDepth.Occluded;
+                if (_annotationsDirty || annotationCamera != _builtAnnotationCamera
+                    || occluded != _builtAnnotationsOccluded)
                 {
                     _annotationScratch.Clear();
                     if (ShowAnnotations)
@@ -1285,14 +1296,25 @@
                     }
                     if (_measurement is { } measurement)
                         _annotationScratch.Add(new AnnotationItem(measurement, Matrix4d.Identity));
-                    AnnotationGeometry.Build(_annotationSegments, _annotationScratch, annotationCamera);
+                    // Occluded needs the text apart from the line work and the geometry
+                    // pulled a pixel toward the eye, so the mode joins the rebuild key —
+                    // the desktop layer's rule. Passing null for the text list is the
+                    // incumbent single-list build, byte for byte.
+                    _annotationLineWork = AnnotationGeometry.Build(
+                        _annotationSegments, _annotationScratch, annotationCamera,
+                        occluded ? AnnotationGeometry.OccludedDepthBiasPx : 0,
+                        occluded ? _annotationText : null);
+                    if (occluded)
+                        _annotationSegments.AddRange(_annotationText);
                     await gl.UploadLineVerticesAsync(
                         "@annotations", RenderGeometry.SegmentVertices(_annotationSegments));
                     _builtAnnotationCamera = annotationCamera;
+                    _builtAnnotationsOccluded = occluded;
                     _annotationsDirty = false;
                 }
                 if (_annotationSegments.Count > 0)
-                    annotations = new ViewportAnnotations("@annotations", _annotationSegments.Count * 2);
+                    annotations = new ViewportAnnotations(
+                        "@annotations", _annotationSegments.Count * 2, _annotationLineWork * 2);
             }
 
             // The field legend: rebuilt (and re-uploaded) only when the display or the
@@ -1311,7 +1333,8 @@
                 // A deformation track reaches the frame as one scalar, exactly as the
                 // pose track reaches it as matrices. Nothing is re-uploaded.
                 deformFactor: deformFactor,
-                shading: Shading));
+                shading: Shading,
+                annotationDepth: AnnotationDepth));
         }
         catch (JSDisconnectedException)
         {
