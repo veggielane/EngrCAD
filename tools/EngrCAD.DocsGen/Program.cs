@@ -352,6 +352,27 @@ foreach (var s in snippets)
     }
 }
 
+// ---- placeholder guard ------------------------------------------------------------
+// CLAUDE.md's count tokens are NEUTRALIZED to placeholders while its giant status
+// paragraph is 3-way spliced on every merge, then restored afterwards. That restore has
+// silently no-opped twice now, because a sed written against the NUMERIC form
+// (`(~4994 tests)`) does not match the placeholder it is supposed to replace — so the
+// placeholder ships and nothing complains. It is exactly the class of staleness this
+// tool already exists to refuse, so it refuses this too: the numbers are only wrong for
+// as long as nobody looks, and now something looks on every gate.
+foreach (var (file, marker) in new[]
+         {
+             ("CLAUDE.md", "~NNNN tests"),
+             ("CLAUDE.md", "NN snippets, MM rendered"),
+         })
+{
+    var path = Path.Combine(docsRoot, "..", file);
+    if (File.Exists(path) && File.ReadAllText(path).Contains(marker, StringComparison.Ordinal))
+        errors.Add($"{file}: the placeholder \"{marker}\" is still in the file — a merge " +
+                   "neutralized the count token and the restore did not match it. Replace it " +
+                   "with the real figure from this run.");
+}
+
 // ---- report ----------------------------------------------------------------------
 Console.WriteLine($"\n{snippets.Count} snippets: {executed} executed, {rendered} rendered" +
                   (canRender ? "" : " (rendering skipped)") + $", {errors.Count} error(s).");
