@@ -227,9 +227,12 @@ scene.Add(part);
 
 ![An eccentric tube colour-mapped by wall thickness, grading from teal on the thin side to yellow on the thick one](images/dfm-thickness.png)
 
-The thin side measures **1.9904** against an analytic 2 at the default density — under,
-which is the direction a minimum-thickness check should err in, and the deficit is the
-inscribed 32-gon rather than the estimator.
+The thin side measures **1.9904** against an analytic 2 at the default density. That
+deficit is the discretization rather than the estimator, which is a measurement and not
+an assumption: at 32 / 64 / 128 / 256 segments per circle the error runs
+−9.63e-3 / −2.41e-3 / −6.02e-4 / −1.51e-4 — ratios of exactly 4.00, so it converges
+quadratically — and it is one-sided, always **under**, which is the direction a
+minimum-thickness check should err in.
 
 ### Where it is exact, where it lies, and where it declines
 
