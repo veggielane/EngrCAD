@@ -3836,6 +3836,98 @@ coordinates already relative to the rotating line of centres — and the failure
 that is wrong is the dangerous kind: every individual coupling stays satisfied, the
 mechanism solves, and the assembled ratio is quietly wrong.
 
+### The meshing phase (`GearMeshing.cs`): one derivation, and the sign that was invisible
+
+Every gear layout in the docs phased its pair by hand — `RotateZ(π − π/z)` — which is a
+convention re-derived at each call site and checkable nowhere. `GearMeshing` states it
+once, and the shape of the statement is the design decision: **the rule depends on the
+tooth COUNTS and the drawing datum, not on the tooth form.** Two gears mesh when the
+pitch circles roll together and a tooth of one sits in a space of the other, and neither
+clause mentions the flank curve — so one helper serves involute, cycloidal and anything
+else drawn to the same datum, which is why the primitive takes tooth counts and a stated
+centre distance while the `GearSpec` overload is the convenience on top. The datum is
+part of the contract rather than an assumption (`Gears.Spur` draws a TOOTH on +X,
+`PlanetaryGears.RingProfile` a tooth SPACE), and both halves are MEASURED off the
+regions' own signed distance rather than trusted.
+
+The derivation is one idea used three times. A gear of z teeth turned by φ from a datum
+whose tooth centre lies at τ has the **tooth-index coordinate** `u(θ) = z(θ − φ − τ)/2π`
+along a direction θ in its own frame — integer at a tooth centre, half-integer at a
+space centre. What makes a mesh a CONSTRAINT rather than a coincidence is that a
+combination of the two members' coordinates is invariant under rolling, and *which*
+combination is decided by how they roll: an external pair counter-rotates, so
+`u_A(ψ) + u_B(ψ+π)` is constant; an internal pair co-rotates and engages along ψ from
+BOTH centres (the pinion's engaging tooth points outward, away from the ring's centre),
+so `u_R(ψ) − u_P(ψ)` is constant; a rack ties `x = −r·φ`, so the pinion's coordinate at
+−π/2 minus x/p is constant. Each condition is `≡ ½` (or `≡ 0` for the rack) and solves
+in closed form, the rack's reducing to `φ = −π/2 − x/r`.
+
+**The finding.** `PlanetarySet.PlanetPhase` already had this solved — and what it had
+solved was the INTERNAL half. The external rule depends on the azimuth with the opposite
+sign, and the two differ by `2ψ(z_A + z_B)/z_B`, which is a whole tooth pitch — i.e. the
+same placement — for every planet exactly when N divides `z_sun + z_ring`. **That is what
+the planetary assembly condition IS**, and it is why one number can satisfy both of a
+planet's meshes there, and equally why the sign could not be observed in the code that
+carried it: inside a legal planetary set the two rules are indistinguishable. Away from
+it they are not, and a general external pair at a general azimuth is exactly where the
+difference bites. `PlanetPhase` now delegates bit-identically; both directions are pinned
+(three assembling sets agree to 1e-9 of a pitch, a five-planet set violating divisibility
+lands 16.8 pitches apart), and `PlanetarySet.RingPhase` keeps its `(z_p − 1)π/z_r` closed
+form with a test asserting it IS the general rule at azimuth 0 — kept because it is the
+simpler statement, and the test is what stops the two drifting.
+
+**Which flank drives is the caller's.** The phase returned is the symmetric one: the
+tooth centred in the space, which at the standard centre distance and standard
+proportions is zero-backlash contact on both flanks at once. That is a placement, not an
+operating condition, so `GearMesh.RolledBy(radians)` is how a design says which side it
+runs on, and nothing guesses. The same reasoning settles the profile-shift refusal:
+`x₁ + x₂ = 0` is what keeps the standard centre distance (the two pitch-circle
+thicknesses then sum to the circular pitch, so one member's tooth exactly fills the
+other's space and the centres coincide), any other sum needs the involute-function solve
+for the operating distance — and since the PHASE rule does not depend on the distance at
+all, the refusal names the tooth-count overload, which takes it as an argument.
+
+**A helical pair needs nothing extra**, and the proof is short enough to keep: a twisted
+extrusion's transverse section at height z is the drawn section turned by
+ψ(z) = z·tan β / r, so the mesh condition holds at every section at once iff
+`ψ_A·z_A + ψ_B·z_B` is constant in z — which, since ψ·z = 2z·tan β / m, is exactly the
+requirement that the helix angles be equal and opposite. Phase a correctly paired set at
+its drawn section and it is phased everywhere; measured at 0.141 mm of clearance at 0, ¼,
+½ and the full face width.
+
+Verification is from **contact** throughout and never through `Coupling.Gear`, which
+enforces a ratio and says nothing whatever about phase — the involute file's own rule,
+applied to the thing a coupling structurally cannot witness.
+
+### A still only has to be right at one instant
+
+A wrong phase or a wrong ratio is invisible in a static render that was phased by hand:
+the picture was approved at the one angle it was drawn at. `GearTrainMotionTests` drives
+a meshed pair through a `MotionStudy` and probes the exact profiles at **every recorded
+pose**, with two mutations that fail in different ways — half a tooth pitch of phase
+error reads −1.66 mm at every frame (the ratio still exact, so the coupling is perfectly
+satisfied and only the geometry objects), and one tooth of RATIO error starts clear at
++0.14 mm and walks into −0.39 mm by the end of the sweep, which is the failure a single
+still structurally cannot show. `MotionStudy.CheckInterference` is cross-checked on the
+same rig and agrees; it stays the secondary instrument because it answers a boolean off
+the display tessellation where the probe answers a depth off the exact profile.
+
+**And a gear animation aliases, which is not a cosmetic problem — it misreports the
+ratio.** The docs' planetary clip wants to be a seamless loop, and the smallest carrier
+turn that is one is 120° (the three planets swap places, each having advanced a whole
+number of teeth). At 24 frames that puts the sun at 1.17 and a planet at 1.08 tooth
+pitches per frame; both alias to a slow forward creep and a viewer reads the sun as
+turning *slower* than the carrier it drives at 3.5×. The frame count that would fix it is
+`z_planet + z_ring` = 78, three times the committed file for a clip that is no more
+informative — and it cannot be fixed by choosing better tooth counts either, since the
+requirement `z_sun + 3·z_planet ≤ 24` is below the undercut limit for any real pair. So
+the clip runs 30° and does **not** loop, exactly as `animate-explode` does not: the
+honest reading beat the seamless one. Same family as `DeformationTracks.Oscillate`'s
+"a mode does not animate at its own frequency" — a clip's timing is a viewing parameter,
+and the general rule is to **check the fastest periodic detail in the scene against the
+frame step before choosing a clip length**, and where both cannot be had, say which was
+given up.
+
 ### Design studies: driving `[Param]` values by an optimizer (`DesignStudy.cs`)
 
 `DesignStudy.Minimize` moves a part's `[Param]` values to minimize a measured objective

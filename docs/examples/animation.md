@@ -130,6 +130,24 @@ var animation = new Animation(durationSeconds: 4)
 A study that stalls (a dead centre, a joint stop) animates what it recorded —
 honestly ending where the sweep did, with the diagnostics naming why.
 
+### What the frame count can misreport
+
+A linkage's bars have no periodic detail, so a four-bar reads correctly at any
+frame count. **A gear train does not**, and the failure is not cosmetic: teeth
+are a periodic pattern, so a clip whose frames advance more than half a tooth
+pitch aliases, and the apparent speed a viewer reads off it is not the speed the
+mechanism has. The [planetary clip](gears.md#running-it) records the measurement
+— the seamless-looping 120° version puts a planet at 1.08 tooth pitches per
+frame, which aliases to a slow forward creep and makes the sun look *slower* than
+the carrier it drives at 3.5×. The clip therefore runs 30° and does **not** loop,
+because the honest reading beat the seamless one.
+
+That is the same family as `DeformationTracks.Oscillate`'s caveat below: a
+clip's timing is a viewing parameter, and a figure that quietly rescales it is a
+figure that lies. The rule that generalizes: **check the fastest periodic detail
+in the scene against the frame step before choosing a clip length**, and where
+the two cannot both be had, state which one you gave up.
+
 ## A sequenced explode
 
 The exploded view is already a pure function of a factor

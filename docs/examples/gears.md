@@ -71,13 +71,15 @@ if (pinion.MaxFitDeviation > pinion.FitTolerance)
 if (Math.Abs(pinionSpec.BasePitch - Math.PI * pinionSpec.BaseDiameter / 18) > 1e-12)
     throw new Exception("base pitch is an identity");
 
-// Standard centre distance; a wheel gap centred on the line of centres meshes
-// with the pinion tooth on it.
-double a = (pinionSpec.PitchDiameter + wheelSpec.PitchDiameter) / 2;
+// Where the wheel sits and how far it must be turned, DERIVED rather than
+// re-derived at the call site - see "Putting a pair in mesh" below.
+if (Math.Abs(GearMeshing.ExternalCentreDistance(pinionSpec, wheelSpec)
+        - (pinionSpec.PitchDiameter + wheelSpec.PitchDiameter) / 2) > 1e-12)
+    throw new Exception("the standard centre distance is m(z1 + z2)/2");
+
+var placement = GearMeshing.External(pinionSpec, wheelSpec);
 var pinionShape = Gears.SpurGear(pinionSpec, faceWidth: 8, boreDiameter: 8);
-var wheelShape = Gears.SpurGear(wheelSpec, faceWidth: 8, boreDiameter: 12)
-    .RotateZ(Math.PI - Math.PI / wheelSpec.Teeth)
-    .Translate(a, 0, 0);
+var wheelShape = placement.Place(Gears.SpurGear(wheelSpec, faceWidth: 8, boreDiameter: 12));
 
 var scene = new Scene();
 var tab = scene.AddTab("gears");
@@ -100,6 +102,118 @@ Because the tooth profile is lines and circular arcs, a spur gear is exact in al
 three representations; a bore is one `boreDiameter` argument, and keyways are a
 filed follow-up. Everything below is this profile put to work — swept along a
 helix, mirrored, laid flat, or replaced by a different flank curve entirely.
+
+## Putting a pair in mesh
+
+Drawing two gears is not the same as meshing them. `GearMeshing` answers the
+second question: **where the driven member's centre goes, and how far it must be
+turned about its own axis** for its teeth to enter the other's spaces.
+
+**The rule depends on the tooth counts and the drawing datum, not on the tooth
+form.** Two gears mesh when the pitch circles roll together and a tooth of one
+sits in a space of the other — neither statement mentions the flank curve, which
+is why one helper serves involute, cycloidal and anything else drawn to the same
+datum. The datum is stated rather than assumed: `Gears.Spur` and
+`CycloidalGears.Spur` draw a **tooth** centred on +X, while
+`PlanetaryGears.RingProfile` draws a tooth **space** there (its bore is a cutter
+gear's outline, and the cutter's tooth is the ring's space). Both are measured in
+the tests rather than trusted.
+
+The derivation is one idea used three times. Give a gear of *z* teeth, turned by
+φ from a datum whose tooth centre lies at τ, the **tooth-index coordinate** along
+a direction θ in its own frame:
+
+```
+u(θ) = z·(θ − φ − τ) / 2π
+```
+
+which is an integer exactly when a tooth centre lies along θ and a half-integer
+exactly when a space centre does. What makes the mesh a *constraint* rather than
+a coincidence is that a combination of the two members' coordinates is invariant
+under rolling — and which combination depends on how they roll:
+
+| Pair | Engaging directions | Rolling | Condition |
+|---|---|---|---|
+| **External** | ψ from A, ψ+π from B | counter-rotating, ω_B = −(z_A/z_B)ω_A | `u_A + u_B ≡ ½` |
+| **Internal** | ψ from **both** (the pinion's tooth points outward) | co-rotating, ω_P = (z_R/z_P)ω_R | `u_R − u_P ≡ ½` |
+| **Rack** | −π/2 from the pinion | x = −r·φ | `u_pinion − x/p ≡ 0` |
+
+Each solves in closed form, and the rack's reduces to something worth
+remembering on its own: `φ = −π/2 − x/r`. The two terms are the whole story — a
+quarter turn to point the drawn tooth down at the rack, and −x/r for how far the
+pinion has *rolled* to get there.
+
+```csharp run:gear-mesh-phase
+var pinionSpec = new GearSpec(module: 2, teeth: 18);
+var wheelSpec = new GearSpec(module: 2, teeth: 27);
+
+// The ordinary layout: driven member on +X, driver as drawn. The phase is the
+// familiar half turn less half a tooth pitch.
+var side = GearMeshing.External(pinionSpec, wheelSpec);
+if (Math.Abs(side.Phase - (Math.PI - Math.PI / 27)) > 1e-12)
+    throw new Exception("pi - pi/z at the ordinary layout");
+
+// ...and it holds at any azimuth, and for any driver phase: turning the driver
+// by delta turns the driven member by -(z1/z2)*delta, which is the mesh.
+var above = GearMeshing.External(pinionSpec, wheelSpec, azimuth: Math.PI / 2, driverPhase: 0.4);
+if (Math.Abs(above.Centre.Y - GearMeshing.ExternalCentreDistance(pinionSpec, wheelSpec)) > 1e-9)
+    throw new Exception("azimuth pi/2 puts the wheel on +Y");
+if (Math.Abs((above.Phase - GearMeshing.External(pinionSpec, wheelSpec, Math.PI / 2).Phase)
+        - -(18.0 / 27.0) * 0.4) > 1e-12)
+    throw new Exception("a driver phase carries through at the ratio");
+
+// An internal pair: the ring at the origin, the pinion inside it. Note the
+// centre distance is m(z_ring - z_pinion)/2, and the phase depends on the
+// azimuth the OTHER way round - see below.
+var ringSpec = new GearSpec(module: 2, teeth: 60);
+var inside = GearMeshing.Internal(ringSpec, pinionSpec, azimuth: 0.9);
+if (Math.Abs(inside.Centre.Length - 42) > 1e-9)
+    throw new Exception("m(z_ring - z_pinion)/2 = 42");
+
+// A rack and pinion. Gears.Rack puts a tooth SPACE at x = 0, so the pinion's
+// phase is just a quarter turn plus however far it has rolled.
+var rackSpec = new RackSpec(module: 2);
+var onRack = GearMeshing.Rack(rackSpec, rackSpec.MatingGear(teeth: 18), x: 25);
+if (Math.Abs(onRack.Phase - (-Math.PI / 2 - 25.0 / 18.0)) > 1e-12)
+    throw new Exception("-pi/2 - x/r");
+```
+
+**External and internal depend on the azimuth with opposite signs**, and that is
+not a sign slip in one of them: an external pair counter-rotates where an
+internal pair co-rotates, so carrying the driven member round to a different
+azimuth spins it the other way. The two rules differ by `2ψ(z_A + z_B)/z_B`,
+which is a whole tooth pitch — i.e. the same placement — exactly when
+`(z_sun + z_ring)` is divisible by the planet count. **That is what the planetary
+assembly condition IS**, and it is why `PlanetarySet` can satisfy both of a
+planet's meshes with one number. Away from it the two genuinely differ (a
+five-planet set violating divisibility lands them 16.8 tooth pitches apart), so
+the caller asks for the mesh they have.
+
+**Which flank drives is the caller's.** The phase a factory returns is the
+*symmetric* one — the tooth centred in the space, which at the standard centre
+distance and standard proportions is zero-backlash contact on both flanks at
+once. A real pair runs with backlash (an extended centre distance, which an
+involute pair tolerates exactly, or thinned teeth) and touches on one flank only;
+`GearMesh.RolledBy(radians)` rolls the member onto whichever side the design
+wants, and nothing guesses.
+
+**A helical pair needs nothing extra.** A twisted extrusion's transverse section
+at height *z* is the drawn section turned by ψ(z) = z·tan β / r, so the mesh
+condition holds at every section at once iff `ψ_A·z_A + ψ_B·z_B` is constant in
+*z* — which, since ψ·z = 2z·tan β / m, is exactly the requirement that the two
+helix angles be equal and opposite. Phase a correctly paired helical set at its
+drawn section and it is phased everywhere; measured clearance is 0.141 mm at 0,
+¼, ½ and the full face width.
+
+Every claim above is verified from **contact** — one member's outline probed
+against the other's exact 2D signed distance — and never through `Coupling.Gear`,
+which enforces a ratio and says nothing whatever about phase. The nominal
+external clearance at 0.4 mm of extra centre distance measures 0.1413 mm; half a
+tooth pitch of phase error reads −1.66 mm, and the *wrong sign* on the azimuth
+term reads −0.017 to −1.67 mm depending on the azimuth. That smallest figure is
+the near miss worth knowing about: at ψ = 0.7 rad the wrong sign lands 10.03
+tooth pitches from the right answer, so it very nearly meshes — and still bites
+by eighty times the flank fit deviation.
 
 ## Helical gears
 
@@ -518,6 +632,12 @@ planet's outline against the sun's and the ring's material with the sketches' ow
 exact signed distance: every planet touches within the flank fit's own deviation,
 while a quarter-pitch phase error buries it 1.5 mm deep.
 
+`PlanetarySet.PlanetPhase` is now literally `GearMeshing.InternalPhase` — the
+general rule from [Putting a pair in mesh](#putting-a-pair-in-mesh), which is
+where the derivation and the assembly-condition identity live. What was solved
+here first was the *internal* half; the external half runs the other way with the
+azimuth, and the assembly condition is exactly what lets one number satisfy both.
+
 ### The Willis equation, as a test rather than a constraint
 
 `PlanetaryGears.Mechanism` builds the kinematics from **one `Coupling.Gear` per
@@ -581,6 +701,98 @@ converges while 1.0 rad — asking the planet for more than half a turn in one
 step — does not. Use `Sweep`, which is continuation and seeds each step from the
 previous converged pose.
 
+### Running it
+
+**A still only has to be right at one instant; a running set has to be right at
+every one.** A wrong phase or a wrong ratio is invisible in a static render that
+was phased by hand — the picture was approved at the one angle it was drawn at —
+and becomes teeth passing through each other the moment the thing turns. So the
+clip below is a *by-product* of a verified motion rather than a picture somebody
+looked at: `GearTrainMotionTests` drives a meshed pair through a sweep and probes
+the exact profiles at every recorded pose, with two mutations to prove the
+instrument is not blind (half a tooth pitch of phase error reads −1.66 mm at
+every frame; one tooth of ratio error starts clear at +0.14 mm and walks into
+−0.39 mm by the end of the sweep, which is the failure no single still can show).
+
+```csharp animate:animate-planetary frames:24
+var set = new PlanetarySet(module: 2, sunTeeth: 24, planetTeeth: 18, planetCount: 3);
+const double faceWidth = 8;
+double ringOuter = 2 * set.RingRootRadius + 4 * set.Module;
+
+// The gears are drawn about their OWN axes and the mesh phases live in the
+// occurrence frames, which is what lets all three planets share ONE Part - and
+// so one B-Rep lowering, one mesh and one GPU upload for the whole clip.
+var sunPart = new Part("sun", Gears.SpurGear(set.Sun, faceWidth, boreDiameter: 10), Palette.Coral);
+var planetPart = new Part("planet", Gears.SpurGear(set.Planet, faceWidth, boreDiameter: 6), Palette.Sky);
+var ringPart = new Part("ring", PlanetaryGears.RingGear(set.Ring, faceWidth, ringOuter), Palette.Sage);
+
+// A triangular carrier plate under the gears, its corners carrying the planet
+// pins - one sketch with three holes, so no boolean is involved.
+Vector2d Centre(double azimuth, double radius) =>
+    new(radius * Math.Cos(azimuth), radius * Math.Sin(azimuth));
+var corners = new List<Vector2d>();
+for (int k = 0; k < set.PlanetCount; k++)
+    corners.Add(Centre(set.PlanetAzimuth(k), set.CentreDistance + 10));
+var plate = Sketch.Polygon(corners).WithHole(Sketch.Circle(6));
+for (int k = 0; k < set.PlanetCount; k++)
+    plate = plate.WithHole(Sketch.Circle(Centre(set.PlanetAzimuth(k), set.CentreDistance), 3));
+
+var carrierPart = new Part("carrier", Shape.Extrude(plate, 4).Translate(0, 0, -5), Palette.Brass);
+var basePart = new Part("base", Shape.Cylinder(ringOuter / 2, 3).Translate(0, 0, -10), Palette.Slate);
+
+// Every placement comes from GearMeshing: the ring is a pure phase at the origin,
+// each planet an internal mesh inside it at its own azimuth.
+var rig = new Assembly("planetary");
+var housing = rig.Add(basePart);
+var carrier = rig.Add(carrierPart);
+var sun = rig.Add(sunPart);
+var ring = rig.Add(ringPart, new GearMesh(Vector3d.Zero, set.RingPhase).Frame);
+var planets = new List<Occurrence>();
+for (int k = 0; k < set.PlanetCount; k++)
+{
+    var mesh = GearMeshing.Internal(set.Ring, set.Planet, set.PlanetAzimuth(k), set.RingPhase);
+    if (Math.Abs(mesh.Phase - set.PlanetPhase(k)) > 0)
+        throw new Exception("the set's own phase IS the general internal rule");
+    planets.Add(rig.Add(planetPart, mesh.Frame, $"planet.{k + 1}"));
+}
+
+var planetary = PlanetaryGears.Mechanism(set, rig, housing, carrier, sun, ring, planets);
+planetary.Mechanism.Ground(ring);              // the ordinary reduction drive
+if (planetary.Mechanism.Assemble().RemainingDegreesOfFreedom != 1)
+    throw new Exception("a planetary set with a held ring has one DOF");
+
+// 30 degrees of carrier, 25 recorded poses - so the 24 rendered frames land ON
+// recorded samples and the track interpolates nothing at all.
+var study = planetary.Mechanism.Sweep(
+    MechanismDriver.Angle(planetary.CarrierPin), 0, Math.PI / 6, frames: 25);
+if (!study.Completed) throw new Exception(study.ToString());
+
+var scene = new Scene();
+scene.AddTab("planetary").Add(rig);
+
+var animation = new Animation(durationSeconds: 4).With(new MechanismTrack(study, scene));
+var camera = new CameraState(-Math.PI / 2, 1.15, 200, (0, 0, 0));
+```
+
+![A 24-tooth sun driving three planets round a held 60-tooth ring](images/animate-planetary.png)
+
+> [!NOTE]
+> **A gear clip aliases, and the aliasing is not cosmetic — it misreports the
+> ratio.** Over 30° of carrier the sun turns 105° and a planet 130°, which at 24
+> frames is 0.29 and 0.27 of a tooth pitch per frame: under the half-pitch
+> Nyquist limit, so the teeth read as moving forward and the 3.5:1 reduction is
+> visible. Turn the carrier a full 120° instead — the smallest angle that makes
+> the clip a *seamless loop*, since the three planets swap places and each has
+> advanced a whole number of teeth — and the same 24 frames put the sun at 1.17
+> and a planet at 1.08 pitches per frame. Both alias to a slow forward creep, and
+> a viewer would read the sun as turning *slower* than the carrier. The frame
+> count that would fix it is `z_planet + z_ring` = 78, i.e. three times the file
+> for a clip that is no more informative. **So this clip does not loop, by
+> choice**, exactly as `animate-explode` does not: the honest reading beat the
+> seamless one. It is the same family as the mode-shape caveat on
+> [the animation page](animation.md) — a clip's *timing* is a viewing parameter,
+> and a figure that quietly rescales it is a figure that lies.
+
 A helical pair's conjugate action needs no second instrument. At every transverse
 section the pair **is** a spur pair, since a helical gear's section at height z is
 its own spur profile rotated by ψ(z) and a meshing pair's two members are rotated
@@ -622,11 +834,12 @@ var pinion = CycloidalGears.Spur(mesh.Pinion);   // the profile, deviation repor
 if (pinion.MaxFitDeviation > pinion.FitTolerance)
     throw new Exception("the fit must honor its stated tolerance");
 
-// A cycloidal pair runs at its DESIGN centre distance, and only there.
+// A cycloidal pair runs at its DESIGN centre distance, and only there - so the
+// distance is stated and GearMeshing supplies only the phase, which depends on
+// the tooth COUNTS and not on the tooth form.
+var placement = GearMeshing.External(mesh.Pinion.Teeth, mesh.Wheel.Teeth, mesh.CentreDistance);
 var pinionShape = CycloidalGears.SpurGear(mesh.Pinion, faceWidth: 8, boreDiameter: 8);
-var wheelShape = CycloidalGears.SpurGear(mesh.Wheel, faceWidth: 8, boreDiameter: 16)
-    .RotateZ(Math.PI - Math.PI / mesh.Wheel.Teeth)
-    .Translate(mesh.CentreDistance, 0, 0);
+var wheelShape = placement.Place(CycloidalGears.SpurGear(mesh.Wheel, faceWidth: 8, boreDiameter: 16));
 
 var scene = new Scene();
 var tab = scene.AddTab("cycloidal");

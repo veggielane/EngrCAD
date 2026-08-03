@@ -122,6 +122,48 @@ public class GearTrainMotionTests
         Assert.Contains(report.Pairs, p => p.PathA.Contains("pinion") && p.PathB.Contains("wheel"));
     }
 
+    /// <summary>
+    /// The set the docs page animates, checked the same way: every planet against the
+    /// sun AND against the ring, at every recorded pose of the sweep. Two meshes per
+    /// planet is what makes it worth running separately from the pair above — a phase
+    /// that satisfies one and not the other is exactly the failure the planetary
+    /// assembly condition exists to rule out, and the ring mesh runs the OTHER way with
+    /// the azimuth.
+    /// </summary>
+    [Fact]
+    public void ADrivenPlanetarySet_KeepsBothMeshes_AtEveryPose()
+    {
+        var rig = PlanetaryRig.Build();
+        var study = rig.Sweep(frames: 25);
+        Assert.True(study.Completed, study.ToString());
+
+        // A nominal set is zero-backlash, so the conjugate flanks TOUCH; what is
+        // asserted is that nothing bites. Both meshes, every planet, every frame.
+        var (worstSun, worstRing) = rig.WorstClearances(study);
+        Assert.True(worstSun > -0.01, $"a planet bites the sun: {worstSun:0.#####}");
+        Assert.True(worstRing > -0.01, $"a planet bites the ring: {worstRing:0.#####}");
+
+        // ...and the picture genuinely turns: over 30 degrees of carrier the sun makes
+        // 1 + z_ring/z_sun = 3.5 times as much angle, which is the reduction the figure
+        // is about. Read off the joints rather than off the formula.
+        Assert.Equal(
+            rig.Set.RingHeldRatio,
+            (rig.Planetary.SunPin.Angle + rig.Planetary.CarrierPin.Angle) / rig.Planetary.CarrierPin.Angle,
+            9);
+    }
+
+    [Fact]
+    public void AHalfToothPhaseErrorOnOnePlanet_IsSeenAcrossThePlanetarySweep()
+    {
+        var rig = PlanetaryRig.Build(phaseErrorOnFirstPlanet: Math.PI / 18);
+        var study = rig.Sweep(frames: 25);
+        Assert.True(study.Completed, study.ToString());
+
+        var (worstSun, worstRing) = rig.WorstClearances(study);
+        Assert.True(worstSun < -1.0, $"the sun mesh must bite; measured {worstSun:0.#####}");
+        Assert.True(worstRing < -1.0, $"the ring mesh must bite; measured {worstRing:0.#####}");
+    }
+
     [Fact]
     public void TheSweepIsDeterministic()
     {
@@ -234,6 +276,91 @@ public class GearTrainMotionTests
                 if (q.X * q.X + q.Y * q.Y > _reachSquared)
                     continue;
                 min = Math.Min(min, _pinionRegion.SignedDistance(new Vector2d(q.X, q.Y)));
+            }
+            return min;
+        }
+    }
+
+    /// <summary>The set the docs page animates, on placeholder bodies: only the POSES
+    /// matter, and the profiles are probed directly.</summary>
+    private sealed class PlanetaryRig
+    {
+        private IPlanarRegion _sunRegion = null!;
+        private IPlanarRegion _ringRegion = null!;
+        private List<Vector2d> _planetOutline = null!;
+
+        public required PlanetarySet Set { get; init; }
+        public required PlanetaryMechanism Planetary { get; init; }
+
+        public static PlanetaryRig Build(double phaseErrorOnFirstPlanet = 0)
+        {
+            var set = new PlanetarySet(module: 2, sunTeeth: 24, planetTeeth: 18, planetCount: 3);
+            var body = new Part("body", Shape.Box(2, 2, 1));
+
+            var rig = new Assembly("planetary");
+            var housing = rig.Add(body, name: "housing");
+            var carrier = rig.Add(body, name: "carrier");
+            var sun = rig.Add(body, name: "sun");
+            var ring = rig.Add(body, new GearMesh(Vector3d.Zero, set.RingPhase).Frame, "ring");
+            var planets = new List<Occurrence>();
+            for (int k = 0; k < set.PlanetCount; k++)
+            {
+                var mesh = GearMeshing.Internal(
+                    set.Ring, set.Planet, set.PlanetAzimuth(k), set.RingPhase);
+                // The docs snippet asserts this equality; it is the whole reason
+                // PlanetarySet can delegate.
+                Assert.Equal(set.PlanetPhase(k), mesh.Phase);
+                if (k == 0)
+                    mesh = mesh.RolledBy(phaseErrorOnFirstPlanet);
+                planets.Add(rig.Add(body, mesh.Frame, $"planet.{k + 1}"));
+            }
+
+            var planetary = PlanetaryGears.Mechanism(set, rig, housing, carrier, sun, ring, planets);
+            planetary.Mechanism.Ground(ring);
+            Assert.Equal(1, planetary.Mechanism.Assemble().RemainingDegreesOfFreedom);
+
+            return new PlanetaryRig { Set = set, Planetary = planetary }.WithProfiles();
+        }
+
+        private PlanetaryRig WithProfiles()
+        {
+            _sunRegion = Gears.Spur(Set.Sun).Sketch.ToRegion();
+            _ringRegion = PlanetaryGears
+                .RingProfile(Set.Ring, 2 * Set.RingRootRadius + 4 * Set.Module).ToRegion();
+            _planetOutline = GearContact.Outline(Gears.Spur(Set.Planet).Sketch);
+            return this;
+        }
+
+        public MotionStudy Sweep(int frames) => Planetary.Mechanism.Sweep(
+            MechanismDriver.Angle(Planetary.CarrierPin), 0, Math.PI / 6, frames);
+
+        public (double Sun, double Ring) WorstClearances(MotionStudy study)
+        {
+            double sun = double.PositiveInfinity, ring = double.PositiveInfinity;
+            foreach (var frame in study.Frames)
+            {
+                var sunWorld = Named(frame, "sun");
+                var ringWorld = Named(frame, "ring");
+                for (int k = 0; k < Set.PlanetCount; k++)
+                {
+                    var planetWorld = Named(frame, $"planet.{k + 1}");
+                    sun = Math.Min(sun, Probe(_sunRegion, sunWorld.Inverse() * planetWorld));
+                    ring = Math.Min(ring, Probe(_ringRegion, ringWorld.Inverse() * planetWorld));
+                }
+            }
+            return (sun, ring);
+        }
+
+        private static Matrix4d Named(MotionFrame frame, string suffix) =>
+            frame.Instances.First(i => i.Path.EndsWith("/" + suffix, StringComparison.Ordinal)).World;
+
+        private double Probe(IPlanarRegion region, in Matrix4d toRegion)
+        {
+            double min = double.PositiveInfinity;
+            foreach (var p in _planetOutline)
+            {
+                var q = toRegion.TransformPoint(new Vector3d(p.X, p.Y, 0));
+                min = Math.Min(min, region.SignedDistance(new Vector2d(q.X, q.Y)));
             }
             return min;
         }
