@@ -3279,6 +3279,55 @@ here because the honest assessment says so — not because nobody got to it. The
 in this file, with their reasoning intact, so that a future decision to start one begins
 from what was already understood rather than from scratch.
 
+- [ ] **Topology optimisation (SIMP) — and it sits here only because it was asked for
+  before CFD, NOT because it is a product-sized campaign like its neighbours.** Every
+  piece it needs already exists: a structural solver, element strain energies, an
+  implicit engine to carry the result and `MeshField` to plot it. It is a LOOP over
+  machinery this repo has, which is the same finding `DesignStudy` recorded about itself
+  — pick it up ahead of the domains around it.
+  - **The loop**: minimise compliance `c = uᵀKu` subject to a volume fraction, over a
+    per-element density `ρ_e` with `E(ρ) = ρ^p·E₀` and `p = 3` — the penalisation whose
+    whole job is to make intermediate densities uneconomic so the answer tends to
+    solid-or-void.
+  - **The sensitivity is FREE from a solve that already happens**:
+    `dc/dρ_e = −p·ρ_e^(p−1)·u_eᵀk₀u_e` is the element strain energy, which
+    `StructuralResults` already computes for its stress recovery. So the feature is the
+    loop, and `DesignStudy` is its COMPLEMENT rather than its competitor: a design study
+    drives a handful of `[Param]` values DERIVATIVE-FREE precisely because a parameter
+    change can alter topology, where here the topology changing IS the answer, there are
+    thousands of variables, and gradients are therefore mandatory. Say that in the docs,
+    because "which optimiser do I use" is the first question a reader will have.
+  - **Filtering is not optional, and its absence is not a tolerance question.** Unfiltered
+    SIMP checkerboards — alternating solid/void elements are an ARTEFACT of that pattern
+    overestimating its own stiffness, not a structure — and the result is
+    MESH-DEPENDENT, so refining gives a different and finer truss forever rather than
+    converging. A density or sensitivity filter of radius `r_min` fixes both, and since
+    it is also what sets the minimum member size, **`r_min` is an engineering input, not
+    a numerical knob**. State it that way or it will be tuned to make pictures.
+  - **The result is a DENSITY FIELD, not a shape**, and that is the honest part rather
+    than a limitation to bury: an element at 0.5 is an unresolved decision, not half
+    material. Extraction is a threshold plus a polygonisation, which is exactly what this
+    repo already has — a density field IS an implicit field, so `Sdf` + `SurfaceNets` is
+    the route, the threshold is a stated parameter, and its effect on the volume must be
+    REPORTED rather than chosen quietly. Handing back a B-Rep is refused by name.
+  - **Verification against published benchmarks, never against "it looks like a truss"**
+    — which is the whole risk here, since a plausible-looking result is the failure mode.
+    The MBB beam and the cantilever of Sigmund's 99-line paper have published compliances
+    at stated volume fractions and filter radii. Three assertions with teeth: the volume
+    constraint is satisfied to round-off at EVERY iteration (the OC bisection makes it
+    exact, so assert it as an identity rather than a tolerance); compliance decreases
+    monotonically under the OC update, or the run says why it did not; and a
+    mesh-refinement study at FIXED `r_min` converges to the SAME structure — that last
+    one is what proves the filter is doing its job, and it fails loudly without one.
+  - **Optimiser**: OC (optimality criteria) is the standard for a single volume
+    constraint and is a few lines. MMA is the general answer and a much larger
+    dependency-free build. Start with OC and say so in the API rather than implying a
+    generality that is not there.
+  - **Refuse by name**: local stress constraints (they need aggregation — p-norm or KS —
+    and the aggregation parameter CHANGES THE ANSWER, so it is a separate feature rather
+    than a flag); design-dependent loads such as self-weight, where compliance stops
+    being self-adjoint and the sensitivity above is simply wrong; and several load cases
+    with no stated weighting, since the weighting is the design decision.
 - [ ] **CFD — assess honestly before starting, because it is not "FEA with different
   physics".** Structural and thermal share a shape: symmetric positive-definite operators,
   one unknown field, `SparseCholesky`/CG, and a verification bar of analytic solutions.
