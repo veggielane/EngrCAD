@@ -143,17 +143,20 @@ public sealed class PlanetarySet
     /// <see cref="SunPhase"/> = 0.
     /// </summary>
     /// <remarks>
-    /// Each mesh fixes a phase relation, and the two are consistent for every planet
+    /// <para>Each mesh fixes a phase relation, and the two are consistent for every planet
     /// exactly when the assembly condition holds — which is what that condition IS. For
     /// an external mesh along the line of centres the sun's and planet's tooth phases must
     /// sum to a half pitch (a tooth opposite a space); for the internal mesh they must
-    /// differ by one. Solving the pair gives γ_k = ψ_k − z_ring(ψ_k − ρ)/z_planet.
+    /// differ by one. Solving the pair gives γ_k = ψ_k − z_ring(ψ_k − ρ)/z_planet.</para>
+    /// <para>That is the INTERNAL half, and it is <see cref="GearMeshing.InternalPhase"/>
+    /// — the same rule stated once, for every internal pair, with its derivation. The
+    /// external half (<see cref="GearMeshing.ExternalPhase"/>) depends on the azimuth with
+    /// the opposite SIGN, because an external pair counter-rotates where an internal pair
+    /// co-rotates; the assembly condition is exactly what makes the two agree modulo one
+    /// tooth pitch here, which is why one number can satisfy both meshes.</para>
     /// </remarks>
-    public double PlanetPhase(int k)
-    {
-        double psi = PlanetAzimuth(k);
-        return psi - (RingTeeth * (psi - RingPhase)) / PlanetTeeth;
-    }
+    public double PlanetPhase(int k) =>
+        GearMeshing.InternalPhase(RingTeeth, PlanetTeeth, PlanetAzimuth(k), RingPhase);
 
     /// <summary>The sun's datum rotation: zero, with a tooth centred on +X — the
     /// convention <c>Gears.Spur</c> already draws to, so the sun needs no rotation at all
@@ -165,10 +168,19 @@ public sealed class PlanetarySet
     /// from the datum where a ring tooth SPACE is centred on +X (which is how
     /// <see cref="PlanetaryGears.RingProfile"/> draws it).
     /// </summary>
-    /// <remarks>The (z_planet − 1) is the parity term: with a sun tooth on +X and a planet
+    /// <remarks>
+    /// <para>The (z_planet − 1) is the parity term: with a sun tooth on +X and a planet
     /// at azimuth 0, the planet must show a space to the sun and a tooth to the ring, and
     /// whether that costs a half pitch depends on whether the planet's tooth count is
-    /// even. Nothing here has to special-case it — it falls out of the same solve.</remarks>
+    /// even. Nothing here has to special-case it — it falls out of the same solve.</para>
+    /// <para>It is the general rule at azimuth 0: feed
+    /// <see cref="GearMeshing.ExternalPhase"/>'s answer for the sun–planet mesh into
+    /// <see cref="GearMeshing.RingPhase"/> and this closed form comes back (asserted, not
+    /// assumed — the two are equal to round-off rather than bit for bit, since
+    /// z(π − π/z) and (z−1)π are the same number by different arithmetic). The closed
+    /// form is kept because it is the simpler statement, and the test is what keeps them
+    /// from drifting.</para>
+    /// </remarks>
     public double RingPhase => (PlanetTeeth - 1) * Math.PI / RingTeeth;
 
     /// <summary>
