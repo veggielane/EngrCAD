@@ -27,6 +27,7 @@
 // is unavailable (no GL/EGL, e.g. a bare CI runner), rendering is skipped with a
 // warning and the committed PNGs are used — but execution failures still fail the run.
 
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using EngrCAD.DocsGen;
 using EngrCAD.Modeling;
@@ -36,14 +37,18 @@ using Microsoft.CodeAnalysis.Scripting;
 
 var docsRoot = "docs";
 string? imagesDir = null;
+string? liveDir = null;
 var noRender = false;
+var noLive = false;
 
 for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
     {
         case "--images" when i + 1 < args.Length: imagesDir = args[++i]; break;
+        case "--live" when i + 1 < args.Length: liveDir = args[++i]; break;
         case "--no-render": noRender = true; break;
+        case "--no-live": noLive = true; break;
         default: docsRoot = args[i]; break;
     }
 }
@@ -57,6 +62,16 @@ if (!Directory.Exists(docsRoot))
 
 imagesDir = Path.GetFullPath(imagesDir ?? Path.Combine(docsRoot, "examples", "images"));
 Directory.CreateDirectory(imagesDir);
+
+// Where the browser-runnable copies of the examples go. The default is the WebAssembly
+// demo's own wwwroot, so a `dotnet publish` of it picks them up as ordinary static assets
+// and the docs deployment needs no extra copy step. They are BUILD OUTPUT and gitignored;
+// the committed artifact is the manifest beside the markdown, which is what the site reads
+// to decide which screenshots get a Run button.
+liveDir = Path.GetFullPath(liveDir
+    ?? Path.Combine(docsRoot, "..", "samples", "EngrCAD.WebDemo", "wwwroot", "examples"));
+var manifestPath = Path.GetFullPath(Path.Combine(docsRoot, "examples", "live-examples.json"));
+var liveRecords = new List<LiveExampleRecord>();
 
 var scratch = Path.Combine(Path.GetTempPath(), "engrcad-docsgen");
 Directory.CreateDirectory(scratch);
@@ -228,9 +243,11 @@ foreach (var s in snippets)
         $"[{(s.Render ? "render" : s.Animate ? "animate" : s.Svg ? "svg   " : "run   ")}] "
         + $"{s.Id}  ({Path.GetFileName(s.File)})");
     ScriptState<object>? state = null;
+    var snippetClock = System.Diagnostics.Stopwatch.StartNew();
     try
     {
         state = await CSharpScript.RunAsync(s.Code, options, new DocsGlobals { Scratch = scratch }, typeof(DocsGlobals));
+        snippetClock.Stop();
         executed++;
     }
     catch (CompilationErrorException ex)
@@ -271,6 +288,31 @@ foreach (var s in snippets)
     {
         errors.Add($"{s.File} ({s.Id}): render snippet must define a variable `scene` of type Scene.");
         continue;
+    }
+
+    // The browser copy. Compiled a SECOND time against exactly the assemblies the
+    // WebAssembly viewer carries, so "can a reader run this?" is answered by the compiler
+    // rather than by a maintained list (see LiveExamples.cs). Refusals are recorded, not
+    // dropped: a page whose example cannot run in a browser should say so.
+    if (!noLive)
+    {
+        var built = LiveExamples.Build(s.Code);
+        liveRecords.Add(new LiveExampleRecord(
+            s.Id,
+            Path.GetRelativePath(docsRoot, s.File).Replace('\\', '/'),
+            built.Live,
+            built.Refusal));
+        if (built.Assembly is not null)
+        {
+            Directory.CreateDirectory(liveDir);
+            File.WriteAllBytes(Path.Combine(liveDir, $"{s.Id}.dll"), built.Assembly);
+            Console.WriteLine($"          live: {built.Assembly.Length / 1024.0:F1} KB, "
+                            + $"{snippetClock.Elapsed.TotalMilliseconds:F0} ms here");
+        }
+        else
+        {
+            Console.WriteLine($"          not live: {built.Refusal}");
+        }
     }
 
     if (s.Animate)
@@ -358,6 +400,46 @@ foreach (var s in snippets)
         errors.Add($"{s.File} ({s.Id}): rendering unavailable and no committed PNG at {pngPath} — " +
                    "generate the image on a machine with GL and commit it.");
     }
+}
+
+// ---- live-example manifest ---------------------------------------------------------
+// The manifest is the COMMITTED artifact of this pass; the assemblies beside it are not.
+// The site reads it to decide which committed screenshot gets a Run button, so it has to
+// exist without a DocsGen run having happened (a plain `npm run build` must produce the
+// same site CI does) -- and it has to be deterministic, or it would be dirty after every
+// run. Hence no timings and no byte counts in it: an informational field either round-trips
+// or does not belong in the file.
+if (!noLive)
+{
+    liveRecords.Sort((a, b) => string.CompareOrdinal(a.Id, b.Id));
+    var json = JsonSerializer.Serialize(
+        new { examples = liveRecords },
+        new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            // A refusal reason is a sentence a human reads in a diff, and the default encoder
+            // spells every apostrophe '. The relaxed encoder is safe here because these
+            // strings reach the site as a build-time JSON import, never as raw HTML.
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        });
+    File.WriteAllText(manifestPath, json + Environment.NewLine);
+
+    // A renamed or deleted example must not leave its assembly behind to be published:
+    // the manifest would not list it, so nothing would ever fetch it, and it would sit in
+    // the deployment forever.
+    if (Directory.Exists(liveDir))
+    {
+        var known = liveRecords.Where(r => r.Live).Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var stale in Directory.EnumerateFiles(liveDir, "*.dll")
+                     .Where(f => !known.Contains(Path.GetFileNameWithoutExtension(f))))
+            File.Delete(stale);
+    }
+
+    int liveCount = liveRecords.Count(r => r.Live);
+    Console.WriteLine($"\nlive examples: {liveCount} of {liveRecords.Count} run in the browser"
+                    + $" -> {liveDir}");
 }
 
 // ---- placeholder guard ------------------------------------------------------------
@@ -460,6 +542,11 @@ internal sealed record Snippet(
     string Id, bool Render, bool Animate, bool Svg, string File, string Code,
     ViewStyle Style, SectionAxis SectionAxis, double? SectionOffset,
     IReadOnlyList<SectionPlane>? SectionPlanes, int AnimationFrames);
+
+/// <summary>One row of <c>docs/examples/live-examples.json</c>: whether a rendered example
+/// also runs in the browser, and — when it does not — why not, in the words of whatever
+/// refused it.</summary>
+internal sealed record LiveExampleRecord(string Id, string Page, bool Live, string? Reason);
 
 namespace EngrCAD.DocsGen
 {

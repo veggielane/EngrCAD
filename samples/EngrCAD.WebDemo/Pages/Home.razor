@@ -3,6 +3,16 @@
 @using EngrCAD.Viewer
 @using EngrCAD.Web
 
+@* ?example=<id> hands the whole page over to one documentation example. It is a branch
+   rather than a route because the app has no router (static hosting would 404 a second
+   path anyway) and because everything below -- the flange, the sliders, the ?report
+   self-check and its committed numbers -- must stay exactly as it was. *@
+@if (_exampleId is not null)
+{
+    <ExamplePage Id="@_exampleId" Embed="_embed" Report="_report" />
+}
+else
+{
 <div class="app @(_embed ? "embed" : null)">
     @if (!_embed)
     {
@@ -113,6 +123,7 @@
         <img src="@_beacon" alt="" width="1" height="1" style="position:absolute; opacity:0" />
     }
 </div>
+}
 
 @inject NavigationManager Nav
 
@@ -132,6 +143,7 @@
     private bool _embed;
     private bool _report;
     private string? _beacon;
+    private string? _exampleId;
 
     private EngrCadSceneView? _view;
     private int _initialTab;
@@ -158,6 +170,14 @@
         int at = query.IndexOf("tab=", StringComparison.Ordinal);
         if (at >= 0 && int.TryParse(query.AsSpan(at + 4, 1), out int tab))
             _initialTab = tab;
+        // ?example=<id> shows one documentation example instead of the flange demo.
+        int example = query.IndexOf("example=", StringComparison.Ordinal);
+        if (example >= 0)
+        {
+            var rest = query.AsSpan(example + "example=".Length);
+            int end = rest.IndexOf('&');
+            _exampleId = Uri.UnescapeDataString((end < 0 ? rest : rest[..end]).ToString());
+        }
     }
 
     /// <summary>
@@ -169,7 +189,7 @@
     /// </summary>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender)
+        if (!firstRender || _exampleId is not null)
             return;
         await RebuildAsync();
         if (_initialTab > 0 && _view is not null)

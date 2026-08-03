@@ -12,6 +12,11 @@ docs/site/dist/
 docs/site/.astro/
 _site/
 wasm-publish/
+# The browser-runnable copies of the documentation examples: build output of
+# EngrCAD.DocsGen, picked up by the WebAssembly demo's publish as ordinary static assets.
+# The COMMITTED artifact of that pass is docs/examples/live-examples.json, which the site
+# reads to decide which screenshots get a Run button.
+samples/EngrCAD.WebDemo/wwwroot/examples/
 # docfx writes the API reference here from the XML docs; docs/api/index.md is hand-written
 # and stays tracked.
 docs/api/*.yml
