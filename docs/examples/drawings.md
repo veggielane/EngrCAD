@@ -1,4 +1,6 @@
-# Drawings (hidden lines, sheets, dimensions)
+---
+title: "Drawings (hidden lines, sheets, dimensions)"
+---
 
 A model becomes a **drawing** in three steps, and EngrCAD owns all three:
 

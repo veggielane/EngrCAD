@@ -1,4 +1,6 @@
-# Assemblies
+---
+title: "Assemblies"
+---
 
 An `Assembly` is a named list of **occurrences** — a shared [`Part`](viewer.md) *or*
 a nested `Assembly`, each posed by a rigid `Frame3d` relative to its parent. Poses

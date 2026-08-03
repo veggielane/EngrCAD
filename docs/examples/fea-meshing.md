@@ -1,4 +1,6 @@
-# Tetrahedral meshing for FEA
+---
+title: "Tetrahedral meshing for FEA"
+---
 
 `TetMesher` fills a closed surface with tetrahedra. Any EngrCAD representation reaches a
 surface mesh — `Shape.ToMesh()`, a B-Rep tessellation, Surface Nets over an SDF, an imported

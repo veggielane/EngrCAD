@@ -1,4 +1,6 @@
-# Animation
+---
+title: "Animation"
+---
 
 Four different things want to animate — a **mechanism** driven through its range, an
 **assembly** moving between assembled and exploded, a **simulation result** ramping

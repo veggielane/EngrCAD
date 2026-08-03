@@ -4386,6 +4386,68 @@ for `in`-parameters being illegal in expression trees.
   the render pass while the RPC port is announced from `OnViewportReady`. No stub can show
   that, and no unit test was ever going to.
 
+## 8b. The documentation site
+
+The site is **Astro Starlight** (`docs/site/`) for everything a human reads, with **DocFX
+reduced to the generated .NET API reference** published as a static subtree at `/api/`,
+and the live WebAssembly demo at `/live/`. CI merges the three trees into one `_site`.
+
+- **The markdown did not move, and that is what makes the migration checkable.**
+  `tools/EngrCAD.DocsGen` compiles and executes every tagged C# snippet in `docs/**/*.md`
+  and writes the screenshots to `docs/examples/images/`; its docs root is a command-line
+  argument, so the content *could* have moved into `src/content/docs/` where Starlight
+  expects it. Keeping it in `docs/` leaves the generator's contract, the fence syntax and
+  every committed image path untouched, which is what turns **"all 134 committed PNGs are
+  byte-identical"** into a real statement about the migration rather than a coincidence of
+  it — the same oracle the shared-render-model refactors were held to. The cost is one
+  custom `glob` loader with an explicit `base`, and one consequence recorded below.
+- **A page that was a FILE became a DIRECTORY, and every relative link is wrong by one
+  level — silently.** DocFX served `examples/fields.html`, so `](documents.md)` resolved;
+  Starlight serves `examples/fields/`, so the same href resolves one level too deep. This
+  is the whole risk of the migration and none of it raises an error: a browser 404s, a
+  build does not. Two mechanisms answer it and they are deliberately different in kind.
+  **`docs/site/src/rewrite-doc-links.mjs`** (a rehype plugin) resolves each `*.md` href
+  against the filesystem, rewrites it to the served route, and **throws when the target
+  file is not there** — so the markdown stays navigable in the repository and on GitHub,
+  and a renamed page fails the build naming both ends. **`docs/site/check-links.mjs`**
+  then validates the BUILT site: every `href` and `src` in the emitted HTML resolved the
+  way a browser resolves it, fragments checked against the ids actually emitted.
+- **`starlight-links-validator` was tried first and cannot work here** — it derives each
+  page's id as `path.relative(srcDir + '/content/docs', filePath)`, one hard-coded
+  assumption, so with content in `docs/` every id came out `../../../<page>/` and all 134
+  internal links were reported invalid at once. Checking the OUTPUT turned out to be the
+  better instrument regardless: it covers `<img>`, `<iframe>` and raw-HTML hrefs rather
+  than only markdown link syntax (the screenshots ARE most of this site's references), and
+  it is the artifact a reader gets rather than a model of it. **Writing it also caught a
+  bug in itself that the plugin's design would have hidden**: taking `dirname` of a page
+  URL ending in a slash drops a segment, so `../` links looked one level shallower than a
+  browser sees them — which made the two genuinely broken links in `web.md` pass. Both
+  guards are pinned by being *shown to fire* (delete a sidebar entry, rename a link
+  target), the rule the Surface Nets fixtures already follow.
+- **The sidebar is the one source of navigation order**, so `docs/toc.yml` and
+  `docs/examples/toc.yml` are deleted rather than parsed — two orderings free to drift is
+  the discrepancy this repo keeps removing. A page left out of the sidebar still builds
+  and is still reachable by URL, so the checker asserts every built page appears in the
+  rendered nav.
+- **Image handling is `passthroughImageService()`, and it is a correctness setting rather
+  than a performance one.** Astro optimizes relative markdown images through sharp by
+  default, which re-encodes a PNG — and several of these are **APNG animations**, whose
+  frames would be silently dropped. Passthrough still resolves and fingerprints each
+  asset; it just does not touch the bytes (verified: the served `animate-explode.png` has
+  the same SHA-256 as the committed one).
+- **The base path comes from the deployment, not from the source.** Astro bakes asset and
+  page URLs at build time, so unlike DocFX's fully relative output it must be told where
+  it will be served; CI reads `base_path` from `actions/configure-pages`, which is
+  `/EngrCAD` for a project site and empty for a custom domain. The repository name is
+  therefore never written down. The one link that stays relative is the WebAssembly demo's
+  (`../../live/` from `/examples/web/`), because that target is merged in after the site
+  is built and its own artifact is path-portable — keeping the reference relative preserves
+  that property end to end.
+- **The new toolchain dependency is stated rather than absorbed**: Node ≥ 22.12 (CI pins
+  24) now sits beside the .NET SDK, pinned exactly in `docs/site/package.json` with a
+  committed `package-lock.json`, and `docs/writing-examples.md` tells a contributor how to
+  build the site locally.
+
 ## 9. Further capabilities
 
 - **A matcap is PROCEDURAL here, and the reason is the parity rule, not the look.**

@@ -1,4 +1,6 @@
-# Remeshing
+---
+title: "Remeshing"
+---
 
 A tessellator's job is to be *accurate*: it puts samples where the surface curves and
 none where it does not, so a drilled plate comes back with 30 mm chords across the flats

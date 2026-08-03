@@ -1,4 +1,6 @@
-# Transient dynamics (direct time integration)
+---
+title: "Transient dynamics (direct time integration)"
+---
 
 `TransientSolver` steps the equation of motion
 

@@ -1,4 +1,6 @@
-# Sheet metal
+---
+title: "Sheet metal"
+---
 
 A sheet-metal part is not a solid that happens to be thin: it is a **flat blank plus a
 list of bends**, and the two views of it — the folded body you assemble and the flat

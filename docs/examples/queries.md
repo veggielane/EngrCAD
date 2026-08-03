@@ -1,4 +1,6 @@
-# LINQ spatial queries
+---
+title: "LINQ spatial queries"
+---
 
 `EngrCAD.Query` makes geometry LINQ-queryable *with an index*: a
 `SpatialCollection<T>` pairs items with a bounds expression and builds a BVH; its

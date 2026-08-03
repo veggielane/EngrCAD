@@ -1,0 +1,21 @@
+{
+  "name": "engrcad-docs",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The EngrCAD documentation site (Astro Starlight). Content lives in ../ as plain markdown; see ../writing-examples.md.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build && node check-links.mjs",
+    "preview": "astro preview",
+    "check-links": "node check-links.mjs"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.41.6",
+    "astro": "7.1.6",
+    "unist-util-visit": "5.0.0"
+  }
+}

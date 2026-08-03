@@ -1,4 +1,6 @@
-# Scripting (.csx models)
+---
+title: "Scripting (.csx models)"
+---
 
 C# **is** EngrCAD's SCAD language — a model is code either way. The `.csx` route drops
 the project file: one script, run through `tools/EngrCAD.Script`, with the same live

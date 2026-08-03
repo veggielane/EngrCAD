@@ -1,4 +1,6 @@
-# Results & fields
+---
+title: "Results & fields"
+---
 
 A simulation result is **data on a mesh**: one number (or one vector) per vertex, with a
 name and a unit. EngrCAD carries those as `MeshField`s attached to a `Part`, colour-maps

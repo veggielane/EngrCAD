@@ -1,4 +1,6 @@
-# Sketching
+---
+title: "Sketching"
+---
 
 2D sketches are the profile language for [extrude, revolve, and sweep](extrude-revolve-sweep.md).
 Draw them with the fluent builder — `LineTo`, `ArcTo`, `ArcThrough`, `EllipticalArcTo`,

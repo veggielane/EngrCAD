@@ -1,4 +1,6 @@
-# Loft, draft & shell
+---
+title: "Loft, draft & shell"
+---
 
 Four operations from the mould-making and industrial-design toolbox, all exact B-Rep
 constructions under the hood: **loft** skins a solid through cross-sections, **draft**

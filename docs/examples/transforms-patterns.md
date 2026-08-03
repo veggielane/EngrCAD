@@ -1,4 +1,6 @@
-# Transforms & patterns
+---
+title: "Transforms & patterns"
+---
 
 ## Transforms
 

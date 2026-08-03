@@ -1,4 +1,6 @@
-# Selecting faces and edges
+---
+title: "Selecting faces and edges"
+---
 
 Feature operations need a way to *say which geometry they mean* — the top face, the
 largest bore, the second step of a stepped block. CadQuery answers with string

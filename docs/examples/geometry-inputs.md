@@ -1,4 +1,6 @@
-# Geometry inputs for features
+---
+title: "Geometry inputs for features"
+---
 
 A feature usually needs more than numbers: it needs *somewhere to build*. A
 `GeometryRef` says which geometry, declaratively — "the top face", "the one

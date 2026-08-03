@@ -4,8 +4,13 @@ artifacts/
 TestResults/
 
 # Built docs site (the generated example PNGs under docs/examples/images ARE tracked,
-# so the site builds without a GPU -- only the docfx output is transient).
+# so the site builds without a GPU -- only the rendered output is transient).
 docs/_site/
+docs/_apisite/
+docs/site/node_modules/
+docs/site/dist/
+docs/site/.astro/
+_site/
 wasm-publish/
 # docfx writes the API reference here from the XML docs; docs/api/index.md is hand-written
 # and stays tracked.

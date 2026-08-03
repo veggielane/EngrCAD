@@ -40,10 +40,11 @@ read `CLAUDE.md`, `design.md`, and the `README.md` of the project you own.
   1. Update the owning project's `README.md` in the same commit (this is in your
      domain and REQUIRED, not optional).
   2. If the feature is user-facing (new `Shape` ops, viewer features, exports,
-     standards catalogs): check `docs/` — the DocFX site with executable examples.
-     If you may edit `docs/`, add/extend the example page (code fence tagged
-     ` ```csharp render:<id> ` per `docs/writing-examples.md`, verified by running
-     `dotnet run --project tools/EngrCAD.DocsGen -- docs`). If docs/ is outside
+     standards catalogs): check `docs/` — the Astro Starlight site with executable
+     examples. If you may edit `docs/`, add/extend the example page (YAML `title:`
+     frontmatter, a code fence tagged ` ```csharp render:<id> ` per
+     `docs/writing-examples.md`, an entry in `docs/site/astro.config.mjs`'s sidebar,
+     verified by running `dotnet run --project tools/EngrCAD.DocsGen -- docs`). If docs/ is outside
      your assignment, your final report MUST name the exact docs pages/examples
      the integrator needs to add — a feature without docs is not done.
   3. XML doc comments on all new public API (they feed the generated API reference).

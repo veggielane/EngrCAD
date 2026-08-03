@@ -1,4 +1,6 @@
-# Getting started
+---
+title: "Getting started"
+---
 
 ## Install
 
@@ -119,6 +121,6 @@ representation), or *Impossible* — see
 
 ## Next steps
 
-- Browse the [examples](examples/toc.yml) — every page's code is executed and rendered
+- Browse the [examples](examples/primitives.md) — every page's code is executed and rendered
   by the documentation build, so it is guaranteed current.
 - Skim the [API reference](api/index.md) for the full surface.

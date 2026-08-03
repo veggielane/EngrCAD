@@ -1,4 +1,6 @@
-# 3D annotations (PMI)
+---
+title: "3D annotations (PMI)"
+---
 
 Parts can carry their own manufacturing information — **dimensions, notes, and datum
 labels attached to model geometry in 3D space** (model-based definition, instead of

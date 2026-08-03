@@ -1,4 +1,6 @@
-# Mechanisms
+---
+title: "Mechanisms"
+---
 
 A **mechanism is the same mate system, driven**. The
 [mate solver](assemblies.md) already reports remaining degrees of freedom from a

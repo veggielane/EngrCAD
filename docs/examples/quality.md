@@ -1,4 +1,6 @@
-# Tessellation quality
+---
+title: "Tessellation quality"
+---
 
 Every curved surface a viewer or exporter sees has been discretized, and the knob that
 controls it is the scene's `MeshQuality`: `SegmentsPerCircle` for circles (default 32),
