@@ -172,6 +172,53 @@ Each engine uses the data structure its mathematics wants:
   documented, natural default), refuses exactly-zero pivots by caller column, and
   reports its pivot-magnitude extremes so near-breakdown growth is visible rather than
   silent.
+- **Space-filling curves (`Geometry2.SpaceFillingCurve`) — the name overpromises, so the
+  API is built around saying what it really is.** A true space-filling curve is the LIMIT
+  of a sequence and has infinite length; what exists is one finite member and the ORDER is
+  the parameter. A caller states a *spacing* and is told the `Spacing` achieved beside the
+  `RequestedSpacing` (the `BiArcFit.MaxDeviation` convention), never the request echoed back.
+  **The interesting decision is which quantity quantises.** The order is fixed by one
+  inequality, `side ≤ spacing·radix^n`, and the surplus has to land somewhere: hold the
+  FOOTPRINT to the region and the spacing comes out finer than asked; hold the SPACING and
+  the footprint comes out larger than the region. Both readings give the SAME order, so
+  neither is cheaper and the choice is not about cost — the footprint is held because a curve
+  is laid *over* a region, and a footprint overhanging by an arbitrary amount would put the
+  pattern's phase somewhere the caller never stated, which for a layered infill is exactly
+  the property that has to be reproducible. (The consequence is stated rather than hidden: on
+  a long thin plate the achieved spacing is set by the LENGTH, since the footprint is the
+  bounding square.)
+  **The verification bar is why this is a Core type rather than a utility**: almost every
+  claim is exact and combinatorial, so the tests are integer identities with no epsilon —
+  sites counted in closed form and pairwise distinct (the check that catches a flipped
+  recursion, which is the classic way these are got wrong), consecutive sites exactly one
+  lattice step apart, Moore's closure asserted rather than trusted, `Length ==
+  SegmentCount × Spacing` exactly. Only coverage is a measurement, and its bound is DERIVED
+  from the cell's own circumradius rather than tuned (√2/2 measured exactly for the square
+  families, 0.5738 against the triangular lattice's 1/√3 for Gosper).
+  **Three things were measured rather than assumed and each changed something.** (a) The
+  longest straight run SATURATES — 3 cells for Hilbert and Moore, 5 for Peano, 2 for Gosper,
+  at every order from 3 upward — so "Hilbert is the isotropic member" is a number, and the
+  reason to reach for Peano is 5 against 3, a real difference and a small one. (b) **Z-order
+  is not a curve**, and its own arithmetic says by how much: exactly `2^(2n−1) − 1` of its
+  `4^n − 1` steps are not lattice steps (half of them, minus one) and the largest jumps the
+  full grid width, so it is offered as the bijective ORDERING it is and refused by name where
+  a path is wanted. `Morton2d` holds the one interleave, which `PlanarSection`'s silhouette
+  fold already sorted by — two spellings of one bijection would let a fold's merge order and
+  a curve's visit order disagree about the same grid. (c) **Gosper does not tile a
+  rectangle**, so it is placed by its own island's inradius, and that inradius is COMPUTED
+  from the walk (the nearest unvisited site's distance from the centroid, less the triangular
+  lattice's covering radius `1/√3` — a sound bound, since a point closer than that has its
+  nearest site closer than the nearest unvisited one) rather than tabulated per order. The
+  price is honest and reported: Gosper's achieved spacing runs 2–2.6× finer than the request
+  where a square family's runs under 2×.
+  The Modeling-side consumer is `SpaceFillingInfill` (§6b): the clip is a comparison against
+  `SketchRegion`'s exact signed distance with no tolerance in it, coverage is measured through
+  `Region2dOffset.Stroke` rather than inferred from the path length, and **both ways a fill
+  can silently miss are refused by name** — a region the clearance erodes to nothing, and a
+  connected piece of the eroded region the lattice's phase stepped over. What is deliberately
+  NOT refused is a thin neck inside a piece that is otherwise filled: the piece as a whole
+  catches passes, so the honest answer is the coverage fraction rather than a refusal the
+  detector cannot actually justify.
 
 ## 3. Mesh engine
 

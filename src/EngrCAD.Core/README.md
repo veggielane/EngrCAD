@@ -183,6 +183,39 @@ concerns.
   circuit (first point repeated) encloses its hole. With round caps and joins a
   stroke is the path's Minkowski sum with a disk, short only of the inscribed-arc
   sagitta; straight-segment butt/square/miter strokes are exact.
+- **`Geometry2.SpaceFillingCurve`** + **`Geometry2.Morton2d`** — finite-order Hilbert /
+  Moore / Peano / Gosper / Z-order curves laid over a region (`Over(bounds|region, family,
+  spacing)`), plus their integer lattices (`LatticeSites`, `AreNeighbours`, `ToPlane`).
+  **The name overpromises and the API says so**: a true space-filling curve is the LIMIT of
+  a sequence and has infinite length, so the ORDER is the parameter — a caller states a
+  *spacing* and gets the order whose cell size is at or under it, with the ACHIEVED
+  `Spacing` reported beside the `RequestedSpacing` (the `BiArcFit.MaxDeviation` convention).
+  **Which quantity quantises is a decision, not arithmetic**: the order comes from one
+  inequality, `side ≤ spacing·radix^n`, so the surplus goes either into a finer spacing (hold
+  the footprint) or a larger footprint (hold the spacing) — same order either way, so
+  neither is cheaper, and the footprint is held because a curve is laid *over* a region and a
+  pattern's phase must be a function of what the caller stated.
+  Everything under the placement is INTEGER, which is what makes the contract testable
+  without a tolerance: sites counted in closed form (`SiteCount`: 4^n, 9^n, 7^n+1) and
+  pairwise distinct, consecutive sites exactly one lattice step apart (Manhattan 1 on a
+  square lattice; one of six Eisenstein unit vectors on Gosper's triangular one — a DIAGONAL
+  is not a step, which is why the rule is family-aware), Moore's closure asserted rather than
+  trusted, and `Length == SegmentCount × Spacing` exactly. Only coverage is a measurement,
+  and its bound is DERIVED from the cell's own circumradius (measured exactly √2/2 · h for
+  the square families; 0.5738 · h for Gosper against the triangular lattice's 1/√3).
+  **Two things are measured rather than claimed.** The longest straight run SATURATES and is
+  what separates the families — 3 cells for Hilbert and Moore, 5 for Peano, 2 for Gosper, at
+  every order from 3 up — so "Hilbert is the isotropic one" is a number rather than a
+  reputation. And **Z-order is not a curve**: exactly `2^(2n−1) − 1` of its `4^n − 1` steps
+  are not lattice steps and the largest jumps the full grid width, so it is offered as the
+  bijective ORDERING it is (`Morton2d` is the same interleave `PlanarSection`'s silhouette
+  fold sorts by — one copy, so a grid cannot be ordered two ways) and refused by name where a
+  path is required. **Gosper is the one family placed differently and it is stated**: its
+  cells are hexagons, so it fills an island rather than a rectangle and is scaled by its own
+  MEASURED inradius — the nearest unvisited site's distance from the centroid less the
+  lattice's covering radius, computed from the walk — which makes its achieved spacing
+  markedly finer than a square family's at the same order. See
+  `EngrCAD.Modeling.SpaceFillingInfill` for the toolpath consumer and `docs/examples/infill.md`.
 
 ### The CURVED tier — `CurvedEdge2d` / `CurvedRegion2d` / `CurvedArrangement2d`
 

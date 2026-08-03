@@ -162,7 +162,10 @@ foreach (double spacing in new[] { 8.0, 5.0, 3.0 })
 ```
 
 The fraction converges on 1 rather than reaching it: the clearance band along every wall is
-uncovered by design, and so is the outer half-cell ring (the curve visits cell *centres*).
+uncovered by design, and so is the outer half-cell ring (the curve visits cell *centres*). A
+clipped curve is straight segments only, so the polygonal stroke and the exact curved one
+differ solely in the round joins and caps — inscribed fans against exact sectors — which makes
+the reported number a one-sided under-estimate, the safe direction for a coverage claim.
 
 ## What is refused, and why
 

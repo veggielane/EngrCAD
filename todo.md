@@ -381,66 +381,74 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   open; both were stale.
 ## Core (EngrCAD.Core)
 
-- [ ] **Space-filling curves, and a way to lay one over a model** (requested 2026-08-02).
-  A finite-order Hilbert / Moore / Peano / Gosper / Z-order generator over a
-  `Region2d`, plus the three consumers that make it worth having. The generator is
-  Core's (it is a curve family over a region, beside `Region2dOffset` and
-  `Arrangement2d`); the consumers are Modeling's.
-  - **Say what it is up front, because the name overpromises**: a true space-filling
-    curve is the LIMIT of a sequence and has infinite length, so what is built is a
-    finite-order approximation and the ORDER is the parameter. A caller asks for a
-    spacing and gets the order whose cell size is at or under it, with the achieved
-    spacing REPORTED (the `BiArcFit.MaxDeviation` convention) rather than the asked
-    one echoed back.
-  - **Choose the family by what the consumer needs, not by fame.** Hilbert has no
-    long straight runs (good for infill stiffness isotropy, bad for machining time);
-    Moore is Hilbert's CLOSED variant and is the one a toolpath wanting to return to
-    its start should use; Peano is the odd-radix member whose runs are longer; Gosper
-    tiles hexagonally, so it fills a hex lattice the square families cannot; and
-    **Z-order is already half-present** — `PlanarSection.SilhouetteGrid` Morton-sorts
-    faces, so that curve's index arithmetic exists and only its polyline does not.
-  - **Reuse story, which is why this is small**: the exact 2D signed distance
-    (`SketchRegion`) answers containment exactly, so clipping the curve to a region
-    needs no tolerance; `CurvedRegion2dOffset.Stroke` turns the clipped path into its
-    footprint (already documented as the toolpath-footprint operation) so an infill's
-    covered area is measurable rather than assumed; and a clipped curve breaks into
-    RUNS whose linking is the same problem the 2.5D CAM entry names, so the two
-    should share one linker rather than growing two.
-  - **The three consumers**, each with a different honest limit:
-    - **2D infill / toolpath** — the direct case. Verification below is exact.
-    - **Solid infill** — clip the 2D curve per layer against the solid's own field
-      (an `Sdf` is sign-exact, so a layer's inside/outside test costs nothing), or a
-      genuine 3D Hilbert curve through the volume. The 3D form is the interesting
-      one: it is a single connected path through the whole interior, which is what a
-      one-extrusion-path print or a single-channel cooling passage wants, and no
-      lattice in the implicit engine can express it (a gyroid is a SURFACE, not a
-      path).
-    - **Surface decoration** — a curve laid ON a doubly-curved surface, for
-      engraving or texture. This one has a real limit and it must be stated:
-      `MeshLocalParam`'s discrete exp map is exact on planes, ≤2% on a developable
-      tube and ≤5% radially on a 35° sphere cap, so a curve conforming to a
-      doubly-curved surface carries that distortion into its spacing. Report it;
-      do not average it away.
-  - **Verification bar — this is the entry's best feature, because almost everything
-    about these curves is EXACT and combinatorial rather than tolerance-bound:**
-    - **Adjacency**: consecutive points of an order-n curve differ by exactly one
-      grid step. An identity on integers, no epsilon anywhere.
-    - **Bijectivity**: the curve visits every one of its 4^n (or 9^n, 7^n) cells
-      exactly once — a counting identity, and the check that catches a wrong
-      recursion orientation, which is the classic way these are got wrong.
-    - **Length**: closed form per family and order (the order-n Hilbert curve on a
-      unit square has length (4^n − 1)/2^n), asserted exactly.
-    - **Closure**: a Moore curve's last point is adjacent to its first — the
-      property that distinguishes it from Hilbert, so assert it rather than
-      trusting the construction.
-    - **Coverage**: stroke the clipped curve at width = spacing and measure the
-      region's UNCOVERED area, which should fall to zero with order; and the total
-      clipped length against area/spacing, which is the classic infill identity and
-      converges rather than being exact (the boundary runs are the residual).
-  - **Refuse by name**: a region whose thinnest feature is under the achieved
-    spacing (the curve would miss it entirely, and silently — the one failure a
-    fill must not have), and a self-intersecting or open input chain, since
-    "inside" is what the clip is asking.
+- [ ] **Space-filling curves: the two consumers still open** (the generator and the 2D
+  infill/toolpath consumer ✅ landed — `Geometry2.SpaceFillingCurve` + `Morton2d` in Core,
+  `SpaceFillingInfill`/`InfillPath` in Modeling, docs `examples/infill.md`, design.md §2).
+  Both remaining consumers ride the SAME two seams the 2D one established, which is what
+  makes them small: the clip is a comparison against an exact signed distance, and coverage
+  is measured by stroking rather than inferred from the path length.
+  - **Solid infill** — clip the 2D curve per layer against the solid's own field (an `Sdf`
+    is sign-exact, so a layer's inside/outside test costs nothing), or a genuine 3D Hilbert
+    curve through the volume. The 3D form is the interesting one: a single connected path
+    through the whole interior, which is what a one-extrusion-path print or a
+    single-channel cooling passage wants, and no lattice in the implicit engine can express
+    it (a gyroid is a SURFACE, not a path). **The scoping is now clearer than the original
+    entry assumed**: the 2D generator's index walk is the same shape in 3D (three bits per
+    level instead of two, with a rotation table rather than the 2D swap), so a 3D Hilbert
+    lattice is an addition to `SpaceFillingCurve` rather than a new design — what genuinely
+    has no 2D counterpart is the PLACEMENT question, since a cube footprint over a general
+    solid wastes the same way a bounding square does over a long thin plate (below), and
+    the per-layer route sidesteps it entirely by keeping the 2D placement per slice.
+  - **Surface decoration** — a curve laid ON a doubly-curved surface, for engraving or
+    texture. The limit must be stated rather than averaged away: `MeshLocalParam`'s
+    discrete exp map is exact on planes, ≤2% on a developable tube and ≤5% radially on a
+    35° sphere cap, so a conforming curve carries that distortion into its spacing — which
+    is now a REPORTED quantity (`InfillPath.Spacing`), so the distortion has somewhere
+    honest to live beside it.
+- [ ] **Infill residuals, all measured while landing the 2D consumer.**
+  - **A thin NECK inside an otherwise-filled piece is reported, not refused.** The two
+    refusals catch a whole connected piece being missed (erosion empty, or a piece of the
+    erosion the lattice stepped over); a neck narrower than the spacing inside a piece that
+    does catch passes shows up only in `CoveredFraction`. Refusing it needs a LOCAL
+    thickness measure over the region rather than a connectivity test —
+    `Manufacturability`'s opposing-ray thickness is the 3D twin and its 2D analogue is the
+    obvious candidate. Until then the docs say to read the fraction.
+  - **The footprint is the bounding SQUARE, so a long thin region wastes most of the
+    curve** — an 80 × 12 plate at spacing 3 generates 1024 cells and keeps ~160, and an
+    80 × 1.5 one is refused outright because the achieved spacing is set by the LENGTH.
+    Neither of the two placement readings helps (they give the same order); what would is a
+    footprint that is not one square — tiled Hilbert blocks with their ends linked, which is
+    the same linker the item below wants.
+  - **The RUN LINKER is not built.** `InfillPath.Runs` comes back in curve order and the
+    travel between runs is the caller's business. The original entry was right that this is
+    the same problem the 2.5D CAM entry names, and it should be ONE linker; filing it here
+    rather than growing a second one.
+  - **`Footprint`/`CoveredArea` cost O(E²) per arrangement** — measured 0.9 / 1.1 / 3.6 s
+    for 28 / 136 / 564-point fills of a 60×40 plate, which is why the docs example is
+    modest. A stroke that unioned per RUN and then merged the runs by bounds (they are
+    mostly disjoint) would do better, and `Region2dBoolean.UnionAll` already gets the
+    curve-ordered input its balanced fold wants.
+  - **Gosper's achieved spacing runs 2–2.6× finer than the request** (measured 0.51 / 0.38 /
+    0.77 / 0.58 of the ask at orders 5–7) where a square family's stays under 2×, because
+    the island is placed by a CONSERVATIVE inradius: the nearest unvisited site's distance
+    from the centroid, less the triangular lattice's covering radius. A true inradius of the
+    island's cell union would recover part of that; the conservative bound is sound and was
+    chosen because it is computable from the walk with no island geometry.
+  - **The footprint uses the POLYGONAL `Region2dOffset.Stroke`, not the curved twin the
+    original entry named**, and the reason is that a clipped curve is straight segments only:
+    the two strokes then differ solely in the round joins and caps, which the polygonal tier
+    builds as INSCRIBED fans and the curved one as exact sectors. That makes the reported
+    coverage a one-sided UNDER-estimate, the safe direction for a coverage claim, over the
+    arrangement that is bit-pinned by `Region2dGoldenTests`. An exact-footprint option over
+    `CurvedRegion2dOffset.Stroke` would raise the number by the sagitta and is worth having
+    when the fill's own bead width is the deliverable.
+  - **A fixed-SPACING mode** (`Spacing == RequestedSpacing` exactly, footprint grown to the
+    next power of the radix and clipped) is a legitimate second reading and would be an
+    option rather than a change: it gives the SAME order, so it costs nothing, and it suits
+    a caller sizing a bead more than a caller reproducing a phase. Recorded with the
+    finding rather than built, since nothing in the repo asks for it yet.
+- [ ] **A pivoted symmetric-indefinite factorization is a multifrontal-scale project — file
+  a consumer before starting
   one.** `SparseLdlt` ✅ landed the symmetric-indefinite family (real + complex symmetric
   L·D·Lᵀ over `SparseCholesky`'s shared symbolic pass — see design.md §2(d) for the
   three-way weighing), and its REAL path is deliberately unpivoted: it factors iff every
