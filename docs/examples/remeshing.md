@@ -84,11 +84,20 @@ if (bounded > 3.0) throw new Exception($"the default maximum should reach the ba
 ```
 
 It shipped opt-in and became the default on measurement. Over a box, a cylinder, two UV
-spheres and an open height-field grid at 10 / 14 / 40 passes, **every** measure improves
-and none trades: maximum 1.37–2.65 → 1.27–1.67 L, shortest edge 0.03–0.26 → 0.10–0.67 L,
-out of band 2.5–11.8% → 0.0–0.9%, worst triangle angle 0.24–17.1° → 22.8–36.3°, worst
-radius ratio 0.0001–0.30 → 0.38–0.81 — and the run is *faster* every time (a box at ten
-passes, 79 ms → 22 ms), because a mesh full of slivers is a mesh full of work.
+spheres and an open height-field grid at 10 / 14 / 40 passes, **every** measure improves:
+maximum 1.37–2.65 → 1.27–1.67 L, shortest edge 0.03–0.26 → 0.10–0.67 L, out of band
+2.5–11.8% → 0.0–0.9%, worst triangle angle 0.24–17.1° → 22.8–36.3°, worst radius ratio
+0.0001–0.30 → 0.38–0.81 — and the run is *faster* every time (a box at ten passes,
+79 ms → 22 ms), because a mesh full of slivers is a mesh full of work.
+
+One measure does trade on a heavily pinned model, and it is worth knowing because it is
+the *same* lesson as "judge by the share, not the extremes", one level up. The drilled
+plate at the top of this page has bore rims far finer than the 3 mm target which, being
+pinned creases, cannot be coarsened: it keeps a single **0.01°** triangle against a bore
+where the unguarded run reads 1.40°, both slivers. Every *population* figure on that
+fixture goes the other way and by a lot — slivers 419 → **157**, out of band 14.1% →
+**7.5%**, longest edge 2.56 → **1.49 L**. Compare sliver *counts*; use the worst angle to
+find a defect, not to rank two meshes.
 
 The deciding argument is downstream, though: [tet meshing](fea-meshing.md)'s boundary
 recovery needs a surface that is already the boundary of the Delaunay tetrahedralization

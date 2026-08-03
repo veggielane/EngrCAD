@@ -837,14 +837,19 @@ public class RemesherTests
         // And it is not bought from the distribution — the in-band share improves too.
         Assert.True(FractionOutsideBand(bounded.Mesh, options) <=
                     FractionOutsideBand(baseline.Mesh, options));
-        // Nor from SHAPE, which is what settled making it the default: the worst free triangle
-        // angle improves on every fixture (0.14 -> 31.69 on the box, 0.20 -> 29.19 on the
-        // cylinder at 32 segments, 5.21 -> 30.93 on the sphere), where the filed blocker had
-        // recorded a cylinder regression that does not reproduce at any density or pass count.
+        // Nor from SHAPE, which is what settled making it the default. The SLIVER COUNT is the
+        // general claim and the one asserted as such; the worst single angle also improves on
+        // all three of these fixtures (0.14 -> 31.69 on the box, 0.20 -> 29.19 on the cylinder,
+        // 5.21 -> 30.93 on the sphere) but is an EXTREMUM and does not generalize — on a
+        // drilled plate, whose bore rims are pinned chains finer than the target and so cannot
+        // be coarsened, the guard keeps a 0.01 degree triangle where the baseline reads 1.40
+        // while cutting slivers 419 -> 157. Judge by the share, not the extremes; see
+        // RemeshOptions.PreventLongEdgeFlips.
+        Assert.True(bounded.Quality.SliverCount < baseline.Quality.SliverCount,
+            $"slivers {bounded.Quality.SliverCount} should beat {baseline.Quality.SliverCount}");
         Assert.True(bounded.Quality.MinAngleDegrees > baseline.Quality.MinAngleDegrees,
-            $"shape should improve too: {bounded.Quality.MinAngleDegrees:F2} against " +
-            $"{baseline.Quality.MinAngleDegrees:F2} degrees");
-        Assert.True(bounded.Quality.SliverCount <= baseline.Quality.SliverCount);
+            $"on these three fixtures the extremum improves too: {bounded.Quality.MinAngleDegrees:F2} " +
+            $"against {baseline.Quality.MinAngleDegrees:F2} degrees");
         bounded.Mesh.Validate();
         AssertAllTriangles(bounded.Mesh);
     }
@@ -901,10 +906,13 @@ public class RemesherTests
     /// <summary>
     /// <b>On by default</b>, decided on measurement after shipping opt-in. Over a box, a
     /// cylinder, two UV spheres and an open height-field grid at 10 / 14 / 40 passes every
-    /// measure improves and none trades — maximum, shortest edge, in-band share, worst free
-    /// angle, worst radius ratio, sliver count and run time — and the filed counter-example
-    /// (a cylinder's worst angle 0.89° → 0.58°) does not reproduce at 32, 48 or 64 segments
-    /// at any of nine pass counts. The deciding argument is downstream: <c>TetMesher</c>'s
+    /// measure improves — maximum, shortest edge, in-band share, worst free angle, worst
+    /// radius ratio, sliver count and run time — and the filed counter-example (a cylinder's
+    /// worst angle 0.89° → 0.58°) does not reproduce at 32, 48 or 64 segments at any of nine
+    /// pass counts. On a heavily pinned model the worst single ANGLE can go the other way
+    /// while every population figure improves (a drilled plate: 1.40° → 0.01° against slivers
+    /// 419 → 157), which is the extremes-versus-share lesson, not a trade in the mesh's
+    /// favour. The deciding argument is downstream: <c>TetMesher</c>'s
     /// boundary recovery needs a Delaunay-clean surface and a valence flip can replace a
     /// Delaunay diagonal with a longer one, so the old default produced surfaces the
     /// project's own tet mesher refuses.

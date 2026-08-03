@@ -604,9 +604,19 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     It is a bound *approached over passes*, not a cap at pass one (a 4 L edge still needs two
     passes to halve twice), and the smoothing and projection stages run after the sweep and
     move vertices by their own damped step, so the end-of-pass maximum sits a fraction of a
-    percent over the threshold. **Nothing measured trades against it**, including the shortest
-    edge (0.03–0.26 → 0.10–0.67 L) and the run time — a mesh full of slivers is a mesh full of
-    work.
+    percent over the threshold. The shortest edge (0.03–0.26 → 0.10–0.67 L) and the run time
+    improve with everything else — a mesh full of slivers is a mesh full of work.
+  - **One measure does trade on a heavily pinned model, and it is an extremum rather than a
+    population — worth keeping, because it is the length lesson reappearing for shape.** The
+    docs page's 60 × 40 × 8 plate with three drilled bores has rim chains far finer than the
+    3 mm target which, being pinned creases, cannot be coarsened. It keeps a single **0.01°**
+    free triangle against a bore at 10 / 14 / 20 / 30 passes where the unguarded run reads
+    0.09 / 1.40 / 1.66 / 1.98° — all slivers either way. Every *population* figure on that same
+    fixture goes the other way by a wide margin: slivers 588 / 419 / 349 / 286 →
+    **184 / 157 / 156 / 152**, out of band 17.4–10.6% → **8.4–7.6%**, longest edge 2.51–2.14 →
+    **1.83–1.49 L**. So compare `TriangleQualityReport.SliverCount`, and use `MinAngleDegrees`
+    to *locate* a defect rather than to rank two meshes — exactly what "judge a remesh by the
+    share in band, never by its extremes" already says about length.
   - **The one filed counter-example does not reproduce**, and that is why the default moved.
     It recorded the cylinder's worst triangle angle going 0.89° → 0.58°; swept over 32 / 48 /
     64 segments and nine pass counts each, the same measure reads 0.20 → 29.19, 0.03 → 0.11

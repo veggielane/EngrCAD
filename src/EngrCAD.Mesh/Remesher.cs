@@ -182,14 +182,27 @@ public sealed record RemeshOptions(double TargetEdgeLength)
     /// <para>
     /// <b>It shipped opt-in and became the default on measurement, and the numbers are the
     /// argument.</b> Over a box, a cylinder, two UV spheres and an open height-field grid at
-    /// 10 / 14 / 40 passes, <i>every</i> measure improves and none trades — maximum 1.37–2.65
-    /// → 1.27–1.67 L, shortest 0.03–0.26 → 0.10–0.67 L, out of band 2.5–11.8% → 0.0–0.9%,
-    /// worst free triangle angle 0.24–17.1° → 22.8–36.3°, worst radius ratio 0.0001–0.30 →
-    /// 0.38–0.81, slivers 4–226 → 0–7 — and the run is <i>faster</i> every time (a box at
-    /// 10 passes, 79 ms → 22 ms), because a mesh full of slivers is a mesh full of work.
-    /// The one filed counter-example, a cylinder whose worst triangle angle was said to go
-    /// 0.89° → 0.58°, <b>does not reproduce</b>: swept over 32 / 48 / 64 segments and nine
-    /// pass counts it reads 0.20 → 29.19, 0.03 → 0.11 and 0.24 → 2.81, better in all 27 rows.
+    /// 10 / 14 / 40 passes, <i>every</i> measure improves — maximum 1.37–2.65 → 1.27–1.67 L,
+    /// shortest 0.03–0.26 → 0.10–0.67 L, out of band 2.5–11.8% → 0.0–0.9%, worst free
+    /// triangle angle 0.24–17.1° → 22.8–36.3°, worst radius ratio 0.0001–0.30 → 0.38–0.81,
+    /// slivers 4–226 → 0–7 — and the run is <i>faster</i> every time (a box at 10 passes,
+    /// 79 ms → 22 ms), because a mesh full of slivers is a mesh full of work. The one filed
+    /// counter-example, a cylinder whose worst triangle angle was said to go 0.89° → 0.58°,
+    /// <b>does not reproduce</b>: swept over 32 / 48 / 64 segments and nine pass counts it
+    /// reads 0.20 → 29.19, 0.03 → 0.11 and 0.24 → 2.81, better in all 27 rows.
+    /// </para>
+    /// <para>
+    /// <b>One measure does trade on a heavily pinned model, and it is an extremum rather than
+    /// a population.</b> A 60 × 40 × 8 plate with three drilled bores — whose rim chains are
+    /// pinned creases far finer than the target, so they cannot be coarsened — keeps a single
+    /// 0.01° free triangle against a bore at 10 / 14 / 20 / 30 passes where the unguarded run
+    /// reads 0.09 / 1.40 / 1.66 / 1.98°, all of them slivers either way. Every population
+    /// figure on the same fixture goes the other way and by a wide margin: slivers
+    /// 588 / 419 / 349 / 286 → 184 / 157 / 156 / 152, out of band 17.4–10.6% → 8.4–7.6%,
+    /// longest edge 2.51–2.14 → 1.83–1.49 L. That is the project's own "judge a remesh by the
+    /// share in band, never by its extremes" lesson reappearing for SHAPE, which is why
+    /// <see cref="TriangleQualityReport.SliverCount"/> is the figure to compare and
+    /// <see cref="TriangleQualityReport.MinAngleDegrees"/> is the one to locate a defect with.
     /// </para>
     /// <para>
     /// The deciding argument is downstream, though, and it arrived after the option did:
