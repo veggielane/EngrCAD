@@ -12,4 +12,9 @@
     <!-- StepReader round-trip tests exercise Shape.Drill output (a task requirement). -->
     <ProjectReference Include="..\..\src\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Steady-state allocation measurement, shared so the four tests that assert
+         allocation-freedom cannot drift apart about what "steady state" means. -->
+    <Compile Include="..\Shared\AllocationProbe.cs" Link="Shared\AllocationProbe.cs" />
+  </ItemGroup>
 </Project>

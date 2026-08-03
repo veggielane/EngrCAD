@@ -12,4 +12,9 @@
     <!-- For polygonized-volume cross-checks of blend operators (SurfaceNets + mesh Volume). -->
     <ProjectReference Include="..\..\src\EngrCAD.Interop\EngrCAD.Interop.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Steady-state allocation measurement, shared so the four tests that assert
+         allocation-freedom cannot drift apart about what "steady state" means. -->
+    <Compile Include="..\Shared\AllocationProbe.cs" Link="Shared\AllocationProbe.cs" />
+  </ItemGroup>
 </Project>

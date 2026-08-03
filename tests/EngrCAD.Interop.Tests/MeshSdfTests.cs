@@ -2,6 +2,7 @@ using EngrCAD.Core;
 using EngrCAD.Implicit;
 using EngrCAD.Interop;
 using EngrCAD.Mesh;
+using EngrCAD.TestSupport;
 using Xunit;
 
 namespace EngrCAD.Interop.Tests;
@@ -72,12 +73,11 @@ public class MeshSdfTests
                 sink += sdf.Evaluate(points[i & 255]);
         }
 
-        RunBatch(5000); // warmup — let tiered compilation settle
-
         const int iterations = 20_000;
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        RunBatch(iterations);
-        long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        // The MINIMUM over several batches — a warm-up COUNT cannot settle tiered
+        // compilation, which is promoted on a background queue (see AllocationProbe).
+        long delta = AllocationProbe.SteadyStateBytes(() => RunBatch(iterations));
 
         // A per-call closure would cost ≳ 88 B × 20 000 ≈ 1.7 MB; steady state must be
         // (near-)zero. Allow a small one-time slack so background tiering can't flake.

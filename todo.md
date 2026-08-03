@@ -379,6 +379,7 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   at 32/64/128/256, where the tracer-polyline rim used to give a non-converging,
   sign-flipping −7.4e-4 / −5.3e-5 / +4.7e-5 / +6.5e-5. Two entries said this was still
   open; both were stale.
+
 ## Core (EngrCAD.Core)
 
 - [ ] **Space-filling curves, and a way to lay one over a model** (requested 2026-08-02).
@@ -441,6 +442,7 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     spacing (the curve would miss it entirely, and silently — the one failure a
     fill must not have), and a self-intersecting or open input chain, since
     "inside" is what the clip is asking.
+- [ ] **A PIVOTED real sparse symmetric-indefinite factorization, if a consumer ever needs
   one.** `SparseLdlt` ✅ landed the symmetric-indefinite family (real + complex symmetric
   L·D·Lᵀ over `SparseCholesky`'s shared symbolic pass — see design.md §2(d) for the
   three-way weighing), and its REAL path is deliberately unpivoted: it factors iff every

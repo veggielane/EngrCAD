@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.TestSupport;
 using Xunit;
 
 namespace EngrCAD.Implicit.Tests;
@@ -276,15 +277,16 @@ public class BatchEvaluationTests
         var points = RandomPoints(4096, seed: 11, extent: 20);
         var distances = new double[points.Length];
 
-        for (int i = 0; i < 4; i++)
-            sdf.Evaluate(points, distances); // JIT + pool warm-up
+        // The MINIMUM over several batches — a JIT/pool warm-up COUNT cannot settle
+        // tiered compilation, which is promoted on a background queue, and a GC on a
+        // neighbouring xUnit thread perturbs the reading (see AllocationProbe).
+        long delta = AllocationProbe.SteadyStateBytes(() =>
+        {
+            for (int i = 0; i < 32; i++)
+                sdf.Evaluate(points, distances);
+        });
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 32; i++)
-            sdf.Evaluate(points, distances);
-        long after = GC.GetAllocatedBytesForCurrentThread();
-
-        Assert.Equal(0, after - before);
+        Assert.Equal(0, delta);
     }
 
     /// <summary>The SoA seam is what operators forward to; a node that overrides it must

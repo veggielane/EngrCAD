@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.TestSupport;
 using Xunit;
 
 namespace EngrCAD.Core.Tests;
@@ -477,14 +478,15 @@ public class Predicates3dTests
         var d = new Vector3d(0, 0, -1);
         var e = new Vector3d(0, -1, 0);
 
-        // Warm-up: JIT the path (and, for the pooled twin below, warm the pool).
-        for (int i = 0; i < 16; i++)
-            Predicates3d.InSphere(a, b, c, d, e);
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
-            Predicates3d.InSphere(a, b, c, d, e);
-        long stackPathBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        // The MINIMUM over several batches, which is what makes this exact-zero assertion
+        // safe: a warm-up COUNT cannot settle tiered compilation (promoted on a background
+        // queue) and a GC on a neighbouring xUnit thread perturbs the reading, but neither
+        // artifact scales with the iteration count. See AllocationProbe.
+        long stackPathBytes = AllocationProbe.SteadyStateBytes(() =>
+        {
+            for (int i = 0; i < 1000; i++)
+                Predicates3d.InSphere(a, b, c, d, e);
+        });
         Assert.Equal(0, stackPathBytes);
 
         double big = Math.Pow(2, 400);
@@ -493,13 +495,11 @@ public class Predicates3dTests
         var wc = new Vector3d(0, big, 0);
         var wd = new Vector3d(0, 0, big);
         var we = new Vector3d(double.Epsilon, 0, -big);
-        for (int i = 0; i < 16; i++)
-            Predicates3d.InSphere(wa, wb, wc, wd, we);
-
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 200; i++)
-            Predicates3d.InSphere(wa, wb, wc, wd, we);
-        long pooledPathBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        long pooledPathBytes = AllocationProbe.SteadyStateBytes(() =>
+        {
+            for (int i = 0; i < 200; i++)
+                Predicates3d.InSphere(wa, wb, wc, wd, we);
+        });
         Assert.Equal(0, pooledPathBytes);
     }
 

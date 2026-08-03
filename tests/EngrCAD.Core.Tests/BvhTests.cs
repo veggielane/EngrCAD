@@ -1,5 +1,6 @@
 using EngrCAD.Core;
 using EngrCAD.Core.Spatial;
+using EngrCAD.TestSupport;
 using Xunit;
 
 namespace EngrCAD.Core.Tests;
@@ -419,12 +420,13 @@ public class BvhTests
             bvh.QueryOverlap(bvh, pairs);
         }
 
-        RunBatch(2000); // warmup: tiering, list capacity growth
+        RunBatch(2000); // size the pair list before AllocationProbe's own warm-up batch
         Assert.True(pairs.Capacity >= pairs.Count, "warmup should have sized the pair list");
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        RunBatch(2000);
-        long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+        // The MINIMUM over several batches, not one measured batch — see AllocationProbe:
+        // tiering promotion and a neighbouring test's GC are one-time artifacts that a
+        // single window catches at random, and neither scales with the iteration count.
+        long delta = AllocationProbe.SteadyStateBytes(() => RunBatch(2000));
 
         // Steady state must be allocation-free; allow a stray one-time artifact but
         // nothing per-iteration (a single closure would already cost ~88 B × 2000).
