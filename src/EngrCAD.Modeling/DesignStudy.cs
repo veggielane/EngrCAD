@@ -553,23 +553,34 @@ public sealed class StudyResult
     /// </summary>
     public string Report()
     {
+        int column = Math.Max(
+            11,
+            Values.Select(v => v.Variable.Name.Length)
+                .Concat(ConstraintReadings.Select(r => r.Name.Length))
+                .DefaultIfEmpty(0)
+                .Max());
+
         var text = new StringBuilder();
         text.AppendLine(Succeeded
             ? (Feasible ? "Design study: feasible optimum" : "Design study: NO FEASIBLE DESIGN")
             : "Design study: could not start");
-        text.AppendLine($"  objective        {Fmt(Objective)}");
+        text.AppendLine($"  {"objective".PadRight(column)}  {Fmt(Objective)}");
         foreach (var value in Values)
-            text.AppendLine($"  {value.Variable.Name,-16} {Fmt(value.Value)}   in [{Fmt(value.Variable.Min)}, {Fmt(value.Variable.Max)}]");
+        {
+            text.AppendLine(
+                $"  {value.Variable.Name.PadRight(column)}  {Fmt(value.Value)}"
+                + $"   in [{Fmt(value.Variable.Min)}, {Fmt(value.Variable.Max)}]");
+        }
         foreach (var reading in ConstraintReadings)
         {
             string relation = reading.Sense == StudySense.AtMost ? "<=" : ">=";
             text.AppendLine(
-                $"  {reading.Name,-16} {Fmt(reading.Value)} {relation} {Fmt(reading.Limit)}   "
+                $"  {reading.Name.PadRight(column)}  {Fmt(reading.Value)} {relation} {Fmt(reading.Limit)}   "
                 + $"margin {reading.Margin * 100:F2}%{(reading.Satisfied ? "" : "   VIOLATED")}");
         }
-        text.AppendLine($"  stop             {Stop.Reason}: {Stop.Summary}");
+        text.AppendLine($"  {"stop".PadRight(column)}  {Stop.Reason}: {Stop.Summary}");
         text.AppendLine(
-            $"  evaluations      {Evaluations}"
+            $"  {"evaluations".PadRight(column)}  {Evaluations}"
             + (RefusedDesigns > 0 ? $" ({RefusedDesigns} refused by the model)" : ""));
         return text.ToString();
     }

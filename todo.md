@@ -2735,18 +2735,32 @@ flattened; a loaded document is an overlay `reload` still discards) and the
 
 ## App layer / infrastructure
 
-- [ ] **Design studies: drive `[Param]` values by an optimizer against a measured
-  objective.** Everything below the loop exists and is verified: `FeatureHistory`
-  regenerates with prefix caching, `[Param(Min=, Max=)]` already declares the box
-  constraints, the FEA suite answers mass/stress/deflection/frequency, and `SolveAll`
-  amortises multi-case solves. The feature is the loop — minimize mass subject to a
-  stress or deflection limit, report the trajectory and the binding constraint.
-  Derivative-free first (regeneration is not differentiable); a failed regeneration
-  mid-search is REPORTED and the study continues from the last feasible point, the
-  regeneration failure culture applied to a new consumer.
-  - Verification: the cantilever gives closed forms — the minimum-mass depth for a
-    stated tip-deflection limit is analytic, and the study must land on it to a stated
-    tolerance rather than merely improve.
+- [ ] **Design-study follow-ups** (`DesignStudy.cs` landed — see design.md §6b). Four
+  residuals, each a stated v1 boundary rather than a gap discovered later:
+  - **A dense deterministic direction set (OrthoMADS).** The poll is
+    `{±e_i} ∪ {±e_i ± e_j}` with the step RATIO adapted one axis at a time, which is
+    enough to slide along the constraint boundaries measured so far (a two-variable beam
+    reaches its analytic optimum where a shared step stopped at 21.92 of a possible 25),
+    but the set is finite, so a boundary whose slope never lands between two reachable
+    ones can still stop the search short. OrthoMADS is the textbook answer and its Halton
+    direction generator is deterministic, so it costs no randomness — but it replaces the
+    poll-size/mesh-size stopping rule, and `StudyResult.OptimumTolerance`'s per-axis claim
+    would have to be restated in MADS' terms rather than merely re-tuned.
+  - **Discrete (`int`) variables** — a pattern count, a tooth number. Refused by name
+    today. The step may not halve below one and the convergence criterion means something
+    different (the answer is exact once the step reaches 1), so it is a second stopping
+    rule beside the continuous one, not a cast.
+  - **Memoization of repeated design points.** A pattern search revisits points and
+    `FeatureHistory`'s prefix cache does not help (it holds one entry per feature index,
+    overwritten each regeneration). Deliberately absent so the trajectory is EXACTLY the
+    list of evaluations performed, which is what makes the determinism comparison mean
+    what it says — a memo has to be recorded as a distinct trajectory outcome or the
+    property is lost.
+  - **A shared expensive analysis between the objective and the constraints.** Today the
+    contract is that the objective is measured FIRST at every point, so a caller can run
+    one solve there and let the constraints read a captured local; a first-class
+    "evaluate once, report several numbers" seam would be better but wants a design
+    (per-evaluation scratch keyed on what?) rather than a bag.
 - [ ] **Configurations / design tables: one `FeatureHistory`, N named parameter
   sets.** A configuration is a name plus a `[Param]` value dictionary through the SAME
   JSON seam as `SaveParameters` (one seam, so spellings cannot drift); the document
