@@ -1,4 +1,6 @@
-# Booleans
+---
+title: "Booleans"
+---
 
 Union, intersection, and difference compose shapes in every representation — exact
 `BrepBoolean` topology surgery in B-Rep, min/max in the implicit engine, and mesh

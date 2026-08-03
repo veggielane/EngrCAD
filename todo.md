@@ -2795,6 +2795,29 @@ flattened; a loaded document is an overlay `reload` still discards) and the
 
 ## App layer / infrastructure
 
+- [ ] **Docs-site follow-ups** (the DocFX → Astro Starlight migration landed 2026-08-03;
+  Starlight hosts the landing page, getting started, writing-examples, the 51 example
+  pages and the embedded live WASM demo, DocFX is reduced to the .NET API reference at
+  `/api/`). Four residuals, each a stated boundary rather than something discovered later:
+  - **`/api/` still wears DocFX's own theme, navigation and search.** It is a
+    self-contained subtree, so a reader crossing into it changes visual gear entirely.
+    The two candidate fixes are very different sizes: retheming DocFX's `modern` template
+    to match Starlight's tokens is cosmetic and reversible; generating the reference INTO
+    Starlight (a loader over DocFX's `mref` YAML, or over the XML doc comments directly)
+    is a real project and the only route to one search index and one sidebar. Nothing
+    should be attempted here until someone has decided which of the two is wanted, because
+    the cheap one forecloses nothing and the expensive one replaces it.
+  - **Search is split in two** — Pagefind indexes the 54 guide pages, DocFX's own index
+    the 770 API pages, and neither knows about the other. This is the same finding as the
+    row above from the reader's side, filed separately because it is the symptom a user
+    reports.
+  - **The sitemap is only correct in CI.** `site` is passed from
+    `actions/configure-pages`, so a local `npm run build` skips sitemap generation with a
+    warning. Harmless (a local build is a preview), but it means the sitemap is one of the
+    few things the local build does not exercise.
+  - **No versioned docs, i18n, edit-this-page links or last-updated stamps.** Starlight
+    offers all four; none is wired, because each wants a decision (which versions? which
+    branch does "edit" target?) rather than a default.
 - [ ] **Design-study follow-ups** (`DesignStudy.cs` landed — see design.md §6b). Four
   residuals, each a stated v1 boundary rather than a gap discovered later:
   - **A dense deterministic direction set (OrthoMADS).** The poll is

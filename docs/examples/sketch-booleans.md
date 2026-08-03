@@ -1,4 +1,6 @@
-# 2D sketch booleans
+---
+title: "2D sketch booleans"
+---
 
 [Sketches](sketching.md) can be combined in 2D before they ever become a solid.
 `Union`, `Intersect`, and `Subtract` turn sketches into **regions** — polygon-with-holes

@@ -1,5 +1,18 @@
 {
   "$schema": "https://raw.githubusercontent.com/dotnet/docfx/main/schemas/docfx.schema.json",
+  "//": [
+    "DocFX generates the .NET API REFERENCE ONLY. The documentation site itself -- landing",
+    "page, getting started, the example pages and the live WebAssembly demo -- is Astro",
+    "Starlight, in docs/site/. CI merges DocFX's output into that site as a static subtree",
+    "at /api/ (see .github/workflows/docs.yml).",
+    "",
+    "`src: api` + `dest: .` is what makes the subtree self-contained: every generated page",
+    "and the template's own assets land at the ROOT of _apisite, and DocFX references them",
+    "relatively, so copying _apisite to _site/api/ gives working URLs at any base path --",
+    "the same portability rule the WebAssembly demo follows. Building with the default",
+    "src/dest instead would put the pages under _apisite/api/ while the template assets sat",
+    "beside them, so every page would end up at /api/api/."
+  ],
   "metadata": [
     {
       "src": [
@@ -18,19 +31,15 @@
     "content": [
       {
         "files": ["**/*.{md,yml}"],
-        "exclude": ["_site/**", "obj/**"]
+        "src": "api",
+        "dest": "."
       }
     ],
-    "resource": [
-      {
-        "files": ["examples/images/**"]
-      }
-    ],
-    "output": "_site",
+    "output": "_apisite",
     "template": ["default", "modern"],
     "globalMetadata": {
       "_appName": "EngrCAD",
-      "_appTitle": "EngrCAD",
+      "_appTitle": "EngrCAD API reference",
       "_appFooter": "EngrCAD — a hybrid B-Rep / implicit / mesh geometry kernel for modern .NET",
       "_enableSearch": true,
       "pdf": false

@@ -1,4 +1,6 @@
-# Viewer
+---
+title: "Viewer"
+---
 
 The viewer is a **library**, not an app: design code builds a `Scene` (parts grouped
 into tabs) and hands it over. `EngrCad.Show(scene)` opens the interactive window;

@@ -1,4 +1,6 @@
-# Buckling, damping and frequency response
+---
+title: "Buckling, damping and frequency response"
+---
 
 A slender part under compression can fail long before its material yields: it goes unstable
 and folds sideways. `EngrCAD.Fea` finds the load at which that happens with a **linear

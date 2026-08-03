@@ -1,4 +1,6 @@
-# Manufacturability checks
+---
+title: "Manufacturability checks"
+---
 
 Three questions a part has to answer before anyone cuts metal or starts a print: will it
 come out of the mould, will it print without support, and is any wall too thin?

@@ -1,4 +1,6 @@
-# Thermal analysis (conduction)
+---
+title: "Thermal analysis (conduction)"
+---
 
 `EngrCAD.Fea` solves **heat conduction** on the same tetrahedral meshes
 [the mesher](fea-meshing.md) produces and the [structural solver](fea-structural.md) uses —

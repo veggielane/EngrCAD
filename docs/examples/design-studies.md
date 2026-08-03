@@ -1,4 +1,6 @@
-# Design studies
+---
+title: "Design studies"
+---
 
 A design study drives a part's `[Param]` values by an optimizer against a **measured**
 objective: minimize mass subject to a deflection limit, find the largest fillet the

@@ -1,4 +1,6 @@
-# Structural analysis (linear static)
+---
+title: "Structural analysis (linear static)"
+---
 
 `EngrCAD.Fea` solves **small-strain linear elasticity** on the tetrahedral meshes
 [the mesher](fea-meshing.md) produces: 4-node or 10-node elements, boundary conditions

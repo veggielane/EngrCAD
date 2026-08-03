@@ -1,4 +1,6 @@
-# The three representations
+---
+title: "The three representations"
+---
 
 EngrCAD is a **hybrid kernel**: it carries three different mathematical descriptions
 of a solid, because no single one serves precision modeling, organic geometry, and

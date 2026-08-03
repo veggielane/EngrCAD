@@ -1,4 +1,6 @@
-# Parametric features
+---
+title: "Parametric features"
+---
 
 A feature is a class with `[Param]` properties and a pure `Apply` body; a model is an
 ordered `FeatureHistory` that regenerates on change — FeatureScript, but plain C#.

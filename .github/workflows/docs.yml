@@ -1,5 +1,13 @@
-# Builds and deploys the documentation site (DocFX + generated example screenshots)
-# to GitHub Pages on every push to main.
+# Builds and deploys the documentation site to GitHub Pages on every push to main.
+#
+# The site is THREE artifacts merged into one _site:
+#
+#   /       Astro Starlight (docs/site/) — the landing page, getting started, writing
+#           examples and the 51 example pages, whose screenshots EngrCAD.DocsGen has just
+#           regenerated from the C# snippets embedded in the markdown.
+#   /api/   DocFX (docs/docfx.json) — the generated .NET API reference, and nothing else.
+#   /live/  samples/EngrCAD.WebDemo — the geometry kernel compiled to WebAssembly, which
+#           docs/examples/web.md embeds in an iframe.
 #
 # Pages must be enabled once in the repository settings with "Source: GitHub Actions"
 # (Settings -> Pages). No gh-pages branch is used — this is the modern Pages flow.
@@ -36,6 +44,19 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      # Reports where Pages will actually serve the site. Astro bakes its asset and page
+      # URLs at build time, so it has to be told: `base_path` is "/EngrCAD" for a project
+      # site and "" for a custom domain or a user page. Reading it from the deployment
+      # rather than hard-coding it is what keeps the repository name out of the source.
+      - uses: actions/configure-pages@v5
+        id: pages
+
       - name: Build solution
         run: dotnet build EngrCAD.slnx -c Release
 
@@ -45,15 +66,23 @@ jobs:
       - name: Restore dotnet tools (docfx)
         run: dotnet tool restore
 
-      - name: Build documentation site
+      - name: Build the API reference
         run: dotnet docfx docs/docfx.json
 
-      # The examples/web.md page embeds a LIVE build of the kernel rather than a
-      # screenshot, so the Blazor WebAssembly demo is published into the site at /live/.
-      # No StaticWebAssetBasePath and no repository name is needed: index.html uses a
-      # relative <base href="./" /> and every asset reference the build emits is already
-      # relative, so the app runs from whatever directory it is dropped into.
-      #
+      - name: Install site dependencies
+        run: npm ci
+        working-directory: docs/site
+
+      # `npm run build` is `astro build && node check-links.mjs`: every internal link and
+      # image reference in the emitted HTML is resolved against the emitted files, and a
+      # dead one fails here rather than 404ing for a reader.
+      - name: Build the documentation site
+        run: npm run build
+        working-directory: docs/site
+        env:
+          DOCS_BASE: ${{ steps.pages.outputs.base_path }}
+          DOCS_SITE: ${{ steps.pages.outputs.origin }}
+
       # wasm-tools is installed so the publish natively relinks the runtime; without the
       # workload the publish still succeeds but ships the larger prebuilt runtime.
       # AOT is deliberately OFF. It is 4.4x faster for 2.4x the download (1.9 -> 4.6 MB),
@@ -63,20 +92,40 @@ jobs:
       - name: Install the WebAssembly build tools
         run: dotnet workload install wasm-tools
 
-      - name: Publish the WebAssembly demo into the site
+      - name: Publish the WebAssembly demo
+        run: dotnet publish samples/EngrCAD.WebDemo -c Release -o wasm-publish
+
+      - name: Assemble the site
         shell: pwsh
         run: |
-          dotnet publish samples/EngrCAD.WebDemo -c Release -o wasm-publish
-          New-Item -ItemType Directory -Force docs/_site/live | Out-Null
-          Copy-Item wasm-publish/wwwroot/* docs/_site/live -Recurse -Force
+          $site = "_site"
+          Remove-Item $site -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $site | Out-Null
+
+          Copy-Item docs/site/dist/* $site -Recurse -Force
+
+          # DocFX's output is already rooted (see the src/dest note in docs/docfx.json), so
+          # it drops in whole and every one of its relative asset links keeps working.
+          New-Item -ItemType Directory -Force "$site/api" | Out-Null
+          Copy-Item docs/_apisite/* "$site/api" -Recurse -Force
+
+          # The published Blazor app is path-portable: index.html carries a relative
+          # <base href="./" /> and every asset reference the build emits is already
+          # relative, so no StaticWebAssetBasePath and no post-publish rewrite is needed.
+          New-Item -ItemType Directory -Force "$site/live" | Out-Null
+          Copy-Item wasm-publish/wwwroot/* "$site/live" -Recurse -Force
           # Pages compresses on its own; the .br/.gz sidecars are for servers that do
           # content negotiation from disk and would otherwise double the artifact.
-          Get-ChildItem docs/_site/live -Recurse -Include *.br, *.gz | Remove-Item -Force
-          if (-not (Test-Path docs/_site/live/index.html)) { throw "WASM demo did not publish" }
+          Get-ChildItem "$site/live" -Recurse -Include *.br, *.gz | Remove-Item -Force
+
+          foreach ($page in "index.html", "api/index.html", "live/index.html") {
+            if (-not (Test-Path "$site/$page")) { throw "the assembled site is missing $page" }
+          }
+          Write-Host "assembled $((Get-ChildItem $site -Recurse -File).Count) files into $site"
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/_site
+          path: _site
 
   deploy:
     needs: build

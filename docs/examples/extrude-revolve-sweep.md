@@ -1,4 +1,6 @@
-# Extrude, revolve, sweep
+---
+title: "Extrude, revolve, sweep"
+---
 
 The three sketch-consuming operations turn 2D profiles into solids. All are native in
 every representation (see [the support matrix](representations.md)).

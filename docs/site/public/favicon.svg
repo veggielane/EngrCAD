@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- An isometric wireframe box: the three representations meet on one solid. -->
+  <rect width="32" height="32" rx="6" fill="#1f2430" />
+  <g fill="none" stroke="#7cc4ff" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M16 5 27 11 27 21 16 27 5 21 5 11 Z" />
+    <path d="M16 5 16 16 27 11 M16 16 5 11 M16 16 16 27" stroke="#4e8fd0" />
+  </g>
+</svg>

@@ -1,4 +1,6 @@
-# AI assistants (MCP)
+---
+title: "AI assistants (MCP)"
+---
 
 A design program can expose itself to an AI assistant over the
 [Model Context Protocol](https://modelcontextprotocol.io) — headlessly, with no

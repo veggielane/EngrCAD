@@ -1,4 +1,6 @@
-# Heightmap terrain
+---
+title: "Heightmap terrain"
+---
 
 `Shape.Heightmap` is OpenSCAD's `surface()`: a rectangular grid of heights becomes a
 closed solid — the grid as the top surface, a flat base, and perimeter walls sharing

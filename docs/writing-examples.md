@@ -1,4 +1,6 @@
-# Writing documentation examples
+---
+title: "Writing documentation examples"
+---
 
 Every C# example in these docs is **executed by the documentation build**
 (`tools/EngrCAD.DocsGen`), and rendered examples produce their screenshots
@@ -96,8 +98,9 @@ viewer uses on first show).
 dotnet run --project tools/EngrCAD.DocsGen -- docs
 ```
 
-- Scans `docs/**/*.md` (excluding `_site/` and `api/`), executes every tagged
-  snippet in file order, writes PNGs to `docs/examples/images/<id>.png`.
+- Scans `docs/**/*.md` (excluding generated trees — `api/`, `_apisite/`, and the site's
+  own `node_modules/`, `dist/`, `.astro/`), executes every tagged snippet in file order,
+  writes PNGs to `docs/examples/images/<id>.png`.
 - **Exit code is nonzero** if any snippet fails to compile or run, a `render:`
   snippet defines no `scene`, an id is duplicated, or a page never references its
   generated image.
@@ -106,13 +109,59 @@ dotnet run --project tools/EngrCAD.DocsGen -- docs
   PNGs are used — execution failures still fail the build. Generated PNGs are
   committed to the repository for exactly this reason.
 
+## Adding a page
+
+A page is a markdown file in `docs/examples/` with **YAML frontmatter carrying a
+`title`**, which is what Starlight renders as the page's heading — so the body starts at
+the first `##`, not at an `#`:
+
+```
+---
+title: "Sheet metal"
+---
+
+A sheet part is a flat blank plus a list of bends...
+```
+
+Then add it to the `sidebar` in `docs/site/astro.config.mjs`. The order there is the
+site's navigation and is deliberate; it used to live in `docs/toc.yml`. A page left out
+of it still builds and is still reachable by URL, so nothing would complain — hence
+`check-links.mjs` asserts that every built page appears in the sidebar and fails the
+build naming the one that does not.
+
+Links between pages are written as ordinary **relative markdown links** (`[fields](fields.md)`,
+`[the viewer](../examples/viewer.md#matcap-shading)`), so the documentation stays
+navigable in the repository. A rehype plugin (`docs/site/src/rewrite-doc-links.mjs`)
+turns them into the routes the site serves, and **throws when the target file does not
+exist**, so a renamed page fails the build at both ends rather than 404ing for a reader.
+
 ## Building the site
+
+The site is [Astro Starlight](https://starlight.astro.build/) and needs **Node ≥ 22.12**
+(CI pins 24) beside the .NET SDK — the one non-.NET toolchain dependency in the
+repository. The content stays in `docs/`; only the site machinery lives in `docs/site/`.
+
+```
+cd docs/site
+npm ci          # first time, or after package-lock.json changes
+npm run dev     # preview at http://localhost:4321
+npm run build   # -> docs/site/dist, then validates every link and image
+```
+
+`npm run build` is `astro build && node check-links.mjs`. The checker resolves every
+`href` and `src` in the emitted HTML against the emitted files exactly as a browser
+would, and checks `#fragments` against the ids actually present — so a broken cross-page
+link, a missing screenshot or a renamed heading fails the build instead of going
+unnoticed.
+
+The **API reference** is generated separately by DocFX and published as a static subtree
+at `/api/`:
 
 ```
 dotnet tool restore
-dotnet docfx docs/docfx.json          # metadata (API reference) + static site -> docs/_site
-dotnet docfx docs/docfx.json --serve  # preview at http://localhost:8080
+dotnet docfx docs/docfx.json    # -> docs/_apisite
 ```
 
-CI (`.github/workflows/docs.yml`) runs the same three steps — build, DocsGen,
-docfx — and deploys `docs/_site` to GitHub Pages on every push to `main`.
+CI (`.github/workflows/docs.yml`) runs the whole sequence — build, DocsGen, docfx, the
+Astro build, the WebAssembly demo publish — merges the three trees into one `_site`
+(`/`, `/api/`, `/live/`) and deploys it to GitHub Pages on every push to `main`.

@@ -1,4 +1,6 @@
-# Gears
+---
+title: "Gears"
+---
 
 Gear geometry lives in `EngrCAD.Modeling`, beside the [mechanisms](mechanisms.md)
 layer that drives it. The two are deliberately separate concerns: this page is

@@ -1,4 +1,6 @@
-# Blends, offset, shell, lattice
+---
+title: "Blends, offset, shell, lattice"
+---
 
 These operations come from the implicit engine (signed distance fields) and have no
 exact B-Rep form — `ToBrep()` rejects them with a clear report, while `ToMesh()`

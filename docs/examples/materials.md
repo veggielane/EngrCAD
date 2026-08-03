@@ -1,4 +1,6 @@
-# Materials & mass
+---
+title: "Materials & mass"
+---
 
 A `Part` can say what it is **made of**. `Material` carries a name, a mass density,
 an optional display colour and — optionally — the analysis properties a simulation

@@ -76,10 +76,15 @@ var snippets = new List<Snippet>();
 var errors = new List<string>();
 var seenIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+// Directories under the docs root that hold generated or third-party markdown rather than
+// documentation. `node_modules` is the one that bites: the Starlight site lives in
+// docs/site/ and npm packages ship READMEs by the thousand, so without it a docs run would
+// walk them all looking for fences. `api` is DocFX's generated reference, `_apisite` its
+// rendered output, `dist`/`.astro` the site build's.
+string[] generatedDirs = ["_site", "_apisite", "api", "obj", "node_modules", "dist", ".astro"];
 var mdFiles = Directory.EnumerateFiles(docsRoot, "*.md", SearchOption.AllDirectories)
-    .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}_site{Path.DirectorySeparatorChar}")
-             && !f.Contains($"{Path.DirectorySeparatorChar}api{Path.DirectorySeparatorChar}")
-             && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+    .Where(f => !generatedDirs.Any(d =>
+        f.Contains($"{Path.DirectorySeparatorChar}{d}{Path.DirectorySeparatorChar}", StringComparison.Ordinal)))
     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
     .ToList();
 
@@ -184,7 +189,7 @@ if (snippets.Count == 0)
 
 // Every snippet that produces an artifact must reference it from its own page (an APNG
 // is served as .png, so render and animate share one rule; an svg: fence writes .svg,
-// which DocFX copies from examples/images/ like any other resource).
+// which the site serves from examples/images/ like any other asset).
 foreach (var s in snippets.Where(s => s.Render || s.Animate || s.Svg))
 {
     var expectedLink = $"images/{s.Id}{(s.Svg ? ".svg" : ".png")}";
@@ -273,7 +278,8 @@ foreach (var s in snippets)
         // An animation page's fence: the snippet may declare `Animation animation`
         // (and `camera`, the render-fence convention); without one it gets the default
         // 4-second turntable. Output is an APNG at the same images/<id>.png path —
-        // an APNG IS a PNG, so DocFX, the link checker and browsers need nothing new.
+        // an APNG IS a PNG, so the site, the link checker and browsers need nothing new
+        // (the site's image service is passthrough, so the frames survive the build).
         if (!TryReadVariable<Animation>(state, "animation", s, errors, out var declaredAnimation)
             || !TryReadVariable<CameraState>(state, "camera", s, errors, out var animateCamera))
             continue;

@@ -1,4 +1,6 @@
-# Modal analysis (natural frequencies)
+---
+title: "Modal analysis (natural frequencies)"
+---
 
 `EngrCAD.Fea` finds a part's **natural frequencies and mode shapes** on the same tetrahedral
 meshes [the mesher](fea-meshing.md) produces, with the same materials and the same supports

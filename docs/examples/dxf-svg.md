@@ -1,4 +1,6 @@
-# DXF & SVG (2D interchange)
+---
+title: "DXF & SVG (2D interchange)"
+---
 
 Two-dimensional geometry leaves and enters EngrCAD through two writers and one
 reader, all dependency-free:

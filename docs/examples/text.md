@@ -1,4 +1,6 @@
-# Text
+---
+title: "Text"
+---
 
 `Shape.Text` turns a font into real geometry — nameplates, part numbers, logos,
 engraved labels. TrueType (`.ttf`) glyph outlines are **lines and quadratic Béziers**

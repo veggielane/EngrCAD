@@ -1,4 +1,6 @@
-# Chamfer & fillet
+---
+title: "Chamfer & fillet"
+---
 
 `Chamfer(setback, faceSelector)` and `Fillet(radius, faceSelector)` are rim features:
 they operate on the closed outer rim of planar faces picked by a **LINQ face

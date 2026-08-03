@@ -1,4 +1,6 @@
-# Fatigue (S-N life and safety factors)
+---
+title: "Fatigue (S-N life and safety factors)"
+---
 
 Stress-life fatigue post-processing over the [structural results](fea-structural.md)
 that already exist — **arithmetic, not a solver**: two static load cases become a

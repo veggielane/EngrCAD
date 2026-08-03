@@ -18,4 +18,9 @@ build — examples cannot drift from the code.
 dotnet run --project tools/EngrCAD.DocsGen -- docs [--images <dir>] [--no-render]
 ```
 
-Used locally and by `.github/workflows/docs.yml` before `dotnet docfx docs/docfx.json`.
+The docs root is an argument, so the generator does not care where the markdown lives;
+it scans everything under it except the generated trees (`api/`, `_apisite/`, and the
+site's `node_modules/`, `dist/`, `.astro/`).
+
+Used locally and by `.github/workflows/docs.yml`, which runs it before building the
+Astro Starlight site (`docs/site/`) and the DocFX API reference (`docs/docfx.json`).

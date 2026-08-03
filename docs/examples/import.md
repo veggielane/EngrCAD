@@ -1,4 +1,6 @@
-# Importing meshes
+---
+title: "Importing meshes"
+---
 
 `Shape.From(path)` imports a mesh file — STL (binary or ASCII, autodetected), OBJ, or
 OFF — as a mesh-backed shape. Underneath it is `MeshReader.ReadAndRepair`: dirty files

@@ -1,4 +1,6 @@
-# Frames & weldments
+---
+title: "Frames & weldments"
+---
 
 `Weldment` builds a frame of straight structural members on a skeleton of runs — the
 SolidWorks-weldments capability, assembled from machinery that already exists: a

@@ -1,4 +1,6 @@
-# Holes & standard sizes
+---
+title: "Holes & standard sizes"
+---
 
 `Shape.Drill(hole, points, depth, plane?)` places one hole recipe at a list of 2D
 points on a sketch plane, cutting along −normal. Every tool is an axis-touching

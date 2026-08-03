@@ -1,4 +1,6 @@
-# Space-filling curves & 2D infill
+---
+title: "Space-filling curves & 2D infill"
+---
 
 A **space-filling curve** reaches every part of a region along one continuous path. That is
 exactly what a printed infill, a pocket-clearing pass, an engraved fill or a serpentine heater

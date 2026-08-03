@@ -1,4 +1,6 @@
-# Primitives
+---
+title: "Primitives"
+---
 
 `Shape` provides five solid primitives — box, cylinder, sphere, torus, and cone. All
 are centered at the origin with their axis along +Z; position them with

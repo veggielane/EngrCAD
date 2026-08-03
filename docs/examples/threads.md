@@ -1,4 +1,6 @@
-# Threads
+---
+title: "Threads"
+---
 
 EngrCAD models **real thread geometry** — helical ridges you can 3D-print and screw
 together — not cosmetic thread annotations. `StandardThreads.Metric(size)` supplies

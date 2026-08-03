@@ -1,4 +1,6 @@
-# In the browser (WebAssembly)
+---
+title: "In the browser (WebAssembly)"
+---
 
 Every other page on this site shows a model rendered ahead of time and committed as a
 PNG. This one doesn't. The panel below is the **actual geometry kernel** — B-Rep,
@@ -7,20 +9,23 @@ WebGL2. Drag to orbit, shift+drag to pan, scroll to zoom. Move a slider and the 
 rebuilt from scratch: a boolean, six drilled holes and a rim fillet, lowered to an exact
 B-Rep, tessellated and rendered, right here.
 
-<!-- docfx warns "InvalidFileLink" on the two ../live/ links below, and that is EXPECTED:
-     the target is the Blazor app, which .github/workflows/docs.yml publishes into
-     _site/live/ AFTER docfx has run, so no such file exists at docfx time. Both links are
-     emitted verbatim, which is all that matters. Do not "fix" this by writing an absolute
-     /EngrCAD/live/ path -- that bakes the repository name into the site and breaks the
-     moment it is renamed or served from a user page. -->
+<!-- The two ../../live/ links below point at the Blazor app, which
+     .github/workflows/docs.yml publishes into _site/live/ AFTER the site is built, so no
+     such file exists while Astro is running; docs/site/check-links.mjs lists /live/ as
+     external for exactly that reason. TWO levels, because this page is served as
+     /examples/web/ (a directory) rather than as /examples/web.html -- that is what the
+     move from DocFX to Starlight changed, and it is why the link checker resolves
+     references the way a browser does instead of trusting them. Do not "fix" this by
+     writing an absolute /EngrCAD/live/ path: that bakes the repository name into the
+     source and breaks the moment it is renamed or served from a user page. -->
 
-<iframe src="../live/?embed"
+<iframe src="../../live/?embed"
         title="EngrCAD's geometry kernel running in WebAssembly"
         loading="lazy"
         style="width:100%; height:26rem; border:1px solid #3a3d45; border-radius:6px; background:#1d1f24;">
 </iframe>
 
-<p style="margin-top:.5rem"><a href="../live/">Open the demo full-page →</a></p>
+<p style="margin-top:.5rem"><a href="../../live/">Open the demo full-page →</a></p>
 
 If that panel is empty, your browser blocked WebAssembly or the demo hasn't been
 deployed yet — see *Running it yourself* below.

@@ -1,4 +1,6 @@
-# 2D views: offset, section, silhouette
+---
+title: "2D views: offset, section, silhouette"
+---
 
 Three operations turn a model back into 2D — and one primitive that only exists
 because a 2D profile swept in x is the shape you keep reaching for.

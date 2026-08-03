@@ -1,4 +1,6 @@
-# Standard components ("smart" hardware)
+---
+title: "Standard components (\"smart\" hardware)"
+---
 
 A catalogue component is more than geometry: **placing it modifies the host model and
 assembles itself**. `ComponentAssembly.Place` does both jobs in one call — it cuts what

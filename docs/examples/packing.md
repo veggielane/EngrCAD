@@ -1,4 +1,6 @@
-# Packing a build plate
+---
+title: "Packing a build plate"
+---
 
 `Packing.Pack` lays several parts out on a printer's build plate — build123d's `pack`
 helper: 2D bin packing of each part's [silhouette](2d-views.md) footprint, so a part

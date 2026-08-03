@@ -1,4 +1,6 @@
-# EngrCAD
+---
+title: "EngrCAD"
+---
 
 A CAD kernel for modern .NET built around a **hybrid geometry engine** that natively
 supports three representations:
@@ -24,7 +26,7 @@ HalfEdgeMesh mesh  = body.ToMesh();      // rendering, FEA, 3D printing
 
 - **[Getting started](getting-started.md)** — install, build a first model, and run
   the live-modeling loop (`dotnet watch` + hot reload).
-- **[Examples](examples/toc.yml)** — one page per feature, each with runnable code and
+- **[Examples](examples/primitives.md)** — one page per feature, each with runnable code and
   the render it produces. Every snippet is compiled, executed, and screenshotted by
   the documentation build itself, so the examples cannot drift from the code.
 - **[API reference](api/index.md)** — generated from the source XML documentation.

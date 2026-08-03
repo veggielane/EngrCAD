@@ -1,6 +1,9 @@
 # API reference
 
-Generated from the XML documentation comments in the `src/*` projects.
+Generated from the XML documentation comments in the `src/*` projects. This subtree is
+built by DocFX; the rest of the documentation — the guides and the executable examples —
+is [back at the site root](../). (The link is relative on purpose: it works whether the
+site is served from a domain root or from a repository subpath.)
 
 Start with these types:
 
