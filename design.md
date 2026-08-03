@@ -3836,6 +3836,76 @@ coordinates already relative to the rotating line of centres — and the failure
 that is wrong is the dangerous kind: every individual coupling stays satisfied, the
 mechanism solves, and the assembled ratio is quietly wrong.
 
+### Manufacturability checks: two fidelities, said out loud
+
+`Manufacturability` (draft angle, overhang area, wall thickness) had one deliverable
+shape to choose and three decisions inside it, and all four are about **honesty rather
+than geometry** — the arithmetic in each leg is a dot product.
+
+**The deliverable is a report PLUS a field, and the two come from different places on
+purpose.** The *verdict* — does this part pass — is read from the most exact source the
+part has: the B-Rep's own faces for draft (a plane has one normal, so its angle carries
+no discretization at all), closed-form facet arithmetic for overhangs, a ray against the
+display mesh for thickness. The *picture* is a `MeshField` over the display mesh, which
+the existing `FieldDisplay` machinery colours with no new rendering code — the whole
+point of results being data on a mesh. Reading the verdict off the mesh instead would
+have been simpler and is wrong in the direction that matters: an inscribed facet is
+steeper than the surface it approximates, so a 3° drafted CONE reads 2.92° at display
+quality and a check with a 3° minimum would fail a part that is correct. A report that
+cries wolf on correct output is worse than no report (`TetQuality`'s rule), so the two
+sources are kept apart and each is labelled.
+
+**A threshold is compared on the dot product, never on the derived angle.** `asin` is
+monotone, so "the angle exceeds the threshold" and "the dot product exceeds the
+threshold's sine" are the same statement — and they are not the same *computation*. A
+wall built at exactly 45° reports a steepest angle of **45.000000000000007**, because
+`asin` round-trips `1/sqrt(2)` an ulp high; a degrees comparison therefore reports a wall
+drawn at exactly the stated self-supporting angle as an overhang, complete with 848.5 of
+area. The sine form carries one fewer rounding and is the one the counts come from, with
+degrees kept for humans. This is the `PolygonFan` tie guard's lesson in another costume —
+**a predicate is only as meaningful as the arithmetic it is evaluated in** — and it is
+pinned by a test asserting BOTH halves, so nobody can quietly rewrite the rule in
+degrees.
+
+**An unmeasurable point takes the conservative end of the scale, not NaN.** The thickness
+ray can genuinely fail to find an opposing surface — a rib end, a boss over a
+through-hole — and NaN is the obvious spelling for "not applicable". It is the wrong one:
+`FieldRange` skips NaN when ranging, but a NaN still paints as the colour map's BOTTOM
+stop, which on a thickness plot is the colour of the thinnest wall in the part. The
+picture would show the exact defect the check exists to find, at a point where the check
+declined to look. So those points carry the model's own diagonal ("at least this thick")
+and are COUNTED in the report, where a number can be acted on. The general rule: **a
+field a human looks at has no "not applicable" colour, so an absence must be spelled as a
+value plus a count, never as a value alone.**
+
+**The wall-thickness estimator was assessed before it was promised**, which the backlog
+entry asked for and which changed what got built. Three candidates: a ray cast opposite
+the normal, a medial-axis (largest inscribed ball) distance, and twice the interior
+distance field. The last is not an estimator at all — the field is zero *on* the surface,
+so it only becomes one by turning into the second. Between the other two the deciding
+argument is not accuracy but **what each is exact ON**: the ray cast, corrected by
+`|n · n_hit|`, is the perpendicular distance from the point to the *plane of the facet it
+hit*, which is EXACT wherever the opposing surface is planar — plates, ribs, bosses,
+webs, shelled prisms, i.e. the geometry a thickness check is run on — and it needs only
+the display mesh, so it works on an imported `.stl` where the implicit lowering can fail.
+The ball is the better answer at a fillet or an inside corner and is filed as a named
+alternative rather than a silent upgrade, because two estimators answering one question
+must both be nameable. What the shipped one does wrong is stated in its own API docs with
+the direction of each error: under-reporting against a locally convex opposite,
+over-reporting against a concave one, and — since every vertex of the whole surface is
+probed — the conservative reading is the one the minimum keeps.
+
+One measurement is worth keeping for its shape rather than its subject. A **cone's**
+lateral area under an overhang threshold converges quadratically on `sqrt(2)·pi·r²`
+(4.0e-3 / 1.0e-3 / 2.5e-4 / 6.3e-5, ratios 4.00) while a **sphere cap's** does not
+converge at all. The difference is not the surface but where the region's BOUNDARY falls:
+on the cone it is a model edge, so the whole face is in or out and nothing is quantized;
+on the sphere it is a level set crossing the interior of a face, and a facet is
+all-or-nothing, so the answer snaps to a facet band and the error is first order with a
+sign set by where the cutoff happens to land. **An integral over a facet-classified
+region converges like its boundary, not like its area** — so a closed form for such a
+region is a sanity band, not a tolerance.
+
 ## 6c. Drawings (hidden lines, sheets, drafting)
 
 A drawing is a *document*, not a picture, and the whole design follows from that.

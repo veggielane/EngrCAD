@@ -2755,17 +2755,57 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   - Verification: save→load→save stays a byte fixed point with configurations present,
     and switching away and back regenerates bit-identical geometry — the cache-key
     property the undo stack already asserts, asked of a new consumer.
-- [ ] **Manufacturability checks: draft angles, wall thickness, overhangs.** Three legs
-  riding machinery that exists, one entry because the deliverable is one shape — a
-  per-part report plus a `FieldDisplay` colouring. Draft: per-face angle against a pull
-  direction (planar faces exact via `BrepQueries`, curved sampled and said so). Wall
-  thickness: the SDF answers it locally already (the section isolines); a global
-  minimum-thickness field wants an honest estimator assessed before a number is
-  promised. Overhangs: facet normal against a build direction below a threshold,
-  area totalled — pure mesh arithmetic.
-  - Verification: closed forms — a drafted block's walls read exactly the drafted
-    angle, a shelled box reads its wall thickness exactly, and a 45° cone at a 45°
-    threshold reports zero overhang area on either side of the tie.
+- [ ] **Manufacturability follow-ups** (`Manufacturability.cs` landed: draft / overhangs /
+  wall thickness, each a report plus a `MeshField` the existing `FieldDisplay` colours;
+  docs `examples/manufacturability.md`). Four residuals, in the order they would pay:
+  - **Undercut detection** — the real complement of the draft check, and stated as a
+    non-goal in its API docs rather than implied away: a face can have ample local draft
+    and still be shadowed by material above it, so no rigid pull frees it. That is a
+    VISIBILITY question along ±pull (a ray per surface sample against the body, or a
+    depth-buffer sweep) rather than a normal question, and it is what turns "these faces
+    have too little draft" into "this part cannot be moulded in two halves". Verification:
+    a re-entrant groove in an otherwise well-drafted block is invisible to `CheckDraft`
+    today and must be reported by this; a plain drafted block must still report none.
+  - **A medial-axis (inscribed-ball) thickness estimator beside the ray cast.** The
+    shipped estimator measures ALONG THE SURFACE NORMAL and is exact against planar
+    opposites, which is the right answer for plates, ribs and webs and the wrong one at a
+    fillet or an inside corner, where the largest inscribed ball is smaller. The ball is
+    a bracketed search on `Part.TryGetSdf()` — walk inward along −n̂ for the largest t
+    with `|d(p − t·n̂)| = t`, thickness `2t` — and it has a nice conservative property
+    (a CSG difference SDF is a correct-sign LOWER bound, so it under-reports). It also
+    has two real costs to weigh first: a lowering that can fail where the mesh route
+    never does, and a root condition that is a degenerate INTERVAL rather than a crossing
+    on the exact case (a slab satisfies it for every t up to T/2), so it is a
+    largest-t-with-f≈0 search and needs its own tolerance argument. Offer it as a named
+    `ThicknessEstimator`, never as a silent upgrade — two estimators answering one
+    question must both be nameable.
+  - **A per-FACET field spelling.** `MeshField` is per-vertex, so a facet quantity is
+    published as the worst incident reading and bleeds one ring into the neighbouring
+    face; a large planar face with no interior vertices is interpolated from its corners,
+    which makes a correct face look implicated (measured on the docs housing figure).
+    Cell association is already a documented gap on `MeshField`; a draft/overhang plot is
+    the first consumer with a real need for it.
+  - **A build PLATE for the overhang check.** A face resting on the bed is currently
+    reported like any other ceiling, because the check knows the build DIRECTION and not
+    where the plate is. Adding a plate is one plane plus a "within one layer of it" test
+    — but it changes the reported area, so it is opt-in and stated, not a default.
+- [ ] **`Shape.Sphere`'s meridian does not refine with `SegmentsPerCircle`** (measured
+  while building the overhang check, and the same shape of defect as the recorded
+  elliptical-prism one). Doubling `SegmentsPerCircle` on a sphere DOUBLES the facet count
+  instead of quadrupling it — 1536 / 3072 / 6144 / 12288 at 32 / 64 / 128 / 256 — because
+  the sphere factory's generator is a rational NURBS arc while `IsAngularlyParameterized`
+  recognizes only `Circle3d` and `Ellipse3d`, so the meridian falls to `curveSamples`.
+  A caller who states a density gets it in one parameter direction and not the other.
+  The measurable consequence: any latitude-quantized quantity is frozen — the overhang
+  cap boundary sits at 119.2776° at every one of those four densities and its area error
+  stays at +2.13% rather than converging. Fix is in `BRepTessellator`'s
+  `IsAngularlyParameterized` (classify a rational arc by GEOMETRY, the way
+  `BrepSelection.Kind` classifies revolved generators by sampling, rather than by curve
+  type — the recorded reason a type switch classifies identical geometry differently).
+  - Verification: the facet count QUADRUPLES per doubling on a sphere and a torus; the
+    overhang cap at a 30° cutoff converges instead of freezing; every committed docs PNG
+    and every golden fingerprint re-taken deliberately, since this moves sphere and torus
+    tessellation everywhere.
 - [ ] **ISO 286 fits and tolerance stackups along a mate chain.** The fit tables
   (H7/g6 and friends) are a transcription carrying the verify-against-datasheet flag
   (`StandardHoles`' convention); a stackup is a walk along the existing mate graph
