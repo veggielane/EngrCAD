@@ -1401,15 +1401,31 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   claim is asymptotic at best. Separating them is a measurement, not a redesign: run the
   same study on a mesh whose boundary is far from the region being measured (an interior
   sub-domain norm), and if the rate rises to 3 the fill is the cap.
-- [ ] **FEA: recovery-based smoothing for a MATERIAL INTERFACE is wrong and is not refused.**
-  A recovered field is smooth by construction, so a patch straddling two regions fits one
-  polynomial across a genuine stress discontinuity and reports a value that is wrong on both
-  sides. Direct averaging has the same defect and the README says so, but recovery makes it
-  worse, and the fix is standard and small: assemble patches PER REGION, so a patch never
-  spans a material boundary and an interface node gets one value per region it touches. That
-  needs a decision about what a single nodal value then means (`NodalStress` is indexed by
-  node, so two values per node has nowhere to go) — most likely per-region nodal fields, the
-  same shape as the per-region laws.
+- [ ] **FEA: thermal `NodalFlux` has the material-interface defect the stress recovery no
+  longer has, and the machinery to fix it now exists.** Heat flux `q = -k·grad T` is
+  discontinuous at a bonded interface in exactly the way stress is — the NORMAL component is
+  continuous and the tangential one jumps with the conductivity — and
+  `ThermalResults.NodalFlux` averages across regions with no way to ask for a material's own
+  value. It is a smaller job than the structural one was, for two reasons: there is no
+  recovery on the thermal path at all (so nothing spans an interface, and the REACH argument
+  that made the structural fix worth doing does not apply), and `AnalysisMesh` already owns
+  the `(node, region)` slot table, so `ComputeNodalFlux` takes the same `perRegion` parameter
+  `ComputeNodalStress` did and a `NodalFluxIn(region, node)` falls out. What is genuinely open
+  is only whether the thermal side wants a superconvergent recovery of its own, which is a
+  separate question with its own convergence table to earn.
+- [ ] **FEA: a bi-material colour plot still shows the blended interface value, because
+  `MeshField` has one value per vertex.** `StructuralResults.Fields()` and `SampleOnto` both
+  publish the node-indexed `NodalStress`, so the honest per-material values
+  (`NodalStressIn`) stop at the API boundary and never reach a viewer or a `.vtu`. Two shapes
+  are plausible and the choice is a decision rather than a coding job. (a) **One field per
+  region**, NaN outside it — which composes with the recorded rules (`FieldRange` skips NaN,
+  and a NaN paints as the map's bottom stop, so the viewer would need to skip rather than
+  colour it) and needs a `FieldDisplay` that can show several fields at once. (b) **VTK's own
+  answer**: write the interface as a cell-data array, or duplicate interface nodes per region
+  so each material has its own surface — exact, and it changes what "node i" means to every
+  consumer downstream. Note the whole thing is unreachable until conforming interfaces land
+  (`AnalysisMesh.InterfaceNodeCount` is zero for every mesh the public API can build), so this
+  is a follow-up to that item rather than to this one.
 - [ ] **FEA: the factorization is the wall, and it is Core's to move.** In Release the
   cost is overwhelmingly `SparseCholesky`: at 46 800 DOF a linear solve measures 323 ms to
   assemble, **79 009 ms to factor**, 249 ms to substitute and 45 ms to recover stress. The
@@ -2221,6 +2237,11 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     selector naming it would double-count a pressure, and `TetFacet.SourceTriangle` would
     be ambiguous between two coincident input triangles. Until then, a bonded bi-material
     part is meshed as one surface with one material.
+    <br>**The post-processing half is now ready for it**: stress recovery assembles its
+    patches per material region and never fits across an interface, `AnalysisMesh` carries the
+    `(node, region)` slot table, and `StructuralResults.NodalStressIn` gives the per-material
+    value a shared node has two of (design.md §3i). So this item no longer has to carry that
+    question too — what it still owns is the double-counting facet decision above.
 - [ ] **Topological naming residuals** (v1 ✅ landed: `BrepFace.Provenance` +
   `Shape.Tag(name)` + `FaceSetRef.Tagged`/`Within`. Tags survive the whole boolean
   pipeline, `BrepSolid.Clone`, `Drill`, patterns and transforms; the failure is one-sided,
