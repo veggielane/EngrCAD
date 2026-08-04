@@ -321,21 +321,24 @@ internal static class SurfaceNetsSimplify
         var offenders = new HashSet<int>();
         var (corners, starts) = MapFaces(label, quadCorners, offenders);
 
-        // Compact: only clusters some surviving face names become vertices, numbered in
-        // first-use order so the output is a deterministic function of the input.
+        // Compact: only the clusters some surviving face names become vertices, numbered in
+        // the ORIGINAL vertex order rather than in first-use order. That is what makes the
+        // neutral settings the identity — with nothing merged the map is v → v and the face
+        // buffer is the uniform walk's, bit for bit — where first-use order would renumber
+        // a mesh nothing had been done to.
+        var used = new bool[n];
+        foreach (int id in corners)
+            used[id] = true;
         var remap = new int[n];
-        Array.Fill(remap, -1);
         var kept = new List<Vector3d>();
-        for (int c = 0; c < corners.Count; c++)
+        for (int id = 0; id < n; id++)
         {
-            int id = corners[c];
-            if (remap[id] < 0)
-            {
-                remap[id] = kept.Count;
+            remap[id] = used[id] ? kept.Count : -1;
+            if (used[id])
                 kept.Add(place[id]);
-            }
-            corners[c] = remap[id];
         }
+        for (int c = 0; c < corners.Count; c++)
+            corners[c] = remap[corners[c]];
         _ = positions;
         return HalfEdgeMesh.Build(
             kept, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(corners),

@@ -31,6 +31,14 @@ public sealed class MeshQuality
     /// </summary>
     public TessellationQuality? Tessellation { get; set; }
 
+    /// <summary>
+    /// How the implicit lowering's polygonizer places its vertices and how coarse it may
+    /// be — sharp-feature placement, its feature angle, and the opt-in adaptive tolerance.
+    /// Null (the default) uses <see cref="SurfaceNetsOptions.Default"/>, which has sharp
+    /// features ON: a polygonized box is a box.
+    /// </summary>
+    public SurfaceNetsOptions? SurfaceNets { get; set; }
+
     /// <summary>The (segmentsPerCircle, curveSamples) a B-Rep tessellation of
     /// <paramref name="solid"/> should use under this quality — the fixed counts, or
     /// the adaptive resolution when <see cref="Tessellation"/> is set.</summary>
