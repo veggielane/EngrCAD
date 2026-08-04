@@ -454,6 +454,128 @@ public class SheetMetalTests
         Assert.Equal(1.0, FoldedVolume(body) / flat.Volume, 6);
     }
 
+    // ------------------------------------------- hems, jogs and curls (multi-bend forms)
+
+    /// <summary>
+    /// A hem is TWO bends in the same direction, and the number that has to be right is the
+    /// GAP — measured on the built solid rather than assumed from the arithmetic that set
+    /// the intermediate leg. The returned leg's facing surface must sit exactly
+    /// <c>gap</c> above the sheet's own quoted face, and it must run back OVER the sheet
+    /// (the direction claim a one-sided test would miss).
+    /// </summary>
+    [Theory]
+    [InlineData(SheetBendDirection.Up)]
+    [InlineData(SheetBendDirection.Down)]
+    public void AHemReturnsOverTheSheetAtExactlyTheDeclaredGap(SheetBendDirection direction)
+    {
+        const double gap = 6, returnLength = 20, radius = 1.0;
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithHem(SheetFlangeTarget.BaseEdge(1), returnLength, gap, bendRadius: radius,
+                direction: direction);
+
+        Assert.Equal(2, body.Flanges.Count);
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+
+        // The sheet's quoted face is z = T for an Up hem and z = 0 for a Down one; the
+        // returned leg faces it across exactly the gap, on the same side the fold went.
+        int sign = direction == SheetBendDirection.Up ? 1 : -1;
+        double quoted = direction == SheetBendDirection.Up ? Thickness : 0;
+        double facing = quoted + sign * gap;
+        var onLeg = solid.Vertices
+            .Where(v => Math.Abs(v.Position.Z - facing) < 1e-6)
+            .ToList();
+        Assert.NotEmpty(onLeg);
+        // ... and the leg runs BACK over the plate: its far end is inboard of the bend line.
+        Assert.True(onLeg.Min(v => v.Position.X) < PlateX,
+            "a hem's returned leg must fold back over the sheet, not away from it");
+    }
+
+    [Fact]
+    public void AClosedHemIsRefusedNamingTheCoincidentFaces()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithHem(SheetFlangeTarget.BaseEdge(1), 20, gap: 2 * Radius));
+        Assert.Contains("CLOSED hem", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("coincident", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A jog steps the sheet sideways and leaves it PARALLEL to itself. Both halves are
+    /// measured on the built solid: the step is exactly the declared offset, and the far
+    /// leg's own faces are parallel to the sheet's (which is what the two bends being equal
+    /// and opposite buys, and what a single-bend model could not produce).
+    /// </summary>
+    [Theory]
+    [InlineData(90.0)]
+    [InlineData(45.0)]
+    [InlineData(120.0)]
+    public void AJogStepsByExactlyItsOffsetAndLeavesTheSheetParallel(double angle)
+    {
+        const double offset = 12, run = 20;
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithJog(SheetFlangeTarget.BaseEdge(1), offset, run, angle);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+
+        // The far leg is the only material past the jog: its two planar faces are
+        // horizontal (parallel to the sheet) and sit at the offset above it.
+        var horizontal = solid.Faces
+            .Where(f => f.IsPlanar(out _, out var n) && Math.Abs(Math.Abs(n.Z) - 1) < 1e-9)
+            .Select(f => f.Bounds().Center.Z)
+            .ToList();
+        Assert.Contains(horizontal, z => Math.Abs(z - (Thickness + offset)) < 1e-9);
+        Assert.Contains(horizontal, z => Math.Abs(z - (offset)) < 1e-9);
+    }
+
+    [Fact]
+    public void AJogSmallerThanItsOwnBendsIsRefusedNamingTheMinimum()
+    {
+        // At 90 degrees the two bends alone step 2R + T = 5.5, so 4 is impossible.
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SheetMetalBody.Base(Plate(), Spec()).WithJog(SheetFlangeTarget.BaseEdge(1), 4, 20));
+        Assert.Contains("5.5", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A curl is a CHAIN of hits, so what it produces is a polygonal roll rather than a
+    /// cylinder — which is what the API says and what this measures: the declared total
+    /// turn arrives as the sum of the segments' turns, read off the built solid's own
+    /// faces. A part rolled 270 degrees has its far leg pointing back at the sheet.
+    /// </summary>
+    [Fact]
+    public void ACurlTurnsThroughItsDeclaredTotalAsAChainOfBends()
+    {
+        const int segments = 6;
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithCurl(SheetFlangeTarget.BaseEdge(1), 270, segments, bendRadius: 1.0, legLength: 0.8);
+
+        Assert.Equal(segments, body.Flanges.Count);
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+
+        // Each hit turns 45 degrees, so the last leg's own direction is 270 degrees from
+        // the sheet's: it points back inboard and DOWNWARD. Read off the last flange's
+        // tip face, whose normal is the leg's own direction.
+        var flat = body.Unfold();
+        Assert.Equal(segments, flat.Bends.Count);
+        Assert.All(flat.Bends, b => Assert.Equal(45, b.AngleDegrees, 9));
+    }
+
+    [Fact]
+    public void ACurlOfOneSegmentOrPastAHalfTurnPerBendIsRefused()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SheetMetalBody.Base(Plate(), Spec()).WithCurl(SheetFlangeTarget.BaseEdge(1), 270, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SheetMetalBody.Base(Plate(), Spec()).WithCurl(SheetFlangeTarget.BaseEdge(1), 400, 2));
+    }
+
     // ------------------------------------------------------- cutouts on a flange wall
 
     /// <summary>

@@ -482,6 +482,151 @@ public sealed class SheetMetalBody
             target, length, angleDegrees, direction, bendRadius, kFactor, startOffset, width, relief,
             cutouts));
 
+    /// <summary>
+    /// A HEM: the edge folded back on itself, as TWO bends in the same direction rather
+    /// than as one 180° fold.
+    ///
+    /// <para><b>Why two.</b> A single 180° bend has no geometry at all in this model — its
+    /// outside setback <c>(R + T)·tan(θ/2)</c> is infinite at exactly 180° — and a return
+    /// leg lying flat against the sheet is the coincident boundary the whole feature exists
+    /// to avoid. Two bends is also how a press brake actually makes one, so the model and
+    /// the process agree: the intermediate leg IS the hem's open gap, and its length is
+    /// derived from the gap the caller states.</para>
+    ///
+    /// <para>The <b>gap is measured between the sheet's own quoted face and the returned
+    /// leg's facing surface</b>, and it is <c>2R + L</c> for an intermediate wall of length
+    /// L — so a gap of <c>2R</c> or less is a CLOSED hem and is refused by name. A tight
+    /// hem is spelt with a small bend radius, which is what flattening the material in the
+    /// press means.</para>
+    /// </summary>
+    /// <param name="target">The edge to hem.</param>
+    /// <param name="returnLength">How far the returned leg runs back, from its own outer
+    /// virtual sharp — the ordinary <see cref="EdgeFlange.Length"/> convention.</param>
+    /// <param name="gap">Open gap between the sheet and the returned leg; null uses
+    /// <c>2R + T</c>, which clears the sheet by one thickness.</param>
+    public SheetMetalBody WithHem(
+        SheetFlangeTarget target, double returnLength, double? gap = null,
+        double? bendRadius = null, SheetBendDirection direction = SheetBendDirection.Up,
+        double startOffset = 0, double? width = null)
+    {
+        double radius = bendRadius ?? Spec.BendRadius;
+        double opening = gap ?? (2 * radius + Spec.Thickness);
+        double intermediate = opening - 2 * radius;
+        if (!(intermediate > Weld))
+        {
+            throw new ArgumentOutOfRangeException(nameof(gap),
+                $"A hem gap of {opening:g6} needs an intermediate leg of {intermediate:g6} at bend radius " +
+                $"{radius:g6}, since the gap is 2R plus that leg. A gap of 2R or less is a CLOSED hem, whose " +
+                "returned leg lies flat against the sheet — coincident boundary, which this kernel refuses " +
+                "everywhere. Open the gap, or use a smaller bend radius (flattening the material is what a " +
+                "press does to close a hem).");
+        }
+
+        // A square bend's setback is exactly R + T, so the first flange's Length -- measured
+        // from its own outer virtual sharp -- is the intermediate leg plus that.
+        var stage = WithFlange(new EdgeFlange(
+            target, intermediate + radius + Spec.Thickness, 90, direction, bendRadius,
+            StartOffset: startOffset, Width: width));
+        // The SAME direction folds back: a flange's own top face is the continuation of the
+        // face its bend line was quoted on, so "toward it" turns the leg back over the sheet.
+        return stage.WithFlange(new EdgeFlange(
+            SheetFlangeTarget.FlangeTip(stage.Flanges.Count - 1), returnLength, 90, direction, bendRadius));
+    }
+
+    /// <summary>
+    /// A JOG (offset): two equal and OPPOSITE bends, so the sheet steps sideways and
+    /// carries on parallel to itself.
+    ///
+    /// <para>The intermediate leg is derived in closed form from the offset the caller
+    /// states: with both bends at θ and radius R, the perpendicular step is
+    /// <c>(2R + T)(1 − cos θ) + L·sin θ</c>, so <c>L = (offset − (2R + T)(1 − cos θ)) /
+    /// sin θ</c>. Below that minimum the two bends would have to overlap, and the refusal
+    /// names the smallest offset the radius and angle allow.</para>
+    /// </summary>
+    /// <param name="offset">Perpendicular step between the sheet's quoted face and the
+    /// corresponding face of the leg beyond the jog.</param>
+    /// <param name="runLength">How far the leg beyond the jog runs, from its own outer
+    /// virtual sharp.</param>
+    /// <param name="angleDegrees">Each bend's angle; 90 makes a square step.</param>
+    public SheetMetalBody WithJog(
+        SheetFlangeTarget target, double offset, double runLength, double angleDegrees = 90,
+        double? bendRadius = null, SheetBendDirection direction = SheetBendDirection.Up,
+        double startOffset = 0, double? width = null)
+    {
+        double radius = bendRadius ?? Spec.BendRadius;
+        double angle = angleDegrees * Math.PI / 180;
+        if (!(angleDegrees > 0) || angleDegrees >= 180)
+            throw new ArgumentOutOfRangeException(nameof(angleDegrees),
+                $"A jog's two bends each turn {angleDegrees:g6} degrees; each must lie strictly between 0 " +
+                "and 180.");
+        double minimum = (2 * radius + Spec.Thickness) * (1 - Math.Cos(angle));
+        double intermediate = (offset - minimum) / Math.Sin(angle);
+        if (!(intermediate > Weld))
+        {
+            throw new ArgumentOutOfRangeException(nameof(offset),
+                $"A jog of {offset:g6} at {angleDegrees:g6} degrees and radius {radius:g6} leaves an " +
+                $"intermediate leg of {intermediate:g6}: the two bends alone already step " +
+                $"{minimum:g6}, so that is the smallest offset this radius and angle can make. Increase the " +
+                "offset, reduce the radius, or steepen the bends.");
+        }
+
+        var stage = WithFlange(new EdgeFlange(
+            target, intermediate + SheetMetalSpec.OutsideSetback(angle, radius, Spec.Thickness),
+            angleDegrees, direction, bendRadius, StartOffset: startOffset, Width: width));
+        // The OPPOSITE direction turns back, which is what leaves the far leg parallel to
+        // the sheet — asserted geometrically rather than assumed (see the tests).
+        var back = direction == SheetBendDirection.Up ? SheetBendDirection.Down : SheetBendDirection.Up;
+        return stage.WithFlange(new EdgeFlange(
+            SheetFlangeTarget.FlangeTip(stage.Flanges.Count - 1), runLength, angleDegrees, back, bendRadius));
+    }
+
+    /// <summary>
+    /// A CURL: the edge rolled through <paramref name="totalAngleDegrees"/> as a CHAIN of
+    /// equal bends.
+    ///
+    /// <para><b>What this is and is not.</b> A rolled edge past 180° is one continuous
+    /// cylindrical band, which this bend model has no way to spell — its outside setback
+    /// diverges at 180° and a wall measured from a virtual sharp stops meaning anything
+    /// beyond it. A curl is therefore built the way a press actually makes one, in
+    /// successive hits, and the result is a POLYGONAL roll of
+    /// <paramref name="segments"/> facets rather than a true cylinder. That is stated
+    /// rather than approximated away: the flat pattern, the bend table and the volume
+    /// identity all describe exactly the part this builds.</para>
+    /// </summary>
+    /// <param name="totalAngleDegrees">Total turn; each of the <paramref name="segments"/>
+    /// bends takes an equal share, and that share must stay under 180.</param>
+    /// <param name="segments">How many hits; at least two (one hit is a plain flange).</param>
+    /// <param name="legLength">Straight leg between hits; null uses one sheet thickness,
+    /// which is about as tight as tooling reaches.</param>
+    public SheetMetalBody WithCurl(
+        SheetFlangeTarget target, double totalAngleDegrees, int segments,
+        double? bendRadius = null, double? legLength = null,
+        SheetBendDirection direction = SheetBendDirection.Up,
+        double startOffset = 0, double? width = null)
+    {
+        if (segments < 2)
+            throw new ArgumentOutOfRangeException(nameof(segments),
+                $"A curl is a CHAIN of bends and this one asks for {segments}. One bend is a plain flange — " +
+                $"use {nameof(WithFlange)}.");
+        double each = totalAngleDegrees / segments;
+        if (!(each > 0) || each >= 180)
+            throw new ArgumentOutOfRangeException(nameof(totalAngleDegrees),
+                $"{totalAngleDegrees:g6} degrees over {segments} segments is {each:g6} per bend; each must lie " +
+                "strictly between 0 and 180. Add segments.");
+
+        double radius = bendRadius ?? Spec.BendRadius;
+        double leg = legLength ?? Spec.Thickness;
+        double length = leg + SheetMetalSpec.OutsideSetback(each * Math.PI / 180, radius, Spec.Thickness);
+        var body = WithFlange(new EdgeFlange(
+            target, length, each, direction, bendRadius, StartOffset: startOffset, Width: width));
+        for (int i = 1; i < segments; i++)
+        {
+            body = body.WithFlange(new EdgeFlange(
+                SheetFlangeTarget.FlangeTip(body.Flanges.Count - 1), length, each, direction, bendRadius));
+        }
+        return body;
+    }
+
     /// <summary>The folded solid as a <see cref="Shape"/> — B-Rep native, built by
     /// topology surgery rather than by booleans (see <see cref="SheetMetalSurgery"/>).</summary>
     public Shape Solid => new SheetMetalShape(this);
