@@ -773,6 +773,86 @@ public abstract class Shape
     // source break to save one `.AsSelector(...)`. Write
     // `Shell(t, openings.AsSelector("openings"))` where the typed vocabulary is wanted.
 
+    // ---- direct editing (a body with no construction history) ----
+
+    /// <summary>
+    /// Pushes the selected faces along their own outward normals by
+    /// <paramref name="distance"/> (positive grows the solid) — <see cref="DirectEdit.OffsetFaces"/>.
+    ///
+    /// <para>This is the edit an IMPORTED body takes: a solid read from STEP has no parameter
+    /// to change, so the only handle on it is its faces. On a shape that DOES have a history,
+    /// changing the construction is better than editing its result.</para>
+    ///
+    /// <para>Where every face adjoining the moved one is parallel to its normal — a box's top
+    /// against its four sides — the volume changes by exactly area × distance; where a
+    /// neighbour is oblique the boundary slides as well and the change is the frustum
+    /// integral.</para>
+    ///
+    /// <para>Representation support: <b>B-Rep-Native</b> under any similarity, MIRRORED
+    /// placements included (an offset by a distance is defined by distance alone, and every
+    /// isometry preserves distance); the distance scales with a uniform factor. Implicit
+    /// bridges through the tessellation; mesh comes from the exact B-Rep.</para>
+    /// </summary>
+    public Shape OffsetFaces(double distance, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        ArgumentNullException.ThrowIfNull(faces);
+        if (!double.IsFinite(distance))
+            throw new ArgumentOutOfRangeException(nameof(distance), "The offset distance must be finite.");
+        return new DirectEditShape(this, DirectEditKind.Offset, new Vector3d(distance, 0, 0), faces);
+    }
+
+    /// <summary>
+    /// Translates the selected PLANAR faces by <paramref name="translation"/> —
+    /// <see cref="DirectEdit.MoveFaces"/>.
+    ///
+    /// <para>A plane is invariant under translation within itself, so this IS
+    /// <see cref="OffsetFaces"/> by the projected distance <c>v·n̂</c>, per face. Two
+    /// consequences follow rather than being arranged: moving a face parallel to itself does
+    /// nothing at all, and moving several faces by one vector moves each by its own amount. A
+    /// curved face is refused by name at lowering (a translation moves its axis, which no
+    /// offset can do).</para>
+    ///
+    /// <para>Representation support: <b>B-Rep-Native</b> under any similarity, MIRRORED
+    /// placements included — the translation takes its LINEAR IMAGE, and because a reflection
+    /// preserves dot products the projected distance survives it. Implicit bridges through
+    /// the tessellation; mesh comes from the exact B-Rep.</para>
+    /// </summary>
+    public Shape MoveFaces(in Vector3d translation, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        ArgumentNullException.ThrowIfNull(faces);
+        return new DirectEditShape(this, DirectEditKind.Move, translation, faces);
+    }
+
+    /// <summary>
+    /// Removes the selected faces and heals the wound by dropping the boundary they left in
+    /// their planar neighbours — <see cref="DirectEdit.DeleteFaces"/>. This is how a boss, a
+    /// pad or a pocket comes off an imported body.
+    ///
+    /// <para>A wound that only PARTLY bounds a neighbouring loop needs those neighbours
+    /// EXTENDED until they meet, which is a different operation that can have no answer at
+    /// all; it is refused by name at lowering rather than attempted.</para>
+    ///
+    /// <para>Representation support: <b>B-Rep-Native</b> under any similarity (the operation
+    /// is purely topological, so nothing has to commute with it). Implicit bridges through
+    /// the tessellation; mesh comes from the exact B-Rep.</para>
+    /// </summary>
+    public Shape DeleteFaces(Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        ArgumentNullException.ThrowIfNull(faces);
+        return new DirectEditShape(this, DirectEditKind.Delete, Vector3d.Zero, faces);
+    }
+
+    /// <inheritdoc cref="OffsetFaces(double, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape OffsetFaces(double distance, FaceSetRef faces) =>
+        OffsetFaces(distance, Selector(faces, nameof(faces)));
+
+    /// <inheritdoc cref="MoveFaces(in Vector3d, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape MoveFaces(in Vector3d translation, FaceSetRef faces) =>
+        MoveFaces(translation, Selector(faces, nameof(faces)));
+
+    /// <inheritdoc cref="DeleteFaces(Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape DeleteFaces(FaceSetRef faces) => DeleteFaces(Selector(faces, nameof(faces)));
+
     private static Func<BrepSolid, IEnumerable<BrepFace>> Selector(FaceSetRef faces, string name)
     {
         ArgumentNullException.ThrowIfNull(faces);
