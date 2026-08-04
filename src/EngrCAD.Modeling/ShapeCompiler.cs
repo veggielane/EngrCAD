@@ -669,10 +669,12 @@ internal static class ShapeCompiler
                 var effective = sheetMirrored
                     ? m * body.Plane.ToMatrix() * FlipX
                     : m * body.Plane.ToMatrix();
-                // BaseOutline, not BaseSketch: a bend relief is a NOTCH in the blank rather
+                // FoldedOutline, not BaseSketch: a bend relief is a NOTCH in the blank rather
                 // than a cut in the folded body, so the sheet is extruded from the outline
-                // the reliefs left. With none declared the two are the same object.
-                var (baseOuter, baseHoles) = body.BaseOutline.ToProfiles();
+                // the reliefs left — and a LOUVRE's lanced footprint is a hole HERE and not
+                // in the blank, since a lance separates material without removing any. With
+                // neither declared all three are the same object.
+                var (baseOuter, baseHoles) = body.FoldedOutline.ToProfiles();
                 var flat = SolidFactory.Extrude(
                     TransformProfile(baseOuter, effective),
                     effective.TransformVector((0, 0, body.Spec.Thickness)),

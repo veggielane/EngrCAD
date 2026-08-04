@@ -568,7 +568,7 @@ public static class SheetMetalSurgery
         // a corner's own preconditions are checked in AddCornerFlanges, still before either
         // wall is touched.)
         if (flush[0] && !AtCorner(cornerPoint, q0))
-            RequireSquareNeighbour(endAtQ0, -a, wall);
+            RequireSquareNeighbour(endAtQ0, a, wall);
         if (flush[1] && !AtCorner(cornerPoint, q1))
             RequireSquareNeighbour(endAtQ1, a, wall);
 
@@ -577,17 +577,34 @@ public static class SheetMetalSurgery
             [wallStart, wallEnd], [wallStartOutside, wallEndOutside], [q0, q1], flush);
     }
 
-    /// <summary>The face across an end edge from the wall must be planar and perpendicular
-    /// to the bend line, since the flange's cross-section has to lie IN its plane.</summary>
-    private static void RequireSquareNeighbour(BrepEdge endEdge, in Vector3d expectedNormal, BrepFace wall)
+    /// <summary>
+    /// The face across an end edge from the wall must be planar and PERPENDICULAR to the
+    /// bend line, since the flange's cross-section has to lie IN its plane.
+    ///
+    /// <para><b>Perpendicularity is the whole condition, and the SIGN of the neighbour's
+    /// normal is deliberately not part of it.</b> The sign says which side of the bend line
+    /// the material sits on — a CONVEX corner on the sheet's own outline (normal −a at the
+    /// Q0 end) or a REFLEX one (normal +a), which is what every corner of a HOLE is, and so
+    /// what every louvre's lanced opening is. Both splice into a simple loop: the tab's
+    /// cross-section rises out of the neighbour's plane on the far side of the shared end
+    /// edge either way. What genuinely differs is which way round that neighbour's loop
+    /// walks, and <see cref="Splice"/> READS that off the coedge rather than deriving it
+    /// from a convention — so the gate here states the correctness condition instead of a
+    /// proxy for it.</para>
+    /// </summary>
+    private static void RequireSquareNeighbour(BrepEdge endEdge, in Vector3d axis, BrepFace wall)
     {
         var use = endEdge.Uses.FirstOrDefault(c => !ReferenceEquals(c.Loop.Face, wall))
             ?? throw new InvalidOperationException("The wall's end edge has no neighbouring face.");
-        if (!HasNormal(use.Loop.Face, expectedNormal))
+        // Dimensionless: two unit directions, so the absolute tier is right.
+        if (!use.Loop.Face.IsPlanar(out _, out var normal)
+            || Math.Abs(Math.Abs(normal.Dot(axis)) - 1) > Weld)
+        {
             throw new NotSupportedException(
                 "A full-width flange needs the face at each end of its bend line to be planar and " +
-                $"perpendicular to it (outward normal {expectedNormal}), so the flange's side can lie in that " +
-                "plane. Inset the flange from both ends instead, or square up the neighbouring wall.");
+                $"perpendicular to it (bend axis {axis}), so the flange's side can lie in that plane. Inset " +
+                "the flange from both ends instead, or square up the neighbouring wall.");
+        }
     }
 
     private static bool HasNormal(BrepFace face, in Vector3d wanted) =>
@@ -1066,6 +1083,15 @@ public static class SheetMetalSurgery
     /// <summary>Coedges for a stored chain, in the order it is stored — the reversal that
     /// used to live here is baked into <c>EndChains[1]</c> by the code that knows which end
     /// is which.</summary>
+    /// <summary>The same chain walked backwards: order reversed and every sense flipped.</summary>
+    private static (BrepEdge Edge, bool SameSense)[] Reversed((BrepEdge Edge, bool SameSense)[] chain)
+    {
+        var flipped = new (BrepEdge, bool)[chain.Length];
+        for (int i = 0; i < chain.Length; i++)
+            flipped[i] = (chain[^(i + 1)].Edge, !chain[^(i + 1)].SameSense);
+        return flipped;
+    }
+
     private static IReadOnlyList<BrepCoedge> Materialize((BrepEdge Edge, bool SameSense)[] chain)
     {
         var coedges = new List<BrepCoedge>(chain.Length);
@@ -1092,18 +1118,33 @@ public static class SheetMetalSurgery
             if (k == cornerEnd)
                 continue;
             if (site.Flush[k])
-                Splice(site.EndEdge[k], Materialize(flange.EndChains[k]), site, faces);
+                Splice(site.EndEdge[k], flange.EndChains[k], site, faces);
             else
                 faces.AddRange(CapAndStub(site, flange, rims, section, k));
         }
     }
 
+    /// <summary>
+    /// Replaces the wall's end edge in the NEIGHBOURING face's loop with the flange's own
+    /// cross-section, so the flange's side becomes part of that face.
+    ///
+    /// <para><b>Which way round the chain goes is MEASURED, not assumed.</b> A loop walks
+    /// counter-clockwise about its face's outward normal, and the neighbour's normal is −a
+    /// at the Q0 end of a CONVEX corner (the sheet's own outline) and +a at a REFLEX one
+    /// (every corner of a hole, so every louvre's opening) — so the coedge being replaced
+    /// runs the other way in the two cases. Reading its start vertex settles it with no
+    /// convention to get wrong, which is also why
+    /// <see cref="RequireSquareNeighbour"/> checks only perpendicularity.</para>
+    /// </summary>
     private static void Splice(
-        BrepEdge endEdge, IReadOnlyList<BrepCoedge> chain, FlangeSite site, List<BrepFace> faces)
+        BrepEdge endEdge, (BrepEdge Edge, bool SameSense)[] chain, FlangeSite site, List<BrepFace> faces)
     {
         var use = endEdge.Uses.First(c => !ReferenceEquals(c.Loop.Face, site.Wall));
         var neighbour = use.Loop.Face;
-        use.Loop.ReplaceCoedge(use, [.. chain]);
+        var first = chain[0];
+        var chainStart = first.SameSense ? first.Edge.StartVertex : first.Edge.EndVertex;
+        var walked = ReferenceEquals(use.StartVertex, chainStart) ? chain : Reversed(chain);
+        use.Loop.ReplaceCoedge(use, [.. Materialize(walked)]);
 
         if (neighbour.Surface is PlaneSurface)
             return;

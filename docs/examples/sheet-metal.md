@@ -282,11 +282,68 @@ scene.Add(new Part("bracket", bracket.Solid) { Color = new PartColor(0.68f, 0.72
 
 ![Bores and a slot punched through a flange wall](images/sheet-metal-cutouts.png)
 
-A cutout must lie strictly inside its wall. One crossing the **bend line** is refused by
-name, and the reason is the flat pattern rather than the solid: a hole running into the
-bend zone is a hole in a *cylindrical band*, whose flat shape is that band's development
-— a different map from the flange's rigid frame — and the unfold's whole claim is that
-it is bookkeeping over rigid frames.
+### Louvres
+
+A **louvre** is a tab lanced out of the middle of a face and formed up, leaving a vent.
+It is not an edge flange and needed its own declaration for a structural reason: an edge
+flange's bend line is an *edge* of the sheet and its material grows outboard of the
+blank, while a louvre's bend line is *interior* to a face and its material comes from the
+sheet itself.
+
+```csharp render:sheet-metal-louvre
+var spec = new SheetMetalSpec(Thickness: 1.2, BendRadius: 1.2, KFactor: SheetMaterials.MildSteel);
+
+var panel = SheetMetalBody
+    .Base(Sketch.Polygon([new(0, 0), new(90, 0), new(90, 60), new(0, 60)]), spec);
+
+// Three rows of vents, all opening the same way.
+for (int row = 0; row < 3; row++)
+{
+    for (int i = 0; i < 3; i++)
+    {
+        panel = panel.WithLouvre(new SheetLouvre(
+            Origin: new Vector2d(20 + row * 25, 15 + i * 15),
+            Opening: new Vector2d(1, 0),
+            Width: 11, LanceLength: 8, AngleDegrees: 40));
+    }
+}
+
+var scene = new Scene();
+scene.Add(new Part("panel", panel.Solid) { Color = new PartColor(0.72f, 0.70f, 0.66f) });
+```
+
+![Nine lanced-and-formed louvres in a panel](images/sheet-metal-louvre.png)
+
+**A lance has a width, and that is a theorem rather than a modelling choice.** A cut of
+zero width would leave the tab's own side face coincident with the wall of the opening it
+came out of, everywhere the bend band still lies inside that opening — two coplanar faces
+with opposite normals touching over an area, which is not a manifold solid. So
+`Clearance` is the width of the cut (a punch's die clearance, a laser's kerf), it is
+strictly positive, and zero is refused by name.
+
+That settles what each view loses, and the two answers are different on purpose:
+
+| View | What it loses | Why |
+| --- | --- | --- |
+| The **blank** (`BaseOutline`, `Unfold()`) | Only the kerf — a U-shaped slot of area `c·(W + 2L + 2c)` | A lance *separates* material; it does not remove the tab. |
+| The **folded** parent (`FoldedOutline`) | The whole opening, `(W + 2c) × (L + c)` | The tab has left the plane, and comes back as its own flange. |
+
+**So the volume identity is untouched, and independent of the clearance**: the kerf
+leaves both views identically, the parent's loss of `W·L·T` is returned by the tab as
+`W·θ·T·(R + T/2) + W·(L − BA)·T`, and what is left is exactly `W·θ·T²·(0.5 − K)` — one
+more term of the same sum an ordinary bend contributes.
+
+One convention differs from every other length here, and it is stated on the type: a
+louvre's `LanceLength` is measured **flat**, along the blank from the bend line, because
+the lance is a cut in the blank and its length is what the laser cuts — where a flange's
+`Length` is measured from the outer virtual sharp, which is how a drawing dimensions a
+folded leg.
+
+Refused by name: a zero-width lance, a lance running off the sheet or into a hole, two
+overlapping louvres, a lance shorter than its own bend allowance, and a tab so shallow it
+would swing back into the material beyond its own opening (a shallow tab reaches
+*further* out than the flat material it came from, by the thickness the bend swings it
+through).
 
 ## The flat pattern
 
@@ -474,7 +531,7 @@ Refused **by name**, rather than approximated:
 | Flanges on a flange's *side* edges | Only the tip: a side flange is a corner interaction. |
 | A cutout crossing a bend line | Its flat shape is that band's *development*, not the flange's rigid frame, and the unfold is bookkeeping over rigid frames. |
 | Reliefs on a flange's tip edge | A relief notches its parent's *outline*, and a flange's wall is built as a plain rectangle rather than from a sketch. Its **holes** are declarable (see Cutouts); its outline is not. |
-| Louvres | A louvre's bend line is *interior* to a face rather than on an edge, and it is lanced as well as formed — so it is not an edge flange at all, and the torn ends of the lance belong to the press. |
+| A **zero-width** lance | Not a limit but a theorem: the tab's side face would be coincident with the wall of the opening it came out of, over the whole stretch where the bend band still lies inside it. State the die clearance or the kerf. |
 | Tear reliefs, spring-back compensation | Both belong to the press rather than to the geometry — a tear relief is what happens when no relief is cut. |
 
 Every one of these throws with a message naming what it hit and what to do instead.

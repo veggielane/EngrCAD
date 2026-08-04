@@ -608,6 +608,210 @@ public class SheetMetalTests
         Assert.Contains("CORNER", separate.Message, StringComparison.Ordinal);
     }
 
+    // --------------------------------------------------------------------- louvres
+
+    private static SheetMetalBody Louvred(
+        double k = SheetMaterials.Coined, double angle = 45, double? clearance = null,
+        double width = 20, double lance = 12) =>
+        SheetMetalBody.Base(Plate(), Spec(k)).WithLouvre(new SheetLouvre(
+            new Vector2d(40, 25), new Vector2d(1, 0), width, lance, angle,
+            Clearance: clearance));
+
+    /// <summary>
+    /// The louvre's own term in the volume identity, and it is the SAME term an ordinary
+    /// bend contributes: <c>W·θ·T²·(0.5 − K)</c>. That it comes out unchanged is the whole
+    /// claim — the parent loses the tab's footprint, the tab returns it as a bend plus a
+    /// wall, and the two cancel down to the K-factor's own discrepancy.
+    /// </summary>
+    [Theory]
+    [InlineData(SheetMaterials.SoftAluminium)]
+    [InlineData(SheetMaterials.MildSteel)]
+    [InlineData(SheetMaterials.Coined)]
+    public void ALouvreContributesExactlyOneMoreBendToTheVolumeIdentity(double k)
+    {
+        const double width = 20, angle = 45 * Math.PI / 180;
+        var body = Louvred(k);
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+
+        double predicted = width * angle * Thickness * Thickness * (0.5 - k);
+        double measured = BrepMassProperties.Compute(solid).Volume - body.Unfold().Volume;
+        Assert.True(
+            Math.Abs(measured - predicted) < 1e-8 * BrepMassProperties.Compute(solid).Volume,
+            $"predicted {predicted:g12}, measured {measured:g12}");
+    }
+
+    /// <summary>
+    /// What a LANCE does to the blank, exactly: it removes its own KERF and nothing else.
+    /// The tab stays — a lance separates material rather than removing it — so the blank's
+    /// area falls by <c>c·(W + 2L + 2c)</c>, while the FOLDED parent gives up the whole
+    /// opening. Both closed forms, and the pair is what says the two views differ by
+    /// precisely the lance and not by an accident of bookkeeping.
+    /// </summary>
+    [Fact]
+    public void ALanceCostsTheBlankItsKerfAndTheFoldedParentTheWholeOpening()
+    {
+        const double width = 20, lance = 12, clearance = 0.2;
+        var body = Louvred(clearance: clearance);
+
+        double kerf = clearance * (width + 2 * lance + 2 * clearance);
+        Assert.Equal(PlateX * PlateY - kerf, body.Unfold().Area, 9);
+        Assert.Equal(PlateX * PlateY - kerf, body.BaseOutline.Area(), 9);
+
+        double opening = (width + 2 * clearance) * (lance + clearance);
+        Assert.Equal(PlateX * PlateY - opening, body.FoldedOutline.Area(), 9);
+    }
+
+    /// <summary>
+    /// <b>The clearance does not move the discrepancy at all</b>, because the kerf is
+    /// removed from BOTH views identically — the bend-relief rule, applied to a lance. That
+    /// is the assertion with teeth: a construction that took the kerf out of one view only
+    /// would still produce a plausible solid and a plausible blank.
+    /// </summary>
+    [Fact]
+    public void TheLanceClearanceDoesNotMoveTheFoldedVersusFlatDiscrepancy()
+    {
+        double Gap(double clearance)
+        {
+            var body = Louvred(SheetMaterials.MildSteel, clearance: clearance);
+            return BrepMassProperties.Compute(body.Solid.ToBrep()).Volume - body.Unfold().Volume;
+        }
+
+        Assert.Equal(Gap(0.05), Gap(0.4), 6);
+    }
+
+    /// <summary>The tab has to be in the right PLACE, not merely of the right size: its tip
+    /// is where the bend model's closed form puts it, and the parent really does have an
+    /// opening under it (the folded outline's own hole).</summary>
+    [Fact]
+    public void ALouvresTabStandsWhereTheBendModelPutsIt()
+    {
+        const double angle = 60 * Math.PI / 180, lance = 12;
+        var body = Louvred(angle: 60);
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+
+        double allowance = SheetMetalSpec.BendAllowance(angle, Radius, Thickness, SheetMaterials.Coined);
+        double wall = lance - allowance;
+        // Axis one inside radius above the top face; the inside surface leaves the bend at
+        // the end radial and the wall runs on from there.
+        double tipX = 40 + Radius * Math.Sin(angle) + wall * Math.Cos(angle);
+        double tipZ = Thickness + Radius - Radius * Math.Cos(angle) + wall * Math.Sin(angle);
+        Assert.Equal(tipZ, solid.Vertices.Max(v => v.Position.Z), 9);
+
+        // Both corners of the tab's inside tip, at the ends of a 20-wide lance about y = 25.
+        foreach (double y in (ReadOnlySpan<double>)[15, 35])
+        {
+            var expected = new Vector3d(tipX, y, tipZ);
+            Assert.True(
+                solid.Vertices.Any(v => v.Position.DistanceTo(expected) < 1e-9),
+                $"no tab tip vertex at {expected}");
+        }
+        Assert.True(tipX < 40 + lance, "the tab must stay inside its own opening at this angle");
+    }
+
+    /// <summary>Louvres compose with flanges and with each other, in both directions and on
+    /// two axes — the case a single-louvre test cannot see, since the bend axis and the
+    /// opening direction are what a sign error would flip.</summary>
+    [Fact]
+    public void SeveralLouvresComposeWithAFlange()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 20)
+            .WithLouvre(new Vector2d(25, 20), new Vector2d(1, 0), 16, 10)
+            .WithLouvre(new Vector2d(55, 35), new Vector2d(0, 1), 16, 10, 60, SheetBendDirection.Down);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        var flat = body.Unfold();
+        Assert.Equal(3, flat.Bends.Count);   // one flange, two louvres
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / flat.Volume, 6);
+    }
+
+    /// <summary>A louvre carries no edge NAME, so a mirror only has to reflect a point and a
+    /// direction — asserted on vertex SETS, since a volume comparison passes a tab formed
+    /// the wrong way round.</summary>
+    [Fact]
+    public void AMirroredLouvreIsTheExactReflection()
+    {
+        static SheetMetalBody Body() =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithLouvre(new Vector2d(30, 18), new Vector2d(1, 0), 14, 9, 50);
+
+        var plain = Body().Solid.ToBrep();
+        var mirrored = Body().Solid.Mirror((0, 0, 0), (1, 0, 0)).ToBrep();
+        mirrored.Validate();
+
+        var reflected = plain.Vertices
+            .Select(v => new Vector3d(-v.Position.X, v.Position.Y, v.Position.Z))
+            .ToList();
+        foreach (var vertex in mirrored.Vertices)
+        {
+            Assert.True(
+                reflected.Any(p => p.DistanceTo(vertex.Position) < 1e-9),
+                $"mirrored vertex {vertex.Position} has no counterpart in the reflected original");
+        }
+    }
+
+    /// <summary>
+    /// <b>A zero-width lance is not a solid, and that is a theorem rather than a limit.</b>
+    /// The tab's own side face would be coincident with the wall of the opening it came out
+    /// of, everywhere the bend band still lies inside that opening — two coplanar faces with
+    /// opposite normals touching over an area.
+    /// </summary>
+    [Fact]
+    public void AZeroWidthLanceIsRefusedAsCoincidentBoundary()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => Louvred(clearance: 0));
+        Assert.Contains("coincident", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("manifold", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A SHALLOW tab reaches FURTHER out than the flat material it came from — by the
+    /// thickness the bend swings it through — so it can run into the sheet beyond its own
+    /// opening while still below the sheet's own face. Refused in closed form, and the
+    /// fixture is a real NEAR MISS rather than an absurd one: 8 degrees on a 4 mm lance
+    /// overhangs a 0.02 mm kerf by 0.048 mm, where the same lance at 45 degrees clears it
+    /// by more than a millimetre. The overhang peaks near <c>atan(T(1−K)/L)</c> and is
+    /// about <c>T²(1−K)²/2L</c>, so it is a thick-sheet, short-lance, tight-kerf failure —
+    /// which is exactly why the default clearance hides it and a fixture has to state one.
+    /// </summary>
+    [Fact]
+    public void AShallowTabThatWouldRunIntoTheSheetIsRefusedInClosedForm()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => Louvred(angle: 8, clearance: 0.02, lance: 4));
+        Assert.Contains("run into the material", exception.Message, StringComparison.Ordinal);
+
+        // The same lance and kerf at a steeper angle is fine, which is what makes the
+        // refusal about the geometry rather than about the dimensions.
+        Louvred(angle: 45, clearance: 0.02, lance: 4).Solid.ToBrep().Validate();
+    }
+
+    [Fact]
+    public void ALanceShorterThanItsOwnBendAllowanceIsRefusedNamingBoth()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => Louvred(angle: 90, lance: 2));
+        Assert.Contains("develops", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("FLAT", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALouvreRunningOffTheSheetOrOverlappingAnotherIsRefused()
+    {
+        var off = Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(Plate(), Spec()).WithLouvre(
+                new Vector2d(75, 25), new Vector2d(1, 0), 20, 12));
+        Assert.Contains("strictly inside the blank", off.Message, StringComparison.Ordinal);
+
+        var overlap = Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithLouvre(new Vector2d(40, 25), new Vector2d(1, 0), 20, 12)
+                .WithLouvre(new Vector2d(45, 25), new Vector2d(1, 0), 20, 12));
+        Assert.Contains("overlapping footprints", overlap.Message, StringComparison.Ordinal);
+    }
+
     // ------------------------------------------- multi-body sheets / welded assemblies
 
     /// <summary>
