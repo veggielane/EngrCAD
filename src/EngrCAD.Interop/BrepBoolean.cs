@@ -967,13 +967,34 @@ public static class BrepBoolean
         {
             // Pole-bounded faces (discs of axis-touching revolves) have only their rim
             // loop; averaging would probe ON the rim. Move halfway toward the pole —
-            // and skip the parity check: the upward-v ray convention cannot see a
-            // rim that lies below the probe, but everything between rim and pole
-            // belongs to the face by construction.
+            // and skip the parity check, which is unnecessary rather than merely
+            // awkward here: a SINGLE loop that wraps the period separates the pole from
+            // everything else, and this face is the pole's side, so every v strictly
+            // between the pole and the loop is inside AT EVERY u.
+            //
+            // That is why the loop is measured by its CLOSEST APPROACH to the pole and
+            // not by its average. The two agree exactly when the loop sits at one v —
+            // every pole cap bounded by nothing but its own rim — and part company as
+            // soon as another solid CUTS the cap, which leaves the loop wrapping but no
+            // longer level. Measured on a drill tool's flat bottom breaking out of a
+            // plate's top face: the average put the probe 0.106 ABOVE that plate's own
+            // top plane, i.e. in the fragment on the far side of the cut, so the piece
+            // that should have been kept was classified away and the solid cracked along
+            // its whole rim (3 of 19 edges used once). Note that the two-sided parity is
+            // NOT the fix here — it errs toward inside by design, and duly accepts that
+            // very point.
             var domainV = face.Surface.DomainV;
             double far = Math.Abs(v - domainV.Start) > Math.Abs(domainV.End - v) ? domainV.Start : domainV.End;
             if (double.IsFinite(far))
-                return face.Surface.PointAt(u, (v + far) / 2);
+            {
+                double nearest = outer[0].Y;
+                foreach (var p in outer)
+                {
+                    if (Math.Abs(p.Y - far) < Math.Abs(nearest - far))
+                        nearest = p.Y;
+                }
+                return face.Surface.PointAt(u, (nearest + far) / 2);
+            }
         }
         var mid = face.Surface.PointAt(u, v);
         if (FaceGeometry.Contains(face, mid))
