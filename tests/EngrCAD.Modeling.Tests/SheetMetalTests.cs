@@ -1258,15 +1258,152 @@ public class SheetMetalTests
         Assert.All(rim, v => Assert.Equal(Thickness + Radius + 6, v.Position.Z, 6));
     }
 
-    [Fact]
-    public void ACutoutThatWouldCrossTheBendIsRefusedNamingTheDevelopment()
+    // ------------------------------------------------ cutouts that CROSS the bend line
+
+    /// <summary>An axis-aligned rectangle in the flange's own local frame, spanning
+    /// x ∈ [x0, x1] and y ∈ [y0, y1] — negative y being into the bend zone.</summary>
+    private static Sketch Slot(double x0, double x1, double y0, double y1) =>
+        Sketch.Polygon([new(x0, y0), new(x1, y0), new(x1, y1), new(x0, y1)]);
+
+    private static double Allowance(double k, double angle = Math.PI / 2) =>
+        SheetMetalSpec.BendAllowance(angle, Radius, Thickness, k);
+
+    /// <summary>
+    /// A slot running out of the wall and down INTO the bend, and the closed form for what
+    /// it does to the volume identity.
+    ///
+    /// <para>The blank loses the whole rectangle, <c>w·(y₁ − y₀)·T</c>; the folded body loses
+    /// the wall part plus an annular sector, <c>w·(y₁·T + (θ − φ₀)·T·(R + T/2))</c> — and
+    /// since <c>−y₀ = (θ − φ₀)(R + K·T)</c> the difference is exactly
+    /// <c>w·(θ − φ₀)·T²·(0.5 − K)</c>. So a crossing slot removes a SLICE of the very
+    /// discrepancy the K-factor owns, which is the strongest statement available: it is the
+    /// same formula the bend itself obeys, restricted to the angle the slot takes away.</para>
+    ///
+    /// <para>Measured against the identical flange with no slot, so the assertion is about
+    /// the slot alone. The residual is one tier coarser than a plain flange's (6.9e-8 of the
+    /// folded volume against 6.2e-10) because the split arcs are sampled independently of
+    /// the band's own grid; it converges, measured −3.0e-3 / +5.4e-4 / −5.3e-5 / +1.8e-5 at
+    /// 32/64/128/256 segments per circle.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(SheetMaterials.SoftAluminium)]
+    [InlineData(SheetMaterials.MildSteel)]
+    [InlineData(SheetMaterials.Coined)]
+    public void ACutoutCrossingTheBendRemovesASliceOfTheDiscrepancyItself(double k)
     {
-        var exception = Assert.Throws<NotSupportedException>(() =>
+        const double angle = Math.PI / 2, from = 20, to = 30, height = 6;
+        double allowance = Allowance(k);
+        double y0 = -allowance / 2;
+
+        var plain = SheetMetalBody.Base(Plate(), Spec(k)).WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+        var slotted = SheetMetalBody.Base(Plate(), Spec(k))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: [Slot(from, to, y0, height)]);
+
+        var solid = slotted.Solid.ToBrep();
+        solid.Validate();
+        double folded = BrepMassProperties.Compute(solid).Volume;
+
+        // The blank loses exactly the rectangle it was drawn as — the bend zone is a
+        // developable strip of the same blank, so a rigid frame places the slot there too.
+        Assert.Equal(plain.Unfold().Area - (to - from) * (height - y0), slotted.Unfold().Area, 9);
+
+        double phi = angle * (allowance + y0) / allowance;
+        double predicted = (to - from) * (angle - phi) * Thickness * Thickness * (0.5 - k);
+        double measured = (FoldedVolume(plain) - plain.Unfold().Volume) - (folded - slotted.Unfold().Volume);
+        Assert.True(
+            Math.Abs(measured - predicted) < 1e-7 * folded,
+            $"predicted {predicted:g12}, measured {measured:g12}");
+    }
+
+    /// <summary>Two slots on one bend, on an inset DOWN flange that also carries an ordinary
+    /// wall cutout and a chained flange — the composition case, since a slot splits both
+    /// bend bands and the rims they weld to, and every one of those is shared with something
+    /// else.</summary>
+    [Fact]
+    public void CrossingSlotsComposeWithEverythingElseOnAFlange()
+    {
+        double allowance = Allowance(SheetMaterials.Coined);
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(
+                SheetFlangeTarget.BaseEdge(1), 25, startOffset: 6, width: 38,
+                direction: SheetBendDirection.Down,
+                cutouts:
+                [
+                    Slot(4, 10, -allowance / 2, 6),
+                    Slot(20, 27, -allowance * 0.8, 9),
+                    Sketch.Circle(2.5).Placed((32, 12), (1, 0)),
+                ])
+            .WithFlange(SheetFlangeTarget.FlangeTip(0), 10);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+    }
+
+    /// <summary>A mirrored placement re-declares the tree, so a crossing slot has to survive
+    /// the same remap a wall cutout does — pinned on vertex SETS, since a volume comparison
+    /// passes a slot mirrored to the wrong side.</summary>
+    [Fact]
+    public void AMirroredCrossingSlotIsTheExactReflection()
+    {
+        double allowance = Allowance(SheetMaterials.Coined);
+        SheetMetalBody Body() =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: [Slot(12, 20, -allowance / 2, 7)]);
+
+        var plain = Body().Solid.ToBrep();
+        var mirrored = Body().Solid.Mirror((0, 0, 0), (1, 0, 0)).ToBrep();
+        mirrored.Validate();
+
+        var reflected = plain.Vertices
+            .Select(v => new Vector3d(-v.Position.X, v.Position.Y, v.Position.Z))
+            .ToList();
+        foreach (var vertex in mirrored.Vertices)
+        {
+            Assert.True(
+                reflected.Any(p => p.DistanceTo(vertex.Position) < 1e-9),
+                $"mirrored vertex {vertex.Position} has no counterpart in the reflected original");
+        }
+    }
+
+    /// <summary>
+    /// <b>The aligned rectangle is the complete EXACT tier, not a budget</b>, and the two
+    /// refusals say which fact each hits: a cut at any other angle wraps to a HELIX and an
+    /// arc in the blank wraps to nothing with a closed form at all.
+    /// </summary>
+    [Fact]
+    public void ACrossingCutoutThatIsNotAnAlignedRectangleIsRefusedNamingWhy()
+    {
+        foreach (var cutout in (ReadOnlySpan<Sketch>)
+        [
+            Sketch.Circle(4).Placed((25, 1), (1, 0)),
+            Sketch.Polygon([new(20, -1), new(30, -1), new(32, 6), new(22, 6)]),
+        ])
+        {
+            var exception = Assert.Throws<NotSupportedException>(() =>
+                SheetMetalBody.Base(Plate(), Spec())
+                    .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: [cutout]));
+            Assert.Contains("rectangle aligned with", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("HELIX", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ASlotThroughTheBendIntoTheParentIsRefusedNamingTheParent()
+    {
+        double allowance = Allowance(SheetMaterials.MildSteel);
+        var through = Assert.Throws<NotSupportedException>(() =>
             SheetMetalBody.Base(Plate(), Spec())
-                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25,
-                    cutouts: [Sketch.Circle(3).Placed((20, 2), (1, 0))]));
-        Assert.Contains("BEND", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("development", exception.Message, StringComparison.Ordinal);
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: [Slot(20, 30, -allowance - 1, 6)]));
+        Assert.Contains("into the PARENT", through.Message, StringComparison.Ordinal);
+
+        // ... and one that never reaches the wall is a different construction, said so.
+        var floating = Assert.Throws<NotSupportedException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(
+                    SheetFlangeTarget.BaseEdge(1), 25,
+                    cutouts: [Slot(20, 30, -allowance * 0.8, -allowance * 0.2)]));
+        Assert.Contains("wholly inside the BEND", floating.Message, StringComparison.Ordinal);
     }
 
     [Fact]

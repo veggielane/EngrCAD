@@ -307,6 +307,66 @@ scene.Add(new Part("bracket", bracket.Solid) { Color = new PartColor(0.68f, 0.72
 
 ![Bores and a slot punched through a flange wall](images/sheet-metal-cutouts.png)
 
+#### Slots that cross the bend line
+
+A cutout may run out of the wall and **down into the bend**, and where it does it must be
+a **rectangle aligned with the bend line**. That is the complete *exact* tier rather than
+a budget: bending is an isometry of the sheet, so a straight cut running *along* the bend
+line stays straight (it becomes a ruling of the cylinder) and one running *across* it
+becomes a circular arc — and the wall each sweeps through the thickness is a **plane**. A
+cut at any other angle wraps to a *helix*, and an arc in the blank wraps to nothing with
+a closed form at all; both are refused by name rather than fitted.
+
+```csharp render:sheet-metal-bend-slot
+var spec = new SheetMetalSpec(Thickness: 1.5, BendRadius: 2, KFactor: SheetMaterials.MildSteel);
+
+// The bend zone occupies y from -BA to 0 in the flange's own local frame, so a negative
+// y is inside the bend. BA = angle x (R + K x T).
+double allowance = SheetMetalSpec.BendAllowance(Math.PI / 2, 2, 1.5, SheetMaterials.MildSteel);
+
+Sketch Slot(double x0, double x1, double y0, double y1) =>
+    Sketch.Polygon([new(x0, y0), new(x1, y0), new(x1, y1), new(x0, y1)]);
+
+var duct = SheetMetalBody
+    .Base(Sketch.Polygon([new(0, 0), new(100, 0), new(100, 60), new(0, 60)]), spec)
+    .WithFlange(SheetFlangeTarget.BaseEdge(1), length: 30, cutouts:
+    [
+        Slot(10, 20, -allowance * 0.6, 14),
+        Slot(28, 38, -allowance * 0.6, 14),
+        Slot(46, 56, -allowance * 0.6, 14),
+    ]);
+
+var scene = new Scene();
+scene.Add(new Part("duct", duct.Solid) { Color = new PartColor(0.70f, 0.66f, 0.60f) });
+```
+
+![Three slots running out of the wall and into the bend](images/sheet-metal-bend-slot.png)
+
+Each slot splits both bend bands into **three** — the two full-height stretches either
+side and a short one running under it, all ordinary full-domain bands of an arc — and
+notches both wall faces. Nothing here is a trimmed face and nothing is a boolean.
+
+**What a crossing slot costs is the K-factor's independence from the folded shape**, and
+it cannot be otherwise: a cutout is declared *flat* (it is punched in the blank and then
+bent, which is why holes near a bend deform), and the only map from the blank to the band
+is the neutral-axis map, which K parameterizes. So the angle a slot bottoms out at is
+resolved where K lives, and `SheetBendSection` still carries none.
+
+The identity follows exactly, and it is the same formula the bend itself obeys restricted
+to the angle the slot takes away — a crossing slot removes a **slice of the very
+discrepancy the K-factor owns**:
+
+```text
+blank loses     w x (y1 - y0) x T
+folded loses    w x (y1 x T + (theta - phi0) x T x (R + T/2))
+difference      w x (theta - phi0) x T^2 x (0.5 - K)
+```
+
+A slot that runs all the way *through* the bend into the parent is refused: that would
+notch the parent's own faces, which is a change to the parent rather than to this flange.
+One that floats wholly inside the band is refused too — it would leave the band a trimmed
+face with a hole in it, a different construction.
+
 ### Louvres
 
 A **louvre** is a tab lanced out of the middle of a face and formed up, leaving a vent.
@@ -554,7 +614,8 @@ Refused **by name**, rather than approximated:
 | Bends along non-straight edges | **Not a gap but a theorem.** Folding a sheet along a curve is not an *isometry* of the sheet, so no flat blank produces it: along a circular bend line the band is a torus segment, whose Gaussian curvature is non-zero everywhere a flat sheet's is zero. The material would have to stretch or shrink, which is *forming* rather than bending and has no bend allowance. Approximate it as a chain of straight bends, or model it as forming and accept that its blank is not derivable. |
 | Two flanges sharing a stretch of one edge | Two bends cannot occupy the same material — and a relief counts as part of the stretch its flange occupies. |
 | Flanges on a flange's *side* edges | Only the tip: a side flange is a corner interaction. |
-| A cutout crossing a bend line | Its flat shape is that band's *development*, not the flange's rigid frame, and the unfold is bookkeeping over rigid frames. |
+| A cutout crossing a bend line that is **not an aligned rectangle** | Not a budget but the complete exact tier: a straight cut at any other angle wraps to a *helix*, and an arc in the blank wraps to nothing with a closed form. |
+| A cutout running **through** the bend into the parent, or floating wholly inside it | The first notches the *parent's* faces, the second leaves the band a trimmed face with a hole in it. Both are different constructions rather than harder versions of this one. |
 | A **zero-width** lance | Not a limit but a theorem: the tab's side face would be coincident with the wall of the opening it came out of, over the whole stretch where the bend band still lies inside it. State the die clearance or the kerf. |
 | Tear reliefs, spring-back compensation | Both belong to the press rather than to the geometry — a tear relief is what happens when no relief is cut. |
 

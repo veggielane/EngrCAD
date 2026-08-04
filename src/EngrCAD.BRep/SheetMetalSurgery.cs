@@ -112,6 +112,38 @@ public readonly record struct SheetBendSection(
 public readonly record struct SheetTipNotch(Vector3d From, Vector3d To, double Depth, bool Rounded);
 
 /// <summary>
+/// A cutout that CROSSES the bend line: a rectangular slot running out of the flange's flat
+/// wall and down into the bend itself.
+///
+/// <para><b>Why it is a rectangle, and why that is the complete tier rather than a
+/// budget.</b> Bending is an isometry of the sheet, so a straight cut in the blank running
+/// ALONG the bend line stays straight (it is a ruling of the cylinder) and one running
+/// ACROSS it becomes a circular arc. Both are curves this kernel already has, and the wall
+/// each sweeps through the thickness is a PLANE — the along-cut's is the plane containing
+/// the bend axis at its own angle, the across-cut's the plane perpendicular to the axis. A
+/// cut at any other angle wraps to a HELIX and its wall to a helical surface; an ARC in the
+/// blank wraps to nothing with a closed form at all. So the exact tier is exactly the
+/// rectangle aligned with the bend, and anything else is refused rather than fitted.</para>
+///
+/// <para><b>The angle carries the K-factor and that is the one place it can.</b> A cutout is
+/// declared FLAT — it is punched in the blank and then bent, which is what makes it deform —
+/// and the only map from the blank to the band is the neutral-axis map, which K
+/// parameterizes. So the caller resolves the cutout's flat depth into
+/// <paramref name="BendAngleRadians"/> before calling, and <see cref="SheetBendSection"/>
+/// still carries no K: the geometry here is pure, and the ARGUMENT is what K decided.</para>
+/// </summary>
+/// <param name="From">One end of the slot, as a point on the flange's bend line; only its
+/// position ALONG the span is read.</param>
+/// <param name="To">The other end.</param>
+/// <param name="BendAngleRadians">Where the slot bottoms out INSIDE the bend, measured from
+/// the bend line: strictly between 0 (the parent's own rim) and the bend's own angle (the
+/// tangent line).</param>
+/// <param name="WallHeight">How far the slot reaches up the flat wall past the tangent
+/// line.</param>
+public readonly record struct SheetBendCutout(
+    Vector3d From, Vector3d To, double BendAngleRadians, double WallHeight);
+
+/// <summary>
 /// Sheet-metal edge-flange construction as direct topology surgery on a B-Rep solid —
 /// the same doctrine as <see cref="Filleting"/>'s rim features, and for the same reason.
 ///
@@ -175,7 +207,7 @@ public static class SheetMetalSurgery
     public static BrepSolid AddEdgeFlange(
         BrepSolid solid, in SheetBendSection section,
         in Vector3d spanStart, in Vector3d spanEnd, double wallLength) =>
-        AddEdgeFlange(solid, section, spanStart, spanEnd, wallLength, [], []);
+        AddEdgeFlange(solid, section, spanStart, spanEnd, wallLength, [], [], []);
 
     /// <inheritdoc cref="AddEdgeFlange(BrepSolid, in SheetBendSection, in Vector3d, in Vector3d, double)"/>
     /// <param name="wallCutouts">Closed profiles lying ON one of the flange wall's two
@@ -186,21 +218,26 @@ public static class SheetMetalSurgery
         BrepSolid solid, in SheetBendSection section,
         in Vector3d spanStart, in Vector3d spanEnd, double wallLength,
         IReadOnlyList<Profile> wallCutouts) =>
-        AddEdgeFlange(solid, section, spanStart, spanEnd, wallLength, wallCutouts, []);
+        AddEdgeFlange(solid, section, spanStart, spanEnd, wallLength, wallCutouts, [], []);
 
     /// <inheritdoc cref="AddEdgeFlange(BrepSolid, in SheetBendSection, in Vector3d, in Vector3d, double, IReadOnlyList{Profile})"/>
     /// <param name="tipNotches">Bend reliefs cut into this flange's TIP, for the benefit of
     /// flanges grown from it — see <see cref="SheetTipNotch"/>. They split the tip face into
     /// one four-sided piece per surviving stretch, which is what lets a child arrive as an
     /// ordinary FLUSH flange.</param>
+    /// <param name="bendCutouts">Rectangular slots running out of the wall and down into the
+    /// bend — see <see cref="SheetBendCutout"/>. Each splits both bend bands into three and
+    /// notches both wall faces.</param>
     public static BrepSolid AddEdgeFlange(
         BrepSolid solid, in SheetBendSection section,
         in Vector3d spanStart, in Vector3d spanEnd, double wallLength,
-        IReadOnlyList<Profile> wallCutouts, IReadOnlyList<SheetTipNotch> tipNotches)
+        IReadOnlyList<Profile> wallCutouts, IReadOnlyList<SheetTipNotch> tipNotches,
+        IReadOnlyList<SheetBendCutout> bendCutouts)
     {
         ArgumentNullException.ThrowIfNull(solid);
         ArgumentNullException.ThrowIfNull(wallCutouts);
         ArgumentNullException.ThrowIfNull(tipNotches);
+        ArgumentNullException.ThrowIfNull(bendCutouts);
         Validate(section, wallLength);
 
         var n = section.Inside;
@@ -221,7 +258,8 @@ public static class SheetMetalSurgery
         var rims = ResolveRims(site, n, section.Thickness, q0, q1, a);
 
         var flange = BuildFlange(
-            section with { BendLinePoint = q0 }, q1 - q0, wallLength, rims, wallCutouts, tipNotches, null);
+            section with { BendLinePoint = q0 }, q1 - q0, wallLength, rims, wallCutouts, tipNotches,
+            bendCutouts, null);
 
         var faces = solid.Faces.Where(f => !ReferenceEquals(f, site.Wall)).ToList();
         faces.AddRange(flange.Faces);
@@ -298,10 +336,10 @@ public static class SheetMetalSurgery
             rimsA.InsideVertex[cornerA], rimsA.OutsideVertex[cornerA]);
 
         var flangeA = BuildFlange(
-            sectionA with { BendLinePoint = q0A }, q1A - q0A, wallA, rimsA, cutoutsA, notchesA,
+            sectionA with { BendLinePoint = q0A }, q1A - q0A, wallA, rimsA, cutoutsA, notchesA, [],
             new CornerEnd(cornerA, miter));
         var flangeB = BuildFlange(
-            sectionB with { BendLinePoint = q0B }, q1B - q0B, wallB, rimsB, cutoutsB, notchesB,
+            sectionB with { BendLinePoint = q0B }, q1B - q0B, wallB, rimsB, cutoutsB, notchesB, [],
             new CornerEnd(cornerB, miter));
 
         var faces = solid.Faces
@@ -797,9 +835,18 @@ public static class SheetMetalSurgery
         (BrepEdge Edge, bool SameSense)[] Outside,
         IReadOnlyList<BrepFace> Faces);
 
+    /// <summary>The two bend bands as built, and the chain each wall face walks along its
+    /// own tangent line — one edge when nothing crosses the bend, and a notched run when
+    /// something does.</summary>
+    private sealed record BendBuild(
+        IReadOnlyList<BrepFace> Faces,
+        (BrepEdge Edge, bool SameSense)[] InsideTangent,
+        (BrepEdge Edge, bool SameSense)[] OutsideTangent);
+
     private static FlangeBuild BuildFlange(
         in SheetBendSection s0, in Vector3d span, double wallLength, Rims rims,
-        IReadOnlyList<Profile> wallCutouts, IReadOnlyList<SheetTipNotch> tipNotches, CornerEnd? corner)
+        IReadOnlyList<Profile> wallCutouts, IReadOnlyList<SheetTipNotch> tipNotches,
+        IReadOnlyList<SheetBendCutout> bendCutouts, CornerEnd? corner)
     {
         // The far end's cross-section is the near one translated along the bend line —
         // one fact, so the caller cannot hand over an inconsistent pair.
@@ -886,24 +933,36 @@ public static class SheetMetalSurgery
                new ExtrudedSurface(outsideArcCurve[0], span))
             : ExtendedBands(s0, s1, span, alongSpan, radius, thickness, corner);
 
-        var bendInside = new BrepFace(
-            insideSurface,
-            [new BrepLoop(
-            [
-                Use(rims.Inside, rims.InsideVertex[0], rims.InsideVertex[1]),
-                new BrepCoedge(insideArc[1], true),
-                new BrepCoedge(insideTangentEdge, false),
-                new BrepCoedge(insideArc[0], false),
-            ])]);
-        var bendOutside = new BrepFace(
-            outsideSurface,
-            [new BrepLoop(
-            [
-                new BrepCoedge(outsideArc[0], true),
-                new BrepCoedge(outsideTangentEdge, true),
-                new BrepCoedge(outsideArc[1], false),
-                Use(rims.Outside, rims.OutsideVertex[1], rims.OutsideVertex[0]),
-            ])]);
+        // The bend, slots and all. With none declared this is the two faces and the two
+        // tangent edges it always was, built by the same calls in the same order.
+        var bend = bendCutouts.Count == 0
+            ? new BendBuild(
+                [
+                    new BrepFace(
+                        insideSurface,
+                        [new BrepLoop(
+                        [
+                            Use(rims.Inside, rims.InsideVertex[0], rims.InsideVertex[1]),
+                            new BrepCoedge(insideArc[1], true),
+                            new BrepCoedge(insideTangentEdge, false),
+                            new BrepCoedge(insideArc[0], false),
+                        ])]),
+                    new BrepFace(
+                        outsideSurface,
+                        [new BrepLoop(
+                        [
+                            new BrepCoedge(outsideArc[0], true),
+                            new BrepCoedge(outsideTangentEdge, true),
+                            new BrepCoedge(outsideArc[1], false),
+                            Use(rims.Outside, rims.OutsideVertex[1], rims.OutsideVertex[0]),
+                        ])]),
+                ],
+                [(insideTangentEdge, true)],
+                [(outsideTangentEdge, true)])
+            : BuildBend(
+                s0, span, alongSpan, wallLength, radius, thickness, rims,
+                insideArc, outsideArc, insideArcCurve, outsideArcCurve,
+                tangentInsideVertex, tangentOutsideVertex, u, v, bendCutouts);
 
         // Wall cutouts: each is punched straight through, so the two planar wall faces gain
         // a hole loop apiece and the hole's own wall arrives as one band face per profile
@@ -929,7 +988,7 @@ public static class SheetMetalSurgery
             [
                 new BrepLoop(
                 [
-                    new BrepCoedge(insideTangentEdge, true),
+                    .. Materialize(bend.InsideTangent),
                     new BrepCoedge(insideWall[1], true),
                     .. Materialize(Reversed(tip.Inside)),
                     new BrepCoedge(insideWall[0], false),
@@ -941,7 +1000,7 @@ public static class SheetMetalSurgery
             [
                 new BrepLoop(
                 [
-                    new BrepCoedge(outsideTangentEdge, false),
+                    .. Materialize(Reversed(bend.OutsideTangent)),
                     new BrepCoedge(outsideWall[0], true),
                     .. Materialize(tip.Outside),
                     new BrepCoedge(outsideWall[1], false),
@@ -967,7 +1026,327 @@ public static class SheetMetalSurgery
         ];
 
         return new FlangeBuild(
-            [bendInside, bendOutside, flangeInside, flangeOutside, .. tip.Faces, .. bandFaces], chains);
+            [.. bend.Faces, flangeInside, flangeOutside, .. tip.Faces, .. bandFaces], chains);
+    }
+
+    /// <summary>
+    /// The two bend bands, split by every slot that crosses the bend line.
+    ///
+    /// <para>Each slot cuts a band into three: the two full-height stretches either side, and
+    /// a SHORT one under the slot running only as far as the slot's own angle. All three are
+    /// ordinary full-domain <c>ExtrudedSurface</c> bands of an arc — the short one's arc just
+    /// sweeps less — so nothing here needs a trimmed face, which is the whole reason the
+    /// exact tier is the aligned rectangle: the slot's four walls are PLANES and its rims are
+    /// straight rulings and circular arcs.</para>
+    /// </summary>
+    private static BendBuild BuildBend(
+        in SheetBendSection s0, in Vector3d span, in Vector3d alongSpan, double wallLength,
+        double radius, double thickness, Rims rims,
+        BrepEdge[] insideArc, BrepEdge[] outsideArc,
+        NurbsCurve[] insideArcCurve, NurbsCurve[] outsideArcCurve,
+        BrepVertex[] tangentInsideVertex, BrepVertex[] tangentOutsideVertex,
+        in Vector3d u, in Vector3d v, IReadOnlyList<SheetBendCutout> cutouts)
+    {
+        double angle = s0.AngleRadians;
+        double spanLength = span.Length;
+        var inside = s0.Inside;
+        var outward = s0.Outward;
+        var axis = s0.AxisDirection;
+        var bendLine = s0.BendLinePoint;
+        var along = alongSpan;
+
+        var slots = new List<(double From, double To, double Angle, double Height)>(cutouts.Count);
+        foreach (var cutout in cutouts)
+        {
+            double a = (cutout.From - bendLine).Dot(along);
+            double b = (cutout.To - bendLine).Dot(along);
+            slots.Add((Math.Min(a, b), Math.Max(a, b), cutout.BendAngleRadians, cutout.WallHeight));
+        }
+        slots.Sort((x, y) => x.From.CompareTo(y.From));
+
+        // Every refusal before a coedge moves, as everywhere else in this file.
+        double previous = 0;
+        foreach (var (from, to, at, height) in slots)
+        {
+            if (!(to - from > Weld) || from <= previous + Weld || to >= spanLength - Weld)
+                throw new ArgumentOutOfRangeException(nameof(cutouts),
+                    $"A bend cutout spans [{from:g6}, {to:g6}] of a bend line {spanLength:g6} long, which " +
+                    "either runs off an end or overlaps the cutout before it. A slot crossing the bend has to " +
+                    "sit strictly inside it, since its ends are what the bend's own cross-section closes on.");
+            if (!(at > Weld) || at >= angle - Weld)
+                throw new ArgumentOutOfRangeException(nameof(cutouts),
+                    $"A bend cutout bottoms out {at:g6} rad into a bend of {angle:g6} rad. It has to stop " +
+                    "strictly inside the bend: at 0 it would break through into the parent sheet, and at the " +
+                    "full angle it never enters the bend at all.");
+            if (!(height > Weld) || height >= wallLength - Weld)
+                throw new ArgumentOutOfRangeException(nameof(cutouts),
+                    $"A bend cutout reaches {height:g6} up a wall {wallLength:g6} long; it has to cross the " +
+                    "tangent line and stop short of the tip.");
+            previous = to;
+        }
+
+        // The rims are shared with the parent's own faces, so splitting them patches those
+        // loops too (TopologyEditor.SplitEdge). Both rims are straight and parallel, so one
+        // list of axis positions serves both.
+        var cuts = new List<double>(slots.Count * 2);
+        foreach (var slot in slots)
+        {
+            cuts.Add((bendLine + along * slot.From).Dot(axis));
+            cuts.Add((bendLine + along * slot.To).Dot(axis));
+        }
+        var (insideRim, insideRimVertex) = SplitAlong(rims.Inside, axis, cuts);
+        var (outsideRim, outsideRimVertex) = SplitAlong(rims.Outside, axis, cuts);
+
+        var faces = new List<BrepFace>();
+        var insideTangent = new List<(BrepEdge, bool)>();
+        var outsideTangent = new List<(BrepEdge, bool)>();
+
+        // Everything is written in the section at an offset, so nothing is re-derived.
+        var section = s0;
+        SheetBendSection At(double offset) => section with { BendLinePoint = bendLine + along * offset };
+        Vector3d Radial(double phi) => -inside * Math.Cos(phi) + outward * Math.Sin(phi);
+        Vector3d Bend(double offset, double phi, double r) => At(offset).AxisPoint + Radial(phi) * r;
+        NurbsCurve Arc(double offset, double r, double from, double to) =>
+            NurbsCurve.Arc(At(offset).AxisPoint, -inside, outward, r, from, to);
+
+        var previousInsideTangent = tangentInsideVertex[0];
+        var previousOutsideTangent = tangentOutsideVertex[0];
+        // A band's end cross-section is a CHAIN rather than one arc: past a slot the arc at
+        // that offset has been split at the slot's own angle, so the band beyond it is
+        // closed by both halves. Stored walking the direction each band's loop needs it.
+        (BrepEdge Edge, bool SameSense)[] previousInsideArc = [(insideArc[0], false)];
+        (BrepEdge Edge, bool SameSense)[] previousOutsideArc = [(outsideArc[0], true)];
+        double previousOffset = 0;
+
+        for (int i = 0; i < slots.Count; i++)
+        {
+            var (from, to, at, height) = slots[i];
+            var lowRimInside = insideRimVertex[2 * i];
+            var highRimInside = insideRimVertex[2 * i + 1];
+            var lowRimOutside = outsideRimVertex[2 * i];
+            var highRimOutside = outsideRimVertex[2 * i + 1];
+
+            // The slot's own eight corners, on both surfaces.
+            var lowBendIn = new BrepVertex(Bend(from, at, radius));
+            var lowBendOut = new BrepVertex(Bend(from, at, radius + thickness));
+            var highBendIn = new BrepVertex(Bend(to, at, radius));
+            var highBendOut = new BrepVertex(Bend(to, at, radius + thickness));
+            var lowTanIn = new BrepVertex(At(from).InsideTangentPoint);
+            var lowTanOut = new BrepVertex(At(from).OutsideTangentPoint);
+            var highTanIn = new BrepVertex(At(to).InsideTangentPoint);
+            var highTanOut = new BrepVertex(At(to).OutsideTangentPoint);
+            var lowTopIn = new BrepVertex(At(from).InsideTangentPoint + u * height);
+            var lowTopOut = new BrepVertex(At(from).OutsideTangentPoint + u * height);
+            var highTopIn = new BrepVertex(At(to).InsideTangentPoint + u * height);
+            var highTopOut = new BrepVertex(At(to).OutsideTangentPoint + u * height);
+
+            // Arcs at the slot's two ends, split at its own angle: the lower halves bound the
+            // short band under it, the upper halves bound the slot's end walls.
+            var lowArcInLow = ArcEdge(Arc(from, radius, 0, at), lowRimInside, lowBendIn);
+            var lowArcInHigh = ArcEdge(Arc(from, radius, at, angle), lowBendIn, lowTanIn);
+            var highArcInLow = ArcEdge(Arc(to, radius, 0, at), highRimInside, highBendIn);
+            var highArcInHigh = ArcEdge(Arc(to, radius, at, angle), highBendIn, highTanIn);
+            var lowArcOutLow = ArcEdge(Arc(from, radius + thickness, 0, at), lowRimOutside, lowBendOut);
+            var lowArcOutHigh = ArcEdge(Arc(from, radius + thickness, at, angle), lowBendOut, lowTanOut);
+            var highArcOutLow = ArcEdge(Arc(to, radius + thickness, 0, at), highRimOutside, highBendOut);
+            var highArcOutHigh = ArcEdge(Arc(to, radius + thickness, at, angle), highBendOut, highTanOut);
+
+            var insideBottom = Segment(lowBendIn, highBendIn);
+            var outsideBottom = Segment(lowBendOut, highBendOut);
+            var insideTop = Segment(lowTopIn, highTopIn);
+            var outsideTop = Segment(lowTopOut, highTopOut);
+            var lowWallIn = Segment(lowTanIn, lowTopIn);
+            var lowWallOut = Segment(lowTanOut, lowTopOut);
+            var highWallIn = Segment(highTanIn, highTopIn);
+            var highWallOut = Segment(highTanOut, highTopOut);
+            var lowCrossBend = Segment(lowBendIn, lowBendOut);
+            var highCrossBend = Segment(highBendIn, highBendOut);
+            var lowCrossTop = Segment(lowTopIn, lowTopOut);
+            var highCrossTop = Segment(highTopIn, highTopOut);
+
+            var tangentPieceIn = Segment(previousInsideTangent, lowTanIn);
+            var tangentPieceOut = Segment(previousOutsideTangent, lowTanOut);
+
+            // The full-height band left of the slot.
+            faces.Add(new BrepFace(
+                new ExtrudedSurface(Arc(from, radius, 0, angle), -along * (from - previousOffset)),
+                [new BrepLoop(
+                [
+                    Use(insideRim[2 * i], insideRimVertex.ElementAtOrDefault(2 * i - 1)
+                        ?? rims.InsideVertex[0], lowRimInside),
+                    new BrepCoedge(lowArcInLow, true),
+                    new BrepCoedge(lowArcInHigh, true),
+                    new BrepCoedge(tangentPieceIn, false),
+                    .. Materialize(previousInsideArc),
+                ])]));
+            faces.Add(new BrepFace(
+                new ExtrudedSurface(
+                    Arc(previousOffset, radius + thickness, 0, angle), along * (from - previousOffset)),
+                [new BrepLoop(
+                [
+                    .. Materialize(previousOutsideArc),
+                    new BrepCoedge(tangentPieceOut, true),
+                    new BrepCoedge(lowArcOutHigh, false),
+                    new BrepCoedge(lowArcOutLow, false),
+                    Use(outsideRim[2 * i], lowRimOutside, outsideRimVertex.ElementAtOrDefault(2 * i - 1)
+                        ?? rims.OutsideVertex[0]),
+                ])]));
+
+            // The short band UNDER the slot: the same construction with a shorter arc.
+            faces.Add(new BrepFace(
+                new ExtrudedSurface(Arc(to, radius, 0, at), -along * (to - from)),
+                [new BrepLoop(
+                [
+                    Use(insideRim[2 * i + 1], lowRimInside, highRimInside),
+                    new BrepCoedge(highArcInLow, true),
+                    new BrepCoedge(insideBottom, false),
+                    new BrepCoedge(lowArcInLow, false),
+                ])]));
+            faces.Add(new BrepFace(
+                new ExtrudedSurface(Arc(from, radius + thickness, 0, at), along * (to - from)),
+                [new BrepLoop(
+                [
+                    new BrepCoedge(lowArcOutLow, true),
+                    new BrepCoedge(outsideBottom, true),
+                    new BrepCoedge(highArcOutLow, false),
+                    Use(outsideRim[2 * i + 1], highRimOutside, lowRimOutside),
+                ])]));
+
+            // The slot's four walls, every one a PLANE — which is the whole reason the exact
+            // tier is the aligned rectangle. Each normal points OUT of the material and so
+            // INTO the slot: away from the flange's start at the low end, back toward it at
+            // the high one, toward the tip at the bottom and back toward the bend at the top.
+            faces.Add(new BrepFace(
+                new PlaneSurface(lowBendIn.Position, outward, inside),
+                [new BrepLoop(
+                [
+                    new BrepCoedge(lowCrossBend, true),
+                    new BrepCoedge(lowArcOutHigh, true),
+                    new BrepCoedge(lowWallOut, true),
+                    new BrepCoedge(lowCrossTop, false),
+                    new BrepCoedge(lowWallIn, false),
+                    new BrepCoedge(lowArcInHigh, false),
+                ])]));
+            faces.Add(new BrepFace(
+                new PlaneSurface(highBendIn.Position, inside, outward),
+                [new BrepLoop(
+                [
+                    new BrepCoedge(highArcInHigh, true),
+                    new BrepCoedge(highWallIn, true),
+                    new BrepCoedge(highCrossTop, true),
+                    new BrepCoedge(highWallOut, false),
+                    new BrepCoedge(highArcOutHigh, false),
+                    new BrepCoedge(highCrossBend, false),
+                ])]));
+            faces.Add(new BrepFace(
+                new PlaneSurface(lowBendIn.Position, along, Radial(at)),
+                [new BrepLoop(
+                [
+                    new BrepCoedge(insideBottom, true),
+                    new BrepCoedge(highCrossBend, true),
+                    new BrepCoedge(outsideBottom, false),
+                    new BrepCoedge(lowCrossBend, false),
+                ])]));
+            faces.Add(new BrepFace(
+                new PlaneSurface(lowTopIn.Position, along, v),
+                [new BrepLoop(
+                [
+                    new BrepCoedge(lowCrossTop, true),
+                    new BrepCoedge(outsideTop, true),
+                    new BrepCoedge(highCrossTop, false),
+                    new BrepCoedge(insideTop, false),
+                ])]));
+
+            // The wall faces detour up and over the slot instead of running along the
+            // tangent line: the slot reaches their own boundary, so it is a NOTCH in the
+            // outer loop rather than a hole in the face.
+            insideTangent.Add((tangentPieceIn, true));
+            insideTangent.Add((lowWallIn, true));
+            insideTangent.Add((insideTop, true));
+            insideTangent.Add((highWallIn, false));
+            outsideTangent.Add((tangentPieceOut, true));
+            outsideTangent.Add((lowWallOut, true));
+            outsideTangent.Add((outsideTop, true));
+            outsideTangent.Add((highWallOut, false));
+
+            previousInsideTangent = highTanIn;
+            previousOutsideTangent = highTanOut;
+            previousInsideArc = [(highArcInHigh, false), (highArcInLow, false)];
+            previousOutsideArc = [(highArcOutLow, true), (highArcOutHigh, true)];
+            previousOffset = to;
+        }
+
+        // The last full-height band, up to the flange's own far end.
+        var lastTangentIn = Segment(previousInsideTangent, tangentInsideVertex[1]);
+        var lastTangentOut = Segment(previousOutsideTangent, tangentOutsideVertex[1]);
+        faces.Add(new BrepFace(
+            new ExtrudedSurface(insideArcCurve[1], -along * (spanLength - previousOffset)),
+            [new BrepLoop(
+            [
+                Use(insideRim[^1], insideRimVertex[^1], rims.InsideVertex[1]),
+                new BrepCoedge(insideArc[1], true),
+                new BrepCoedge(lastTangentIn, false),
+                .. Materialize(previousInsideArc),
+            ])]));
+        faces.Add(new BrepFace(
+            new ExtrudedSurface(
+                Arc(previousOffset, radius + thickness, 0, angle),
+                along * (spanLength - previousOffset)),
+            [new BrepLoop(
+            [
+                .. Materialize(previousOutsideArc),
+                new BrepCoedge(lastTangentOut, true),
+                new BrepCoedge(outsideArc[1], false),
+                Use(outsideRim[^1], rims.OutsideVertex[1], outsideRimVertex[^1]),
+            ])]));
+        insideTangent.Add((lastTangentIn, true));
+        outsideTangent.Add((lastTangentOut, true));
+
+        return new BendBuild(faces, [.. insideTangent], [.. outsideTangent]);
+    }
+
+    /// <summary>An edge over an arc, on the arc's own parameterization — so the samples the
+    /// tessellator reads off it land on the band surfaces' natural grid.</summary>
+    private static BrepEdge ArcEdge(NurbsCurve arc, BrepVertex from, BrepVertex to) =>
+        new(arc, arc.Domain, from, to);
+
+    /// <summary>
+    /// Splits a straight edge at a list of positions along <paramref name="axis"/>, returning
+    /// the pieces ordered along +axis and the vertices between them.
+    /// <para>Cuts run in the EDGE's own parameter order so each later one still lies inside
+    /// what the previous left, and every position is a model-unit LENGTH along the axis —
+    /// the rule <see cref="SplitRim"/> follows for the same reason.</para>
+    /// </summary>
+    private static (BrepEdge[] Pieces, BrepVertex[] Cuts) SplitAlong(
+        BrepEdge edge, in Vector3d axis, IReadOnlyList<double> axisValues)
+    {
+        if (axisValues.Count == 0)
+            return ([edge], []);
+
+        var domain = edge.Domain;
+        double axisStart = edge.Curve.PointAt(domain.Start).Dot(axis);
+        double axisEnd = edge.Curve.PointAt(domain.End).Dot(axis);
+        bool ascending = axisEnd > axisStart;
+
+        var cuts = new List<(double Parameter, int Index)>(axisValues.Count);
+        for (int i = 0; i < axisValues.Count; i++)
+            cuts.Add((domain.ParameterAt((axisValues[i] - axisStart) / (axisEnd - axisStart)), i));
+        cuts.Sort((a, b) => a.Parameter.CompareTo(b.Parameter));
+
+        var pieces = new List<BrepEdge>(axisValues.Count + 1);
+        var vertices = new BrepVertex[axisValues.Count];
+        var current = edge;
+        foreach (var (parameter, index) in cuts)
+        {
+            var (before, after, split) = TopologyEditor.SplitEdge(current, parameter);
+            pieces.Add(before);
+            vertices[index] = split;
+            current = after;
+        }
+        pieces.Add(current);
+        if (!ascending)
+            pieces.Reverse();
+        return ([.. pieces], vertices);
     }
 
     /// <summary>
