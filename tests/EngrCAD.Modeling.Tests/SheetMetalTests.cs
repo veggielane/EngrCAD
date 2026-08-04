@@ -380,6 +380,40 @@ public class SheetMetalTests
         Assert.Contains("run off the end", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A relief that reaches past the far side of its parent — or into a hole in it — is
+    /// refused NAMING THE POINT, because the failure without the guard is silent: a notch
+    /// is drawn as a detour in the outline, so one running out of the parent leaves a
+    /// self-intersecting blank whose SIGNED area still reads base-minus-notches and whose
+    /// extrusion still validates. Measured before the guard: a 200-deep relief on this
+    /// 80×50 plate gave area 2800 (exactly 4000 − 2·600) and an 18-face solid that passed
+    /// <c>Validate</c>.
+    /// </summary>
+    [Fact]
+    public void AReliefReachingOutOfItsParentIsRefusedNamingThePoint()
+    {
+        var deep = Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(Plate(), Spec()).WithFlange(
+                SheetFlangeTarget.BaseEdge(1), 25, startOffset: 10, width: 30,
+                relief: BendRelief.Rectangular(width: 3, depth: PlateX + 10)));
+        Assert.Contains("self-intersecting", deep.Message, StringComparison.Ordinal);
+
+        // A hole counts as outside: the notch's own corner lands in it.
+        var holed = Plate().WithHole(Sketch.Circle(new Vector2d(70, 25), 8));
+        var intoHole = Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(holed, Spec()).WithFlange(
+                SheetFlangeTarget.BaseEdge(1), 25, startOffset: 20, width: 10,
+                relief: BendRelief.Rectangular(width: 3, depth: 12)));
+        Assert.Contains("outside the base sketch", intoHole.Message, StringComparison.Ordinal);
+
+        // ... and a notch that stops short of the hole is fine, so the guard is not
+        // simply refusing every relief on a holed plate.
+        var fine = SheetMetalBody.Base(holed, Spec()).WithFlange(
+            SheetFlangeTarget.BaseEdge(1), 25, startOffset: 20, width: 10,
+            relief: BendRelief.Rectangular(width: 3, depth: 2));
+        Assert.Equal(PlateX * PlateY - 64 * Math.PI - 2 * 6, fine.BaseOutline.Area(), 9);
+    }
+
     /// <summary>Two flanges that do not overlap can still have reliefs that do — which is
     /// why the overlap test compares OCCUPIED stretches rather than spans.</summary>
     [Fact]

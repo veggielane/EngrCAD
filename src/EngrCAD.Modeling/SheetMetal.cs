@@ -748,8 +748,8 @@ public sealed class SheetMetalBody
             // per-bend radius and K cannot be applied one way here and another way there.
             double radius = flange.BendRadius ?? body.Spec.BendRadius;
             double angle = flange.AngleRadians;
-            var (reliefWidth, reliefDepth) =
-                ResolveRelief(body, flange, index, radius, start, width, edgeLength, inset, parent);
+            var (reliefWidth, reliefDepth) = ResolveRelief(
+                body, flange, index, radius, start, width, edgeLength, inset, parent, a2, t2, o2);
 
             foreach (var sibling in parent.Children)
             {
@@ -807,7 +807,8 @@ public sealed class SheetMetalBody
         /// </summary>
         private static (double Width, double Depth) ResolveRelief(
             SheetMetalBody body, EdgeFlange flange, int index, double radius,
-            double start, double width, double edgeLength, bool[] inset, Node parent)
+            double start, double width, double edgeLength, bool[] inset, Node parent,
+            in Vector2d edgeStart, in Vector2d tangent, in Vector2d outward)
         {
             if (flange.Relief is not { } relief)
                 return (0, 0);
@@ -843,6 +844,37 @@ public sealed class SheetMetalBody
                     $"Flange {index}'s relief is {reliefWidth:g6} wide but only " +
                     $"{edgeLength - start - width:g6} of {flange.Target} is left beyond the flange, so the " +
                     "notch would run off the end of the edge.");
+
+            // A notch is drawn as a DETOUR in the outline, so one reaching past the far
+            // side of the parent makes a self-intersecting blank — and that failure is
+            // SILENT: measured on an 80x50 plate with a 200-deep relief, the signed area
+            // still reads base-minus-notches (2800) and the extruded solid still
+            // validates. So every point of the notch below the surface has to lie strictly
+            // inside the parent's own region. Sound for the failure it exists to catch, and
+            // it claims no more: a notch that passes clean through a HOLE and comes out in
+            // material on the far side has its own corners inside and is not caught.
+            var region = new SketchRegion(body.BaseSketch);
+            double side = relief.Kind == SheetReliefKind.Obround
+                ? reliefDepth - reliefWidth / 2
+                : reliefDepth;
+            var (a2, t2, o2) = (edgeStart, tangent, outward);
+            for (int k = 0; k < 2; k++)
+            {
+                if (!inset[k])
+                    continue;
+                double from = k == 0 ? start - reliefWidth : start + width;
+                Vector2d At(double s, double depth) => a2 + t2 * s - o2 * depth;
+                foreach (var point in (ReadOnlySpan<Vector2d>)
+                    [At(from, side), At(from + reliefWidth / 2, reliefDepth), At(from + reliefWidth, side)])
+                {
+                    if (region.SignedDistance(point) >= -Weld)
+                        throw new ArgumentException(
+                            $"Flange {index}'s relief reaches {reliefDepth:g6} into the parent at {point}, " +
+                            "which is outside the base sketch. A relief notches the blank, so a notch that " +
+                            "runs out of the parent would leave a self-intersecting outline rather than a " +
+                            "cut; make it shallower.");
+                }
+            }
             return (reliefWidth, reliefDepth);
         }
 

@@ -174,7 +174,10 @@ shape the material tears into belongs to the press, not to the geometry.
 
 Reliefs are cut only on the **base flange's** edges: a flange's own wall is built as a
 plain rectangle rather than from a sketch, so a relief on a flange tip is refused by
-name.
+name. A notch that reaches past the far side of its parent — or into a hole in it — is
+refused too, naming the point: a notch is a *detour in the outline*, so one running out
+of the parent leaves a self-intersecting blank, and it does so silently (the signed area
+still reads base-minus-notches, and the extrusion still validates).
 
 ## The flat pattern
 

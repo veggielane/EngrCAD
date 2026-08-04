@@ -990,7 +990,10 @@ wall, reaching the surgery as an ordinary flush flange. With no relief declared,
 `BaseOutline` **is** `BaseSketch`, by reference. A relief is cut at each *inset* end (a
 flush end has no parent material beside it), and only on the base flange's edges — a
 flange's own wall is built as a plain rectangle rather than from a sketch, so a relief
-there is refused by name.
+there is refused by name. A notch is a *detour in a loop*, so one running out of its
+parent would leave a self-intersecting blank — silently, since the signed area still
+reads base-minus-notches and the extrusion still validates — and every point of a notch
+below the surface is therefore required to lie strictly inside the parent's own region.
 
 **`Unfold()` is bookkeeping, not geometry re-derivation**: it walks the flange tree,
 gives each bend its allowance and splices a rectangle into the blank. Base-sketch holes

@@ -4135,6 +4135,15 @@ the genuinely new work is a **model**, not new surface types.
   base is drawn as a SKETCH, so a notch is an edit to data the model already carries; a
   flange's wall is BUILT as a plain rectangle by the surgery, so a notch there would be
   geometry with no declaration behind it. Refused by name rather than approximated.
+- **A notch is a DETOUR in a loop, so one that runs out of its parent is silent** — and
+  measuring that is what put the guard in. On an 80×50 plate a 200-deep relief leaves a
+  self-intersecting blank whose SIGNED area still reads exactly base-minus-notches (2800 =
+  4000 − 2·600, because a Green's integral over a bowtie is not the enclosed area) and
+  whose extrusion still passes `Validate` with 18 faces. So every point of the notch below
+  the surface is required to lie strictly inside the parent's own region
+  (`SketchRegion.SignedDistance`), which also catches a notch reaching into a HOLE. The
+  guard claims no more than it proves: a notch passing clean through a hole and out into
+  material on the far side has its own corners inside and is not caught.
 - **Every refusal fires before a single coedge moves**, which the rim features learned the
   hard way ("partial runs are rejected BEFORE any surgery — rim surgery rewrites loops in
   place, so a late failure would leave a half-edited solid"). `Locate` therefore checks
