@@ -1947,6 +1947,69 @@ exactly.
   iteration to convergence), and the deliberate trade is an **over-estimating** outward
   magnitude (~13% worst case) rather than Borgefors-optimized accuracy, so the invariant
   "never reports nearer than the truth" holds.
+- **Domain operations, and the property they cost.** A translate, a rotate, a mirror and a
+  repetition are ISOMETRIES, so composing a field with them leaves a distance a distance —
+  that is why those sit beside the set operators with no caveat attached. A **twist, a bend
+  and a taper are not**: they shear or stretch space, so the composed value changes faster
+  than the query point moves. What survives is the SIGN, exactly, because the solid is
+  exactly the pre-image of the child; what does not is the magnitude, which becomes an
+  over-estimate. `Elongate` joins the isometries in effect (its map is 1-Lipschitz per
+  component: exact outside the stretched body, a strict lower bound inside the clamped
+  core). `Displace` is a fourth case and the odd one — it adds a value rather than moving a
+  point, so it is not a distance at all and the solid is `{d + ripple < 0}` by definition.
+- **`Sdf.LipschitzBound(region)` is what keeps the non-isometries safe, and its shape was
+  forced by the geometry rather than chosen.** Three consumers reason "a value of |d| proves
+  no surface is within |d| of here" — the Surface Nets block cull, the narrow-band octree,
+  the projection target's step — and each would drop geometry SILENTLY under a sheared
+  field. So the node reports the factor and each widens by it. It takes a REGION rather
+  than being a scalar because a twist's factor grows with distance from the axis, so no
+  finite constant is valid over all of space; a consumer knows the region it is about to
+  sample and asks once, and an infinite answer means "cull nothing", which is always
+  correct. Default 1, so nothing that existed before pays anything — verified the only way
+  that can be, by every committed docs PNG staying byte-identical. The design cost worth
+  naming: this is the first thing in the engine a node can get wrong by saying NOTHING, so
+  the guard is a measurement rather than a review convention (secants over the whole
+  catalogue with a twist buried inside every wrapper, plus a wrapper built to forget and
+  asserted to be caught).
+- **One derivation serves all three non-isometries**, which is worth more than three
+  formulas. Every one of their Jacobians reduces — after an orthogonal change of basis,
+  free because singular values are invariant under one — to `[[g, w], [0, 1]]` beside an
+  untouched unit direction. `DomainMath.ShearedScaleNorm` is that matrix's spectral norm in
+  closed form; twist supplies (1, rate·r) and recovers the tidy `(k + √(k²+4))/2`, bend
+  supplies the same matrix TRANSPOSED (a matrix and its transpose share singular values),
+  taper supplies (1/f, r·f′/f²). The norm increases in both arguments, so substituting each
+  one's largest magnitude over a region bounds it over that whole region.
+- **Repetition visits two cells per repeated axis, and that is the correctness condition
+  rather than an accuracy refinement.** The single nearest-cell map every shader
+  implementation uses is DISCONTINUOUS at a cell boundary whenever the child is not
+  symmetric about its cell centre, because the map jumps by a whole spacing there — and a
+  discontinuous field is Lipschitz at no constant at all, so the cull could not be widened
+  to cover it and would report surface where there is none. Visiting both neighbours makes
+  the field continuous AND makes the sign exact, given one enforced precondition: the
+  child's bounds must fit inside one cell. Outside it a query point can lie inside an
+  instance the evaluation never visits, which is a wrong SIGN — refused by name with the
+  measured span, not documented as a caveat. Verification is an identity rather than a
+  tolerance: a lattice must equal an explicit `Sdf.Union` of translated copies **bit for
+  bit**, since both spell `child(p − spacing·n)`.
+- **AST compilation (`Sdf.Compile()`) is bit-identical by construction, and where that
+  construction lives is the decision.** Each node emits its own expression, term for term,
+  through an internal virtual — NOT a type switch inside the compiler, which would be a
+  second copy of every formula free to drift from the one it claims to mirror. A node with
+  no expression form emits a call back into its own `Evaluate`, so compilation always
+  succeeds and is always exact; it simply stops paying for that subtree. Measured, it buys
+  1.02–2.67× over the scalar walk in proportion to how much of the cost is DISPATCH, and
+  **loses to the SIMD batch path by 1.2–3.4× in every case** — so it serves callers stuck
+  with per-point queries and is not a faster way to sample a grid. The asymmetry with
+  vectorization is the interesting part: the gyroid COMPILES (an expression tree calls
+  `Math.Sin` itself, so it is bit-identical) where it deliberately does not vectorize, so
+  the two are not the same trade.
+- **The two primitives whose published formulas did not survive measurement** are recorded
+  under the numerical lessons in CLAUDE.md: the ellipsoid (a genuine lower bound outside, an
+  over-report of depth inside, with the error table against an exact Lagrange-multiplier
+  oracle — and the finding that the first oracle convicted a *sphere* of an 86% error), and
+  the square pyramid (Quilez's closed form is exact for the pyramid with its base REMOVED,
+  reading 5.831 against a true 3.0 below the base centre, so `Sdf.Pyramid` takes the
+  minimum over its own boundary triangles instead).
 
 ## 5. B-Rep engine
 

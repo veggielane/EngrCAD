@@ -71,6 +71,54 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Implicit engine (EngrCAD.Implicit)
 
+- [ ] **The ellipsoid's Lipschitz bound `2 + (rmax/rmin)²` is sound but loose, and the
+  looseness is paid by the polygonizer.** The derivation bounds two factors independently
+  (`|∇k1| ≤ k1/rmin²` because every term carries a `1/r_i²`, and `k1 ≥ k0/rmax`), and they
+  are worst-case simultaneously only at points that do not exist: measured, the true
+  supremum runs **0.26–0.55 of the bound** over aspect ratios 1 to 10 (1.00 against 3, 1.26
+  against 3.56, 41.4 against 102). The cost is a cull shell that many times too thick around
+  every ellipsoid, including a near-spherical one, which reports 3 where the truth is 1.
+  - The obvious tightening is to keep the `|k0 − 1|/k0` factor rather than bounding it by 1
+    — it vanishes ON the surface (where the true gradient is exactly 1, provable in two
+    lines) and only approaches 1 far away, where the true gradient tends to 1 for a
+    different reason. A bound that is a function of the region's own `k0` range would
+    capture both ends.
+  - **Do not tune this by fitting the measurements**: a Lipschitz bound that is too small
+    drops geometry silently, which is the whole reason the mechanism exists.
+    `PrimitiveDistanceTests.Ellipsoid_ReportedLipschitzBound_CoversTheMeasuredSecants`
+    prints `measured/reported` per row, so progress is visible.
+- [ ] **`Sdf.ConvexPolyhedron` is exact inside and a lower bound outside; the machinery for
+  making it exact everywhere is already there.** Outside, `max` over the face half-spaces
+  understates wherever the nearest feature is an edge or a vertex. `Sdf.Pyramid` shows the
+  exact route — the minimum over the boundary TRIANGLES through
+  `Distance3d.ClosestPointOnTriangle` — and this node already enumerates its vertices (for
+  `Bounds`), so the missing step is only grouping them per plane, ordering each group by
+  angle in its plane, and fan-triangulating. Weigh it: the query then costs O(triangles)
+  Voronoi-region tests (12 for a cube) against one dot product per plane today, so it may
+  want to be a constructor option rather than a replacement — in which case both behaviours
+  need naming, since "two estimators answering one question must both be nameable".
+- [ ] **A vector-kernel compiler is the version of `Sdf.Compile()` that would actually
+  beat the batch path**, and the measurements say why the scalar one does not: compiled
+  loses to SIMD by 1.2–3.4× in every case. Every node would need its expression written
+  against `Vector<double>` instead of `double` — which is mechanical for the ones that
+  already have both a scalar `Evaluate` and an `ISdfKernel`, since the pairing already
+  exists and is already held bit-equal. Two things to settle before starting: the nodes that
+  are deliberately scalar (gyroid, twist, bend, displace — no bit-identical vector
+  transcendental) would have to fall back **per node inside a vector expression**, which is
+  a masking/blending question rather than a compilation one; and the recorded rule that
+  "block granularity destroys per-lane savings" applies to that fallback too, so measure a
+  mixed tree before assuming the win survives one scalar node in it.
+- [ ] **`Displace`'s bounds are `child.Bounds.Expanded(amplitude)`, which is right only
+  where the child's magnitude is a true distance.** A child that under-reports far from its
+  surface — a CSG difference near the subtracted tool's fictitious faces is the standing
+  example — can have the ripple raise material outside those bounds, and the polygonizer
+  would then cut it off at the region boundary. Today this is documented on the API rather
+  than detected. A sound bound needs an upper estimate of the distance from a level set to
+  the surface, which the engine's lower-bound contract deliberately does not provide; the
+  honest alternatives are to refuse a child whose field is not exact (there is no way to ask
+  it), or to expand by `amplitude × LipschitzBound` and state the residual case. Worth
+  deciding rather than leaving to a surprise.
+
 - ~~**The bézier kernel's Newton stage is fixed at 8 iterations for every lane.**~~
   ✅/❌ **half landed, half measured and declined** — and the entry's premise was wrong in a
   useful way. It assumed "a convergence exit would change results ... so it needs the golden
