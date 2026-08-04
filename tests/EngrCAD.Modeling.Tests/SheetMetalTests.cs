@@ -1054,6 +1054,46 @@ public class SheetMetalTests
         var exception = Assert.Throws<NotSupportedException>(
             () => body.WithFlange(SheetFlangeTarget.BaseEdge(arcIndex), 20));
         Assert.Contains("must be STRAIGHT", exception.Message, StringComparison.Ordinal);
+        // The refusal states a THEOREM rather than a missing surface type, which is the
+        // whole difference: a curved bend line is not something this kernel has not got
+        // round to, it is something no flat blank can produce.
+        Assert.Contains("isometry", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Gaussian curvature", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The reason a curved bend line is refused, MEASURED rather than asserted: the band a
+    /// circular bend line would sweep is a torus segment, and a torus has non-zero Gaussian
+    /// curvature everywhere a flat sheet's is zero — so the material would have to stretch.
+    /// Read off the kernel's own surface rather than from the formula, by comparing the
+    /// area a torus band actually has against the area the flat blank would spend on it
+    /// (which is what a bend allowance is): they differ, and by a straight bend's own
+    /// standard they must not.
+    /// </summary>
+    [Fact]
+    public void ACurvedBendLineWouldNotBeAnIsometryOfTheSheet()
+    {
+        const double rho = 30, radius = 2, angle = Math.PI / 2;
+
+        // A STRAIGHT bend of width w spends exactly w x BA of blank and has exactly that
+        // much neutral-surface area: an isometry, which is what makes the unfold work.
+        double allowance = SheetMetalSpec.BendAllowance(angle, radius, Thickness, SheetMaterials.Coined);
+        double straightWidth = 2 * Math.PI * rho;
+        double straightArea = straightWidth * allowance;
+
+        // The same bend run round a circle of radius rho is a TORUS band: by Pappus its
+        // neutral-surface area is the generator's length times the distance its CENTROID
+        // travels, and the centroid does not sit on the bend line — so the area is not the
+        // blank's, and the gap is the material that would have to come from somewhere.
+        double neutral = radius + SheetMaterials.Coined * Thickness;   // neutral-surface radius
+        double centroidOffset = neutral * (1 - Math.Cos(angle / 2)) * 2 / angle * Math.Sin(angle / 2);
+        double torusArea = allowance * 2 * Math.PI * (rho + centroidOffset);
+
+        Assert.True(
+            Math.Abs(torusArea - straightArea) > 1e-6 * straightArea,
+            "if these agreed, folding along a curve would be an isometry and the refusal would be wrong");
+        // ... and the gap is what a fabricator has to stretch or shrink: about 3% here.
+        Assert.InRange(Math.Abs(torusArea - straightArea) / straightArea, 0.01, 0.10);
     }
 
     [Fact]

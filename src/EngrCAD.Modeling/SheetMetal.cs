@@ -1197,9 +1197,14 @@ public sealed class SheetMetalBody
                 if (curves[target.EdgeIndex] is not Line2d line)
                     throw new NotSupportedException(
                         $"Flange {index} names base edge {target.EdgeIndex}, which is a " +
-                        $"{curves[target.EdgeIndex].GetType().Name}. A bend line must be STRAIGHT: a bend along " +
-                        "a curved edge sweeps a developable band rather than a cylinder, and v1 refuses it " +
-                        "rather than approximating it.");
+                        $"{curves[target.EdgeIndex].GetType().Name}. A bend line must be STRAIGHT, and that is a " +
+                        "theorem rather than a limit of this kernel: folding a sheet along a curve is not an " +
+                        "isometry of the sheet, so no flat blank produces it. Along a circular bend line the " +
+                        "band is a TORUS segment, whose Gaussian curvature is non-zero everywhere, where a flat " +
+                        "sheet's is zero — so the material has to stretch or shrink, which is FORMING rather " +
+                        "than bending and has no bend allowance. Model a curved flange as forming (and accept " +
+                        "that its blank is not derivable from this bend model), or approximate it as a chain of " +
+                        "straight bends.");
                 return (line.Start, line.End);
             }
 

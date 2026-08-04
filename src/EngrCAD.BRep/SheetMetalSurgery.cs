@@ -275,8 +275,9 @@ public static class SheetMetalSurgery
             throw new NotSupportedException(
                 $"No straight sheet edge runs from {q0} to {q1} between a planar face with outward normal " +
                 $"{inside} and a planar side wall with outward normal {outward}. A flange grows from a " +
-                "STRAIGHT edge of a planar sheet face; a curved bend line would sweep a developable band, " +
-                "which v1 does not build.");
+                "STRAIGHT edge of a planar sheet face: folding along a curve is not an isometry of the sheet " +
+                "(the band's Gaussian curvature stops being zero), so it is forming rather than bending and " +
+                "has no flat blank behind it.");
         }
 
         if (wall.Loops.Count != 1 || wall.OuterLoop.Coedges.Count != 4)
