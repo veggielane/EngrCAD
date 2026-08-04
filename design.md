@@ -2940,6 +2940,77 @@ reverses B's kept faces *properly*: loops re-wound (order and senses) in additio
 there. Boolean results therefore pass `Validate()` and Euler–Poincaré with the correct
 genus.
 
+### Direct editing (`DirectEdit`) — the operation an imported body needs
+
+Every other modelling operation here edits a RECIPE. An imported STEP or IGES body has
+none, so the only handle on it is its faces: push one, translate one, delete a feature.
+Three decisions carry it, and two of them are reductions rather than constructions.
+
+**(a) Face offsetting is `Shelling` under a selective law, and the missing piece was one
+overload.** The backlog predicted "the machinery already exists"; it was right, and the
+gap was smaller than it supposed. `Shelling.Shell` already took a per-face wall thickness
+and already held its openings still at ZERO — a non-uniform offset array, in production,
+with exact corners — while `Shelling.Offset` took only a scalar. So the whole of face
+offsetting is `Shelling.Offset(solid, Func<BrepFace, double>)`, the twin the file did not
+have, with `DirectEdit.OffsetFaces` supplying a law that returns zero off the selection.
+Both tiers inherit unchanged: all-planar solids keep the three-plane Cramer path (the
+uniform overload delegates with a constant law, producing the identical array, so its
+output is untouched) and anything curved takes `CarrierBody`, where a face whose law
+returns zero keeps its carrier object VERBATIM. No refusal was restated either — carriers
+with no same-family offset, non-circular curved edges and non-concurrent higher-valence
+vertices all still refuse where they always did.
+
+**(b) A MOVE of a planar face is an offset, by derivation, so it is implemented as one.**
+A plane is invariant under translation within itself, so the plane reached by displacing a
+face by `v` is exactly the plane an offset of `v·n̂` reaches. Writing it as that reduction
+rather than as a second algorithm makes two behaviours facts instead of arrangements: a
+face moved parallel to itself does not move at all, and several faces moved by one vector
+each take their own projection. It is also what makes the Native-under-mirror
+classification a theorem — the operation is a dot product, and an orthogonal map preserves
+dot products, so a reflected move pushes by the same amount. **A curved face is refused**,
+and the reason is specific rather than caution: `CarrierBody.ConcentricRim` rebuilds each
+rim as a circle concentric with the ORIGINAL, which is exactly right for an offset (which
+leaves the axis where it was) and false for a translation (which moves it). Left
+unchecked, the hypothesis fails three stages downstream in `OnBothCarriers`; declining it
+at the call names the real cause.
+
+**(c) Delete-and-heal is a CONDITION, and the entry's own verification clause turned out
+to be the gate.** Call an edge *wound* when one of its two faces is deleted and the other
+kept. The deletion heals by DROPPING loops exactly when every wound edge lies on a
+complete interior loop of a kept **planar** face — a boss, a pad, a pocket liner, a
+counterbore's step. The planar clause is not a convenience: a plane is bounded by its
+outer loop alone, so an interior loop really is a hole and dropping it leaves the face
+covering exactly the right region. On a cylinder or an extruded band a second loop is
+routinely the far END of the band, and dropping it opens the solid into an infinite tube
+which satisfies **both** `Validate()` and Euler–Poincaré (measured: a cylinder minus its
+top cap comes back V=1, E=1, F=2, L=2, and `V − E + 2F − L = 2`). So no downstream check
+could catch it, and the first version of the gate — "any loop that is not `Loops[0]`" —
+would have shipped that silently. The entry's verification sentence said *"restores the
+base solid bit-for-bit **when the neighbours are planar**"*, which is the correctness
+condition written as a test case.
+
+What that buys is the strongest available oracle: because the operation shares geometry
+and rebuilds only topology, a deletion does not merely *resemble* the body a feature was
+added to — it reproduces it, asserted bit for bit against a plate that never had the hole,
+and against the closed-form volume on a plate whose boss came from a real boolean.
+
+**What is refused by name** rather than attempted: a wound that only PARTLY bounds a
+neighbouring loop. Healing that means EXTENDING the two neighbours until they meet in a
+new edge, which is a different operation and can have no answer at all — a box's four
+sides extended past its deleted top never meet. `SurfaceCorner.TrySolveCurve` could supply
+the curve; what is missing is the topology rewiring and a soundness gate, so it is filed
+rather than guessed at.
+
+**One measured property worth keeping**, of the signed-zero family: a re-solved corner
+reproduces every nonzero coordinate BIT FOR BIT and can return −0.0 where the original
+held +0.0, because the three-plane Cramer solve divides by a determinant of −1. It
+compares equal to 0.0 under every value test and differs only in the sign bit, so it is
+invisible to everything except a bit-level fixture placed at the origin — which is exactly
+the assertion the "did this face really not move?" check reaches for. The fixture moves
+off the origin and the property is pinned by its own test, so it cannot rot into a
+mystery. Same shape as `PolygonFan`'s tie guard: a comparison is only as meaningful as the
+scale (here, the representation) it is made against.
+
 ### The native B-Rep archive (`BrepArchive`, `.ecb`) — and why it is TEXT
 
 STEP is the interchange format and will stay so; the native archive exists for the one

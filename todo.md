@@ -2170,17 +2170,34 @@ export — is recorded in CLAUDE.md):
 
 ## OpenCASCADE (OCCT) feature parity (open items)
 
-- [ ] **Direct editing: offset, move and delete a face on a history-less solid** —
-  what makes imported STEP editable. `Shelling.Offset` already offsets EVERY face with
-  exact corner re-solves and takes a per-face wall thickness, so offsetting ONE face is
-  the same machinery under a selective law; a face MOVE is the offset's rigid cousin;
-  delete-face-and-heal is extend-the-neighbours through the same three-plane/Newton
-  corner solves. Selection through the existing `FaceSetRef` vocabulary; provenance
-  inherits (the six-site rule); refusals BY NAME exactly where the corner machinery
-  already refuses (>3-valent vertices, carriers with no same-family offset).
-  - Verification: offsetting a box face by d changes the volume by exactly A·d;
-    deleting a boss's faces restores the base solid bit-for-bit when the neighbours
-    are planar and it does not merely "look removed".
+- [ ] **Direct editing follow-ups** (`DirectEdit.OffsetFaces`/`MoveFaces`/`DeleteFaces` +
+  the `Shape` overloads landed — see design.md §5 and `examples/direct-editing.md`; each
+  item below was refused BY NAME in v1 with its reason, so none is a silent gap):
+  - [ ] **Delete-face by EXTENDING the neighbours.** v1 heals only a wound that bounds a
+    complete interior loop of a planar face (a boss, a pad, a pocket); a wound that runs
+    only part of the way round a loop — deleting a chamfer band, a fillet band, a draft
+    face — needs the two neighbours extended until they meet in a NEW edge, which
+    `SurfaceCorner.TrySolveCurve` can already solve for the analytic pairs. The work is
+    not the curve: it is the topology rewiring (two rim loops collapse into one edge) plus
+    a soundness gate, since the extension can have no answer at all (a box's four sides
+    extended past its deleted top never meet) and the refusal must come BEFORE any coedge
+    moves. Note the v1 gate is `IsPlanar` on the loop-dropping face and the general fix
+    subsumes it.
+  - [ ] **Move a CURVED face.** Refused today because `CarrierBody.ConcentricRim` rebuilds
+    each rim as a circle concentric with the ORIGINAL — exactly right for an offset (which
+    leaves the axis alone) and false for a translation, which moves it. The fix is to take
+    the rim's new axis from the new CARRIER rather than from the fit, keeping the phase
+    rule (frame taken verbatim, never re-derived from a solved point). Would also unlock
+    ROTATING a face, which is `Draft` with an arbitrary neutral line.
+  - [ ] **Replace a face's surface** (OCCT `BRepTools_ReShape`): swap a planar face for a
+    cone or a cylinder and re-solve the corners. `CarrierBody.Rebuild(carriers, what)` is
+    already exactly that seam — it takes one carrier per face and rebuilds everything —
+    so this is an API and a validation question rather than a geometric one.
+  - [ ] **Direct edits as FEATURES.** They are `Shape` graph nodes today, so they compose
+    and `Explain` reports them, but there is no `Feature` wrapper and so no `[Param]`
+    distance a design study or a configuration could drive. The selector is a
+    `FaceSetRef`, which already serializes, so the blocker is only that a `Feature` needs
+    writing.
 - [ ] **PDF export follow-ups** (the writer landed: `PdfDrawing` +
   `SheetWriter.ToPdf`, byte-fixed-point, twin-decoder-verified — see design.md §6c;
   each item below was declined in v1 with its reason and would be additive):

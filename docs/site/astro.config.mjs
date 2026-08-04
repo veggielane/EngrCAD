@@ -127,6 +127,7 @@ document.addEventListener('click', function (event) {
             { label: 'Booleans', slug: 'examples/booleans' },
             { label: 'Blends, offset, shell, lattice', slug: 'examples/implicit' },
             { label: 'Loft, draft & shell', slug: 'examples/loft-draft-shell' },
+            { label: 'Direct editing', slug: 'examples/direct-editing' },
             { label: 'Transforms & patterns', slug: 'examples/transforms-patterns' },
             { label: 'Text', slug: 'examples/text' },
             { label: 'Heightmap terrain', slug: 'examples/heightmaps' },
