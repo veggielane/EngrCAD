@@ -648,7 +648,23 @@ operations. Depends only on `EngrCAD.Core`.
   computed in that closed form rather than through the general v-linear expressions,
   which reach it only up to rounding. `SpiralArc3d.IsPlanar` is an exact-zero test every
   downstream tier reads, so with the rounded form the SAME chamfer came out planar at one
-  end of a rod and not at the other; **bounded planar carriers** (below), and a general marching tracer
+  end of a rod and not at the other. **The same disk against an ordinary PLANE is the
+  third member of that family** (`TryRevolvedDisk` + `TryPlanarDisk`): a full-turn revolve
+  of an axis-perpendicular generator IS a plane restricted to an annulus, so a face
+  crossing it obliquely meets it in an exact CHORD — the two planes' analytic line clipped
+  to the query region, to the patch's parallelogram where the carrier is bounded, and
+  finally to the disk's radial extent, one square root per rim (an annulus leaves two
+  chords, an axis-TOUCHING disk one). That is what a `Shape.Drill` tool presents where a
+  `Shape.Cylinder` presents a `PlaneSurface` cap, the tool being ONE axis-touching revolve.
+  **PARALLEL planes are refused BY NAME rather than answered with an empty list**, so the
+  axis-perpendicular arm and the coplanar-fusion tier keep every case they already owned —
+  which is also the only configuration in which a disk carrier reached an analytic path
+  before. Landing it needed a matching density rule in `BRepTessellator.SampleEdge`
+  (a two-sample chord pulls back onto the disk as a zero-area sliver, both its ends sitting
+  on the rim where the arc closing the loop already is), and **on its own it TRADES
+  refusals**, which is why it had been built, measured and reverted once: `CoaxialDiskIntersectionTests`
+  and `SideWallBreakoutBooleanTests.TheDiametralCut_ConvergesOnTheAnalyticVolume` carry
+  the measurement; **bounded planar carriers** (below), and a general marching tracer
   (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
   everything else. See design.md §5 for the algorithm. Full-turn revolved surfaces whose
   sampled generator lies on a sphere centered on the axis (MakeSphere hemispheres) are

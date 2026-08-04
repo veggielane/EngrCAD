@@ -216,6 +216,27 @@ logging complements them, never replaces them.
     about the parameter mapping** — the same reason `FaceGeometry.ExactSampleParameters`
     exists on the polyline side.
 
+    **A STRAIGHT edge takes the angular density of any face whose azimuth it crosses**
+    (`StraightEdgeSegments`). Two samples describe a straight CURVE exactly and may
+    describe the FACE it bounds not at all: a `Shape.Drill` tool's flat bottom is a
+    full-turn `RevolvedSurface` whose u is an azimuth about the pole, so a face cutting it
+    obliquely leaves a CHORD whose two endpoints both sit on the rim — at the same v the
+    arc completing the loop already occupies. Pulled back, that loop is a zero-area sliver
+    running out along v = 1 and back, which `TrimmedFaceTessellator` refuses as a winding
+    structure it cannot read *however fine the grid around it becomes*. The count is
+    `AngularSegments` of the azimuth the edge actually sweeps about the face's own axis,
+    taken as the MAX over every using face (one polyline per edge, and both sides read it).
+    **The gate IS the correctness condition rather than a proxy for it**: an ISO-parameter
+    straight edge — a cylinder's or a cone's ruling, a revolve's seam, a helical band's
+    generator, which is every straight edge on an angular face that existed before this
+    rule — sweeps nothing and stays at exactly two samples, with no separate iso-parameter
+    test to keep in step. Extra samples cost no fidelity either, since every one of them is
+    exactly on the curve (the argument `RefineTracerChords` already makes), and both
+    endpoints keep their incumbent expressions so a one-segment answer is bit-identical.
+    Measured, the rule fires on exactly one construction in the repo — the drilled breakout
+    — where it and `SurfaceIntersection`'s coaxial-disk recognizer are each insufficient
+    alone: `StraightEdgeDensityTests` pins both halves.
+
     **Traced polylines refine against their exact carriers at tessellation time**
     (`RefineTracerChords`). A marching-tracer curve's sample count is fixed at boolean
     time, so the facets straddling it used to disagree MORE with the exact surface as

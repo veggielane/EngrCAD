@@ -108,6 +108,18 @@ public static class SurfaceIntersection
         if (planarB && patchB.Bounded && TryPatchQuadric(patchB, a, region, out var wallCurvesB))
             return wallCurvesB;
 
+        // A coaxial DISK — a full-turn revolve of a generator perpendicular to its axis —
+        // is a PLANE restricted to an annulus, and it is what `Drill`'s tool presents where
+        // a `Shape.Cylinder` presents a `PlaneSurface` cap. A face crossing it obliquely
+        // therefore meets it in an exact CHORD rather than a traced polyline.
+        // <para>Parallel planes fall through by name, so the perpendicular-full-turn arm in
+        // the switch below keeps its cases verbatim; that is also the only configuration in
+        // which a disk carrier reached an analytic path before.</para>
+        if (planarA && TryPlanarDisk(patchA, b, region, out var diskCurvesA))
+            return diskCurvesA;
+        if (planarB && TryPlanarDisk(patchB, a, region, out var diskCurvesB))
+            return diskCurvesB;
+
         return (a, b) switch
         {
             (PlaneSurface p, CylinderSurface c) => PlaneCylinder(p, c, region),
@@ -783,6 +795,118 @@ public static class SurfaceIntersection
         tMin = Math.Max(tMin, lo);
         tMax = Math.Min(tMax, hi);
         return tMin < tMax;
+    }
+
+    /// <summary>
+    /// A coaxial disk or annulus expressed as what it is: the axis-perpendicular
+    /// <paramref name="Plane"/> through <paramref name="Centre"/> (the axis point at the
+    /// generator's own height), carrying only the radii in <paramref name="RadialRange"/>.
+    /// </summary>
+    private readonly record struct RevolvedDisk(
+        PlaneSurface Plane, Vector3d Centre, Interval RadialRange);
+
+    /// <summary>
+    /// Recognizes a full-turn revolve whose generator is PERPENDICULAR to the axis — a
+    /// disk, an annulus, a shoulder face, and above all the flat bottom of a
+    /// <c>Shape.Drill</c> tool, which is ONE axis-touching revolve and so presents a
+    /// <see cref="RevolvedSurface"/> POLE CAP where a <c>Shape.Cylinder</c> presents a
+    /// <see cref="PlaneSurface"/>.
+    /// <para>It is the b = ∞ member of <see cref="TryCoaxialProfileLine"/>'s family, exactly
+    /// as <see cref="TryCoaxialDisk"/> is on the helical side, and it uses the same
+    /// scale-free complement of that recognizer's guard: no axial spread beside the radial
+    /// one is what makes a profile a disk. The generator is SAMPLED, never read off
+    /// <see cref="Curve3d.Underlying"/>.</para>
+    /// </summary>
+    private static bool TryRevolvedDisk(Surface carrier, out RevolvedDisk disk)
+    {
+        disk = default;
+        if (carrier is not RevolvedSurface revolved || !revolved.IsFullTurn)
+            return false;
+
+        var axis = revolved.AxisDirection.Normalized();
+        // The in-plane axes are only ever used to spell the plane; the intersection line
+        // below reads the NORMAL, so no phase convention rides on this frame.
+        var frame = Frame3d.FromNormal(revolved.AxisOrigin, axis);
+        Span<double> radii = stackalloc double[CoaxialSamples + 1];
+        Span<double> axials = stackalloc double[CoaxialSamples + 1];
+        if (!TrySampleCoaxialGenerator(
+                carrier, frame, radii, axials, out var axialSpan, out var radialSpan))
+            return false;
+        if (axialSpan.Length > Math.Max(axialSpan.Length, radialSpan.Length) * 1e-12)
+            return false;
+
+        // The generator's own start, not a mean: every sample agrees to the guard above,
+        // and an endpoint is a height the carrier actually passes through.
+        var centre = revolved.AxisOrigin + axis * axials[0];
+        disk = new RevolvedDisk(
+            new PlaneSurface(centre, frame.X, frame.Y), centre, radialSpan);
+        return true;
+    }
+
+    /// <summary>
+    /// A planar carrier meeting a coaxial disk: the two planes' exact line, clipped to the
+    /// query region, to the patch's own parallelogram where it is bounded, and finally to
+    /// the disk's radial extent — a CHORD, or the two chords an annulus leaves.
+    /// <para>Parallel planes return FALSE rather than an empty list, so the coincident and
+    /// axis-perpendicular configurations fall through to the routes that already own
+    /// them (<see cref="PlaneRevolved"/>, and the coplanar-fusion tier one layer up).</para>
+    /// </summary>
+    private static bool TryPlanarDisk(
+        in PlanarPatch patch, Surface other, in Aabb region, out List<Curve3d> curves)
+    {
+        curves = [];
+        if (!TryRevolvedDisk(other, out var disk))
+            return false;
+
+        var na = patch.Plane.Normal.Normalized();
+        var nb = disk.Plane.Normal.Normalized();
+        if (!na.Cross(nb).TryNormalize(Tolerance.Default, out var dir))
+            return false;
+
+        // A point on both planes, in the span of the two normals (PlanarPatches' solve).
+        double da = na.Dot(patch.Plane.Origin);
+        double db = nb.Dot(disk.Plane.Origin);
+        double dot = na.Dot(nb);
+        var point = na * ((da - db * dot) / (1 - dot * dot)) + nb * ((db - da * dot) / (1 - dot * dot));
+
+        if (!TryClipToRegion(point, dir, region, out double tMin, out double tMax))
+            return true;
+        if (!ClipToPatch(patch, point, dir, ref tMin, ref tMax))
+            return true;
+
+        // |point + dir·t − centre|² = t² + 2·b·t + c with dir a unit vector, so each radius
+        // bound is one square root — the same closed form the conic clip uses, and for the
+        // same reason: a clipped end becomes a VERTEX shared with the neighbouring face.
+        var offset = point - disk.Centre;
+        double b1 = offset.Dot(dir), c1 = offset.LengthSquared;
+        double outerDisc = b1 * b1 - c1 + disk.RadialRange.End * disk.RadialRange.End;
+        if (!(outerDisc > 0))
+            return true;
+        double outer = Math.Sqrt(outerDisc);
+        tMin = Math.Max(tMin, -b1 - outer);
+        tMax = Math.Min(tMax, -b1 + outer);
+        if (tMax - tMin <= Tolerance.Default.Linear)
+            return true;
+
+        // An annulus removes the stretch inside its bore, leaving up to two chords; a disk
+        // that touches its own axis (every drill tool's) has no inner radius and no split.
+        double innerDisc = b1 * b1 - c1 + disk.RadialRange.Start * disk.RadialRange.Start;
+        if (disk.RadialRange.Start > 0 && innerDisc > 0)
+        {
+            double inner = Math.Sqrt(innerDisc);
+            AddChord(point, dir, tMin, Math.Min(tMax, -b1 - inner), curves);
+            AddChord(point, dir, Math.Max(tMin, -b1 + inner), tMax, curves);
+            return true;
+        }
+        AddChord(point, dir, tMin, tMax, curves);
+        return true;
+    }
+
+    private static void AddChord(
+        in Vector3d point, in Vector3d dir, double tMin, double tMax, List<Curve3d> into)
+    {
+        if (tMax - tMin > Tolerance.Default.Linear)
+            into.Add(new Line3d(point + dir * tMin, point + dir * tMax));
     }
 
     /// <summary>

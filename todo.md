@@ -939,27 +939,24 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     40×30×10 plate (axis height z0, top face at 10) fixes z0 = 10.5 / 9.5 / 9 and regresses
     none; design.md §5 carries the reasoning and why `ContainsTwoSided` is NOT the fix.
     Residuals below.
-    - [ ] **The annulus recognizer is BLOCKED by a `SampleEdge` density rule, not by
-      anything in `SurfaceIntersection`.** It was built, measured and reverted: with the
-      exact `Line3d` chord the boolean fixes the exactly-DIAMETRAL cut (z0 = 10, still the
-      one refusal left in the interior of the family) and BREAKS z0 = 11.5 and 10.5, which
-      then fail in trimmed-face tessellation on the disc fragment — a trade, and the
-      standing rule is that an algorithm which can only trade one refusal for another is not
-      reached at all. The blocker is established by subtraction rather than guessed: feeding
-      the SAME exact chord as a 25-point polyline (identical geometry, identical endpoints,
-      only the density different) passes **all three** rows. So a straight `Line3d` boundary
-      takes 2 samples from `BRepTessellator.SampleEdge` while the disc's own parameterization
-      is ANGULAR and the chord crosses many u columns. **The fix belongs in `SampleEdge`**:
-      an edge whose curve is straight, which bounds a face with an angular parameter and
-      which is not iso-parameter on it, needs that face's angular density — and extra
-      samples on a straight curve are free of fidelity cost, since every one of them is
-      exactly on the curve (the same argument the baked-carrier refinement makes). Expect a
-      wide verification pass (`SampleEdge` is shared by every using face, so the density must
-      be the max over them; the corpus gate and the committed docs PNGs are the oracles), and
-      note the recognizer is worth landing only together with it — on its own it buys nothing
-      measurable, because a traced polyline along a STRAIGHT curve is exact at every point
-      and `SnapTracerEnds` already removes the only defect (end truncation), so the whole
-      boolean's output on this family is bit-identical with and without it.
+    - ~~**The annulus recognizer is BLOCKED by a `SampleEdge` density rule.**~~ ✅ **done** —
+      both halves landed TOGETHER, which the entry called for and which the measurement then
+      justified. `SurfaceIntersection` recognizes a coaxial DISK as the annulus-restricted
+      plane it is (`TryRevolvedDisk`/`TryPlanarDisk`; parallel planes refused BY NAME so the
+      axis-perpendicular arm and the coplanar-fusion tier keep every case they owned), and
+      `BRepTessellator.SampleEdge` gives a straight edge the angular density of any face
+      whose azimuth it crosses. **The gate IS the correctness condition rather than a proxy
+      for it**: the count is the azimuth swept about the face's own axis, so an iso-parameter
+      straight edge — a ruling, a seam, a helical generator, i.e. every straight edge on an
+      angular face that existed before — measures zero and stays at two samples, with no
+      separate iso-parameter test to keep in step. Across the eleven-row breakout sweep:
+      baseline refuses z0 = 10; the recognizer alone fixes 10 and breaks 11.5 and 10.5;
+      **the density rule alone is bit-identical to baseline on all eleven rows** (with the
+      tracer route the chord is polyline-backed, so the straight-edge branch is never reached
+      for it), and both together pass every row. That last row is what makes "land them
+      together" a measurement rather than a preference. The wide verification pass the entry
+      predicted came to ONE moved docs PNG (`holes-breakout`: 14 px of 1 792 000, thirteen of
+      them ±1 on the bore's dark interior) and no corpus movement at all. design.md §5.
     - [ ] **The drilled breakout is structurally clean but below the corpus AGREEMENT
       floor, and the comparison says which face is at fault.** It is not a `Corpus` member
       for that reason, and is locked instead by
@@ -975,8 +972,27 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
       in general and the junction where the bore's rim meets the face it breaks out of is
       what degrades it. That is the recorded traced-rim density residual (a traced rim keeps
       whatever sample count the tracer's arc-length step gave it however fine the grid
-      around it becomes) in a new location, and it is likely the SAME `SampleEdge` density
-      work as the annulus-recognizer item above.
+      around it becomes) in a new location. **The entry's guess about the cause is now
+      FALSIFIED, and that is the useful part**: it read *"it is likely the SAME `SampleEdge`
+      density work as the annulus-recognizer item above"*, and that work has landed with all
+      three numbers **unchanged**. The chord the density rule feeds is on the flat CAP, while
+      the wall's boundary is two traced polylines and two rim arcs — nothing straight — so
+      the rule structurally cannot reach it. What did move is the disc fragment, strictly
+      for the better (141 → 102 facets at 64 segments and 3 305 → 426 at 256, at exactly the
+      same area), which isolates the residual to the wall alone with nothing left in front
+      of it.
+    - [ ] **The coaxial-disk recognizer put z0 = 11.5 onto the family's residual route, and
+      the trade is worth revisiting once the wall is fixed.** That row's chord used to arrive
+      as a traced polyline and its bore WALL took a coarse route with it — 222 facets at 64
+      segments where 10.5 and 9 take 2 094 and 2 046 — which measured BETTER on volume
+      (2.5e-2 against 8.0e-2 at 64 segments) and on agreement (0.99997 against 0.98054 at
+      96/48) than the route its neighbours are on. Both readings now sit beside 10.5's own
+      (0.97901), the degenerate slivers at 16/8 went 2 → 0, and the error stays one-signed
+      and converging (ratios 6.91 / 4.08 / 2.96), so nothing regressed below a gate. But a
+      wall measuring **94.3078 against an exact 94.2478** is not inscribed, and neither is
+      10.5's (126.3274 vs 126.3013) nor 9's — so the bulge is the FAMILY's rather than this
+      change's, and fixing the wall should be expected to reclaim z0 = 11.5's old numbers
+      rather than merely restore its old route.
     - [ ] **A GRAZING breakout still refuses, in both routes.** At a half-chord of 0.245 and
       0.077 (Ø6 bore, z0 = 7.01 and 7.001) the drilled hole fails with *"Open splitting
       curves must start and end outside the face"* naming the top face, and at 0.077 the
