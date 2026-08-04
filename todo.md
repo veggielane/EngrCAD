@@ -1497,22 +1497,29 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   claim is asymptotic at best. Separating them is a measurement, not a redesign: run the
   same study on a mesh whose boundary is far from the region being measured (an interior
   sub-domain norm), and if the rate rises to 3 the fill is the cap.
-- [ ] **FEA: thermal `NodalFlux` has the material-interface defect the stress recovery no
-  longer has, and the machinery to fix it now exists.** Heat flux `q = -k·grad T` is
-  discontinuous at a bonded interface in exactly the way stress is — the NORMAL component is
-  continuous and the tangential one jumps with the conductivity — and
-  `ThermalResults.NodalFlux` averages across regions with no way to ask for a material's own
-  value. It is a smaller job than the structural one was, for two reasons: there is no
-  recovery on the thermal path at all (so nothing spans an interface, and the REACH argument
-  that made the structural fix worth doing does not apply), and `AnalysisMesh` already owns
-  the `(node, region)` slot table, so `ComputeNodalFlux` takes the same `perRegion` parameter
-  `ComputeNodalStress` did and a `NodalFluxIn(region, node)` falls out. What is genuinely open
-  is only whether the thermal side wants a superconvergent recovery of its own, which is a
-  separate question with its own convergence table to earn.
+- [ ] **FEA: does the thermal path want a superconvergent flux recovery of its own?** The
+  per-region `NodalFluxIn` landed (design.md §3d), and it deliberately did NOT bring a
+  recovery with it — the thermal side still averages element values at each node, where the
+  structural side offers `StressRecovery.Superconvergent` beside `Direct`. The patch
+  machinery would transfer almost verbatim: `SuperconvergentRecovery` fits a polynomial per
+  vertex patch over Gauss-point samples of a per-element tensor, and a flux vector is a
+  smaller version of the same fit (3 components rather than 6) over the same slot table, with
+  the same region rule and the same boundary walk. **What it has to EARN is a convergence
+  table, not a port**: the structural claim is 14.4x/11.4x lower nodal error at measured rates
+  2.30 and 2.76 against theory 2 and 3, plus an effectivity index converging on 1 — and the
+  thermal equivalent has to be measured on the manufactured solution `ThermalConvergenceTests`
+  already carries, because the superconvergence theory is about the FIELD's order and a flux
+  is one derivative down from temperature exactly as a stress is from displacement, so the
+  numbers should land but "should" is not a measurement. The by-product would be the thing
+  worth having: a thermal `ErrorEstimate`, i.e. an answer to "is this mesh good enough" that a
+  conduction solve currently never gives. Note the counterweight §3i records applies here too
+  — a recovered field is smooth by construction, so `Direct` stays the default whatever the
+  table says.
 - [ ] **FEA: a bi-material colour plot still shows the blended interface value, because
-  `MeshField` has one value per vertex.** `StructuralResults.Fields()` and `SampleOnto` both
-  publish the node-indexed `NodalStress`, so the honest per-material values
-  (`NodalStressIn`) stop at the API boundary and never reach a viewer or a `.vtu`. Two shapes
+  `MeshField` has one value per vertex.** `StructuralResults.Fields()`/`SampleOnto` publish
+  the node-indexed `NodalStress` and `ThermalResults`' publish `NodalFlux`, so the honest
+  per-material values (`NodalStressIn`, `NodalFluxIn`) stop at the API boundary and never
+  reach a viewer or a `.vtu` — one gap with two spellings. Two shapes
   are plausible and the choice is a decision rather than a coding job. (a) **One field per
   region**, NaN outside it — which composes with the recorded rules (`FieldRange` skips NaN,
   and a NaN paints as the map's bottom stop, so the viewer would need to skip rather than
