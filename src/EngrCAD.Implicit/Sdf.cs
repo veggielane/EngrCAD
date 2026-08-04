@@ -255,8 +255,8 @@ public abstract class Sdf
     /// Quilez's scaled-implicit approximation, whose relative error grows with eccentricity
     /// (measured: see <see cref="EllipsoidSdf"/> and the implicit engine's README for the
     /// numbers, and note the value is <em>not</em> a one-sided bound). The sign is exact
-    /// everywhere, and equal semi-axes reduce the expression to the sphere's exact distance
-    /// bit for bit.
+    /// everywhere, and equal semi-axes reduce the expression algebraically to the sphere's
+    /// exact distance.
     /// </summary>
     public static Sdf Ellipsoid(double semiAxisX, double semiAxisY, double semiAxisZ)
     {
@@ -468,6 +468,12 @@ public abstract class Sdf
     /// widening here. It stretches the child <em>about the origin</em>, so a child that does
     /// not straddle the origin leaves the middle stretch hollow — that is the operation, not
     /// a defect.</para>
+    /// <para>Fidelity, stated exactly because the two halves differ: <b>outside the solid the
+    /// value is the child's own distance to the stretched body</b> (an elongated sphere is
+    /// bit-identical to <see cref="RoundedBox"/> there), while <b>inside the stretched core
+    /// it is a strict lower bound</b> — every coordinate clamps, so the map lands on the
+    /// origin and reports the child's centre value however deep the elongated body is. Exact
+    /// sign, magnitude never nearer than the truth: the engine's contract.</para>
     /// </summary>
     public Sdf Elongate(in Vector3d amounts) => new ElongateSdf(this, amounts);
 
@@ -747,10 +753,11 @@ public abstract class Sdf
     /// exact — it simply stops paying off for that subtree.
     /// </para>
     /// <para>
-    /// <b>Read <c>SdfCompiler</c>'s remarks before reaching for this.</b> The measured
-    /// answer is that it beats the scalar path on deep trees and <em>loses to the SIMD batch
-    /// path</em>, which is what every bulk consumer already uses; it is for callers stuck
-    /// with per-point queries.
+    /// <b>Read <c>SdfCompiler</c>'s remarks before reaching for this.</b> Measured, it buys
+    /// 1.02× on a lone sphere and 2.67× on a 24-node union chain — the win tracks how much of
+    /// the cost is dispatch — and it <em>loses to the SIMD batch path by 1.2–3.4×</em>, which
+    /// is what every bulk consumer already uses. It is for callers genuinely stuck with
+    /// per-point queries, not a faster way to sample a grid.
     /// </para>
     /// </summary>
     public Sdf Compile() => SdfCompiler.Compile(this);

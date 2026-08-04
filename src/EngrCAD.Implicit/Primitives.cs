@@ -460,15 +460,25 @@ internal sealed class RoundedBoxSdf(Vector3d innerHalfExtents, double radius) : 
 /// form; every practical ellipsoid SDF is therefore a bound. This one is the implicit
 /// function scaled by its own gradient — a first-order estimate of the distance to the level
 /// set — and it is exact in two regimes for a structural reason rather than by luck: with
-/// equal semi-axes the expression collapses term for term to <c>|p| − r</c>, the sphere's
-/// exact distance, and far from the body the level sets round out so the ratio tends to the
-/// true distance.
+/// equal semi-axes the expression reduces algebraically to <c>|p| − r</c>, the sphere's exact
+/// distance (agreeing to round-off, since the value still travels through two divisions), and
+/// far from the body the level sets round out so the ratio tends to the true distance.
 /// </para>
 /// <para>
-/// <b>The error is neither one-sided nor small at high eccentricity</b>, and the measured
-/// numbers are in <c>PrimitiveDistanceTests</c> and the project README rather than quoted
-/// as folklore here. The sign is exact everywhere, which is what boolean classification and
-/// polygonization need.
+/// <b>The error IS one-sided outside and is not small at high eccentricity</b> — measured
+/// against an exact oracle (the Lagrange-multiplier solve, bisected to machine precision)
+/// rather than quoted as folklore. Reported over true distance, at aspect ratios 1 / 1.25 /
+/// 1.67 / 3 / 4 / 10:
+/// <list type="bullet">
+///   <item><description><b>Outside: 1.000 / 0.983 / 0.916 / 0.675 / 0.544 / 0.238</b> — always
+///   at or below 1, so outside the solid this is a genuine <em>lower bound</em>, the engine's
+///   standing contract, and it under-reports by a factor that tracks the eccentricity.</description></item>
+///   <item><description><b>Inside: 1.000 / 1.081 / 1.369 / 2.076 / 2.673 / 6.585</b> — it
+///   over-reports DEPTH, so it is not a lower bound there. Harmless for meshing and for the
+///   block cull (both argue from the Lipschitz bound, not from one-sidedness) and the reason
+///   the projection target divides its step by that bound.</description></item>
+/// </list>
+/// The sign is exact everywhere, which is what boolean classification and polygonization need.
 /// </para>
 /// <para>
 /// One genuine singularity: at the exact centre both k0 and k1 vanish and the limit is
@@ -493,15 +503,27 @@ internal sealed class EllipsoidSdf(Vector3d radii) : Sdf
     public override Aabb Bounds => new(-radii, radii);
 
     /// <summary>
-    /// Measured rather than derived: the value's gradient exceeds 1 near a high-curvature
-    /// rim, by a factor that grows with the aspect ratio. The reported bound is the aspect
-    /// ratio itself, which <c>PrimitiveDistanceTests</c> verifies numerically over a family
-    /// of eccentricities (away from the centre, where the field is genuinely discontinuous
-    /// and no finite constant can hold — a region deep inside the solid, where the cull's
-    /// only possible mistake is to skip a block that provably has no surface in it).
+    /// <c>2 + (rmax/rmin)²</c>, and it is derived rather than fitted. Writing t = 1/k0, the
+    /// product and quotient rules give
+    /// <c>|∇V| ≤ |2 − t| + |1 − t|·|∇k1|·k0²/k1²</c>, and two substitutions close it: every
+    /// term of ∇k1 carries a factor <c>1/r_i² ≤ 1/rmin²</c> so <c>|∇k1| ≤ k1/rmin²</c>, while
+    /// <c>k1 ≥ k0/rmax</c> gives <c>k0²/k1² ≤ rmax²</c>. For <c>k0 ≥ ½</c> — everywhere but
+    /// the inner half of the solid, where the field is anyway approaching its documented
+    /// centre singularity — that leaves <c>2 + (rmax/rmin)²</c>.
+    /// <para>
+    /// The slack is real and stated: measured against it, the true supremum runs 0.26–0.55 of
+    /// the bound over aspect ratios 1 to 10 (1.00 against 3, 1.26 against 3.56, 41.4 against
+    /// 102), because both substitutions are worst-case simultaneously only at points that do
+    /// not exist. A tighter bound would narrow the cull shell for eccentric ellipsoids; it is
+    /// filed rather than guessed at, since a Lipschitz bound that is too small drops geometry.
+    /// </para>
     /// </summary>
-    public override double LipschitzBound(in Aabb region) =>
-        Math.Max(radii.X, Math.Max(radii.Y, radii.Z)) / Math.Min(radii.X, Math.Min(radii.Y, radii.Z));
+    public override double LipschitzBound(in Aabb region)
+    {
+        double aspect =
+            Math.Max(radii.X, Math.Max(radii.Y, radii.Z)) / Math.Min(radii.X, Math.Min(radii.Y, radii.Z));
+        return 2 + aspect * aspect;
+    }
 
     private readonly struct Kernel(Vector3d radii) : ISdfKernel
     {
@@ -555,45 +577,88 @@ internal sealed class EllipsoidSdf(Vector3d radii) : Sdf
 
 /// <summary>
 /// Square-based pyramid along +Z: base <c>size</c> square in the z = 0 plane, apex at
-/// (0, 0, height). Exact (Quilez's <c>sdPyramid</c>).
+/// (0, 0, height). <b>Exact everywhere.</b>
 /// <para>
-/// The published form is Y-up over a unit base, so this evaluates it on the point scaled by
-/// 1/size with the apex height likewise scaled, and multiplies the result back — a uniform
-/// scale, which keeps distances exact.
+/// <b>The closed form usually quoted for this shape is NOT usable here, and the measurement
+/// is why.</b> Quilez's <c>sdPyramid</c> computes the distance to the pyramid's LATERAL
+/// surface and uses the base plane only to decide the sign — so wherever the base FACE is the
+/// nearest feature it reports the lateral distance instead. Measured on a 10-wide, 12-tall
+/// pyramid: directly below the base centre at (0, 0, −3) it returns <b>5.831 against a true
+/// 3.0</b>, and just inside the base at (0, 0, 0.5) it returns −4.423 against a true −0.5.
+/// Both are OVER-estimates, which is the one direction this engine cannot absorb: the
+/// polygonizer's cull, the narrow-band octree and the projection step all read |d| as a
+/// promise that no surface is nearer than that, so an over-estimate drops geometry silently.
+/// (It is a correct field for a different solid — the same pyramid with its base removed and
+/// its lateral faces extended downward, which is what the two figures above measure exactly.)
+/// </para>
+/// <para>
+/// So the distance is taken over the boundary itself: the minimum over the six triangles of
+/// the pyramid's surface, through <see cref="Distance3d.ClosestPointOnTriangle"/> — Core's
+/// one nearest-point-on-triangle rule, asked rather than restated — with the sign from the
+/// five bounding half-planes, which for a convex solid is exact. That costs six Voronoi-region
+/// tests per query where a closed form would cost one, and it is the price of a field that
+/// means what the rest of the engine assumes it means.
 /// </para>
 /// </summary>
-internal sealed class PyramidSdf(double baseSize, double height) : Sdf
+internal sealed class PyramidSdf : Sdf
 {
-    public override double Evaluate(in Vector3d point)
+    private readonly double _baseSize, _height;
+    private readonly (Vector3d A, Vector3d B, Vector3d C)[] _triangles;
+    private readonly (Vector3d Normal, double Offset)[] _planes;
+
+    public PyramidSdf(double baseSize, double height)
     {
-        double s = baseSize;
-        double h = height / s;
-        // Unit-base coordinates, Y-up as the published form expects.
-        double px = Math.Abs(point.X / s);
-        double py = point.Z / s;
-        double pz = Math.Abs(point.Y / s);
-        if (pz > px)
-            (px, pz) = (pz, px);
-        px -= 0.5;
-        pz -= 0.5;
+        _baseSize = baseSize;
+        _height = height;
+        double h = baseSize / 2;
+        Vector3d apex = (0, 0, height);
+        Vector3d[] corners = [(-h, -h, 0), (h, -h, 0), (h, h, 0), (-h, h, 0)];
 
-        double m2 = h * h + 0.25;
-        double qx = pz;
-        double qy = h * py - 0.5 * px;
-        double qz = h * px + 0.5 * py;
+        _triangles =
+        [
+            (corners[0], corners[2], corners[1]),
+            (corners[0], corners[3], corners[2]),
+            (corners[0], corners[1], apex),
+            (corners[1], corners[2], apex),
+            (corners[2], corners[3], apex),
+            (corners[3], corners[0], apex),
+        ];
 
-        double sClamp = Math.Max(-qx, 0);
-        double t = Math.Clamp((qy - 0.5 * pz) / (m2 + 0.25), 0, 1);
+        var planes = new List<(Vector3d, double)> { ((0, 0, -1), 0) };
+        for (int i = 0; i < 4; i++)
+        {
+            var a = corners[i];
+            var b = corners[(i + 1) % 4];
+            var n = (b - a).Cross(apex - a).Normalized();
+            if (n.Dot(Vector3d.Zero - a) > 0)
+                n = -n;    // outward: the centroid side must be negative
+            planes.Add((n, n.Dot(a)));
+        }
+        _planes = [.. planes];
+    }
 
-        double a = m2 * (qx + sClamp) * (qx + sClamp) + qy * qy;
-        double b = m2 * (qx + 0.5 * t) * (qx + 0.5 * t) + (qy - m2 * t) * (qy - m2 * t);
-        double d2 = Math.Min(qy, -qx * m2 - qy * 0.5) > 0 ? 0 : Math.Min(a, b);
+    public override double Evaluate(in Vector3d p)
+    {
+        double best = double.PositiveInfinity;
+        foreach (var (a, b, c) in _triangles)
+            best = Math.Min(best, (Distance3d.ClosestPointOnTriangle(p, a, b, c) - p).LengthSquared);
 
-        return Math.Sqrt((d2 + qz * qz) / m2) * Math.Sign(Math.Max(qz, -py)) * s;
+        // Convex, so "inside" is "on the inner side of every face plane" — exact, no parity.
+        bool inside = true;
+        foreach (var (n, d) in _planes)
+        {
+            if (n.Dot(p) - d > 0)
+            {
+                inside = false;
+                break;
+            }
+        }
+        double distance = Math.Sqrt(best);
+        return inside ? -distance : distance;
     }
 
     public override Aabb Bounds =>
-        new((-baseSize / 2, -baseSize / 2, 0), (baseSize / 2, baseSize / 2, height));
+        new((-_baseSize / 2, -_baseSize / 2, 0), (_baseSize / 2, _baseSize / 2, _height));
 }
 
 /// <summary>

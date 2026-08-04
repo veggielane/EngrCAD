@@ -20,22 +20,30 @@ namespace EngrCAD.Implicit;
 // does not override the virtual emits a call back into its own Evaluate, so compilation
 // always succeeds and is always exact; it simply stops paying for that subtree.
 //
-// WHAT IT IS WORTH (win-x64, i9-9900K, best of interleaved runs; SdfCompilerBenchmark holds
-// the harness):
+// WHAT IT IS WORTH, MEASURED (win-x64 i9-9900K, Release, best of five passes after a
+// wall-clock warm-up budget; SdfCompilerTests.Measure_ScalarVersusCompiledVersusBatch is the
+// harness, so the numbers are re-derivable rather than remembered):
 //
-//   case                          scalar walk   compiled   batch (SIMD)
-//   deep union chain, 24 nodes      12.9 Mpts/s  35.9        43.6
-//   bracket CSG tree                 9.7         21.9        33.5
-//   single sphere                  124.4        150.6       247.0
+//   case                     scalar walk   compiled   batch (SIMD)   compiled/scalar  batch/compiled
+//   single sphere              434.0        444.5       519.2  Mpts/s     1.02x           1.17x
+//   bracket CSG tree            10.8         13.3        45.2            1.23x           3.40x
+//   deep union chain (24)        4.8         12.8        28.0            2.67x           2.20x
 //
-// So compilation is worth ~2.3x over the scalar walk and LOSES to the batch path, which is
-// what every bulk consumer in the repository already uses (Surface Nets sampling, grid
-// bakes, section contours). The honest summary: this is for callers stuck with per-point
-// queries — a marching solver, a probe loop, an interactive query — and it is not a
-// replacement for batching. Compiling to a VECTOR kernel would beat both and is a different
-// project: it needs every node's expression written against Vector<double> instead, and the
-// nodes that are deliberately scalar (gyroid, twist, bend, displace — no bit-identical
-// vector transcendental) would have to stay scalar inside it anyway.
+// TWO CONCLUSIONS, and the second is the one that decides how to use this.
+//
+// Compilation pays in proportion to how much of the cost is DISPATCH rather than arithmetic:
+// 1.02x on a lone sphere (there is one call to remove and five flops behind it), 2.67x on a
+// chain of 24 unions (25 dispatches per query, and the flattened form has none). That is the
+// expected shape, and it is why the win is on tree DEPTH rather than on any node being fast.
+//
+// But it LOSES to the SIMD batch path in every case, by 1.2x to 3.4x — and the batch path is
+// what every bulk consumer in this repository already uses (Surface Nets sampling, grid
+// bakes, section contours). So this is for callers genuinely stuck with per-point queries — a
+// marching solver, an interactive probe, a scattered query loop — and it is NOT a faster way
+// to sample a grid. Compiling to a VECTOR kernel would beat both and is a different project:
+// every node's expression would have to be written against Vector<double>, and the nodes that
+// are deliberately scalar (gyroid, twist, bend, displace — no bit-identical vector
+// transcendental) would still be scalar inside it.
 
 /// <summary>
 /// The expression-building context handed to <see cref="Sdf.BuildExpression"/>: the current
