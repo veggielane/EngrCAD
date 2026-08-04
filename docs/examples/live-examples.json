@@ -560,6 +560,21 @@
       "live": true
     },
     {
+      "id": "sheet-metal-corner",
+      "page": "examples/sheet-metal.md",
+      "live": true
+    },
+    {
+      "id": "sheet-metal-cutouts",
+      "page": "examples/sheet-metal.md",
+      "live": true
+    },
+    {
+      "id": "sheet-metal-hem-jog",
+      "page": "examples/sheet-metal.md",
+      "live": true
+    },
+    {
       "id": "sheet-metal-relief",
       "page": "examples/sheet-metal.md",
       "live": true

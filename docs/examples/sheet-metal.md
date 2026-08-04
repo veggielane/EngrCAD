@@ -179,6 +179,115 @@ refused too, naming the point: a notch is a *detour in the outline*, so one runn
 of the parent leaves a self-intersecting blank, and it does so silently (the signed area
 still reads base-minus-notches, and the extrusion still validates).
 
+### Closed corners
+
+Two flanges on **adjacent** edges are declared as one thing, because they are one
+operation: `WithCorner` locates both bend lines before either is built and **miters**
+them against each other, so the corner closes with no gap.
+
+**The miter is a closed form, not an intersection.** Two bends of the same radius quoted
+on the same face have axes that meet over the sheet's corner, and two equal-radius
+cylinders with intersecting axes meet in **ellipses** — so each band's cut is an exact
+`Ellipse3d` and nothing is traced. The two flanges' cut chains are the *same* curves (the
+configuration is symmetric under reflection in the miter plane, which swaps them), so
+they are welded rather than butted: nothing lies in the miter plane at all.
+
+```csharp render:sheet-metal-corner
+var spec = new SheetMetalSpec(Thickness: 1.5, BendRadius: 2, KFactor: SheetMaterials.MildSteel);
+
+var tray = SheetMetalBody
+    .Base(Sketch.Polygon([new(0, 0), new(90, 0), new(90, 60), new(0, 60)]), spec)
+    .WithCorner(SheetFlangeTarget.BaseEdge(1), SheetFlangeTarget.BaseEdge(2), length: 25)
+    // The other corner is left OPEN, the way a relieved one is: this flange stops short
+    // of it and a relief notches the blank beside the bend.
+    .WithFlange(
+        SheetFlangeTarget.BaseEdge(3), length: 25, startOffset: 6, width: 48,
+        relief: BendRelief.Obround());
+
+var scene = new Scene();
+scene.Add(new Part("tray", tray.Solid) { Color = new PartColor(0.62f, 0.70f, 0.80f) });
+```
+
+![A tray with one mitred closed corner](images/sheet-metal-corner.png)
+
+**What a corner does to the volume identity is the price of sharing material**, and it is
+exact. Each flange's material now runs to the miter plane rather than stopping at the
+sheet's corner, so the folded body *gains* the first moment of that flange's own
+cross-section about the corner line — `((R+T)³ − R³)/3` from the bend's annular sector
+plus `T·L·(R + T/2)` from the wall — while the blank is untouched. That the blank cannot
+supply it is exactly what "an unrelieved corner shares material" means.
+
+The pair must share one sheet corner and agree on radius, angle and length; anything else
+refuses by name. To leave the corner *open* instead, inset one flange and cut a bend
+relief.
+
+### Hems, jogs and curls
+
+Each is two or more ordinary bends, so none of them is new geometry — what the API adds
+is the declaration and the arithmetic that turns a shop dimension into flange lengths.
+
+A **hem** folds the edge back on itself as two bends the *same* way. It is deliberately
+not one 180° fold: that has no geometry here at all (its outside setback
+`(R+T)·tan(θ/2)` diverges) and a return leg flat against the sheet is coincident
+boundary. The gap is `2R + L` for an intermediate leg `L`, so a gap of `2R` or less is a
+*closed* hem and refuses by name — a tight hem is spelt with a small bend radius, which
+is what flattening the material in the press means.
+
+A **jog** is two equal and *opposite* bends, and its intermediate leg is closed form:
+the perpendicular step is `(2R + T)(1 − cos θ) + L·sin θ`, so `L = (offset − (2R +
+T)(1 − cos θ)) / sin θ`. Below the minimum the refusal names the smallest offset that
+radius and angle allow.
+
+A **curl** is a chain of equal hits, and it is honestly **polygonal**: a rolled edge past
+180° is one continuous band this bend model cannot spell, and a press makes one in
+successive hits anyway. The flat pattern, the bend table and the volume identity all
+describe exactly the part this builds.
+
+```csharp render:sheet-metal-hem-jog
+var spec = new SheetMetalSpec(Thickness: 1.0, BendRadius: 1.0, KFactor: SheetMaterials.Aluminium);
+
+var panel = SheetMetalBody
+    .Base(Sketch.Polygon([new(0, 0), new(110, 0), new(110, 45), new(0, 45)]), spec)
+    .WithHem(SheetFlangeTarget.BaseEdge(1), returnLength: 12, gap: 4)
+    .WithJog(SheetFlangeTarget.BaseEdge(3), offset: 8, runLength: 20);
+
+var scene = new Scene();
+scene.Add(new Part("panel", panel.Solid) { Color = new PartColor(0.80f, 0.74f, 0.58f) });
+```
+
+![A hemmed edge and a jogged one](images/sheet-metal-hem-jog.png)
+
+### Cutouts on a flange
+
+A flange's wall can carry holes, declared in the **flange's own local coordinates** —
+`x` along the bend line from the flange's start, `y` out from the bend's tangent line.
+One declaration reaches both views, exactly as a bend relief does: the folded wall is
+punched and the blank gains the same holes through the flange's rigid flat frame.
+
+```csharp render:sheet-metal-cutouts
+var spec = new SheetMetalSpec(Thickness: 1.5, BendRadius: 2, KFactor: SheetMaterials.MildSteel);
+
+var bracket = SheetMetalBody
+    .Base(Sketch.Polygon([new(0, 0), new(100, 0), new(100, 60), new(0, 60)]), spec)
+    .WithFlange(SheetFlangeTarget.BaseEdge(1), length: 30, cutouts:
+    [
+        Sketch.Circle(4).Placed((15, 12), (1, 0)),
+        Sketch.Circle(4).Placed((45, 12), (1, 0)),
+        Sketch.Slot(14, 6).Placed((30, 22), (1, 0)),
+    ]);
+
+var scene = new Scene();
+scene.Add(new Part("bracket", bracket.Solid) { Color = new PartColor(0.68f, 0.72f, 0.60f) });
+```
+
+![Bores and a slot punched through a flange wall](images/sheet-metal-cutouts.png)
+
+A cutout must lie strictly inside its wall. One crossing the **bend line** is refused by
+name, and the reason is the flat pattern rather than the solid: a hole running into the
+bend zone is a hole in a *cylindrical band*, whose flat shape is that band's development
+— a different map from the flange's rigid frame — and the unfold's whole claim is that
+it is bookkeeping over rigid frames.
+
 ## The flat pattern
 
 `Unfold()` is **bookkeeping, not geometry re-derivation**: it walks the flange tree,
@@ -360,15 +469,71 @@ Refused **by name**, rather than approximated:
 
 | Not supported | Why |
 | --- | --- |
-| Bends along non-straight edges | A curved bend line sweeps a developable band, not a cylinder. |
-| Closed corners and miters | Two flanges meeting at a corner of the sheet: their bends' bands have to be trimmed against each other and a corner face built. Caught as a wall that is no longer four-sided. |
-| Jogs, hems, louvres, curls | Each is a different forming operation with its own geometry; a hem in particular folds the flange back against the sheet, which is coincident boundary. |
+| Bends along non-straight edges | **Not a gap but a theorem.** Folding a sheet along a curve is not an *isometry* of the sheet, so no flat blank produces it: along a circular bend line the band is a torus segment, whose Gaussian curvature is non-zero everywhere a flat sheet's is zero. The material would have to stretch or shrink, which is *forming* rather than bending and has no bend allowance. Approximate it as a chain of straight bends, or model it as forming and accept that its blank is not derivable. |
 | Two flanges sharing a stretch of one edge | Two bends cannot occupy the same material — and a relief counts as part of the stretch its flange occupies. |
 | Flanges on a flange's *side* edges | Only the tip: a side flange is a corner interaction. |
-| Reliefs on a flange's tip edge | A relief notches its parent's *outline*, and a flange's wall is built as a plain rectangle rather than from a sketch. |
-| Holes and cuts declared *on* a flange | Cut them on the folded solid; the flat pattern will not know about them. Base-sketch holes do carry through. |
-| Multi-body sheets, welded assemblies | One flange tree, one body. |
-| Mirrored placements | A flange tree is ordered and quoted on named edges, so a reflection needs it rebuilt the other way round rather than re-placed. |
+| A cutout crossing a bend line | Its flat shape is that band's *development*, not the flange's rigid frame, and the unfold is bookkeeping over rigid frames. |
+| Reliefs on a flange's tip edge | A relief notches its parent's *outline*, and a flange's wall is built as a plain rectangle rather than from a sketch. Its **holes** are declarable (see Cutouts); its outline is not. |
+| Louvres | A louvre's bend line is *interior* to a face rather than on an edge, and it is lanced as well as formed — so it is not an edge flange at all, and the torn ends of the lance belong to the press. |
 | Tear reliefs, spring-back compensation | Both belong to the press rather than to the geometry — a tear relief is what happens when no relief is cut. |
 
 Every one of these throws with a message naming what it hit and what to do instead.
+
+## Multi-body sheets and welded assemblies
+
+**A sheet part is one flange tree and one blank, by design rather than by omission.** A
+weldment of sheet metal is several *parts* — each with its own base flange, its own tree
+and its own blank — held together by an `Assembly`: the BOM counts them, mates position
+them, and `SheetMetalFeatures.UnfoldAll` cuts them. Folding several bodies into one
+`SheetMetalBody` would make `FlatPattern` mean two things at once, and a laser cuts one
+blank per body either way.
+
+What is *not* a sheet part is equally deliberate: a boolean of two sheet solids is a
+solid, not a sheet part — a union node carries no flange tree, so it has no blank. Weld
+the parts in an assembly, not in the geometry.
+
+```csharp run:sheet-metal-weldment
+var spec = new SheetMetalSpec(Thickness: 1.5, BendRadius: 2, KFactor: SheetMaterials.MildSteel);
+
+SheetMetalBody Panel(double x, double y) => SheetMetalBody
+    .Base(Sketch.Polygon([new(0, 0), new(x, 0), new(x, y), new(0, y)]), spec)
+    .WithFlange(SheetFlangeTarget.BaseEdge(1), length: 18);
+
+var chassis = new Assembly("chassis");
+chassis.Add(new Part("side", Panel(60, 40).Solid));
+chassis.Add(new Part("lid", Panel(60, 25).Solid), Frame3d.FromXY((0, 60, 0), (1, 0, 0), (0, 1, 0)));
+
+var scene = new Scene();
+scene.AddTab("Model").Add(chassis);
+
+// One blank per body, each once, however deeply nested.
+var blanks = SheetMetalFeatures.UnfoldAll(scene);
+if (blanks.Count != 2) throw new Exception("expected one blank per body");
+```
+
+## Out to the shop without a script
+
+`--flat` writes every sheet part's flat pattern from a model program, and the viewer's
+**Flat** button does the same for the selected part (bend table in a window, DXF beside
+it, path in the status bar).
+
+```text
+dotnet run --project mypart -- --flat blank.dxf      # the laser's outline plus bend lines
+dotnet run --project mypart -- --flat blank.svg      # the same, to look at
+dotnet run --project mypart -- --flat setup.txt      # the press brake's bend table
+```
+
+It is its own verb rather than an `--export` extension because "this scene as DXF" is
+genuinely ambiguous — a drawing sheet, a section and a flat pattern are three different
+2D answers to it. A scene with several sheet parts writes one file each,
+`<stem>-<part><ext>`; each has its own blank, so one path cannot serve them.
+
+## Mirrored placements
+
+A mirrored sheet part is **re-declared, not re-placed**: a flange tree is ordered and
+quoted on named edges, so a reflection has to move the *names*. `Shape.Mirror` rebuilds
+the tree the other way round — the base sketch reflected (which reverses its winding, so
+a segment at index `i` of `n` lands at `n − 1 − i`), every flange's span reversed along
+its own edge, every cutout mirrored in its flange's local `x` — and places it on a proper
+frame. The reflection is taken in the *sketch* plane, so the sheet's own `+Z` never moves
+and `SheetBendDirection` keeps meaning one thing.
