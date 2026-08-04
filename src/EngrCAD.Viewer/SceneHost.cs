@@ -463,6 +463,11 @@ internal sealed class SceneHost
         ToolTip.SetTip(check, "Model validation report: per-part volume, bounds, watertightness");
         toolbar.Children.Add(check);
 
+        var flat = ToolButton("Flat", ShowFlatPattern);
+        ToolTip.SetTip(flat,
+            "Flat pattern of the selected sheet-metal part: bend table shown, DXF saved beside it");
+        toolbar.Children.Add(flat);
+
         toolbar.Children.Add(new Border { Width = 8 });
         var capture = ToolButton("Capture", () => Viewport.SaveScreenshot());
         ToolTip.SetTip(capture, "Save the current view as a PNG (path appears in the status bar)");
@@ -956,6 +961,116 @@ internal sealed class SceneHost
         _statusText.Text = saved is null
             ? $"BOM: {bom.LineCount} item(s), {bom.TotalQuantity} occurrence(s)"
             : $"BOM: {bom.LineCount} item(s), {bom.TotalQuantity} occurrence(s) — wrote {saved}";
+    }
+
+    // ---- flat pattern ----
+
+    /// <summary>
+    /// The selected sheet-metal part's FLAT PATTERN: the press brake's bend table in a
+    /// window and the laser's DXF beside it, following the Capture/BOM "write a file and
+    /// report the path" convention exactly.
+    ///
+    /// <para><b>Which part</b> is the selection when there is one and the tab's only sheet
+    /// part when there is not — and a tab holding SEVERAL asks for a selection rather than
+    /// guessing, because each has its own blank and picking one silently would be a wrong
+    /// answer wearing a right one's clothes.</para>
+    ///
+    /// <para>Nothing here meshes or lowers anything: <c>SheetMetalFeatures.TryUnfold</c>
+    /// reads the flange tree, which is what makes the button safe to press while a tab is
+    /// still loading.</para>
+    /// </summary>
+    private void ShowFlatPattern()
+    {
+        var sheets = new List<Part>();
+        var seen = new HashSet<Part>(ReferenceEqualityComparer.Instance);
+        foreach (var instance in _instances)
+        {
+            if (seen.Add(instance.Part) && SheetMetalFeatures.TryUnfold(instance.Part) is not null)
+                sheets.Add(instance.Part);
+        }
+        if (sheets.Count == 0)
+        {
+            _statusText.Text = "Flat: this tab has no sheet-metal part";
+            return;
+        }
+
+        Part? chosen = null;
+        int selected = Viewport.Selected;
+        if (selected >= 0 && selected < _instances.Count)
+            chosen = sheets.FirstOrDefault(p => ReferenceEquals(p, _instances[selected].Part));
+        chosen ??= sheets.Count == 1 ? sheets[0] : null;
+        if (chosen is null)
+        {
+            _statusText.Text =
+                $"Flat: select which sheet part ({string.Join(", ", sheets.Select(p => p.Name))})";
+            return;
+        }
+
+        var flat = SheetMetalFeatures.TryUnfold(chosen)!;
+        string dxfPath = Path.Combine(
+            Path.GetTempPath(),
+            $"engrcad-flat-{string.Concat(chosen.Name.Select(c => char.IsLetterOrDigit(c) ? c : '-'))}.dxf");
+        string? saved = null;
+        try
+        {
+            flat.ToDxf().SaveFile(dxfPath);
+            saved = dxfPath;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A read-only temp directory must not take the window down with it (ShowBom's rule).
+        }
+
+        var body = new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = FormattableString.Invariant(
+                        $"blank {flat.Area:0.###} mm2 x {flat.Thickness:0.###} mm"),
+                    Foreground = DimText,
+                    FontSize = 11,
+                },
+                new TextBlock
+                {
+                    Text = flat.BendTable(),
+                    FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                    FontSize = 12,
+                    Foreground = BrightText,
+                    TextWrapping = TextWrapping.NoWrap,
+                },
+            },
+        };
+        if (saved is not null)
+        {
+            body.Children.Add(new TextBlock
+            {
+                Text = $"DXF: {saved}",
+                Foreground = DimText,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        new Window
+        {
+            Title = $"Flat pattern - {chosen.Name}",
+            Width = 640,
+            Height = 400,
+            Background = PanelBrush,
+            Content = new ScrollViewer
+            {
+                Padding = new Thickness(16),
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                Content = body,
+            },
+        }.Show();
+
+        _statusText.Text = saved is null
+            ? $"Flat: {chosen.Name}, {flat.Bends.Count} bend(s)"
+            : $"Flat: {chosen.Name}, {flat.Bends.Count} bend(s) - wrote {saved}";
     }
 
     // ---- model validation report ----

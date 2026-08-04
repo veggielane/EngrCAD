@@ -206,6 +206,14 @@ public static class SheetMetalFeatures
     public static FlatPattern? TryUnfold(Shape? body) =>
         body is SheetMetalShape sheet ? sheet.Body.Unfold() : null;
 
+    /// <summary>The flat pattern of a PART, or null when its geometry is not a sheet body —
+    /// what a viewer button and the <c>--flat</c> CLI route ask, so neither has to know how
+    /// a part carries its shape. Deliberately reads <see cref="Part.Geometry"/> rather than
+    /// meshing or lowering anything: an unfold is bookkeeping over the flange tree, so
+    /// offering a blank must never cost a tessellation.</summary>
+    public static FlatPattern? TryUnfold(Part? part) =>
+        part is not null ? TryUnfold(part.Geometry as Shape) : null;
+
     /// <summary>An <see cref="EdgeSetRef"/> naming one sheet edge by the two endpoints it
     /// runs between — the escape hatch for a design that knows exactly which bend line it
     /// means and would rather not compose a query. Not serializable (it is a lambda), so a
