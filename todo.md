@@ -118,6 +118,54 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Interop / meshing (EngrCAD.Interop)
 
+- ~~**Surface Nets rounds every sharp feature.**~~ ✅ **done** — dual contouring with
+  Hermite data (`SurfaceQef`, `SurfaceNetsOptions.SharpFeatures`, ON by default). A box is
+  now reproduced EXACTLY (every vertex reads exactly zero from its own field, volume exactly
+  the box's, at every resolution and any placement; 4.4e-12 rotated off every axis), and
+  smooth fields improve an order of magnitude in volume error because the rank-1 quadric
+  projects the averaged point onto the field's own tangent plane. 15 of 151 docs PNGs moved,
+  every one SDF-routed and none B-Rep-only; the goldens were split into a TOPOLOGY hash
+  asserted for both placement rules and POSITION hashes per rule. Cost 1.6–2.1×, falling
+  with resolution. Findings recorded in design.md §6 and the Interop README; residuals:
+  - [ ] **A smooth surface's simplification criterion is loose, and the CLAMP is what
+    bounds it.** Two adjacent nearly-tangent planes have a tiny QEF residual whatever the
+    merged point does along their near-intersection, so on a curved surface the adaptive
+    tolerance under-penalises: measured, a sphere at resolution 64 merges vertices at a
+    tolerance of 0.001 cells that cost 0.018% of volume, and what actually bounds the
+    damage is the cluster's own bounding box rather than the stated tolerance. Fine for the
+    flat-region case the feature exists for (there the residual really is zero), but the
+    tolerance does not mean what it says on curvature. The standard fix is a second term —
+    the classic being to add the boundary-preservation quadrics QEM decimation uses, or to
+    bound the merged point's distance from the surface directly with one field evaluation
+    per accepted cluster, which is cheap and would make the tolerance a true error bound.
+  - [ ] **The adaptive pass is not the only simplifier in the repo, and the comparison is
+    unmeasured.** `MeshDecimator` is QEM decimation with the same quadric shape, and the
+    honest question is whether "uniform polygonize + decimate" reaches the same face count
+    at the same error more cheaply than the octree clustering — plus whether `MeshDecimator`
+    should be SEEDED with the field's quadrics instead of its own face planes, which it
+    cannot currently be (its `Quadric` is private and its `TryOptimize` is a Cramer solve
+    that returns false on the rank-deficient systems dual contouring lives in, where this
+    one regularises toward a mass point). Note the two are NOT interchangeable in kind: this
+    one is exact for planar regions and the collapse is provably lossless there, and it
+    keeps quads.
+  - [ ] **The adaptive path gives up the streaming memory bound.** The uniform walk's peak
+    sample memory is O(cross-section) because the grid streams in x-slabs; the clustering
+    retains a `SurfaceQef` (14 doubles) and a cell index per vertex for the whole mesh, so
+    it is O(surface) rather than O(cross-section). Same asymptotic order, worse constant,
+    and it is only paid when `SimplifyTolerance` is set — but it means the adaptive path
+    cannot reach the 1024³ grids the uniform one can.
+  - [ ] **The repair loop is global per level.** A cluster implicated in a manifoldness
+    violation is reverted and the whole face buffer rebuilt, up to eight rounds before the
+    level is abandoned wholesale. It has never needed more than a round on any fixture
+    tried, so this is a cost note rather than a correctness one — an incremental check
+    (only the faces touching the reverted cluster) would remove the rebuild.
+  - [ ] **The Newton step that projects a Hermite point onto the surface uses |grad| = 1
+    where the field is a lower bound.** `Sdf.Normals` reports the true |grad| and the
+    polygonizer divides by it, so this is already exact for hard CSG — but inside a smooth
+    blend the field's own value is not the distance to its surface, so the step lands near
+    rather than on. It has no sharp feature to resolve there, which is why it is a note and
+    not a defect, and the bound is one cell either way.
+
 - [ ] **STL → STEP: mesh → B-Rep RECONSTRUCTION — the one edge of the conversion triangle
   that is missing, and the only one that is not a discretisation** (requested 2026-08-03,
   and asked for AMBITIOUSLY, which is the whole point of the entry). Implicit→mesh,

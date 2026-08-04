@@ -1937,6 +1937,14 @@ exactly.
   exponential falloff) are deliberately left scalar because no vector transcendental
   reproduces `Math.Sin`/`Math.Exp` exactly, and a silently divergent fast path is worse
   than no fast path.
+- **Batched gradients (`Sdf.Normals`) are the Hermite seam**, added because dual
+  contouring wants a normal at every surface crossing and a gradient is six evaluations:
+  one batch of six times the length through the same SoA seam, and bit-for-bit identical
+  to the scalar `Normal` for the same reason the distance batch is. The overload reporting
+  **|grad|** is the interesting half — the unit normal throws that away, and it is exactly
+  what a caller needs to turn a field VALUE into a distance. It is 1 for every exact
+  distance field and less for the lower-bound fields the smooth operators document, so it
+  is the engine's own contract made measurable rather than a new one.
 - **Narrow-band grids** evaluate the field only near its surface and fill the rest by a
   distance transform. Two properties of *this* engine make it simpler than g3's
   mesh-specific version: the octree culling test is sound because distance is
@@ -3188,12 +3196,72 @@ right when the geometry is independently checkable.
 
 The conversion triangle is complete; each direction has a deliberately chosen algorithm:
 
-- **Implicit → Mesh: manifold Surface Nets** (dual contouring without QEF). Chosen over
-  marching cubes because the 256-entry MC tables are error-prone to reproduce and Surface
-  Nets pairs naturally with the half-edge's n-gon support (quad output). The *manifold*
-  variant — one vertex per connected component of inside corners per cell — exists
-  because the naive version provably emits non-manifold edges on diagonal sign patterns
-  (thin sheets, gyroids), which the strict `HalfEdgeMesh.Build` rejects.
+- **Implicit → Mesh: manifold dual contouring with Hermite data.** Chosen over marching
+  cubes because the 256-entry MC tables are error-prone to reproduce and the dual scheme
+  pairs naturally with the half-edge's n-gon support (quad output). The *manifold* variant
+  — one vertex per SHEET a cell's inside corners bound — exists because the naive version
+  provably emits non-manifold edges on diagonal sign patterns (thin sheets, gyroids),
+  which the strict `HalfEdgeMesh.Build` rejects.
+  - **Vertex placement is a quadric, and the reason is that averaging is wrong rather than
+    imprecise.** Every crossing lies ON the surface, so their mean lies strictly INSIDE any
+    convex corner: a polygonized box is chamfered by construction and no resolution removes
+    it (measured, the nearest vertex to a box corner sat half a cell away at every
+    resolution and did not converge). The field's own tangent planes carry the feature, and
+    the minimiser of their summed squared distance IS the corner. So the vertex goes at
+    `x = m + A⁺(b − A·m)` over `A = Σ n nᵀ`, with the mass point `m` — the incumbent
+    averaged vertex — supplying every direction the samples do not constrain. The solve is
+    a REGULARISED NORMAL-EQUATIONS solve rather than an SVD and that is not a compromise:
+    A is symmetric PSD by construction so its SVD IS its eigendecomposition, which
+    `SymmetricEigen3` already computes, and the usual objection (normal equations square
+    the condition number) is bounded here because the rows are unit normals — κ(A) is a
+    function of the ANGLES alone, and the truncation is what answers an ill-conditioned
+    angle by declining to resolve it.
+  - **The threshold is an ANGLE, derived rather than chosen.** Two unit normals separated by
+    α give A the eigenvalues 1 ± |cos α|, so the singular-value ratio is exactly tan(α/2)
+    and a stated feature angle converts. The direction of the risk decides the default:
+    raising it returns the incumbent chamfer, lowering it inverts a direction the samples
+    barely constrain and sends the vertex a long way out — a worse mesh against a broken
+    one.
+  - **The Hermite POINT must be projected onto the surface, and a symmetric fixture cannot
+    see that it was not.** A grid crossing is where the LINEAR INTERPOLANT along a cube edge
+    vanishes, which is on the surface only where the field is linear along it — and at a
+    feature it is not, a box's field near a corner being a max of three linear pieces. One
+    Newton step along the gradient fixes it exactly wherever the field is locally linear
+    (every planar face, every hard-CSG corner). What makes this institutional memory rather
+    than an implementation note is HOW it hid: a box sharing its centre with the sampling
+    region puts its corner at the same fractional position on all three axes, and only then
+    does the linear crossing land on the surface by itself — so the symmetric fixture read
+    EXACTLY zero while an offset one read 3.5e-2. The recorded "a mirror-symmetric hostile
+    fixture can be secretly benign" lesson, in a third place.
+  - **Where a vertex may go is `ClampCells`, and both textbook answers are wrong.** A strict
+    cell clamp chamfers a ROTATED box's edges by a quarter of a cell — a cell that sees both
+    faces of an edge need not contain the edge, so the minimiser on the edge LINE is
+    legitimately just outside and refusing it there chamfers exactly the feature the quadric
+    found. No clamp at all is unbounded: an under-resolved gyroid throws a vertex 4.3 cells
+    out. The default of one cell is the neighbourhood a cell's own crossings can speak
+    about — a fit's own data rather than an extrapolation past it — and measures exact on
+    every box placement while bounding the gyroid. Half a cell is measurably not enough,
+    which is why the bound is a measurement rather than a comfortable number.
+  - **Placement never changes TOPOLOGY, and that is the manifoldness argument.** Which
+    crossings belong to which vertex is decided before any position is computed, so the
+    index buffer is bit-for-bit unchanged and every combinatorial property with it —
+    including the recorded pinch-vertex residual, which this neither creates nor repairs.
+    The golden fingerprints are split to say so: a TOPOLOGY hash asserted for BOTH placement
+    rules from one row, and POSITION hashes per rule.
+  - **Adaptive output is BOTTOM-UP, and that is a completeness decision.** The textbook
+    adaptive contouring is a top-down octree that stops subdividing where the field looks
+    flat, which would save the visit as well as the faces — and it cannot certify that no
+    feature hides between the samples it took, which is verbatim the argument `SurfaceCull`'s
+    own remarks make against seed-and-flood. Collapsing cells the uniform walk HAS visited
+    inherits that argument unchanged and adds no new one; the cost is stated rather than
+    implied, namely that it saves faces and nothing in evaluation. Cracks are then
+    structurally impossible because the connectivity is the uniform walk's face buffer
+    RE-INDEXED and never re-derived — there is no T-junction to make. Manifoldness is the
+    one thing that is checked rather than argued (contracting a connected vertex set is a
+    manifold quotient only when its induced subcomplex is a disk), and the check terminates
+    for a stated reason: reverting a cluster only ever splits vertices apart, and splitting
+    cannot create a violation, so every round strictly removes merges and the empty
+    clustering is the original mesh.
 - **B-Rep → Mesh: edge-consistent tessellation**. The invariant that makes welded output
   crack-free by construction: **every edge is sampled exactly once into a shared
   polyline, and every face's boundary sampling equals those polylines**. Planar faces
