@@ -10,8 +10,15 @@ namespace EngrCAD.Interop.Tests;
 /// Locks the sampler's two invariants: the mesh is bit-for-bit independent of how the
 /// grid is fed to the field (deinterleaved streaming vs. a point at a time), and
 /// bit-for-bit independent of the slab window size the streaming sampler chooses.
-/// The golden fingerprints were taken from the dense <c>Vector3d[]</c> sampler that
-/// preceded the deinterleaved one, so they also pin the output against that revision.
+/// <para>
+/// The goldens are in TWO tables on purpose. Topology (counts and face indices) is
+/// asserted for both vertex-placement rules from ONE row, because sharp-feature placement
+/// must not move a single index — that is the manifoldness argument stated as a test
+/// rather than as prose. Positions are a separate table with a row per rule, and the
+/// <c>plain</c> rows are the original goldens taken from the dense <c>Vector3d[]</c>
+/// sampler that preceded the deinterleaved one, so the pre-dual-contouring output stays
+/// pinned against every revision since.
+/// </para>
 /// </summary>
 public class SurfaceNetsSamplingTests
 {
@@ -45,13 +52,63 @@ public class SurfaceNetsSamplingTests
         (Sdf.Box(2, 2, 2) - Sdf.Cylinder(0.6, 3))
         .SmoothUnion(Sdf.Sphere(1.2).Translate((0.8, 0.3, 0.2)), 0.25);
 
+    /// <summary>
+    /// The FNV over face indices alone — the mesh's combinatorics with no coordinate in
+    /// it. Sharp-feature placement moves every vertex and must not move this by a bit:
+    /// which crossings belong to which vertex is decided before any position is computed,
+    /// so the index buffer handed to <see cref="HalfEdgeMesh.Build"/> is the same buffer.
+    /// That is the whole manifoldness argument, expressed as one number.
+    /// </summary>
+    private static long TopologyFingerprint(HalfEdgeMesh mesh)
+    {
+        unchecked
+        {
+            long hash = (long)14695981039346656037UL;
+            void Mix(long value)
+            {
+                hash ^= value;
+                hash *= 1099511628211L;
+            }
+
+            Mix(mesh.VertexCount);
+            foreach (var face in mesh.Faces)
+                foreach (var vertex in face.Vertices())
+                    Mix(vertex.Index);
+            return hash;
+        }
+    }
+
+    /// <summary>
+    /// Counts and TOPOLOGY, asserted for BOTH vertex-placement rules — one row, two
+    /// polygonizations. Positions live in <see cref="Positions"/>, which is deliberately a
+    /// separate table: they are the thing sharp features are allowed to change.
+    /// </summary>
     public static TheoryData<string, int, int, int, long> Golden => new()
     {
-        // name, resolution, expected vertices, expected faces, expected fingerprint
-        { "sphere", 32, 2528, 2526, -1701506304702635191L },
-        { "csg", 41, 3316, 3316, -6493424247366869703L },
-        { "torus", 37, 2764, 2764, -3233375004565935246L },
+        // name, resolution, expected vertices, expected faces, topology fingerprint
+        { "sphere", 32, 2528, 2526, -1880870020840074829L },
+        { "csg", 41, 3316, 3316, 324766280307659388L },
+        { "torus", 37, 2764, 2764, 7645207557967803343L },
     };
+
+    /// <summary>
+    /// Position fingerprints, one per placement rule. The <c>plain</c> column is the
+    /// ORIGINAL golden, taken from the dense <c>Vector3d[]</c> sampler that preceded the
+    /// deinterleaved one — kept verbatim rather than retired, so the pre-sharp-feature
+    /// output stays pinned against every revision since; the <c>sharp</c> column was taken
+    /// deliberately when dual contouring landed.
+    /// </summary>
+    public static TheoryData<string, int, bool, long> Positions => new()
+    {
+        { "sphere", 32, false, -1701506304702635191L },
+        { "csg", 41, false, -6493424247366869703L },
+        { "torus", 37, false, -3233375004565935246L },
+        { "sphere", 32, true, 8816252880545085349L },
+        { "csg", 41, true, -131546108220177304L },
+        { "torus", 37, true, -7311666246686429445L },
+    };
+
+    private static readonly SurfaceNetsOptions Plain = new() { SharpFeatures = false };
 
     private static (Sdf Field, Aabb Region) Case(string name) => name switch
     {
@@ -79,15 +136,27 @@ public class SurfaceNetsSamplingTests
 
     [Theory]
     [MemberData(nameof(Golden))]
-    public void Polygonize_MatchesTheGoldenBitPattern(
-        string name, int resolution, int vertices, int faces, long fingerprint)
+    public void Polygonize_MatchesTheGoldenTopology(
+        string name, int resolution, int vertices, int faces, long topology)
     {
         var (field, region) = Case(name);
-        var mesh = SurfaceNets.Polygonize(field, region, resolution);
+        foreach (var options in new[] { Plain, SurfaceNetsOptions.Default })
+        {
+            var mesh = SurfaceNets.Polygonize(field, region, resolution, null, options);
+            Assert.Equal(vertices, mesh.VertexCount);
+            Assert.Equal(faces, mesh.FaceCount);
+            Assert.Equal(topology, TopologyFingerprint(mesh));
+        }
+    }
 
-        Assert.Equal(vertices, mesh.VertexCount);
-        Assert.Equal(faces, mesh.FaceCount);
-        Assert.Equal(fingerprint, Fingerprint(mesh));
+    [Theory]
+    [MemberData(nameof(Positions))]
+    public void Polygonize_MatchesTheGoldenPositions(
+        string name, int resolution, bool sharpFeatures, long fingerprint)
+    {
+        var (field, region) = Case(name);
+        var options = sharpFeatures ? SurfaceNetsOptions.Default : Plain;
+        Assert.Equal(fingerprint, Fingerprint(SurfaceNets.Polygonize(field, region, resolution, null, options)));
     }
 
     /// <summary>

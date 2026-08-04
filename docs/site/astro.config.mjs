@@ -191,6 +191,7 @@ document.addEventListener('click', function (event) {
           label: 'Meshing & import',
           collapsed: true,
           items: [
+            { label: 'Polygonization (implicit to mesh)', slug: 'examples/polygonization' },
             { label: 'Remeshing', slug: 'examples/remeshing' },
             { label: 'Tessellation quality', slug: 'examples/quality' },
             { label: 'Importing meshes', slug: 'examples/import' },

@@ -412,7 +412,7 @@ public sealed class Part
             if (Geometry is HalfEdgeMesh direct)
                 return _mesh = direct;
             if (Geometry is Sdf sdf)
-                return _mesh = SurfaceNets.Polygonize(sdf, q.SdfResolution, progress);
+                return _mesh = SurfaceNets.Polygonize(sdf, q.SdfResolution, progress, q.SurfaceNets);
 
             // B-Rep-representable geometry (a BrepSolid part or a Shape with a B-Rep
             // route): tessellate the ONE cached solid. This is exactly what

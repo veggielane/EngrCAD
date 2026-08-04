@@ -231,4 +231,80 @@ public class SurfaceNetsBenchmark(ITestOutputHelper output)
         }
         return best;
     }
+
+    /// <summary>
+    /// What sharp features and the adaptive pass cost, against the plain averaging walk.
+    /// Both extra passes are batched — one gradient batch and one value batch per slab —
+    /// so the cost is seven more field evaluations per CROSSING, not per sample.
+    /// <para>
+    /// Reference machine (i9-9900K, win-x64, .NET 10.0.302, Release, otherwise idle), best
+    /// of four alternating in ONE process (the interleave rule: a ratio taken across
+    /// sittings is noise with units):
+    /// </para>
+    /// <code>
+    ///  res |  plain ms | sharp ms | ratio | adaptive ms | faces plain -> adaptive
+    ///   48 |       2.6 |      5.3 | 2.09x |        12.7 |    4 542 ->     1 429
+    ///   96 |      11.3 |     21.4 | 1.89x |        49.4 |   17 930 ->     2 912
+    ///  192 |      51.4 |     84.7 | 1.65x |       190.1 |   72 232 ->     6 118
+    ///  256 |      94.6 |    153.6 | 1.62x |       311.9 |  129 268 ->     8 798
+    /// </code>
+    /// <para>
+    /// <b>The ratio FALLS with resolution, which is the shape worth keeping</b>: the extra
+    /// work is per crossing and crossings are an O(n²) surface quantity, while the walk the
+    /// cull leaves is a shell that still grows faster than that. So the feature is at its
+    /// most expensive on small grids, where polygonization is cheap anyway.
+    /// </para>
+    /// <para>
+    /// The adaptive column is a DIFFERENT trade and its own row says so: it roughly doubles
+    /// the polygonization to divide the face count by 3.3 at resolution 48 and by <b>14.7 at
+    /// 256</b> — the saving grows with the grid because the surface it is describing does
+    /// not. It buys nothing in evaluation (see <see cref="SurfaceNetsSimplify"/> on why it
+    /// is bottom-up) and everything downstream of the face count: rendering, export,
+    /// booleans, occlusion baking, tet meshing.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void SharpFeatureCost()
+    {
+        if (!Enabled)
+            return;
+
+        var field = (Sdf.Box(2, 2, 2) - Sdf.Cylinder(0.6, 3))
+            .SmoothUnion(Sdf.Sphere(1.2).Translate((0.8, 0.3, 0.2)), 0.25);
+        var region = new Aabb((-2.2, -2.2, -2.2), (2.4, 2.2, 2.2));
+        var plain = new SurfaceNetsOptions { SharpFeatures = false };
+
+        var warm = Stopwatch.StartNew();
+        do
+        {
+            SurfaceNets.Polygonize(field, region, 48, null, plain);
+            SurfaceNets.Polygonize(field, region, 48);
+        }
+        while (warm.ElapsedMilliseconds < 1500);
+
+        output.WriteLine(" res |  plain ms | sharp ms | ratio | adaptive ms | faces plain -> adaptive");
+        foreach (int resolution in new[] { 48, 96, 192, 256 })
+        {
+            double cell = 4.6 / resolution;
+            var adaptiveOptions = new SurfaceNetsOptions { SimplifyTolerance = 0.05 * cell };
+            double p = double.MaxValue, s = double.MaxValue, a = double.MaxValue;
+            int plainFaces = 0, adaptiveFaces = 0;
+            for (int trial = 0; trial < 4; trial++)
+            {
+                var watch = Stopwatch.StartNew();
+                plainFaces = SurfaceNets.Polygonize(field, region, resolution, null, plain).FaceCount;
+                p = Math.Min(p, watch.Elapsed.TotalMilliseconds);
+                watch.Restart();
+                SurfaceNets.Polygonize(field, region, resolution);
+                s = Math.Min(s, watch.Elapsed.TotalMilliseconds);
+                watch.Restart();
+                adaptiveFaces = SurfaceNets
+                    .Polygonize(field, region, resolution, null, adaptiveOptions).FaceCount;
+                a = Math.Min(a, watch.Elapsed.TotalMilliseconds);
+            }
+            output.WriteLine(
+                $"{resolution,4} | {p,9:F1} | {s,8:F1} | {s / p,4:F2}x | {a,11:F1} | " +
+                $"{plainFaces,8} -> {adaptiveFaces,8}");
+        }
+    }
 }

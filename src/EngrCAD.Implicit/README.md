@@ -6,7 +6,8 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 ## Contents
 
 - **`Sdf`** (abstract base) — `Evaluate(point)`, batch `Evaluate(span, span)`,
-  finite-difference `Normal`, and conservative `Bounds` propagated through every node
+  finite-difference `Normal` (and batched `Normals`, optionally reporting |grad|), and
+  conservative `Bounds` propagated through every node
   (infinite for unbounded fields). Batches come in two shapes: interleaved
   `Evaluate(ReadOnlySpan<Vector3d>, Span<double>)` for callers holding point arrays, and
   **deinterleaved `Evaluate(x, y, z, distances)`** for callers that generate coordinates
@@ -70,6 +71,29 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 
 Meshes can join the AST via `EngrCAD.Interop`'s `MeshSdf`, and any finite `Sdf` converts
 to a mesh via `SurfaceNets.Polygonize`.
+
+## Batched gradients (`Sdf.Normals`)
+
+A gradient costs six evaluations, so a Hermite consumer — dual contouring's vertex
+placement above all — wants them by the thousand rather than one at a time.
+`Normals(points, normals, epsilon?)` drives one batch of six times the length through the
+same `EvaluateBatch` seam, and is **bit-for-bit identical to the scalar `Normal`** at the
+same epsilon for the same reason the batch distance entry is: the probe coordinates are the
+same expressions, the seam is contractually bit-identical to the scalar evaluator, and the
+difference and normalization are the same two operations in the same order.
+
+The overload taking a `Span<double> gradientMagnitudes` also reports **|grad|**, which the
+unit normal throws away and which a caller needs to turn a field value into a distance. It
+is 1 for every exact distance field and less than 1 wherever the field is the lower bound
+the smooth operators document — measured, an exact field reads 1 to 1e-6 at over 95% of
+sample points and never above it, the exceptions being the medial axis and creases where
+the gradient does not exist and a central difference straddles two branches (worst 0.99959).
+
+`epsilon` is ABSOLUTE and the default is inherited from `Normal`; a bulk caller working at
+a known scale should pass one relative to it, since a central difference's round-off floor
+is ~eps·|d|/h. `SurfaceNets` passes 1e-4 of its grid cell, which keeps that floor under
+1e-9 at every resolution while staying far too small to straddle any feature the grid
+resolves.
 
 ## Batch evaluation (SIMD)
 

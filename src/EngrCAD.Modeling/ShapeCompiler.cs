@@ -1202,7 +1202,8 @@ internal static class ShapeCompiler
 
         // Last: polygonize the subtree's own SDF at identity, transform the mesh.
         var sdf = LowerImplicit(shape, Matrix4d.Identity, quality);
-        return new MeshSdf(TransformMesh(SurfaceNets.Polygonize(sdf, quality.SdfResolution), m));
+        return new MeshSdf(TransformMesh(
+            SurfaceNets.Polygonize(sdf, quality.SdfResolution, options: quality.SurfaceNets), m));
     }
 
     // ----------------------------------------------------------------- mesh lowering
@@ -1216,7 +1217,8 @@ internal static class ShapeCompiler
         // Blends/offsets/shells/lattices have no crisp form: polygonize the SDF.
         if (UsesImplicitOnlyOps(shape))
             return SurfaceNets.Polygonize(
-                LowerImplicit(shape, Matrix4d.Identity, quality), quality.SdfResolution);
+                LowerImplicit(shape, Matrix4d.Identity, quality), quality.SdfResolution,
+                options: quality.SurfaceNets);
 
         // Mesh leaves mixed into boolean trees: per-node mesh operations.
         return LowerMesh(shape, Matrix4d.Identity, quality);
@@ -1287,7 +1289,8 @@ internal static class ShapeCompiler
                     return TransformMesh(Tessellate(LowerBrep(shape, Matrix4d.Identity), quality), m);
                 return TransformMesh(
                     SurfaceNets.Polygonize(
-                        LowerImplicit(shape, Matrix4d.Identity, quality), quality.SdfResolution),
+                        LowerImplicit(shape, Matrix4d.Identity, quality), quality.SdfResolution,
+                        options: quality.SurfaceNets),
                     m);
         }
     }
