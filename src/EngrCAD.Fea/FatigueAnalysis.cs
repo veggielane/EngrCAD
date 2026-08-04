@@ -182,6 +182,194 @@ public static class FatigueAnalysis
     }
 
     /// <summary>
+    /// Miner's-rule damage from an already-counted spectrum: <c>sum(count / N)</c> over the
+    /// cycles, each cycle's own mean correcting its own amplitude through
+    /// <see cref="EquivalentAlternating"/> before the S-N lookup. This IS the sum
+    /// <see cref="Evaluate(TransientResults, SnCurve, RainflowFatigueOptions?)"/>
+    /// accumulates per node, exposed so a caller holding a spectrum from elsewhere (a
+    /// measured strain-gauge history, a load block from a specification) can use the same
+    /// arithmetic.
+    ///
+    /// <para>A cycle at or below the endurance limit contributes EXACTLY nothing (the
+    /// infinity is skipped, not added), and a cycle whose corrected amplitude is unbounded —
+    /// a mean at or beyond S_ut — makes the whole sum infinite: that is a STATIC failure on
+    /// the first pass rather than something an accumulation reaches.</para>
+    /// </summary>
+    /// <param name="cycles">The counted spectrum (see <see cref="Rainflow.Count"/>).</param>
+    /// <param name="curve">The material's S-N line.</param>
+    /// <param name="correction">Which mean-stress correction to apply per cycle.</param>
+    public static double Damage(
+        IReadOnlyList<RainflowCycle> cycles,
+        SnCurve curve,
+        MeanStressCorrection correction = MeanStressCorrection.Goodman) =>
+        DamageUnder(cycles, curve, correction, 1.0);
+
+    /// <summary>Damage with every cycle scaled by <paramref name="loadFactor"/> — the
+    /// function the load factor is the root of. A factor of exactly 1 multiplies by 1.0,
+    /// which is the identity on every finite double, so <see cref="Damage"/> is this at
+    /// 1.0 bit for bit.</summary>
+    private static double DamageUnder(
+        IReadOnlyList<RainflowCycle> cycles,
+        SnCurve curve,
+        MeanStressCorrection correction,
+        double loadFactor)
+    {
+        ArgumentNullException.ThrowIfNull(cycles);
+        ArgumentNullException.ThrowIfNull(curve);
+        double total = 0;
+        foreach (var cycle in cycles)
+        {
+            double equivalent = EquivalentAlternating(
+                curve, loadFactor * cycle.Amplitude, loadFactor * cycle.Mean, correction);
+            if (double.IsPositiveInfinity(equivalent))
+                return double.PositiveInfinity;
+            double life = curve.LifeAt(equivalent);
+            if (double.IsPositiveInfinity(life))
+                continue;
+            total += cycle.Count / life;
+        }
+        return total;
+    }
+
+    /// <summary>
+    /// The variable-amplitude safety factor: the multiplier on the WHOLE load history at
+    /// which the counted spectrum first reaches its damage target — the spectrum twin of
+    /// the static pair's radial factor, and the same claim ("scale the loads by this and
+    /// the part is at its limit").
+    ///
+    /// <para><b>Two targets, exactly as the static path has two.</b> With
+    /// <paramref name="designRepetitions"/> null the target is INFINITE life, i.e. the
+    /// multiplier at which the spectrum's worst cycle first reaches the endurance limit and
+    /// damage first becomes non-zero — closed form, since that is the static radial factor
+    /// of each cycle against the endurance limit and the answer is their minimum. With a
+    /// stated count R the target is a Miner damage of <c>1/R</c>, so the part survives R
+    /// repetitions of the history; that root has no closed form in general (below) and is
+    /// bracketed.</para>
+    ///
+    /// <para><b>Where the closed form exists, and where it stops.</b> Damage is a sum of
+    /// power-law terms, so if every cycle's equivalent amplitude were LINEAR in the
+    /// multiplier the whole sum would scale as <c>k^(-1/b)</c> and the answer would be
+    /// exactly <c>(R·D)^b</c> for the damage D at unit load. Two things break that
+    /// linearity and both are ordinary: a tensile mean under Goodman or Gerber makes the
+    /// equivalent amplitude <c>k·a/(1 − k·m/S_ut)</c>, which is not a power of k at all and
+    /// diverges at <c>k = S_ut/m</c> (static failure — a hard ceiling the factor can never
+    /// reach); and the endurance knee makes cycles JOIN the sum as k grows, so the
+    /// coefficient is piecewise. Hence one bracketed solve for every case rather than a
+    /// closed form with conditions, with the closed form kept as the test oracle where it
+    /// is exact.</para>
+    ///
+    /// <para>The damage function is non-decreasing in k (each cycle's equivalent amplitude
+    /// is), so the bracket is sound; the answer returned is the SMALLEST multiplier at
+    /// which the target is reached, which matters only where the target falls inside the
+    /// step the endurance knee puts in the damage (a jump of exactly <c>count/N_knee</c> as
+    /// a cycle crosses it — an artefact of the flat-line model, not of this solve).</para>
+    ///
+    /// <para>NaN where there is no fatigue mechanism at all — an empty spectrum, or one
+    /// carrying no amplitude and no tensile mean — the no-value spelling the static path
+    /// uses, rather than an infinity that would poison a legend's range.</para>
+    /// </summary>
+    /// <param name="cycles">The counted spectrum for ONE pass of the history.</param>
+    /// <param name="curve">The material's S-N line.</param>
+    /// <param name="correction">Which mean-stress correction to apply per cycle.</param>
+    /// <param name="designRepetitions">How many repetitions of the history the part must
+    /// survive, or null for a factor against infinite life (which a curve with no endurance
+    /// limit does not have, and refuses by name).</param>
+    public static double LoadFactor(
+        IReadOnlyList<RainflowCycle> cycles,
+        SnCurve curve,
+        MeanStressCorrection correction = MeanStressCorrection.Goodman,
+        double? designRepetitions = null)
+    {
+        ArgumentNullException.ThrowIfNull(cycles);
+        ArgumentNullException.ThrowIfNull(curve);
+        if (designRepetitions is { } stated && !(stated >= 1))
+            throw new ArgumentOutOfRangeException(
+                nameof(designRepetitions), designRepetitions,
+                "A design life is at least one repetition of the history.");
+
+        if (designRepetitions is not { } repetitions)
+        {
+            // Infinite life: the multiplier at which damage first appears. Each cycle
+            // reaches the endurance limit at its own static radial factor, and the
+            // spectrum reaches it at the smallest of them — the SAME helper the static
+            // pair's field is built from, so a one-cycle spectrum answers identically.
+            double limit = EnduranceStrength(curve);
+            double best = double.NaN;
+            foreach (var cycle in cycles)
+            {
+                if (!(cycle.Count > 0))
+                    continue;
+                double n = SafetyFactor(curve, limit, cycle.Amplitude, cycle.Mean, correction);
+                if (!double.IsNaN(n) && !(n >= best))
+                    best = n;
+            }
+            return best;
+        }
+
+        double target = 1.0 / repetitions;
+        double lo, hi;
+        if (DamageUnder(cycles, curve, correction, 1.0) >= target)
+        {
+            // Already at or past the target under the stated load: the factor is <= 1.
+            hi = 1.0;
+            lo = 0.5;
+            while (DamageUnder(cycles, curve, correction, lo) >= target)
+            {
+                hi = lo;
+                lo *= 0.5;
+                // Unreachable in exact arithmetic — every cycle's equivalent amplitude
+                // vanishes with the load, so the damage does too — but a bracket search
+                // states its own bound rather than trusting one.
+                if (!(lo > 0))
+                    return double.NaN;
+            }
+        }
+        else
+        {
+            lo = 1.0;
+            hi = 2.0;
+            while (DamageUnder(cycles, curve, correction, hi) < target)
+            {
+                lo = hi;
+                hi *= 2.0;
+                // No multiplier reaches the target: nothing in the spectrum alternates and
+                // nothing carries a tensile mean, so there is no mechanism to scale into.
+                if (!double.IsFinite(hi))
+                    return double.NaN;
+            }
+        }
+
+        // Geometric bisection — scale-free, and stopped by an EXACT fixed point rather
+        // than a tolerance: once the midpoint of the bracket rounds onto an endpoint the
+        // bracket is one representable step wide and there is nothing left to halve.
+        while (true)
+        {
+            double mid = Math.Sqrt(lo) * Math.Sqrt(hi);
+            if (!(mid > lo) || !(mid < hi))
+                break;
+            if (DamageUnder(cycles, curve, correction, mid) >= target)
+                hi = mid;
+            else
+                lo = mid;
+        }
+        return hi;
+    }
+
+    /// <summary>The endurance limit, or the refusal a knee-less material earns — the
+    /// spectrum twin of <see cref="DesignStrength"/>'s, naming the option that supplies the
+    /// missing claim.</summary>
+    internal static double EnduranceStrength(SnCurve curve)
+    {
+        if (curve.EnduranceLimit is { } limit)
+            return limit;
+        throw new FeaException(
+            $"'{curve.Name}' has no endurance limit, so a safety factor against infinite "
+            + "life does not exist for it. State RainflowFatigueOptions.DesignRepetitions "
+            + "— how many repetitions of the history the part must survive — and the factor "
+            + "is measured against a Miner damage of 1/repetitions.");
+    }
+
+    /// <summary>
     /// Evaluates fatigue at every node from two static load cases — the extremes of one
     /// proportional load history, in either order (the maximum and minimum are taken PER
     /// NODE, so which case is "worse" may differ across the part).
@@ -288,6 +476,12 @@ public static class FatigueAnalysis
     /// <see cref="RainflowFatigueOptions.AssumeRepeating"/> for the two honest readings
     /// E1049 names (residual halves for a one-shot event; rearrange-and-pair for one
     /// period of a repeating load).</para>
+    ///
+    /// <para><b>The safety factor is the load multiplier to the damage target</b>
+    /// (<see cref="LoadFactor"/>), against infinite life by default and against a stated
+    /// <see cref="RainflowFatigueOptions.DesignRepetitions"/> otherwise — the same claim the
+    /// static pair's factor makes, and refused by name for a curve with no endurance limit
+    /// exactly as that one is.</para>
     /// </summary>
     /// <param name="history">A completed transient run (its stored states are the
     /// samples).</param>
@@ -317,6 +511,12 @@ public static class FatigueAnalysis
                     + "cycle amplitude; set the same Recovery and Averaging on every state.");
         }
 
+        // The factor's target is resolved up front so a curve that cannot answer (no
+        // endurance limit, no stated repetitions) refuses at the CALL rather than on the
+        // first node — the static path's rule, and its message names the way out.
+        if (options.DesignRepetitions is null)
+            EnduranceStrength(curve);
+
         int nodes = history.Mesh.NodeCount;
         var series = new double[nodes][];
         for (int v = 0; v < nodes; v++)
@@ -331,29 +531,17 @@ public static class FatigueAnalysis
         var damage = new double[nodes];
         var cycleCounts = new double[nodes];
         var log10Repetitions = new double[nodes];
+        var safety = new double[nodes];
         for (int v = 0; v < nodes; v++)
         {
             var cycles = Rainflow.Count(series[v], options.AssumeRepeating);
-            double d = 0, count = 0;
+            double count = 0;
             foreach (var cycle in cycles)
-            {
                 count += cycle.Count;
-                double equivalent = EquivalentAlternating(
-                    curve, cycle.Amplitude, cycle.Mean, options.Correction);
-                if (double.IsPositiveInfinity(equivalent))
-                {
-                    // Static failure: a mean at or beyond S_ut fails on the first pass,
-                    // not by accumulation.
-                    d = double.PositiveInfinity;
-                    continue;
-                }
-                double life = curve.LifeAt(equivalent);
-                // Exact-infinity skip: a cycle at or below the endurance limit
-                // contributes exactly nothing, the same statement the static path makes.
-                if (double.IsPositiveInfinity(life))
-                    continue;
-                d += cycle.Count / life;
-            }
+            // The damage sum is ONE rule, shared with the caller-facing overload — the
+            // per-cycle correction, the exact-infinity skip below the endurance limit and
+            // the static-failure branch all live there.
+            double d = Damage(cycles, curve, options.Correction);
             damage[v] = d;
             cycleCounts[v] = count;
             // Repetitions to failure = 1/damage, floored at one repetition (log10 = 0)
@@ -361,10 +549,12 @@ public static class FatigueAnalysis
             log10Repetitions[v] = d == 0
                 ? double.NaN
                 : Math.Log10(Math.Max(1.0, 1.0 / d));
+            safety[v] = LoadFactor(
+                cycles, curve, options.Correction, options.DesignRepetitions);
         }
 
         return new RainflowFatigueResults(
-            history, curve, options, damage, cycleCounts, log10Repetitions);
+            history, curve, options, damage, cycleCounts, log10Repetitions, safety);
     }
 
     /// <summary>
@@ -380,8 +570,12 @@ public static class FatigueAnalysis
     /// amplitude AND no tensile mean has no fatigue mechanism at all, so its factor is
     /// NaN — the no-value spelling — rather than an infinity that would poison a
     /// legend's range.</para>
+    /// <para>The spectrum path asks the same question one cycle at a time: a cycle reaches
+    /// the endurance limit at exactly this factor, so <see cref="LoadFactor"/>'s
+    /// infinite-life answer is the minimum of these over the counted cycles — one rule, not
+    /// a second formula that could drift from it.</para>
     /// </summary>
-    private static double SafetyFactor(
+    internal static double SafetyFactor(
         SnCurve curve, double designStrength, double amplitude, double meanStress,
         MeanStressCorrection correction)
     {

@@ -440,6 +440,68 @@ public class FeaBenchmark(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// What the variable-amplitude safety factor costs, and why its two targets are priced
+    /// differently. Against INFINITE life the answer is closed form — each counted cycle's
+    /// static radial factor against the endurance limit, minimum over the spectrum — so it
+    /// is one extra pass over cycles the counting has already produced. Against a stated
+    /// repetition count there is no closed form (a tensile mean makes the equivalent
+    /// amplitude a rational function of the multiplier, and the endurance knee makes the
+    /// damage sum piecewise), so it is a bracketed bisection per node, roughly sixty damage
+    /// evaluations each. The rainflow COUNTING is the shared floor under both.
+    /// </summary>
+    [Fact]
+    public void WhatTheSpectrumSafetyFactorCosts()
+    {
+        if (!Enabled)
+            return;
+
+        var tets = StructuredTetMesh.Box(Vector3d.Zero, Size, 8, 4, 2);
+        var mesh = AnalysisMesh.Of(tets);
+        var model = new StructuralModel(mesh, Materials.Steel);
+        model.Fix(StructuredTetMesh.XMin);
+        model.Force(Facets.Tag(StructuredTetMesh.XMax), new Vector3d(0, 0, -3000));
+        var run = TransientSolver.Solve(model, new TransientSolveOptions(2e-5, 240)
+        {
+            LoadFactor = t => Math.Sin(90000.0 * t) + 0.4 * Math.Sin(23000.0 * t),
+        });
+
+        var curve = FatigueMaterials.Steel1045;
+        var infinite = new RainflowFatigueOptions();
+        var stated = new RainflowFatigueOptions { DesignRepetitions = 1e4 };
+
+        // Warm the JIT, then take the MINIMUM over repeats: a deterministic workload can
+        // only be slowed down by its neighbours (the recorded estimator rule).
+        FatigueAnalysis.Evaluate(run, curve, infinite);
+        FatigueAnalysis.Evaluate(run, curve, stated);
+
+        double Best(RainflowFatigueOptions options)
+        {
+            double best = double.PositiveInfinity;
+            for (int i = 0; i < 5; i++)
+            {
+                var watch = Stopwatch.StartNew();
+                FatigueAnalysis.Evaluate(run, curve, options);
+                best = Math.Min(best, watch.Elapsed.TotalMilliseconds);
+            }
+            return best;
+        }
+
+        double infiniteMs = Best(infinite);
+        double statedMs = Best(stated);
+        var spectrum = FatigueAnalysis.Evaluate(run, curve, stated);
+        int cycles = 0;
+        for (int v = 0; v < mesh.NodeCount; v++)
+            cycles = Math.Max(cycles, spectrum.CyclesAt(v).Count);
+
+        output.WriteLine(
+            $"{mesh.NodeCount} nodes, {run.States.Count} stored states, "
+            + $"up to {cycles} counted cycles per node");
+        output.WriteLine($"infinite-life target (closed form): {infiniteMs:F1} ms");
+        output.WriteLine($"stated target (bracketed per node): {statedMs:F1} ms "
+            + $"({statedMs / infiniteMs:F1}x)");
+    }
+
     private static double Norm(double[] v)
     {
         double sum = 0;
