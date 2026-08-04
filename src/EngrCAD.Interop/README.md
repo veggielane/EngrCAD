@@ -31,11 +31,20 @@ logging complements them, never replaces them.
     resolution 44 and 528 at 56, `Box(10) & Gyroid(8, 0.2)` up to **3 066** at 64.
     The refinement is by the cube's own **face adjacency** — two crossings on a common face
     are the two ends of one arc of the surface's cross-section there, so they belong to one
-    sheet — restricted to crossings of the same inside component, computed as a union-find
-    over the twelve cube edges. It only ever splits, never merges, and a cell whose every
+    sheet — restricted to crossings of the same inside component, as a union-find over the
+    twelve cube edges. That partition is a pure function of the eight corner SIGNS, so it is
+    a 256-entry **table** (four bits per cube edge packed into a `long`) rather than a
+    per-cell computation: measured on the reference machine (i9-9900K, win-x64, Release, best
+    of seven after a wall-clock warm-up budget), computing it per cell costs **1.15–1.51×**
+    on the whole polygonization (csg res 128 20.3 → 30.6 ms, csg res 256 87.8 → 101.3, a thin
+    shell at res 128 67.6 → 80.8, a gyroid at res 96 61.4 → 80.6) where the table costs
+    **1.01–1.07×** (20.9 / 93.9 / 71.2 / 62.3 — and part of even that is the extra vertices
+    the fix legitimately creates). It only ever splits, never merges, and a cell whose every
     component is a single sheet is untouched **bit for bit**: all three golden fingerprints
-    (`sphere`, `csg`, `torus`) and 131 of the 132 rendered docs PNGs are unchanged, and the
-    two that move are the two gyroid figures that carry the defect.
+    (`sphere`, `csg`, `torus`) and 133 of the 135 rendered docs PNGs are unchanged, and the
+    two that move are the two gyroid figures that carry the defect — 339 and 315 pixels of
+    1.79 million (0.019%), each inside one small box, and what changes is that the little
+    dark specks the pinch points rendered as along a hole's rim are gone.
     An ambiguous face keeps merging all four of its crossings here, deliberately — see the
     residual at the end of the next bullet. Coverage is `SurfaceNetsPinchTests`, which
     sweeps fields and resolutions (it is an alignment question, not a tolerance one — the

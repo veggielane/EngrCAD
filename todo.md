@@ -260,8 +260,9 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     (two crossings on a common face are the two ends of one arc), restricted to one inside
     component; the interface rule agrees with it only when no face is ambiguous. The 204/1/2
     figures the entry quoted belonged to the interface rule, not to this one: the face rule
-    leaves ALL THREE golden fingerprints untouched and moves 2 of 132 docs PNGs, both gyroid
-    figures that carry the defect. Residual below.
+    leaves ALL THREE golden fingerprints untouched and moves 2 of 135 docs PNGs, both gyroid
+    figures that carry the defect, by 339 and 315 pixels of 1.79 million (0.019%) — the dark
+    specks the pinch points rendered as along a hole's rim. Residual below.
   - [ ] **The ambiguous face's split is applied by ONE of the two cells, and that PINCHES the
     other** — the residual left after the sheet refinement above, and now the only source of
     pinch vertices measured. The + side owns the test because the sliding window cannot
