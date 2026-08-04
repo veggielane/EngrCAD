@@ -315,6 +315,15 @@ function drawFrame(ctx, frame) {
     const fullViewport = [0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight];
     const [r, g, b] = frame.clear;
     gl.clearColor(r, g, b, 1);
+    // A CLEAR IS NOT A DRAW, and glClear of the depth buffer is gated by the depth MASK.
+    // Per-draw state is applied here and never reset, so a frame whose LAST draw set
+    // depthWrite false -- the annotation overlay, a translucent fill, the ghost pass --
+    // leaves the mask off, and without this line the clear below would silently keep the
+    // PREVIOUS frame's depth buffer. Every model fragment then fails LESS against its own
+    // stale depth and the model VANISHES, leaving only the draws that disable the depth
+    // test. Measured before this line existed: with the annotation overlay on and the
+    // view cube off, the demo's silhouette went 32 374 -> 786 lit pixels.
+    gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     for (const call of frame.draws) {
@@ -355,7 +364,15 @@ function drawFrame(ctx, frame) {
         // Depth clear + per-draw viewport, both decided in C# (the view cube's overlay
         // trick). glClear ignores the viewport rect, so the order matches the desktop:
         // clear first, then narrow the viewport for the draw.
-        if (call.clearDepth) gl.clear(gl.DEPTH_BUFFER_BIT);
+        // Unmasked for the same reason the frame clear is, so the rule is ONE rule rather
+        // than two spellings: a draw that clears the depth buffer AND disables depth
+        // writes would otherwise clear nothing. No draw the frame builder emits today does
+        // both (the cube's fills clear and write), so this moves no pixel.
+        if (call.clearDepth) {
+            gl.depthMask(true);
+            gl.clear(gl.DEPTH_BUFFER_BIT);
+            gl.depthMask(call.depthWrite !== false);
+        }
         const vp = call.viewport ?? fullViewport;
         gl.viewport(vp[0], vp[1], vp[2], vp[3]);
 

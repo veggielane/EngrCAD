@@ -655,8 +655,9 @@ The `?report` self-check covers the new rungs as pixel relationships (cube and
 annotations start OFF under `?report`, like the furniture, because their near-white
 strokes would land in the "steel" class and skew the comparative counts): sectioning at
 the scene centre removed **32 374 → 20 593** body pixels with **676** gold d = 0
-isoline pixels on the cut; toggling the flange's dimension changed **34 317** pixels (this
-one was re-measured on win-x64 and had gone stale at 786 — see the note below); the
+isoline pixels on the cut; toggling the flange's dimension changed **786** pixels and left
+the model's silhouette at **32 405** against the **32 374** it draws without one (an
+overlay may only ADD — see the note below); the
 cube lit **4 770** pixels in its corner region, claimed a click on the region
 (`cubeClaimed=1`) and landed the camera EXACTLY on a shared-pose-table orientation
 (`cubeSnapped=1` — checkable without naming the face, because the animation's final
@@ -664,21 +665,46 @@ step returns the target). The drawing buffer is 693×393 now that the toolbar ta
 row, so absolute counts are not comparable with the older tables above — the
 relationships are the point, and all of the pre-toolbar checks reproduce.
 
-**One of those numbers had gone stale, and finding it is what a control is for.** The
-live-examples work needed to show it had moved nothing, so the whole beacon was captured
-against the commit before it and against the commit after: **all 44 fields identical**.
-The same pair of runs showed `annotationPixels` reading **34 317** where this file said
-786 — an order of magnitude more than the dimension's own strokes, and more than the whole
-model's silhouette (32 374), so the toggle is repainting the frame rather than adding an
-overlay to it. It is *not* the live-examples change (identical on both sides) and the
-buffer is the same 693×393, so the comparison is like for like. The occlusion-aware
-annotation work was the first suspect and is RULED OUT — `AnnotationDepth` defaults to
-`AlwaysOnTop`, the demo never sets it, and that branch is one depth-off draw, so the
-browser has never run the two-pass path. And the count EXCEEDS the silhouette, so
-background pixels moved, which no overlay draw can do: look at the camera and the
-section state either side of the toggle first. Filed in
-`todo.md` for whoever has that context — the check still fires, it is just no longer
-measuring only what its name says.
+### The number that "went stale" was the only one telling the truth
+
+`annotationPixels` was recorded here as **786**, and a later control run — the whole beacon
+captured against the commit before the live-examples work and the commit after, **all 44
+fields identical** — measured **34 317**. That was written up as a stale figure. It was not:
+786 was right, and 34 317 was a **regression in the browser viewport** that the check was
+still dutifully "firing" on.
+
+**Turning the overlay on was erasing the model.** The probe is one extra count, not a
+difference: read the silhouette on both sides of the toggle. It went **32 374 → 786** — the
+786 lit pixels being the dimension's own strokes and *nothing else*, which is why the two
+numbers looked like the same measurement drifting. The camera and the section state were
+innocent (recorded either side: unmoved, off), and capturing the same state twice differs by
+**0**, so the frame is a function of the state and the difference counts are signal.
+
+**The cause is that `glClear` of the depth buffer is masked by `glDepthMask`.**
+`engrcad-gl.js` applies each draw's state as it goes and never resets it, so the last draw
+of a frame leaves its mask set; a frame ending in a `depthWrite: false` draw therefore starts
+the *next* frame with a clear that clears no depth. The stale buffer already holds the model
+at exactly those depths, every fragment fails `LESS` against itself, and only the draws that
+disable the depth test survive. One `gl.depthMask(true)` before the clear is the whole fix
+(and the same line before the per-draw `clearDepth` the view cube uses, so it is one rule
+rather than two spellings — a no-op today, since the cube's fills clear *and* write).
+
+**The filed suspect was half right in a way worth recording.** The occlusion-aware
+annotation work was ruled out on the grounds that `AnnotationDepth` defaults to
+`AlwaysOnTop` and the browser has never run the two-pass path — all true, and the defect is
+still that commit's: it added `DepthWrite = false` to the shared helper *both* branches use,
+for a reason that is exactly right about draws ("a disabled depth test does not write depth
+either") and silently wrong about clears. Ruling out a code PATH is not ruling out a commit.
+
+**And it hid for a release because the view cube is drawn last.** Three passes emit
+`DepthWrite = false` (the annotation overlay, translucent fills, the undeformed ghost) and
+three do not (the isolines, the legend, the cube) — so with the cube on, the mask was
+re-enabled every frame and nothing was ever wrong. `?report` turns the cube off. The
+self-check was the *only* configuration in the repo that could see it, which is the argument
+for having one.
+
+`annotationBody` now rides beside `annotationPixels` for that reason: an overlay may only
+add, so the silhouette must survive the toggle, and a difference count alone cannot say so.
 
 Notes for whoever takes the next rung:
 
