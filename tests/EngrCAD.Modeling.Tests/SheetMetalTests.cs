@@ -195,6 +195,52 @@ public class SheetMetalTests
         Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
     }
 
+    /// <summary>
+    /// A flange running to ONE end of its edge — the ordinary shop case v1 refused as "a
+    /// corner in disguise". It is not one: the flush end splices the flange's cross-section
+    /// into the neighbouring wall, the inset end caps and stubs, and the two share no
+    /// coedge. Both orientations are exercised because which end of the edge is the
+    /// surgery's Q0 depends on the bend axis, and a rule that only works one way round
+    /// would pass a single-sided test.
+    /// </summary>
+    [Theory]
+    [InlineData(0.0, 30.0)]                     // flush at the edge's start
+    [InlineData(PlateY - 30.0, 30.0)]           // flush at its end
+    public void AFlangeFlushAtOneEndOnly_KeepsTheIdentity(double startOffset, double width)
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, startOffset: startOffset, width: width);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+    }
+
+    /// <summary>
+    /// What a half-inset flange must weigh, in closed form. Against the full-width flange
+    /// it is short by exactly the strip of blank it does not carry — <c>(edge − width)</c>
+    /// by <c>(allowance + wall)</c> by the thickness — and against a doubly-inset flange of
+    /// the same width it weighs the SAME, since only the wall stub moved. Between them
+    /// those two say the flush end kept its wall and the inset end capped, rather than
+    /// either rule having been applied twice.
+    /// </summary>
+    [Fact]
+    public void AHalfInsetFlangeWeighsExactlyWhatTheClosedFormSays()
+    {
+        const double width = 30, length = 25;
+        SheetMetalBody Flanged(double? startOffset, double? span) =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), length, startOffset: startOffset ?? 0, width: span);
+
+        double allowance = SheetMetalSpec.BendAllowance(
+            Math.PI / 2, Radius, Thickness, SheetMaterials.Coined);
+        double wall = length - SheetMetalSpec.OutsideSetback(Math.PI / 2, Radius, Thickness);
+        double missing = (PlateY - width) * (allowance + wall) * Thickness;
+
+        Assert.Equal(missing, FoldedVolume(Flanged(0, null)) - FoldedVolume(Flanged(0, width)), 4);
+        Assert.Equal(FoldedVolume(Flanged(10, width)), FoldedVolume(Flanged(0, width)), 4);
+    }
+
     [Fact]
     public void HolesInTheBaseSketch_CarryThroughToBothTheSolidAndTheBlank()
     {
