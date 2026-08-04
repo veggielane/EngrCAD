@@ -57,6 +57,11 @@
       "live": true
     },
     {
+      "id": "booleans-breakout",
+      "page": "examples/booleans.md",
+      "live": true
+    },
+    {
       "id": "booleans-machined",
       "page": "examples/booleans.md",
       "live": true

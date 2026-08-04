@@ -714,19 +714,59 @@ operations. Depends only on `EngrCAD.Core`.
     generator at the 1e-9 weld tier; `Underlying` is only a type hint.
   - **A bounded planar carrier ∩ a quadric** (`TryPatchQuadric`) — the SAME exact curves
     the main switch produces for a real `PlaneSurface` (cylinder, sphere, revolve ⊥ its
-    axis, sphere-carrier revolve), accepted only when the conic lies WHOLLY inside the
-    parallelogram. This is the drilled-side-wall case: a bore's rim on an extruded wall
-    used to come back as a fixed ~57-sample tracer polyline while the identical bore on a
-    flat cap got a `Circle3d`, so the wall bore's volume error *floored* — measured
+    axis, sphere-carrier revolve), **clipped to the runs the patch actually carries**
+    (`ClipConicToPatch`). This is the drilled-side-wall case: a bore's rim on an extruded
+    wall used to come back as a fixed ~57-sample tracer polyline while the identical bore
+    on a flat cap got a `Circle3d`, so the wall bore's volume error *floored* — measured
     −7.4e-4 / −5.3e-5 / +4.7e-5 / +6.5e-5 at 32/64/128/256 segments, wandering rather than
     converging — and is now 7.1e-14 / 6.8e-14 / 4.3e-14 / −5.3e-14, exact as an identity.
-    **Containment is closed-form, not sampled**: the patch's (s, t) coordinates are affine
-    in the point, so on a conic each runs `centre ± hypot(a, b)` over the two semi-axis
-    images. A conic that pokes out of the wall, and the axis-parallel line pair, both
-    defer to the tracer — clipping a conic to the wall's rim would produce arcs whose ends
-    must weld to a face boundary, which is separate work. **BOUNDED patches only**: an
-    unbounded `PlaneSurface` still takes the main switch verbatim, so nothing in the
-    boolean pipeline's regression surface changed route.
+    **BOUNDED patches only**: an unbounded `PlaneSurface` still takes the main switch
+    verbatim, so nothing in the boolean pipeline's regression surface changed route.
+
+    **The clip is one harmonic per patch edge.** Both patch coordinates are affine in the
+    point and a conic is affine in (cos θ, sin θ), so each is exactly
+    `c + a·cos θ + b·sin θ` — and each of the four edges is one equation
+    `R·cos(θ − φ) = level − c` whose two roots are `φ ± acos(…)`. Membership is then decided
+    at the MIDPOINT of each interval between consecutive roots, because the four
+    constraints are independent (two crossings of `s = 0` can bracket a stretch that leaves
+    through `t = 1`), and a midpoint is strictly inside or strictly outside every one of
+    them, so the test is exact and no epsilon enters. A conic wholly inside is returned as
+    ITSELF, by reference, so every input the old containment test accepted produces
+    bit-for-bit what it always did and a closed curve stays closed (the wrap-splitting and
+    hole-splitting paths key on `IsClosed`); a run straddling the seam comes back as ONE
+    `CurveSegment` running past the domain end, which a closed base makes meaningful.
+
+    **Closed form is what makes the ends WELD.** A clipped end becomes a VERTEX shared with
+    the neighbouring face — a bore breaking out of a wall's top edge ends exactly where the
+    top face's own intersection curve starts — so it must not carry a sampling error. On a
+    Ø6 bore whose rim runs off a wall's top edge, the arc's ends measure **exactly** the
+    wall's top (`|z − 2.5| = 0`) and land within **0 and 4.4e-16** of the top plane's own
+    `±√(r² − d²)`, i.e. 0–2 ulps, against a tracer that stops up to one march step short of
+    the boundary and never reaches it at all. Every sample of the clipped arc stays inside
+    the extrusion's own `[0, 1]²` — measured escape **0.000** — which is the geometric guard
+    the `Promote` trap earns: "lies on the carrier" is not "IS the carrier", so the answer
+    is checked by sampling rather than by a type test.
+
+    **A conic TANGENT to a patch edge needs a rule, and the rule is derived rather than
+    chosen.** Near a tangency the `acos` argument is within round-off of ±1, where `acos`
+    has a square-root singularity, so the two roots come back ~1e-7 rad apart however exact
+    the geometry is and the midpoint between them reads inside or outside by round-off.
+    Neither reading is more accurate — but they are not equally safe: DROPPING a run of
+    angular span δ removes a chord of `scale·δ` from the curve, an outright gap, while
+    KEEPING it leaves the curve at most `scale·(1 − cos(δ/2))` outside the patch, second
+    order in δ. So a dropped run is flipped whenever that excursion is inside the weld
+    tolerance — for a real tangency, by six orders — and a touching conic comes back as the
+    CLOSED conic it is. **Whether the round-off falls the safe way without the rule is
+    ALIGNMENT, not tolerance**, so the test is a family: measured, **62 of 480** tangency
+    configurations come back with a pinhole in them without it and **0 of 480** with it.
+    (The separate 1e-9 rad `DuplicateRootAngle` is a structural cleanup for a conic crossing
+    a patch CORNER, where two edges give the same root twice and the zero-span interval
+    between them has no midpoint to decide.)
+
+    Still deferred: **the axis-parallel LINE pair** (a bore drilled ALONG a wall rather than
+    into it), which is not a conic and keeps its tracer route — and measurably needs no help,
+    since `SnapTracerEnds` plus `SampleEdge`'s baked-carrier refinement already take that
+    family to quadratic convergence.
 
   **Cylinder promotion needs the WHOLE circle** (`Promote` / `WrapsWholeCylinder`). An
   extrusion of a full circle along its axis IS a `CylinderSurface`, and promoting it is

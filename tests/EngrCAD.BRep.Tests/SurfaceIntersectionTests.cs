@@ -550,15 +550,43 @@ public class SurfaceIntersectionTests
     }
 
     [Fact]
-    public void BoreTangentToTheWallsTopEdge_StaysAClosedCircle()
+    public void BoresTangentToTheWallsTopEdge_StayClosedCircles()
     {
-        // Exactly tangent: the two roots of the top edge's equation coincide, and acos's
-        // square-root conditioning cannot resolve them. Merging them is what keeps the
-        // answer a CLOSED circle instead of an arc with a ~1e-8 rad pinhole.
-        var wall = Wall();
-        var bore = new CylinderSurface((0, 0, 2.2), Vector3d.UnitX, Vector3d.UnitZ, 0.3);
-
-        Assert.IsType<Circle3d>(Assert.Single(SurfaceIntersection.Intersect(wall, bore, PlateRegion)));
+        // A bore whose rim TOUCHES the wall's top edge without crossing it. The two roots
+        // of that edge's equation coincide mathematically, and acos's square-root
+        // conditioning cannot resolve them — they come back ~1e-7 rad apart however exact
+        // the geometry is, and the midpoint between them reads inside or outside by
+        // round-off. So the answer is decided by the short-run rule: dropping a run of span
+        // δ removes a chord of scale·δ (an outright gap) while keeping it leaves the curve
+        // only scale·(1 − cos(δ/2)) outside the patch, second order in δ — so the run is
+        // kept and the conic stays CLOSED.
+        //
+        // <para><b>Whether the round-off falls the safe way is ALIGNMENT, not tolerance</b>,
+        // so the instrument is the family rather than one fixture: measured, 62 of these
+        // 480 configurations come back as an arc with a pinhole in it without the rule, and
+        // 0 of 480 with it. Both seam alignments are swept, because a run straddling θ = 0
+        // exercises the cyclic span arithmetic that a run in the middle does not.</para>
+        int checkedCases = 0;
+        foreach (double height in (double[])[1.5, 1.25, 1.0, 2.0, 0.9, 1.7])
+        {
+            var wall = new ExtrudedSurface(new Line3d((-5, -2.5, 1), (5, -2.5, 1)), (0, 0, height));
+            for (int i = 0; i < 40; i++)
+            {
+                // Strictly under height/2, so the top edge is the ONLY contact.
+                double r = 0.02 + i * (height / 2 - 0.04) / 40;
+                double z0 = 1 + height - r;
+                foreach (var (x, y) in ((Vector3d, Vector3d)[])
+                    [(Vector3d.UnitZ, Vector3d.UnitX),   // θ = 0 AT the tangency
+                     (Vector3d.UnitX, Vector3d.UnitZ)])  // θ = 0 a quarter turn away
+                {
+                    var bore = new CylinderSurface((0, 0, z0), x, y, r);
+                    var curves = SurfaceIntersection.Intersect(wall, bore, PlateRegion);
+                    Assert.IsType<Circle3d>(Assert.Single(curves));
+                    checkedCases++;
+                }
+            }
+        }
+        Assert.Equal(480, checkedCases);
     }
 
     [Fact]

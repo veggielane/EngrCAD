@@ -863,6 +863,7 @@ public static class SurfaceIntersection
                 curve,
                 new Harmonic(offset.Dot(sRow), axisX.Dot(sRow), axisY.Dot(sRow)),
                 new Harmonic(offset.Dot(tRow), axisX.Dot(tRow), axisY.Dot(tRow)),
+                Math.Max(axisX.Length, axisY.Length),
                 clipped);
         }
         curves = clipped;
@@ -901,17 +902,14 @@ public static class SurfaceIntersection
     }
 
     /// <summary>
-    /// The angular resolution of the crossing solve, DERIVED from <see cref="Math.Acos"/>'s
-    /// own conditioning rather than chosen: near a tangency the argument is within round-off
-    /// of ±1, where acos has a square-root singularity, so a relative input error ε comes
-    /// out as √(2ε) — about 2.1e-8 rad at double precision, and 4.2e-8 for the pair of roots
-    /// either side. Two crossings closer than that are not two crossings: they are one
-    /// tangency the arithmetic could not resolve, and merging them is what makes a conic
-    /// TOUCHING a patch edge come back as the closed conic it is instead of an arc with a
-    /// pinhole in it. Radians are dimensionless, which is why this guard is absolute where
-    /// the epsilon ladder's default is relative.
+    /// Duplicate roots collapse: two patch edges crossed at one CORNER give the same angle
+    /// twice, and a zero-span interval between them has no midpoint to decide. A structural
+    /// cleanup rather than a model tolerance — what happens near a TANGENCY, where the roots
+    /// are close but not equal, is decided by the derived rule in
+    /// <see cref="ClipConicToPatch"/> instead. Radians are dimensionless, so this is
+    /// absolute where the epsilon ladder's default is relative.
     /// </summary>
-    private const double AcosResolution = 1e-7;
+    private const double DuplicateRootAngle = 1e-9;
 
     private static double Wrap2Pi(double theta)
     {
@@ -944,7 +942,11 @@ public static class SurfaceIntersection
     /// outside every constraint, so the exact test is the right one and no epsilon
     /// enters.</para>
     /// </summary>
-    private static void ClipConicToPatch(Curve3d conic, Harmonic s, Harmonic t, List<Curve3d> output)
+    /// <param name="scale">The conic's largest semi-axis in MODEL units — the Lipschitz
+    /// constant turning an angular span into a length, which is what makes the short-run
+    /// rule below a statement about geometry rather than about radians.</param>
+    private static void ClipConicToPatch(
+        Curve3d conic, Harmonic s, Harmonic t, double scale, List<Curve3d> output)
     {
         // Both callers are Circle3d/Ellipse3d, whose parameter IS the angle over [0, 2π],
         // so the crossing angles below are curve parameters with nothing to map.
@@ -957,7 +959,7 @@ public static class SurfaceIntersection
         angles.Sort();
         for (int i = angles.Count - 1; i > 0; i--)
         {
-            if (angles[i] - angles[i - 1] <= AcosResolution)
+            if (angles[i] - angles[i - 1] <= DuplicateRootAngle)
                 angles.RemoveAt(i);
         }
 
@@ -979,13 +981,35 @@ public static class SurfaceIntersection
         // out, so one midpoint decides it.
         int n = angles.Count;
         var keep = new bool[n];
+        var span = new double[n];
         int kept = 0;
         for (int i = 0; i < n; i++)
         {
             double a = angles[i];
             double b = i + 1 < n ? angles[i + 1] : angles[0] + period;
+            span[i] = b - a;
             if (keep[i] = Inside(0.5 * (a + b)))
                 kept++;
+        }
+        // <b>A run too short to leave the patch measurably is KEPT, and the bound is derived
+        // rather than chosen.</b> Near a tangency the acos argument is within round-off of
+        // ±1, where acos has a square-root singularity, so the two roots come back ~1e-7 rad
+        // apart however exact the geometry is, and the midpoint between them reads inside or
+        // outside by round-off. Neither answer is more accurate — but they are not equally
+        // safe: DROPPING a run of span δ removes a chord of `scale·δ` from the curve, an
+        // outright gap, while KEEPING it lets the curve stand at most `scale·(1 − cos(δ/2))`
+        // outside the patch, which is second order in δ. So a dropped run is flipped
+        // whenever that excursion is inside the weld tolerance, which for a real tangency it
+        // is by six orders — and a conic TOUCHING a patch edge then comes back as the closed
+        // conic it is instead of an arc with a pinhole, deterministically. Kept runs are
+        // never dropped, so nothing is lost either way.
+        for (int i = 0; i < n; i++)
+        {
+            if (!keep[i] && scale * (1 - Math.Cos(0.5 * span[i])) <= Tolerance.Default.Linear)
+            {
+                keep[i] = true;
+                kept++;
+            }
         }
         if (kept == 0)
             return;
