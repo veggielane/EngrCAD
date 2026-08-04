@@ -498,7 +498,14 @@ else
         Trace("annotations");
         var without = await Viewport!.CapturePixelsAsync();
         await Viewport.SetAnnotationsAsync(true);
-        counts["annotationPixels"] = Differences(without, await Viewport.CapturePixelsAsync());
+        var with = await Viewport.CapturePixelsAsync();
+        counts["annotationPixels"] = Differences(without, with);
+        // An overlay may only ADD, so the silhouette must survive the toggle. A
+        // difference count alone cannot say that, and the gap is not hypothetical: a
+        // depth-clear regression (see the Web README) made the model VANISH when the
+        // overlay went on, and `annotationPixels` rose from 786 to 34 317 while still
+        // "firing" -- it was then measuring an erased model rather than a dimension.
+        counts["annotationBody"] = Body(with);
         await Viewport.SetAnnotationsAsync(false);
     }
 

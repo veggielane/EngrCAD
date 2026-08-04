@@ -5115,6 +5115,25 @@ geometry kernel building *that* model in the reader's tab. The pieces are
   section planes are exactly 16 floats, indistinguishable from a mat4 by shape). WHICH
   uniforms carry which type stays a C# decision; the JS dispatches on the marker's
   shape and contains no policy.
+- **A CLEAR IS NOT A DRAW, and `glClear` of the depth buffer is masked by `glDepthMask`.**
+  The interop applies each draw's state as it goes and never resets it, so whatever the
+  LAST draw of a frame set is still set when the NEXT frame starts - and if that draw
+  disabled depth writes, the next frame's `gl.clear(DEPTH_BUFFER_BIT)` clears nothing. The
+  stale depth buffer already holds the model at exactly those depths, so every fragment
+  fails `LESS` against itself and **the model vanishes**, leaving only the draws that
+  disable the depth test. Measured on the demo: the silhouette went **32 374 -> 786 lit
+  pixels** the moment the annotation overlay went on with the view cube off. Three passes
+  emit `DepthWrite = false` (the annotation overlay, translucent fills, the undeformed
+  ghost) and three do not (the isolines, the legend, the cube), which is why this was
+  invisible for a release: the cube is on by default and drawn LAST, so it re-enabled the
+  mask and hid the defect everywhere except the one configuration that turns it off - the
+  `?report` self-check. The fix is one line before the clear and one rule for both clears
+  (the per-draw `clearDepth` the view cube uses inherits the same trap), and the guard is
+  a source-reading test beside the property contract, because this seam has no compiler
+  behind it either. **The desktop is structurally immune for a reason worth copying**:
+  every site there that turns the mask off turns it back on before returning
+  (`AnnotationLayer`, `ViewportControl`, `OffscreenRenderer` all pair theirs), where a
+  per-draw state applier has no "before returning".
 - **A published Blazor app is path-portable for the price of one tag.** Every asset
   reference the build emits is already relative - `./_framework/...` in the rewritten
   import map, `_framework/...` in the script tag - so `<base href>` is the *entire*

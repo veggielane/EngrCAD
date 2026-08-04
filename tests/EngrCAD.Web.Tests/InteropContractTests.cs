@@ -104,6 +104,51 @@ public class InteropContractTests
     }
 
     [Fact]
+    public void EveryDepthClearIsUnmaskedFirst()
+    {
+        // HARD-WON, and the one GL rule this interop can break silently: glClear of the
+        // DEPTH buffer is gated by the depth MASK. The module applies per-draw state and
+        // never resets it, so a frame whose LAST draw sets depthWrite false -- the
+        // annotation overlay, a translucent fill, the undeformed ghost pass -- leaves the
+        // mask off, and the next frame's clear then keeps the PREVIOUS depth buffer.
+        // Every model fragment fails LESS against its own stale depth and the model
+        // disappears, leaving only the draws that disable the depth test. Measured on the
+        // demo with the overlay on and the cube off: 32 374 -> 786 lit pixels, and the
+        // ?report beacon reported it as a healthy-looking `annotationPixels=34317`.
+        //
+        // There is no compiler and no type behind this: it is one `gl.depthMask(true)`
+        // that must precede each clear, so the guard reads the source, the way the
+        // property contract above does.
+        string js = ReadInteropModule();
+        var clears = Regex.Matches(js, @"gl\.clear\([^)]*DEPTH_BUFFER_BIT[^)]*\)");
+        Assert.NotEmpty(clears);
+        foreach (Match clear in clears)
+        {
+            // The nearest preceding depth-mask write must enable writes. Nearest, not
+            // "any": a `depthMask(false)` between an enabling one and the clear puts the
+            // mask back off, which is exactly the bug.
+            var masks = Regex.Matches(js[..clear.Index], @"gl\.depthMask\(([^)]*)\)");
+            Assert.True(masks.Count > 0,
+                "A depth clear in engrcad-gl.js has no gl.depthMask() before it: "
+                + Context(js, clear.Index));
+            string argument = masks[^1].Groups[1].Value.Trim();
+            Assert.True(argument == "true",
+                $"The depth clear at '{Context(js, clear.Index)}' inherits gl.depthMask({argument}). "
+                + "glClear is masked by it, so the clear must be preceded by gl.depthMask(true) "
+                + "-- a clear is not a draw and must not inherit a draw's mask.");
+        }
+    }
+
+    /// <summary>The source line a match sits on, for a failure message that names WHERE
+    /// rather than only what.</summary>
+    private static string Context(string js, int index)
+    {
+        int start = js.LastIndexOf('\n', Math.Max(0, index - 1)) + 1;
+        int end = js.IndexOf('\n', index);
+        return js[start..(end < 0 ? js.Length : end)].Trim();
+    }
+
+    [Fact]
     public void ShaderSourcesAreAscii()
     {
         // HARD-WON: an em dash in a shader comment made ANGLE's translator reject the

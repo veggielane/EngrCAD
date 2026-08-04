@@ -2887,31 +2887,19 @@ UI dependencies, which makes this unusually feasible.
   reason; the site drops the button and prints no note. Stating it (a one-line caption under
   the screenshot, from the same manifest) would make the boundary visible to a reader rather
   than only to whoever opens the JSON — and would put pressure on the four causes above.
-- [ ] **`?report`'s `annotationPixels` stopped measuring what its name says.** The
-  live-examples work captured the whole beacon against the commit before it and after it to
-  show it moved nothing (all 44 fields identical, win-x64), and the same pair showed
-  `annotationPixels` reading **34 317** where the Web README and CLAUDE.md both said 786.
-  That is more than the whole model's silhouette (32 374) in the same 693×393 buffer, so
-  toggling the overlay is repainting the frame rather than adding to it — the check still
-  fires, but it can no longer tell "the dimension appeared" from "everything was redrawn".
-  Not the live-examples change (identical both sides) and not a buffer-size difference. The
-  recorded figures are updated to what it measures today; what is wanted is either the cause
-  or a classifier that counts only overlay-coloured pixels.
-  - **The filed suspect — the occlusion-aware annotation work's two depth passes — is
-    RULED OUT, so do not start there.** `EngrCadViewport.AnnotationDepth` defaults to
-    `AlwaysOnTop` and the demo never sets it, and `ViewportFrame.AppendAnnotations` takes
-    a single `depthFunc: null` draw over the whole buffer on that branch and returns
-    before the two-pass code exists. The browser has never executed the occluded path.
-  - **The sharper reading of the number points AWAY from the overlay entirely**: 34 317
-    EXCEEDS the whole silhouette (32 374), so pixels outside the body changed too, and no
-    overlay draw can repaint background. That is the signature of the CAMERA or the scene
-    furniture moving between the two captures, not of an annotation. Note what runs
-    immediately before: `CheckSectionAsync` ends by clearing the planes
-    (`SetSectionPlanesAsync(null)`, `SetSectionAsync(false)`), and the isoline rebuild is
-    a generation-stamped BACKGROUND task, so the `without` capture is only a clean
-    baseline if every one of those has landed. **The next probe is one line** — record
-    the camera state and the section state either side of the toggle and compare them,
-    before touching any drawing code.
+- [ ] **The browser's per-draw GL state is never reset, and only one of its consequences
+  has been found.** The depth-clear defect (Web README, "The number that went stale") came
+  from `engrcad-gl.js` applying each draw's state and leaving it set, so the NEXT frame
+  inherits whatever the last draw wanted. `depthMask` was the one that erased the model,
+  because it also gates `glClear`; the other per-draw settings — `blend`, `cull`,
+  `polygonOffset`, `depthFunc`, the viewport rect — cannot affect a clear, so nothing else
+  is currently wrong, and that is a property of what the frame builder happens to emit
+  rather than an invariant. The cheap version is to reset the whole block at the top of
+  `drawFrame` (one state-setting pass per frame, not per draw) so a frame's appearance can
+  never depend on the previous frame's last draw; the honest question first is whether any
+  of the remaining settings can reach anything but a draw, since a reset that fixes nothing
+  is state nobody can test. Worth doing WITH a measurement either way (the beacon's fields
+  are the instrument and were bit-identical across the depth fix, so a no-op is provable).
 - [ ] **The Run button quotes no cost.** A reader clicking one has no idea whether it is a
   half-second or ten. DocsGen already times each snippet's desktop execution and could carry
   a projected browser figure, but the honest number is time-to-first-FRAME (meshing
