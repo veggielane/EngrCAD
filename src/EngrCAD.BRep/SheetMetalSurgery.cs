@@ -99,12 +99,22 @@ public readonly record struct SheetBendSection(
 /// straight into the parent's loops, as a rim fillet's band is. If you find yourself
 /// reaching for a union here, that is why it is not one.</para>
 ///
-/// <para><b>What v1 does not do</b>, refused by name rather than approximated: bends
-/// along non-straight edges (a curved bend line sweeps a developable band, not a
-/// cylinder), closed corners and bend reliefs, jogs, hems (a fold back through 180
-/// degrees), louvres, and any flange whose bend would interact with another feature. A
-/// flange must also either span its whole edge or be inset from BOTH ends — flush at one
-/// end only is a corner interaction in disguise.</para>
+/// <para><b>A flange's two ends are independent.</b> Each end is either FLUSH with the
+/// wall's own corner — where the flange's cross-section is spliced into the neighbouring
+/// face's loop, which must be planar and square to the bend line — or INSET, where the
+/// flange gets a planar cap and the leftover wall a stub. A flange running to one end of
+/// a plate takes one of each, which is the ordinary shop case and needs no special path:
+/// the rims are split only at the ends that are inset, and each end is closed by whichever
+/// of the two rules applies to it.</para>
+///
+/// <para><b>What is still refused by name</b> rather than approximated: bends along
+/// non-straight edges (a curved bend line sweeps a developable band, not a cylinder),
+/// CLOSED CORNERS and miters (two flanges meeting at a corner of the sheet — caught here
+/// as a wall that is no longer four-sided), jogs, hems (a fold back through 180 degrees),
+/// louvres, and any flange whose bend would interact with another feature. Bend RELIEFS
+/// are not surgery at all: a relief notches the blank the sheet is extruded from, so a
+/// relieved flange arrives here as an ordinary flange flush against the notch's own wall
+/// (see <c>SheetMetalBody.BaseOutline</c> in EngrCAD.Modeling).</para>
 /// </summary>
 public static class SheetMetalSurgery
 {
@@ -151,18 +161,16 @@ public static class SheetMetalSurgery
         var site = Locate(solid, q0, q1, section);
 
         // Rims: the pieces of the two sheet-face edges the bend takes over, plus the
-        // vertices at the flange's ends. An inset flange splits both rims in three first,
-        // which is what creates those vertices; a full-width one already has them.
-        var rims = site.FullWidth ? WholeRims(site) : SplitRims(site, n, section.Thickness, q0, q1, a);
+        // vertices at the flange's ends. A rim is split exactly at the ends that are INSET,
+        // which is what creates those vertices; a flush end already has the wall's own
+        // corner there.
+        var rims = ResolveRims(site, n, section.Thickness, q0, q1, a);
 
         var flange = BuildFlange(section with { BendLinePoint = q0 }, q1 - q0, wallLength, rims);
 
         var faces = solid.Faces.Where(f => !ReferenceEquals(f, site.Wall)).ToList();
         faces.AddRange(flange.Faces);
-        if (site.FullWidth)
-            SpliceIntoNeighbours(site, flange, faces);
-        else
-            faces.AddRange(CapAndStub(site, flange, rims, section));
+        CloseEnds(site, flange, rims, section, faces);
 
         // The wall is consumed by the bend; detaching drops its coedges from the surviving
         // rims' use lists so they read exactly two uses again.
@@ -204,22 +212,22 @@ public static class SheetMetalSurgery
 
     /// <summary>Where the flange grows from: the bend edge on the inside sheet face, the
     /// matching edge on the outside face, the side wall between them, and the wall's two
-    /// end edges (indexed by which end of the flange they sit at).</summary>
+    /// end edges (indexed by which end of the flange they sit at). Everything indexed by
+    /// END is a two-element array in Q0-then-Q1 order, so the two ends read the same way
+    /// wherever they are handled independently.</summary>
     private sealed record FlangeSite(
         BrepEdge InsideEdge, BrepEdge OutsideEdge, BrepFace Wall,
-        BrepEdge EndEdgeAtQ0, BrepEdge EndEdgeAtQ1,
-        BrepVertex WallStart, BrepVertex WallEnd,
-        BrepVertex WallStartOutside, BrepVertex WallEndOutside,
-        Vector3d Q0, Vector3d Q1, bool FullWidth);
+        BrepEdge[] EndEdge,
+        BrepVertex[] WallCornerInside, BrepVertex[] WallCornerOutside,
+        Vector3d[] Q, bool[] Flush);
 
-    /// <summary>The rim edges the bend bands weld to, and the vertices at the flange's
-    /// two ends. <see cref="OutsideLeft"/> and friends are the leftover rim pieces of an
-    /// inset flange (null when it spans the whole edge).</summary>
+    /// <summary>The rim edges the bend bands weld to, the vertices at the flange's two
+    /// ends, and the leftover rim pieces beyond them. A leftover is null exactly where the
+    /// flange is FLUSH with the wall's corner — there is no wall left over there.</summary>
     private sealed record Rims(
         BrepEdge Inside, BrepEdge Outside,
         BrepVertex[] InsideVertex, BrepVertex[] OutsideVertex,
-        BrepEdge? InsideLeft, BrepEdge? InsideRight,
-        BrepEdge? OutsideLeft, BrepEdge? OutsideRight);
+        BrepEdge?[] InsideLeftover, BrepEdge?[] OutsideLeftover);
 
     private static FlangeSite Locate(
         BrepSolid solid, in Vector3d q0, in Vector3d q1, in SheetBendSection section)
@@ -284,35 +292,31 @@ public static class SheetMetalSurgery
             : (coedges[index].EndVertex, coedges[index].StartVertex);
         var (endAtQ0, endAtQ1) = forward ? (before, after) : (after, before);
 
-        bool flushStart = wallStart.Position.DistanceTo(q0) <= Weld;
-        bool flushEnd = wallEnd.Position.DistanceTo(q1) <= Weld;
-        if (flushStart != flushEnd)
-            throw new NotSupportedException(
-                "A flange must either span its whole edge or be inset from BOTH ends. Flush at one end only " +
-                "leaves the bend meeting the neighbouring wall at a corner, which v1 refuses rather than " +
-                "approximate (closed corners and bend reliefs are the follow-up).");
-        bool fullWidth = flushStart && flushEnd;
+        // Each end is settled on its own: flush with the wall's corner, or inset from it.
+        // The v1 rule refused one of each as "a corner in disguise"; it is not one — an
+        // inset end's cap and a flush end's splice never touch the same coedge, so a
+        // flange running to one end of a plate is just one of each.
+        bool[] flush = [wallStart.Position.DistanceTo(q0) <= Weld, wallEnd.Position.DistanceTo(q1) <= Weld];
 
         // The wall must descend exactly one sheet thickness at BOTH ends — checked on the
-        // wall's own corners, which also settles the split points of an inset flange,
-        // since both rims are straight and this makes them parallel one thickness apart.
+        // wall's own corners, which also settles the split points of an inset end, since
+        // both rims are straight and this makes them parallel one thickness apart.
         var wallStartOutside = OppositeEnd(endAtQ0, wallStart);
         var wallEndOutside = OppositeEnd(endAtQ1, wallEnd);
         RequireAt(wallStartOutside, wallStart.Position - inside * section.Thickness, section.Thickness);
         RequireAt(wallEndOutside, wallEnd.Position - inside * section.Thickness, section.Thickness);
 
-        // A full-width flange splices its cross-section into the faces at the bend line's
-        // two ends, so those must be planar and square to it. Checked here rather than at
+        // A FLUSH end splices the flange's cross-section into the face beyond the wall, so
+        // that face must be planar and square to the bend line. Checked here rather than at
         // the splice: by then the first end has already been rewritten.
-        if (fullWidth)
-        {
+        if (flush[0])
             RequireSquareNeighbour(endAtQ0, -a, wall);
+        if (flush[1])
             RequireSquareNeighbour(endAtQ1, a, wall);
-        }
 
         return new FlangeSite(
-            bendEdge, opposite, wall, endAtQ0, endAtQ1, wallStart, wallEnd,
-            wallStartOutside, wallEndOutside, q0, q1, fullWidth);
+            bendEdge, opposite, wall, [endAtQ0, endAtQ1],
+            [wallStart, wallEnd], [wallStartOutside, wallEndOutside], [q0, q1], flush);
     }
 
     /// <summary>The face across an end edge from the wall must be planar and perpendicular
@@ -343,13 +347,6 @@ public static class SheetMetalSurgery
 
     // ------------------------------------------------------------------------- rims
 
-    /// <summary>A full-width flange takes both rims whole: its end vertices are the wall's
-    /// own four corners, which <see cref="Locate"/> has already placed and checked.</summary>
-    private static Rims WholeRims(FlangeSite site) => new(
-        site.InsideEdge, site.OutsideEdge,
-        [site.WallStart, site.WallEnd], [site.WallStartOutside, site.WallEndOutside],
-        null, null, null, null);
-
     private static void RequireAt(BrepVertex vertex, in Vector3d expected, double thickness)
     {
         if (vertex.Position.DistanceTo(expected) > Weld)
@@ -359,55 +356,102 @@ public static class SheetMetalSurgery
                 "thickness square to both faces.");
     }
 
-    /// <summary>Splits both rims in three at the flange's ends. <c>SplitEdge</c> patches
-    /// every using loop, so the two sheet faces and the wall all follow.</summary>
-    private static Rims SplitRims(
+    /// <summary>Splits both rims at whichever of the flange's ends are INSET.
+    /// <c>SplitEdge</c> patches every using loop, so the two sheet faces and the wall all
+    /// follow.</summary>
+    private static Rims ResolveRims(
         FlangeSite site, in Vector3d inside, double thickness,
         in Vector3d q0, in Vector3d q1, in Vector3d axis)
     {
-        var (insideLeft, insideMiddle, insideRight, insideLow, insideHigh) =
-            SplitThree(site.InsideEdge, q0, q1, axis);
+        var (insideMiddle, insideVertex, insideLeftover) =
+            SplitRim(site.InsideEdge, axis, q0, q1, site.Flush, site.WallCornerInside);
         // Both rims are straight and (per Locate's corner check) exactly one thickness
         // apart, so projecting the span onto the outer rim lands where it should.
-        var (outsideLeft, outsideMiddle, outsideRight, outsideLow, outsideHigh) =
-            SplitThree(site.OutsideEdge, q0 - inside * thickness, q1 - inside * thickness, axis);
+        var (outsideMiddle, outsideVertex, outsideLeftover) = SplitRim(
+            site.OutsideEdge, axis, q0 - inside * thickness, q1 - inside * thickness,
+            site.Flush, site.WallCornerOutside);
         return new Rims(
-            insideMiddle, outsideMiddle,
-            [insideLow, insideHigh], [outsideLow, outsideHigh],
-            insideLeft, insideRight, outsideLeft, outsideRight);
+            insideMiddle, outsideMiddle, insideVertex, outsideVertex, insideLeftover, outsideLeftover);
     }
 
-    /// <summary>Splits a straight edge at two interior points, returning the pieces and
-    /// the new vertices in +<paramref name="axis"/> order.</summary>
-    private static (BrepEdge Left, BrepEdge Middle, BrepEdge Right, BrepVertex Low, BrepVertex High)
-        SplitThree(BrepEdge edge, in Vector3d low, in Vector3d high, in Vector3d axis)
+    /// <summary>
+    /// Splits one straight rim at whichever of the two span ends is inset, returning the
+    /// piece the bend welds to, the vertices at the flange's two ends and the leftover
+    /// pieces beyond them — all in Q0-then-Q1 order whichever way the edge itself runs.
+    /// <para>Positions are measured along the bend AXIS rather than as edge fractions, so
+    /// every guard here is a model-unit LENGTH and speaks the same units as
+    /// <see cref="Locate"/>'s flush test; the two cannot disagree about a degenerate
+    /// stub.</para>
+    /// </summary>
+    private static (BrepEdge Middle, BrepVertex[] Vertex, BrepEdge?[] Leftover) SplitRim(
+        BrepEdge edge, in Vector3d axis, in Vector3d q0, in Vector3d q1,
+        bool[] flush, BrepVertex[] corner)
     {
+        if (flush[0] && flush[1])
+            return (edge, [corner[0], corner[1]], [null, null]);
+
         var domain = edge.Domain;
         var start = edge.Curve.PointAt(domain.Start);
         var end = edge.Curve.PointAt(domain.End);
-        var along = end - start;
-        double lengthSquared = along.LengthSquared;
-        double FractionOf(in Vector3d p) => (p - start).Dot(along) / lengthSquared;
+        double axisStart = start.Dot(axis), axisEnd = end.Dot(axis);
+        double[] axisSpan = [q0.Dot(axis), q1.Dot(axis)];
+        double[] stub =
+        [
+            axisSpan[0] - Math.Min(axisStart, axisEnd),
+            Math.Max(axisStart, axisEnd) - axisSpan[1],
+        ];
+        // A BACKSTOP rather than a live guard, and it is worth saying which: an end past the
+        // weld tier necessarily has a stub, because this stub and Locate's flush test are
+        // the same length measured against the same tier. It stays because this method
+        // takes its span as arguments rather than deriving it — the span's own positivity
+        // is asked of AddEdgeFlange, not restated here.
+        for (int k = 0; k < 2; k++)
+        {
+            if (!flush[k] && stub[k] <= Weld)
+                throw new NotSupportedException(
+                    $"An inset end of a flange must leave a positive stub of wall beyond it; this one leaves " +
+                    $"{stub[k]:g6} of an edge {Math.Abs(axisEnd - axisStart):g6} long. Make the flange flush " +
+                    "with that end of its edge, or move it further in.");
+        }
 
-        bool ascending = along.Dot(axis) > 0;
-        var (first, second) = ascending ? (low, high) : (high, low);
-        double f1 = FractionOf(first), f2 = FractionOf(second);
-        // Measured as LENGTHS, not as fractions, so this guard and the flush test in
-        // Locate speak the same units and cannot disagree about a degenerate stub.
-        double length = along.Length;
-        if (f1 * length <= Weld || (1 - f2) * length <= Weld || (f2 - f1) * length <= Weld)
-            throw new NotSupportedException(
-                "An inset flange must leave a positive stub of wall at BOTH ends of its edge; it currently " +
-                $"leaves {f1 * length:g6} at one end and {(1 - f2) * length:g6} at the other, of an edge " +
-                $"{length:g6} long.");
+        // Cut in the EDGE's own parameter order, so each later parameter still lies inside
+        // whatever the previous cut left. Every parameter is expressed on the SAME base
+        // curve, which is what makes that true (SplitEdge slices the domain and shares the
+        // curve).
+        bool ascending = axisEnd > axisStart;
+        var cuts = new List<(double Parameter, int End)>(2);
+        for (int k = 0; k < 2; k++)
+        {
+            if (!flush[k])
+                cuts.Add((domain.ParameterAt((axisSpan[k] - axisStart) / (axisEnd - axisStart)), k));
+        }
+        cuts.Sort((a, b) => a.Parameter.CompareTo(b.Parameter));
 
-        var (before, rest, vertex1) = TopologyEditor.SplitEdge(edge, domain.ParameterAt(f1));
-        // The second split parameter is expressed on the SAME base curve, so it is
-        // already interior to the remaining piece's domain.
-        var (middle, after, vertex2) = TopologyEditor.SplitEdge(rest, domain.ParameterAt(f2));
-        return ascending
-            ? (before, middle, after, vertex1, vertex2)
-            : (after, middle, before, vertex2, vertex1);
+        var pieces = new List<BrepEdge>(3);
+        var vertex = new BrepVertex?[2];
+        var current = edge;
+        foreach (var (parameter, endIndex) in cuts)
+        {
+            var (before, after, split) = TopologyEditor.SplitEdge(current, parameter);
+            pieces.Add(before);
+            vertex[endIndex] = split;
+            current = after;
+        }
+        pieces.Add(current);
+        if (!ascending)
+            pieces.Reverse();
+
+        // In Q0-to-Q1 order the pieces are: [leftover at Q0], the bend's rim, [leftover at Q1].
+        int index = 0;
+        var leftover = new BrepEdge?[2];
+        if (!flush[0])
+            leftover[0] = pieces[index++];
+        var middle = pieces[index++];
+        if (!flush[1])
+            leftover[1] = pieces[index];
+        return (middle,
+            [flush[0] ? corner[0] : vertex[0]!, flush[1] ? corner[1] : vertex[1]!],
+            leftover);
     }
 
     // -------------------------------------------------------------- the flange geometry
@@ -572,18 +616,21 @@ public static class SheetMetalSurgery
 
     // ---------------------------------------------------------------------- rewiring
 
-    /// <summary>Full width: the flange's cross-section replaces the wall's end edge in
-    /// each neighbouring face's loop. <see cref="Locate"/> has already established that
-    /// those neighbours are planar and square to the bend line; what remains here is that
-    /// they are <b>re-surfaced as plain planes</b>, because a loop that now reaches out
-    /// past the flange's tip would escape a domain-driven extruded surface's parameter
-    /// rectangle (a planar face triangulates from its loops, so a plane has nothing left
-    /// to escape). That is the dual of <c>Filleting.TrimNeighborBand</c>, which shortens a
-    /// domain-driven neighbour whose loop SHRANK.</summary>
-    private static void SpliceIntoNeighbours(FlangeSite site, FlangeBuild flange, List<BrepFace> faces)
+    /// <summary>Closes the flange's two ends, each by the rule its own end asks for: a
+    /// FLUSH end splices the cross-section into the neighbouring face's loop, an INSET one
+    /// caps the flange and stubs the leftover wall. The two are independent — they share
+    /// no coedge — which is what makes "flush at one end, inset at the other" an ordinary
+    /// combination rather than a third path.</summary>
+    private static void CloseEnds(
+        FlangeSite site, FlangeBuild flange, Rims rims, in SheetBendSection section, List<BrepFace> faces)
     {
-        Splice(site.EndEdgeAtQ0, Materialize(flange.EndChains[0]), site, faces);
-        Splice(site.EndEdgeAtQ1, Materialize(flange.EndChains[1]), site, faces);
+        for (int k = 0; k < 2; k++)
+        {
+            if (site.Flush[k])
+                Splice(site.EndEdge[k], Materialize(flange.EndChains[k]), site, faces);
+            else
+                faces.AddRange(CapAndStub(site, flange, rims, section, k));
+        }
     }
 
     private static void Splice(
@@ -612,48 +659,50 @@ public static class SheetMetalSurgery
         new(face.Frame() ?? throw new NotSupportedException(
             "Expected a planar face at the end of the bend line."));
 
-    /// <summary>Inset: the wall becomes two stubs either side of the flange, and each end
-    /// of the flange gets its own planar cap closed by a new vertical edge.</summary>
+    /// <summary>One INSET end: the leftover wall becomes a stub, and the flange gets a
+    /// planar cap closed by a new vertical edge between the two rims' split vertices. The
+    /// two ends are mirror images of each other, so each loop is spelt out in its own
+    /// traversal rather than derived from the other's — every sense comes from
+    /// <see cref="Use"/>, so none of them is a boolean a reader has to check against the
+    /// loop direction by hand.</summary>
     private static IReadOnlyList<BrepFace> CapAndStub(
-        FlangeSite site, FlangeBuild flange, Rims rims, in SheetBendSection section)
+        FlangeSite site, FlangeBuild flange, Rims rims, in SheetBendSection section, int end)
     {
         var n = section.Inside;
         var w = section.Outward;
-
-        var newVertical = new BrepEdge[2];
-        for (int k = 0; k < 2; k++)
-            newVertical[k] = Segment(rims.InsideVertex[k], rims.OutsideVertex[k]);
-
-        // Stub loops run CCW about the wall's outward normal: up the low-axis vertical,
-        // along the inside rim, down the high-axis vertical, back along the outside rim.
-        // Every sense is DERIVED from the traversal (Use), so none of them is a boolean a
-        // reader has to check against the loop direction by hand.
+        var vertical = Segment(rims.InsideVertex[end], rims.OutsideVertex[end]);
         var plane = AsPlane(site.Wall);
-        var stubLow = new BrepFace(plane, [new BrepLoop(
-        [
-            Use(site.EndEdgeAtQ0, site.WallStartOutside, site.WallStart),
-            Use(rims.InsideLeft!, site.WallStart, rims.InsideVertex[0]),
-            Use(newVertical[0], rims.InsideVertex[0], rims.OutsideVertex[0]),
-            Use(rims.OutsideLeft!, rims.OutsideVertex[0], site.WallStartOutside),
-        ])]);
+
+        if (end == 0)
+        {
+            // Stub loop, CCW about the wall's outward normal: up the wall's own end edge,
+            // along the inside rim to the flange, down the new vertical, back outside.
+            var stub = new BrepFace(plane, [new BrepLoop(
+            [
+                Use(site.EndEdge[0], site.WallCornerOutside[0], site.WallCornerInside[0]),
+                Use(rims.InsideLeftover[0]!, site.WallCornerInside[0], rims.InsideVertex[0]),
+                Use(vertical, rims.InsideVertex[0], rims.OutsideVertex[0]),
+                Use(rims.OutsideLeftover[0]!, rims.OutsideVertex[0], site.WallCornerOutside[0]),
+            ])]);
+            var cap = new BrepFace(
+                new PlaneSurface(site.Q[0], n, w),
+                [new BrepLoop([.. Materialize(flange.EndChains[0]),
+                    Use(vertical, rims.OutsideVertex[0], rims.InsideVertex[0])])]);
+            return [stub, cap];
+        }
+
         var stubHigh = new BrepFace(plane, [new BrepLoop(
         [
-            Use(newVertical[1], rims.OutsideVertex[1], rims.InsideVertex[1]),
-            Use(rims.InsideRight!, rims.InsideVertex[1], site.WallEnd),
-            Use(site.EndEdgeAtQ1, site.WallEnd, site.WallEndOutside),
-            Use(rims.OutsideRight!, site.WallEndOutside, rims.OutsideVertex[1]),
+            Use(vertical, rims.OutsideVertex[1], rims.InsideVertex[1]),
+            Use(rims.InsideLeftover[1]!, rims.InsideVertex[1], site.WallCornerInside[1]),
+            Use(site.EndEdge[1], site.WallCornerInside[1], site.WallCornerOutside[1]),
+            Use(rims.OutsideLeftover[1]!, site.WallCornerOutside[1], rims.OutsideVertex[1]),
         ])]);
-
-        var capAtQ0 = new BrepFace(
-            new PlaneSurface(site.Q0, n, w),
-            [new BrepLoop([.. Materialize(flange.EndChains[0]),
-                Use(newVertical[0], rims.OutsideVertex[0], rims.InsideVertex[0])])]);
-        var capAtQ1 = new BrepFace(
-            new PlaneSurface(site.Q1, w, n),
+        var capHigh = new BrepFace(
+            new PlaneSurface(site.Q[1], w, n),
             [new BrepLoop([.. Materialize(flange.EndChains[1]),
-                Use(newVertical[1], rims.InsideVertex[1], rims.OutsideVertex[1])])]);
-
-        return [stubLow, stubHigh, capAtQ0, capAtQ1];
+                Use(vertical, rims.InsideVertex[1], rims.OutsideVertex[1])])]);
+        return [stubHigh, capHigh];
     }
 
     private static BrepVertex OppositeEnd(BrepEdge edge, BrepVertex known) =>

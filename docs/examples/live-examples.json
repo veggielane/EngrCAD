@@ -560,6 +560,11 @@
       "live": true
     },
     {
+      "id": "sheet-metal-relief",
+      "page": "examples/sheet-metal.md",
+      "live": true
+    },
+    {
       "id": "sheet-metal-tabs",
       "page": "examples/sheet-metal.md",
       "live": true

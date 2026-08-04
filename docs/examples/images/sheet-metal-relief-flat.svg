@@ -1,0 +1,13 @@
+<svg viewBox="-23.5238934211693 -65 163.0477868423386 70" width="163.0477868423386mm" height="70mm" xmlns="http://www.w3.org/2000/svg">
+  <g transform="scale(1,-1)">
+    <g id="cut" class="visible" fill="none" stroke="#111111" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M0 0 L110 0 L110 9 L102.5 9 A2.5 2.5 0 0 0 102.5 14 L110 14 L134.5238934211693 14 L134.5238934211693 46 L110 46 L102.5 46 A2.5 2.5 0 0 0 102.5 51 L110 51 L110 60 L0 60 L0 44 L8 44 L8 40 L0 40 L-18.5238934211693 40 L-18.5238934211693 16 L0 16 L8 16 L8 12 L0 12 L0 0 Z " />
+    </g>
+    <g id="bend" class="section" fill="none" stroke="#aa2222" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3 0.7 0.7 0.7">
+      <path d="M110 14 L110 46" />
+      <path d="M114.5238934211693 14 L114.5238934211693 46" />
+      <path d="M0 40 L0 16" />
+      <path d="M-4.523893421169302 40 L-4.523893421169302 16" />
+    </g>
+  </g>
+</svg>

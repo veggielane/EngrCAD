@@ -4107,15 +4107,43 @@ the genuinely new work is a **model**, not new surface types.
   so they tessellate on the natural grid) and the flange's three planes are welded
   straight into the parent's loops, `Filleting`-style. A comment says so where a future
   reader would otherwise reach for a union.
-- **Two rewiring cases, one cross-section.** A full-width flange REPLACES the wall's end
-  edge in each neighbouring face's loop with the flange's cross-section chain; an inset
-  one splits both rims in three (`TopologyEditor.SplitEdge` patches every using loop),
-  splits the wall into two stubs, and closes the same chain against a new vertical edge
-  as its own end cap. Both build the chain once. The full-width path has one non-obvious
-  duty: the neighbour must be **re-surfaced as a `PlaneSurface`**, because the widened
-  loop now reaches out past the flange's tip and would escape a domain-driven
-  `ExtrudedSurface`'s parameter rectangle — the trim-the-neighbour rule from rim surgery,
-  running the other way.
+- **A flange's two ENDS are independent, and that is the whole of v2's surgery.** Each end
+  is either FLUSH with the wall's own corner — where the flange's cross-section chain
+  REPLACES the wall's end edge in the neighbouring face's loop — or INSET, where the rim is
+  split (`TopologyEditor.SplitEdge` patches every using loop), the leftover wall becomes a
+  stub and the same chain is closed against a new vertical edge as an end cap. Both build
+  the chain once. **v1 refused one of each as "the corner case in disguise" and it is not
+  one**: the two rules touch no common coedge, so a flange running to one end of a plate is
+  simply one of each, and the code went from branching on a `FullWidth` flag to settling
+  each end on its own. The flush path keeps its non-obvious duty: the neighbour must be
+  **re-surfaced as a `PlaneSurface`**, because the widened loop now reaches out past the
+  flange's tip and would escape a domain-driven `ExtrudedSurface`'s parameter rectangle —
+  the trim-the-neighbour rule from rim surgery, running the other way.
+- **A bend relief is a change to the BLANK, which is why it needs no surgery at all.** The
+  obvious reading of a relief is a pocket subtracted from the folded body, i.e. a boolean;
+  the right one is that a relief notches the base flange's own OUTLINE
+  (`SheetMetalBody.BaseOutline`), which is what the sheet is extruded from AND what the
+  flat pattern starts from. So one declaration produces both views, exactly as an edge
+  flange does, and `SheetMetalSurgery` needed no change whatever — because between its two
+  notches a relieved flange runs the full width of the shortened wall, arriving as an
+  ordinary FLUSH flange whose neighbours are the notches' own walls. Two riders: with no
+  relief declared `BaseOutline` **is** `BaseSketch` by reference, so nothing that already
+  worked can move; and the notch curves are emitted through the SAME frame-mapped code the
+  flat pattern uses, which is sound because the base node's flat frame is the identity —
+  "the blank's coordinates ARE the base sketch's" restated as an implementation.
+- **Reliefs are cut only on the base flange's edges, and the reason is asymmetric.** The
+  base is drawn as a SKETCH, so a notch is an edit to data the model already carries; a
+  flange's wall is BUILT as a plain rectangle by the surgery, so a notch there would be
+  geometry with no declaration behind it. Refused by name rather than approximated.
+- **A notch is a DETOUR in a loop, so one that runs out of its parent is silent** — and
+  measuring that is what put the guard in. On an 80×50 plate a 200-deep relief leaves a
+  self-intersecting blank whose SIGNED area still reads exactly base-minus-notches (2800 =
+  4000 − 2·600, because a Green's integral over a bowtie is not the enclosed area) and
+  whose extrusion still passes `Validate` with 18 faces. So every point of the notch below
+  the surface is required to lie strictly inside the parent's own region
+  (`SketchRegion.SignedDistance`), which also catches a notch reaching into a HOLE. The
+  guard claims no more than it proves: a notch passing clean through a hole and out into
+  material on the far side has its own corners inside and is not caught.
 - **Every refusal fires before a single coedge moves**, which the rim features learned the
   hard way ("partial runs are rejected BEFORE any surgery — rim surgery rewrites loops in
   place, so a late failure would leave a half-edited solid"). `Locate` therefore checks
@@ -4139,7 +4167,14 @@ the genuinely new work is a **model**, not new surface types.
   differ by **`Σ width·θ·T²·(0.5 − K)`** everywhere else — measured to 8e-10 relative on
   a 6.1e3 volume, i.e. to the grade of the tessellate-then-Richardson mass properties
   themselves. A blanket "the volumes agree" would have been satisfied by a bend model
-  with the K-factor wired to a constant.
+  with the K-factor wired to a constant. **A bend relief EXTENDS that oracle rather than
+  needing a new one**: a relief takes the same material out of the folded body as out of
+  the blank, so the discrepancy is unchanged and the relief contributes exactly nothing to
+  it — which is the assertion that catches a relief reaching only one of the two views,
+  the failure an approximate-agreement test waves through. Beside it sit two exact
+  statements: the blank's area falls by exactly the notch's closed form (which is also
+  what catches an inward arc swept the wrong way, since a mis-swept dome ADDS area), and
+  the folded volume falls by exactly `area × thickness` per notch.
 - **Three conventions carry every dimension**, and each was a real choice. `Length` is
   measured from the OUTER VIRTUAL SHARP (the drawing dimension). The bend is placed
   **bend-outside** — its tangent line IS the named edge, so the material continues
@@ -4148,12 +4183,25 @@ the genuinely new work is a **model**, not new surface types.
   region and complicate the unfold for no gain. And **a flange folds toward the face its
   edge is quoted on**, that face becoming the inside of the bend, which makes
   `Up`/`Down` mean one thing all the way down a chain.
-- **v1 stops where corners begin.** Non-straight bend lines, closed corners, miters,
-  bend reliefs, jogs, hems, louvres, two flanges sharing a stretch of edge, flanges on a
-  flange's SIDE edges and multi-body sheets are all refused by name. The recurring shape
-  of the refusal is instructive: a flange flush at ONE end only, and a second flange on a
-  wall an earlier flange already reshaped, are both the corner case in disguise — the
-  four-sided-wall check catches the second, and an explicit both-ends test the first.
+- **The optional-parameter rule reaches its enum form.** `EdgeFlangeFeature.Relief` is a
+  `SheetReliefOption` (`None`/`Rectangular`/`Obround`) rather than a nullable
+  `SheetReliefKind`, because `ParamEditors.KindFor` gives an enum a DROPDOWN whose rows are
+  the type's own members — so it can no more say "unset" than a slider can, which is the
+  same argument that keeps `KFactor`'s sentinel 0. The price of a second spelling is drift,
+  paid the way this repo pays it: a test drives EVERY member through a real regeneration
+  and reads the kind back off the flange tree BY NAME, and asserts the two enums' member
+  sets agree, so a kind added to one and not the other fails there rather than quietly
+  meaning something else.
+- **v2 still stops where corners begin.** Closed corners and miters, non-straight bend
+  lines, jogs, hems, louvres, curls, two flanges sharing a stretch of edge, flanges on a
+  flange's SIDE edges, reliefs on a flange TIP, flange-local holes carried into the flat
+  pattern, mirrored placements and multi-body sheets are all refused by name. What v2
+  removed from that list is instructive about what a "corner in disguise" really was: a
+  flange flush at ONE end only was NOT one (its two ends never meet), while a second
+  flange on a wall an earlier flange reshaped genuinely is, and the four-sided-wall check
+  still catches it. The **tear relief** is a documented absence rather than a refusal — it
+  is what happens when no relief is cut, and its shape belongs to the press, exactly as
+  spring-back does.
 
 Frames & weldments (`Frames.cs`) follow the same doctrine — a declaration (profile +
 skeleton) from which the members, the trims and the cut list are all derived — and

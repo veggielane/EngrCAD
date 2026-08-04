@@ -134,6 +134,79 @@ public enum SheetBendDirection
     Down,
 }
 
+/// <summary>The shape of a bend relief's notch.</summary>
+/// <remarks>
+/// <b>The TEAR relief is deliberately absent.</b> A tear relief is what happens when no
+/// relief is cut at all: the material tears as the bend runs out, leaving a torn edge whose
+/// shape is a property of the press and the batch — the same call
+/// <see cref="SheetMetalSpec"/> makes about spring-back. Modelling it would mean drawing a
+/// shape nobody can predict; leaving the relief off is the honest way to say "let it tear".
+/// </remarks>
+public enum SheetReliefKind
+{
+    /// <summary>A square-cornered slot: two sides and a flat bottom.</summary>
+    Rectangular,
+
+    /// <summary>A slot rounded at the bottom with a semicircle of half the relief's width —
+    /// the fatigue-friendly form, since a square inside corner is a stress raiser. Its
+    /// <see cref="BendRelief.Depth"/> reaches the deepest point of the dome, so a relief can
+    /// never be shallower than its own radius.</summary>
+    Obround,
+}
+
+/// <summary>
+/// A bend relief: the notch cut into the parent sheet beside a flange's bend line, so the
+/// bend can run out without tearing the material next to it.
+///
+/// <para><b>A relief is a change to the BLANK, not a cut in the folded body.</b> It notches
+/// the base flange's own outline (<see cref="SheetMetalBody.BaseOutline"/>) — which is what
+/// the folded sheet is extruded from and what the flat pattern starts from — so there is no
+/// boolean and no second description: the same declaration produces both views, exactly as
+/// an edge flange does. It also makes the geometry simpler rather than harder, because a
+/// relieved flange then runs the full width of the (now shortened) wall between its two
+/// notches, which is the surgery's ordinary flush case.</para>
+///
+/// <para>A relief is placed at each INSET end of its flange. A flush end has no parent
+/// material beside it to relieve, so a flange spanning its whole edge is refused by name
+/// rather than silently given nothing.</para>
+/// </summary>
+/// <param name="Kind">Notch shape.</param>
+/// <param name="Width">Notch width along the bend line; null uses one sheet thickness, the
+/// usual shop minimum.</param>
+/// <param name="Depth">How far the notch reaches into the parent, measured from the bend
+/// line; null uses <c>R + T</c>, which clears the bend's own tangent region.</param>
+public sealed record BendRelief(
+    SheetReliefKind Kind = SheetReliefKind.Rectangular,
+    double? Width = null,
+    double? Depth = null)
+{
+    /// <summary>A square-cornered relief.</summary>
+    public static BendRelief Rectangular(double? width = null, double? depth = null) =>
+        new(SheetReliefKind.Rectangular, width, depth);
+
+    /// <summary>A relief rounded at the bottom, radius half the width.</summary>
+    public static BendRelief Obround(double? width = null, double? depth = null) =>
+        new(SheetReliefKind.Obround, width, depth);
+
+    /// <summary>Notch width, resolved against the sheet: one thickness unless stated.</summary>
+    public double WidthFor(SheetMetalSpec spec) =>
+        Width ?? (spec ?? throw new ArgumentNullException(nameof(spec))).Thickness;
+
+    /// <summary>Notch depth, resolved against the sheet and the flange's own inside bend
+    /// radius: <c>R + T</c> unless stated, which is the depth that takes the notch past the
+    /// bend's outer tangent line.</summary>
+    public double DepthFor(SheetMetalSpec spec, double? insideRadius = null) =>
+        Depth ?? (insideRadius ?? (spec ?? throw new ArgumentNullException(nameof(spec))).BendRadius)
+            + (spec ?? throw new ArgumentNullException(nameof(spec))).Thickness;
+
+    /// <summary>Area of ONE notch — the material a relief removes from the blank, and by
+    /// the same token from the folded body, which is why a relief cannot move the
+    /// folded-versus-flat discrepancy.</summary>
+    public double AreaOf(double width, double depth) => Kind == SheetReliefKind.Obround
+        ? width * (depth - width / 2) + Math.PI * width * width / 8
+        : width * depth;
+}
+
 /// <summary>
 /// Which edge a flange grows from. The base flange's edges are its SKETCH SEGMENTS — a
 /// sketch is authored data, so a segment index is a stable name rather than a derived
@@ -176,8 +249,10 @@ public readonly record struct SheetFlangeTarget(int ParentFlange, int EdgeIndex)
 /// <param name="KFactor">K-factor override; null uses the body's spec.</param>
 /// <param name="StartOffset">Inset from the target edge's start, measured along the parent
 /// outline's counter-clockwise traversal direction.</param>
-/// <param name="Width">Span along the edge; null runs to the edge's far end. A flange must
-/// span the WHOLE edge or be inset from both ends.</param>
+/// <param name="Width">Span along the edge; null runs to the edge's far end. Either end may
+/// be flush with the edge or inset from it, independently.</param>
+/// <param name="Relief">The <see cref="BendRelief"/> notched into the parent beside each
+/// INSET end of this flange; null cuts none, which is the "let it tear" choice.</param>
 public sealed record EdgeFlange(
     SheetFlangeTarget Target,
     double Length,
@@ -186,7 +261,8 @@ public sealed record EdgeFlange(
     double? BendRadius = null,
     double? KFactor = null,
     double StartOffset = 0,
-    double? Width = null)
+    double? Width = null,
+    BendRelief? Relief = null)
 {
     internal double AngleRadians => AngleDegrees * Math.PI / 180;
 }
@@ -211,6 +287,10 @@ public readonly record struct FlatBendLine(
     /// where a single-line bend annotation goes.</summary>
     public (Vector2d Start, Vector2d End) CenterLine =>
         ((StartTangent + StartFar) * 0.5, (EndTangent + EndFar) * 0.5);
+
+    /// <summary>Length of the bend line: how much of the brake's tooling the bend
+    /// occupies, and the width the tonnage is quoted per.</summary>
+    public double Length => StartTangent.DistanceTo(EndTangent);
 }
 
 /// <summary>
@@ -231,6 +311,30 @@ public sealed record FlatPattern(Sketch Outline, IReadOnlyList<FlatBendLine> Ben
     /// differ by <c>Σ width·θ·T²·(0.5 − K)</c> otherwise, which is the K-factor doing its
     /// job rather than an error.</summary>
     public double Volume => Area * Thickness;
+
+    /// <summary>
+    /// The bend table a press brake is set up from: one row per bend in the order the
+    /// flanges were declared, giving the length of the bend line, the angle, which way it
+    /// folds, the inside radius and the allowance.
+    /// <para>Every column is READ OFF <see cref="Bends"/> — the same records the drawing's
+    /// bend zones are drawn from — rather than recomputed from the flange tree, so the
+    /// table and the picture cannot disagree about a bend. A pattern with no bends returns
+    /// a header and nothing else, which is the honest answer for a flat part.</para>
+    /// </summary>
+    public string BendTable()
+    {
+        var text = new System.Text.StringBuilder();
+        text.AppendLine("BEND  LENGTH   ANGLE  DIR   RADIUS  ALLOWANCE");
+        for (int i = 0; i < Bends.Count; i++)
+        {
+            var bend = Bends[i];
+            text.AppendLine(string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{i + 1,4}  {bend.Length,6:0.000}  {bend.AngleDegrees,6:0.0}  " +
+                $"{(bend.Up ? "UP  " : "DOWN"),-4}  {bend.InsideRadius,6:0.000}  {bend.Allowance,9:0.000}"));
+        }
+        return text.ToString();
+    }
 
     /// <summary>
     /// The flat pattern as a DXF document — what a laser or turret shop actually cuts
@@ -338,6 +442,16 @@ public sealed class SheetMetalBody
     public SheetMetalSpec Spec { get; }
     public IReadOnlyList<EdgeFlange> Flanges => _flanges;
 
+    /// <summary>
+    /// The base flange's outline as BUILT: <see cref="BaseSketch"/> with every
+    /// <see cref="BendRelief"/> notched into it. This is the region the folded sheet is
+    /// extruded from and the region the flat pattern starts from, which is what makes a
+    /// relief one declaration rather than a cut applied twice.
+    /// <para>With no reliefs declared it IS <see cref="BaseSketch"/>, by reference — so a
+    /// design that cuts none is untouched down to the bit.</para>
+    /// </summary>
+    public Sketch BaseOutline => Tree.BaseOutline;
+
     /// <summary>This body with one more flange — a NEW body; this one is unchanged. The
     /// addition is validated here, at the call that made it.</summary>
     public SheetMetalBody WithFlange(EdgeFlange flange)
@@ -353,9 +467,9 @@ public sealed class SheetMetalBody
         SheetFlangeTarget target, double length, double angleDegrees = 90,
         SheetBendDirection direction = SheetBendDirection.Up,
         double? bendRadius = null, double? kFactor = null,
-        double startOffset = 0, double? width = null) =>
+        double startOffset = 0, double? width = null, BendRelief? relief = null) =>
         WithFlange(new EdgeFlange(
-            target, length, angleDegrees, direction, bendRadius, kFactor, startOffset, width));
+            target, length, angleDegrees, direction, bendRadius, kFactor, startOffset, width, relief));
 
     /// <summary>The folded solid as a <see cref="Shape"/> — B-Rep native, built by
     /// topology surgery rather than by booleans (see <see cref="SheetMetalSurgery"/>).</summary>
@@ -381,9 +495,31 @@ public sealed class SheetMetalBody
             if (JoinsSamePoints(site.Start, site.End, start, end))
                 return site;
         }
+        // A bend relief NOTCHES the blank, so an edge a site names can arrive as two or
+        // three pieces of itself. A piece still names the same site — the flange's own
+        // StartOffset and Width say where on it the bend goes — so a picked sub-segment
+        // resolves rather than reporting an edge the body does not carry. The exact match
+        // is tried first, so nothing that already resolved can be answered differently.
+        foreach (var site in Sites)
+        {
+            if (LiesOn(site, start) && LiesOn(site, end))
+                return site;
+        }
         throw new ArgumentException(
             $"The edge from {start} to {end} is not one of this sheet body's flange-able edges. It carries " +
             $"{Sites.Count}: {string.Join(", ", Sites.Select(s => s.Target.ToString()))}.", nameof(edge));
+    }
+
+    /// <summary>Is a point on a site's own segment, at the weld tier? Both were built from
+    /// the same frame chain, so the absolute tier is right.</summary>
+    private static bool LiesOn(in SheetFlangeSite site, in Vector3d point)
+    {
+        var along = site.End - site.Start;
+        double lengthSquared = along.LengthSquared;
+        if (lengthSquared <= 0)
+            return false;
+        double t = (point - site.Start).Dot(along) / lengthSquared;
+        return t >= -Weld && t <= 1 + Weld && (site.Start + along * t).DistanceTo(point) <= Weld;
     }
 
     /// <summary>Do two segments join the same pair of points, either way round? The one
@@ -462,12 +598,71 @@ public sealed class SheetMetalBody
         public double WallLength { get; init; }
         public double Allowance { get; init; }
         public double InsideRadius { get; init; }
+
+        /// <summary>The declared relief and its resolved dimensions; <see cref="Relief"/>
+        /// null means none was asked for.</summary>
+        public BendRelief? Relief { get; init; }
+        public double ReliefWidth { get; init; }
+        public double ReliefDepth { get; init; }
+
+        /// <summary>Is this end of the flange inset from its edge's own end? A relief is
+        /// cut at exactly the ends that are — a flush end has no parent material beside
+        /// it — so this one predicate settles both the notch list and the surgery's rims.</summary>
+        public bool[] Inset { get; init; } = [false, false];
+
+        /// <summary>The stretch of the parent's edge this flange occupies, RELIEFS
+        /// INCLUDED — what a sibling flange has to keep clear of, since a notch that ate
+        /// its neighbour's wall would leave a flange with nothing to fold from.</summary>
+        public (double From, double To) Occupies =>
+            OccupiedBy(StartOffset, Width, Relief, ReliefWidth, Inset);
+
+        /// <summary>
+        /// <inheritdoc cref="Occupies"/>
+        /// <para>Static because the overlap check has to ask it about a flange that is
+        /// still being resolved and so has no <see cref="Node"/> yet; the property above
+        /// asks the same rule rather than restating it, which is what stops the two
+        /// disagreeing about whether a relief counts.</para>
+        /// </summary>
+        public static (double From, double To) OccupiedBy(
+            double start, double width, BendRelief? relief, double reliefWidth, bool[] inset) =>
+            (start - (relief is not null && inset[0] ? reliefWidth : 0),
+             start + width + (relief is not null && inset[1] ? reliefWidth : 0));
+
         public List<Node> Children { get; } = [];
     }
 
     /// <summary>The surgery arguments for one bend.</summary>
     internal readonly record struct BendArgs(
         SheetBendSection Section, Vector3d Start, Vector3d End, double WallLength);
+
+    /// <summary>
+    /// Builds one outline as an exact chain of <see cref="Curve2d"/>s. Two rules and no
+    /// others: a zero-length step is DROPPED (a flange flush with its edge's end, a notch
+    /// mouth landing on a vertex already emitted — the two points are the same corner, and
+    /// the sketch constructor would refuse the segment), and an arc's neighbours are drawn
+    /// to the arc's OWN evaluated endpoints rather than to the points that were used to
+    /// construct it, so the chain is continuous by construction instead of to within the
+    /// ULP or two that <c>centre + r·(cos θ, sin θ)</c> costs.
+    /// </summary>
+    private sealed class OutlinePen(List<Curve2d> curves, Vector2d start)
+    {
+        private Vector2d _at = start;
+
+        public void LineTo(in Vector2d to)
+        {
+            if (to.DistanceTo(_at) > Weld)
+                curves.Add(new Line2d(_at, to));
+            _at = to;
+        }
+
+        public void ArcTo(in Vector2d centre, double radius, double startAngle, double sweep)
+        {
+            var arc = new Arc2d(centre, radius, startAngle, sweep);
+            LineTo(arc.PointAt(0));
+            curves.Add(arc);
+            _at = arc.PointAt(1);
+        }
+    }
 
     /// <summary>The declaration resolved into flat frames and lengths — computed once, and
     /// the single source both the folded build and the unfold read.</summary>
@@ -483,6 +678,7 @@ public sealed class SheetMetalBody
         private readonly IReadOnlyList<Curve2d> _curves;
 
         private IReadOnlyList<SheetFlangeSite>? _sites;
+        private Sketch? _outline;
 
         private ResolvedTree(
             SheetMetalBody body, Node baseNode, List<Node> nodes, IReadOnlyList<Curve2d> curves)
@@ -554,21 +750,32 @@ public sealed class SheetMetalBody
                 throw new ArgumentException(
                     $"Flange {index} on {flange.Target} spans [{start:g6}, {start + width:g6}] of an edge " +
                     $"{edgeLength:g6} long; the span must lie inside it.");
-            foreach (var sibling in parent.Children)
-            {
-                if (sibling.Flange!.Target.EdgeIndex != flange.Target.EdgeIndex)
-                    continue;
-                if (start < sibling.StartOffset + sibling.Width - Weld
-                    && sibling.StartOffset < start + width - Weld)
-                    throw new ArgumentException(
-                        $"Flange {index} overlaps flange {sibling.Index} on {flange.Target}: two bends cannot " +
-                        "share the same stretch of one edge.");
-            }
+            bool[] inset = [start > Weld, start + width < edgeLength - Weld];
 
             // Override resolution happens ONCE, in the spec's own accessors, so a flange's
             // per-bend radius and K cannot be applied one way here and another way there.
             double radius = flange.BendRadius ?? body.Spec.BendRadius;
             double angle = flange.AngleRadians;
+            var (reliefWidth, reliefDepth) = ResolveRelief(
+                body, flange, index, radius, start, width, edgeLength, inset, parent, a2, t2, o2);
+
+            // Compared on OCCUPIED stretches, reliefs included: a notch that ate its
+            // neighbour's wall would leave a flange with nothing to fold from, and the
+            // failure would surface as a missing bend edge three stages downstream.
+            var mine = Node.OccupiedBy(start, width, flange.Relief, reliefWidth, inset);
+            foreach (var sibling in parent.Children)
+            {
+                if (sibling.Flange!.Target.EdgeIndex != flange.Target.EdgeIndex)
+                    continue;
+                var theirs = sibling.Occupies;
+                if (mine.From < theirs.To - Weld && theirs.From < mine.To - Weld)
+                    throw new ArgumentException(
+                        $"Flange {index} occupies [{mine.From:g6}, {mine.To:g6}] of {flange.Target} and flange " +
+                        $"{sibling.Index} occupies [{theirs.From:g6}, {theirs.To:g6}]: two bends cannot share " +
+                        "the same stretch of one edge, and a bend relief counts as part of the stretch its " +
+                        "flange occupies.");
+            }
+
             double setback = body.Spec.OutsideSetbackAt(angle, flange.BendRadius);
             double wall = flange.Length - setback;
             if (!(wall > Weld))
@@ -595,7 +802,88 @@ public sealed class SheetMetalBody
                 WallLength = wall,
                 Allowance = allowance,
                 InsideRadius = radius,
+                Relief = flange.Relief,
+                ReliefWidth = reliefWidth,
+                ReliefDepth = reliefDepth,
+                Inset = inset,
             };
+        }
+
+        /// <summary>
+        /// The flange's relief dimensions, or (0, 0) when none was asked for — and every
+        /// refusal a relief can produce, all of them BEFORE any geometry is built.
+        /// </summary>
+        private static (double Width, double Depth) ResolveRelief(
+            SheetMetalBody body, EdgeFlange flange, int index, double radius,
+            double start, double width, double edgeLength, bool[] inset, Node parent,
+            in Vector2d edgeStart, in Vector2d tangent, in Vector2d outward)
+        {
+            if (flange.Relief is not { } relief)
+                return (0, 0);
+            if (parent.Index >= 0)
+                throw new NotSupportedException(
+                    $"Flange {index} asks for a bend relief on {flange.Target}. A relief notches the parent's " +
+                    "own OUTLINE, and a flange's wall is built as a plain rectangle rather than from a sketch, " +
+                    "so v2 cuts reliefs only on the base flange's edges. Grow the relieved flange from the " +
+                    "base, or leave the relief off and let the corner tear.");
+            if (!inset[0] && !inset[1])
+                throw new ArgumentException(
+                    $"Flange {index} spans the whole of {flange.Target}, so there is no parent material beside " +
+                    "it to relieve. Inset the flange from an end, or drop the relief.");
+
+            double reliefWidth = relief.WidthFor(body.Spec);
+            double reliefDepth = relief.DepthFor(body.Spec, radius);
+            if (!(reliefWidth > 0) || !(reliefDepth > 0))
+                throw new ArgumentOutOfRangeException(nameof(flange),
+                    $"Flange {index}'s bend relief measures {reliefWidth:g6} by {reliefDepth:g6}; both must be " +
+                    "positive.");
+            if (relief.Kind == SheetReliefKind.Obround && reliefDepth < reliefWidth / 2 - Weld)
+                throw new ArgumentOutOfRangeException(nameof(flange),
+                    $"Flange {index}'s obround relief is {reliefDepth:g6} deep and {reliefWidth:g6} wide, so " +
+                    $"its own end radius ({reliefWidth / 2:g6}) is deeper than the notch. Depth is measured to " +
+                    "the deepest point, so an obround relief can never be shallower than half its width.");
+            if (inset[0] && start < reliefWidth - Weld)
+                throw new ArgumentException(
+                    $"Flange {index}'s relief is {reliefWidth:g6} wide but the flange starts only {start:g6} " +
+                    $"along {flange.Target}, so the notch would run off the end of the edge. Move the flange " +
+                    "in, narrow the relief, or make that end flush.");
+            if (inset[1] && start + width + reliefWidth > edgeLength + Weld)
+                throw new ArgumentException(
+                    $"Flange {index}'s relief is {reliefWidth:g6} wide but only " +
+                    $"{edgeLength - start - width:g6} of {flange.Target} is left beyond the flange, so the " +
+                    "notch would run off the end of the edge.");
+
+            // A notch is drawn as a DETOUR in the outline, so one reaching past the far
+            // side of the parent makes a self-intersecting blank — and that failure is
+            // SILENT: measured on an 80x50 plate with a 200-deep relief, the signed area
+            // still reads base-minus-notches (2800) and the extruded solid still
+            // validates. So every point of the notch below the surface has to lie strictly
+            // inside the parent's own region. Sound for the failure it exists to catch, and
+            // it claims no more: a notch that passes clean through a HOLE and comes out in
+            // material on the far side has its own corners inside and is not caught.
+            var region = new SketchRegion(body.BaseSketch);
+            double side = relief.Kind == SheetReliefKind.Obround
+                ? reliefDepth - reliefWidth / 2
+                : reliefDepth;
+            var (a2, t2, o2) = (edgeStart, tangent, outward);
+            for (int k = 0; k < 2; k++)
+            {
+                if (!inset[k])
+                    continue;
+                double from = k == 0 ? start - reliefWidth : start + width;
+                Vector2d At(double s, double depth) => a2 + t2 * s - o2 * depth;
+                foreach (var point in (ReadOnlySpan<Vector2d>)
+                    [At(from, side), At(from + reliefWidth / 2, reliefDepth), At(from + reliefWidth, side)])
+                {
+                    if (region.SignedDistance(point) >= -Weld)
+                        throw new ArgumentException(
+                            $"Flange {index}'s relief reaches {reliefDepth:g6} into the parent at {point}, " +
+                            "which is outside the base sketch. A relief notches the blank, so a notch that " +
+                            "runs out of the parent would leave a self-intersecting outline rather than a " +
+                            "cut; make it shallower.");
+                }
+            }
+            return (reliefWidth, reliefDepth);
         }
 
         /// <summary>The target edge in the parent's own 2D coordinates, start to end in
@@ -679,38 +967,88 @@ public sealed class SheetMetalBody
 
         public FlatPattern Unfold()
         {
-            var curves = _curves;
             var bends = new List<FlatBendLine>();
             var spliced = new List<Curve2d>();
 
-            for (int i = 0; i < curves.Count; i++)
+            for (int i = 0; i < _curves.Count; i++)
             {
-                var here = _base.Children
-                    .Where(c => c.Flange!.Target.EdgeIndex == i)
-                    .OrderBy(c => c.StartOffset)
-                    .ToList();
+                var here = ChildrenOn(i);
                 if (here.Count == 0)
                 {
-                    spliced.Add(curves[i]);
+                    spliced.Add(_curves[i]);
                     continue;
                 }
-                var line = (Line2d)curves[i];
-                var points = new List<Vector2d> { _base.Flat.ToFlat(line.Start) };
-                SpliceEdge(_base, here, points, bends);
-                points.Add(_base.Flat.ToFlat(line.End));
-                spliced.AddRange(Polyline(points));
+                var line = (Line2d)_curves[i];
+                var pen = new OutlinePen(spliced, _base.Flat.ToFlat(line.Start));
+                SpliceEdge(_base, here, pen, bends);
+                pen.LineTo(_base.Flat.ToFlat(line.End));
             }
 
-            var outline = Sketch.FromCurves(spliced);
-            foreach (var hole in _body.BaseSketch.Holes)
-                outline = outline.WithHole(hole);
-            return new FlatPattern(outline, bends, _body.Spec.Thickness);
+            return new FlatPattern(WithBaseHoles(spliced), bends, _body.Spec.Thickness);
         }
 
+        /// <summary>
+        /// The base flange's outline with every relief notched in — the region BOTH the
+        /// folded sheet's base extrusion and the flat pattern start from, so a relief is
+        /// declared once and appears in both.
+        /// </summary>
+        public Sketch BaseOutline => _outline ??= BuildBaseOutline();
+
+        private Sketch BuildBaseOutline()
+        {
+            // Nothing to notch: the declaration IS the outline, by reference. That is what
+            // keeps a design with no reliefs bit-identical to what it always built.
+            if (!_nodes.Any(n => n.Relief is not null))
+                return _body.BaseSketch;
+
+            var curves = new List<Curve2d>();
+            for (int i = 0; i < _curves.Count; i++)
+            {
+                var here = ChildrenOn(i).Where(c => c.Relief is not null).ToList();
+                if (here.Count == 0)
+                {
+                    curves.Add(_curves[i]);
+                    continue;
+                }
+                var line = (Line2d)_curves[i];
+                var pen = new OutlinePen(curves, line.Start);
+                foreach (var child in here)
+                {
+                    // The flange itself contributes NOTHING to this outline — the bend
+                    // grows outboard of the edge, and this is the region inboard of it.
+                    // What the two LineTo calls do is put a vertex at each end of the
+                    // flange's span, which is what makes the wall between the notches
+                    // exactly the bend line (and so a flush flange to the surgery below).
+                    EmitRelief(_base.Flat, child, 0, pen);
+                    pen.LineTo(At(_base.Flat, child, child.StartOffset));
+                    pen.LineTo(At(_base.Flat, child, child.StartOffset + child.Width));
+                    EmitRelief(_base.Flat, child, 1, pen);
+                }
+                pen.LineTo(line.End);
+            }
+            return WithBaseHoles(curves);
+        }
+
+        /// <summary>The base sketch's holes carry through untouched: the blank's
+        /// coordinates ARE the base sketch's, so a drawn bore keeps its position.</summary>
+        private Sketch WithBaseHoles(IReadOnlyList<Curve2d> curves)
+        {
+            var outline = Sketch.FromCurves(curves);
+            foreach (var hole in _body.BaseSketch.Holes)
+                outline = outline.WithHole(hole);
+            return outline;
+        }
+
+        /// <summary>The base flange's children on one of its sketch segments, in order
+        /// along the edge — the order both outlines have to emit them in.</summary>
+        private List<Node> ChildrenOn(int edgeIndex) =>
+            [.. _base.Children.Where(c => c.Flange!.Target.EdgeIndex == edgeIndex)
+                .OrderBy(c => c.StartOffset)];
+
         /// <summary>Detours around every flange on one edge of <paramref name="owner"/>'s
-        /// outline, appending FLAT points strictly between the edge's own ends.</summary>
+        /// outline, appending FLAT geometry strictly between the edge's own ends.</summary>
         private static void SpliceEdge(
-            Node owner, IReadOnlyList<Node> children, List<Vector2d> points, List<FlatBendLine> bends)
+            Node owner, IReadOnlyList<Node> children, OutlinePen pen, List<FlatBendLine> bends)
         {
             foreach (var child in children)
             {
@@ -722,10 +1060,14 @@ public sealed class SheetMetalBody
                 // The bend zone and the flange's wall are one straight run of blank in
                 // the outline — the tangent line between them is a BEND, not a cut — so
                 // the detour goes straight from the edge to the flange's far corner and
-                // the tangent points appear only in the bend record below.
-                points.Add(owner.Flat.ToFlat(p0));
-                AppendFlangeOutline(child, points, bends);
-                points.Add(owner.Flat.ToFlat(p1));
+                // the tangent points appear only in the bend record below. A relief, where
+                // one is declared, is the notch on the PARENT's side of that edge, so it
+                // brackets the detour rather than joining it.
+                EmitRelief(owner.Flat, child, 0, pen);
+                pen.LineTo(owner.Flat.ToFlat(p0));
+                AppendFlangeOutline(child, pen, bends);
+                pen.LineTo(owner.Flat.ToFlat(p1));
+                EmitRelief(owner.Flat, child, 1, pen);
 
                 bends.Add(new FlatBendLine(
                     owner.Flat.ToFlat(p0), owner.Flat.ToFlat(p1),
@@ -738,23 +1080,51 @@ public sealed class SheetMetalBody
         /// <summary>Appends a flange's own outline in flat coordinates, entered at its
         /// local (width, 0) and left at (0, 0) — counter-clockwise past its side, its tip
         /// (with any flanges of its own spliced in) and its other side.</summary>
-        private static void AppendFlangeOutline(Node node, List<Vector2d> points, List<FlatBendLine> bends)
+        private static void AppendFlangeOutline(Node node, OutlinePen pen, List<FlatBendLine> bends)
         {
-            points.Add(node.Flat.ToFlat(new Vector2d(node.Width, node.WallLength)));
-            SpliceEdge(node, [.. node.Children.OrderBy(c => c.StartOffset)], points, bends);
-            points.Add(node.Flat.ToFlat(new Vector2d(0, node.WallLength)));
+            pen.LineTo(node.Flat.ToFlat(new Vector2d(node.Width, node.WallLength)));
+            SpliceEdge(node, [.. node.Children.OrderBy(c => c.StartOffset)], pen, bends);
+            pen.LineTo(node.Flat.ToFlat(new Vector2d(0, node.WallLength)));
         }
 
-        private static IEnumerable<Curve2d> Polyline(IReadOnlyList<Vector2d> points)
+        /// <summary>A point at parameter <paramref name="s"/> along a child's target edge,
+        /// in its owner's flat coordinates.</summary>
+        private static Vector2d At(in FlatFrame frame, Node child, double s) =>
+            frame.ToFlat(child.EdgeStart + child.EdgeTangent * s);
+
+        /// <summary>
+        /// Emits the relief notch beside ONE end of a flange, and nothing at all where that
+        /// end is flush or no relief was declared. The notch sits immediately OUTSIDE the
+        /// flange's span and reaches INBOARD from the bend line, so it takes material from
+        /// the parent beside the bend and never from the bend itself — which is why a
+        /// relief cannot move the folded-versus-flat volume discrepancy.
+        /// </summary>
+        private static void EmitRelief(in FlatFrame frame, Node child, int end, OutlinePen pen)
         {
-            for (int i = 0; i + 1 < points.Count; i++)
+            if (child.Relief is not { } relief || !child.Inset[end])
+                return;
+            double from = end == 0 ? child.StartOffset - child.ReliefWidth : child.StartOffset + child.Width;
+            double to = from + child.ReliefWidth;
+            var inward = -frame.Direction(child.EdgeOutward);
+
+            pen.LineTo(At(frame, child, from));
+            if (relief.Kind == SheetReliefKind.Rectangular)
             {
-                // A zero-length step arises wherever a flange sits flush with its edge's
-                // end; the sketch constructor would reject it, and dropping it is exactly
-                // right — the two points are the same corner.
-                if (points[i].DistanceTo(points[i + 1]) > Weld)
-                    yield return new Line2d(points[i], points[i + 1]);
+                pen.LineTo(At(frame, child, from) + inward * child.ReliefDepth);
+                pen.LineTo(At(frame, child, to) + inward * child.ReliefDepth);
             }
+            else
+            {
+                // The dome's radius is half the notch's width, so the straight sides run in
+                // by the REST of the depth and the arc carries the last of it. Its sweep is
+                // NEGATIVE: an inward notch is a concavity of a counter-clockwise outline,
+                // so its rounded bottom turns the other way from the outline carrying it.
+                double radius = child.ReliefWidth / 2;
+                var centre = At(frame, child, from + radius) + inward * (child.ReliefDepth - radius);
+                var back = -frame.Direction(child.EdgeTangent);
+                pen.ArcTo(centre, radius, Math.Atan2(back.Y, back.X), -Math.PI);
+            }
+            pen.LineTo(At(frame, child, to));
         }
 
         private IReadOnlyList<SheetFlangeSite> CollectSites(in SheetFrame baseFrame, double scale)

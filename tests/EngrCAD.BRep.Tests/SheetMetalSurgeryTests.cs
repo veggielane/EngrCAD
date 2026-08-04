@@ -152,14 +152,55 @@ public class SheetMetalSurgeryTests
         Assert.Contains("OUTER VIRTUAL SHARP", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void FlangeFlushAtOneEndOnly_IsRefusedAsACornerInteraction()
+    /// <summary>
+    /// A flange running to ONE end of its edge. v1 refused this as "the corner case in
+    /// disguise"; it is not one — the flush end splices the cross-section into the
+    /// neighbouring wall and the inset end caps and stubs, and the two share no coedge.
+    /// Both orientations are driven because which end of the edge is the surgery's Q0
+    /// depends on the bend axis, so a rule that only works one way round would pass a
+    /// one-sided fixture.
+    /// </summary>
+    [Theory]
+    [InlineData(0.0, 30.0)]
+    [InlineData(10.0, Width)]
+    public void FlangeFlushAtOneEndOnly_SplicesThatEndAndCapsTheOther(double from, double to)
     {
-        var exception = Assert.Throws<NotSupportedException>(() =>
-            SheetMetalSurgery.AddEdgeFlange(
-                Plate(), AtPlusX(90), (Length, 0, Thickness), (Length, 30, Thickness),
-                wallLength: 20 - (Radius + Thickness)));
-        Assert.Contains("inset from BOTH ends", exception.Message, StringComparison.Ordinal);
+        var solid = SheetMetalSurgery.AddEdgeFlange(
+            Plate(), AtPlusX(90), (Length, from, Thickness), (Length, to, Thickness),
+            wallLength: 20 - (Radius + Thickness));
+
+        solid.Validate();
+        Assert.True(solid.SatisfiesEulerFormula());
+        // ONE wall stub and ONE end cap, against the doubly-inset flange's two of each and
+        // the full-width flange's none.
+        Assert.Equal(12, solid.Faces.Count());
+    }
+
+    /// <summary>
+    /// An end that misses its wall's corner by less than the WELD tier IS that corner: the
+    /// solid comes back structurally identical to the exactly-flush one rather than growing
+    /// a stub nobody could machine.
+    /// <para>That is also why the "an inset end must leave a positive stub" refusal inside
+    /// <c>SplitRim</c> is a backstop nothing here can reach — it measures the same length
+    /// against the same tier as the flush test, so an end past the tier always has a stub
+    /// and an end inside it is never split. It stays because <c>SplitRim</c> takes its span
+    /// as arguments rather than deriving it, and the verdict is pinned here so the fact
+    /// cannot rot.</para>
+    /// </summary>
+    [Fact]
+    public void AnEndWithinTheWeldTierOfItsCorner_IsThatCorner()
+    {
+        var nudged = SheetMetalSurgery.AddEdgeFlange(
+            Plate(), AtPlusX(90), (Length, 1e-12, Thickness), (Length, 30, Thickness),
+            wallLength: 20 - (Radius + Thickness));
+        var exact = SheetMetalSurgery.AddEdgeFlange(
+            Plate(), AtPlusX(90), (Length, 0, Thickness), (Length, 30, Thickness),
+            wallLength: 20 - (Radius + Thickness));
+
+        nudged.Validate();
+        Assert.Equal(exact.Faces.Count(), nudged.Faces.Count());
+        Assert.Equal(exact.Edges.Count(), nudged.Edges.Count());
+        Assert.Equal(exact.Vertices.Count(), nudged.Vertices.Count());
     }
 
     [Fact]
