@@ -4451,6 +4451,104 @@ rather than rounded; there is no memoization of repeated design points, so the t
 is exactly the list of evaluations performed (which is what makes the determinism
 comparison mean what it says); and there is no `Maximize` — negate the objective, so a
 report cannot disagree with itself about which way is better.
+
+### Configurations: one `FeatureHistory`, N named parameter sets (`Configurations.cs`)
+
+A configuration is a NAME plus a `[Param]` value dictionary, and **the seam is the whole
+design**: the values are the `FeatureHistory.SaveParameters` JSON verbatim, so applying one
+is `LoadParameters` and nothing else. That matters because this repo has been strict about
+it — a saved parameter file, an MCP `set_param`, `DocumentEdits.SetParameter`, the
+properties-panel typed editors and a design study's `StudyResult.Edits` all write through
+that one seam precisely so a value cannot mean two things. A configuration joins them as a
+consumer; it is never a second way to apply a value.
+
+**Which pattern a switch wants was a deliberate call, and it follows `DesignStudy`'s.**
+`StudyResult.Edits` writes through the seam internally rather than composing `DocumentEdits`,
+because one edit per feature would rebuild once per feature. A configuration is the same
+shape: `Activate` is one `LoadParameters` over the whole set plus ONE `Part.Regenerate`, and
+`DocumentEdits.SetConfiguration` wraps THAT as a single undoable edit. Composing it out of
+per-feature `SetParameter`s would be N rebuilds for one user action.
+
+**It lives on `Part`, not on `FeatureHistory`**, which reads backwards until you ask what a
+configuration is FOR. The history owns the parameter vocabulary and is where the entry's
+"one `FeatureHistory`" points, but a configuration is only meaningful once something can
+rebuild from it, and `Part.Regenerate` is the one call that swaps the fresh body in AND
+clears every derived cache (mesh, B-Rep and SDF lowerings, feature edges, resolved
+annotations, construction tree). A set on the history could load values and leave every
+consumer looking at stale geometry.
+
+**A configuration carries VALUES only — it cannot add, remove or suppress a feature.** Two
+things follow. It is what makes the switch exact: the feature INSTANCES never change, so the
+regeneration cache key (instance identity + parameter snapshot) is restored by restoring the
+values. And per-configuration SUPPRESSION, which is the obvious next want (a variant without
+the boss), is filed rather than smuggled in — suppression is not part of the `SaveParameters`
+vocabulary, so it would arrive as a second field beside the parameter object with its own
+capture, compare and round-trip rules, which is exactly the drift the one-seam rule exists to
+prevent. It is a real absence and is named as one.
+
+**The bit-identity claim needed a correction, and the correction is the finding.** The
+verification the backlog asked for is that switching away and back regenerates bit-identical
+geometry, "the cache-key property the undo stack already asserts". It does hold — but NOT
+because the cached body comes back. `FeatureHistory`'s prefix cache holds ONE entry per
+feature INDEX, overwritten every regeneration (the same property that makes memoizing a
+design study's repeated points impossible), so on the way back the feature whose parameter
+moved re-runs and returns a fresh, structurally identical `Shape`. What the cache buys is the
+PREFIX — the plate above the change reports `Cached` on every switch, which is why a
+configuration switch costs the tail of the history rather than all of it — and what makes the
+geometry identical is the contract the cache is BUILT on: `Apply` is a pure function of its
+parameters. So the test asserts both halves separately (a `Cached`/`Applied` outcome pair,
+then every vertex compared through `DoubleToInt64Bits`) rather than an object identity that
+would have been wrong.
+
+**The active configuration is DOCUMENT state, and the undo stack's reasoning is what settles
+it.** The stack is session state because it records HOW the document got here; the active
+configuration records WHERE IT IS — it names the parameter values the model currently
+carries, and those are saved with the history either way. Dropping the name would leave a
+reloaded document whose values match "M6" exactly, unable to say so. Two consequences: the
+name round-trips (which is also the test for whether an informational field belongs in a file
+at all — the snapshot `"source"` rule), and the LOAD restores it WITHOUT re-applying. That
+second half is not an optimization. A document may legitimately be saved MODIFIED (active
+"M6", one parameter since edited), and re-applying at load would silently snap the model back
+onto the configuration and discard the edit; restoring the name alone makes it come back
+modified, which is what happened.
+
+**Activating does not write back either**, and for the same family of reason: editing a
+parameter while "M6" is active leaves the model modified against it rather than quietly
+redefining it, so a configuration's values are a function of the document rather than of the
+order in which someone clicked. `ActiveIsModified` is exact and needs no tolerance, because
+both sides come from one serializer — the model's current values through `SaveParameters`,
+the configuration's as stored — and it compares only the keys the configuration STATES, so a
+partial set says nothing about what it omits.
+
+**Staleness follows the `HistoryLoadResult` convention with one deliberate split.** A
+configuration naming a feature that has been removed is a WARNING at the moment it matters
+(`Activate` surfaces `LoadParameters`' own messages) plus a pre-flight (`Validate`) a UI can
+show without applying anything — never a silent drop, and the configuration is KEPT, because
+the feature may come back from an undone removal and a file that quietly loses a variant is
+worse than one that reports it. The split is that the TYPED authoring overload
+(`Add(name, (feature, parameter, value)…)`) refuses by name instead: its caller holds the
+feature OBJECT, so a bad parameter name is a bug at the call site, where the JSON overload
+names features by string and is in exactly `LoadParameters`' position.
+
+**The BOM per configuration is a family table, and "per configuration" needed defining for a
+document whose parts are shared.** A `Bom` groups by part REFERENCE and a configuration
+changes a part's parameters rather than replacing the object, so the configured part is one
+line in every row and its quantity never moves. What CAN differ is the rest of the model — a
+`ComponentFeature` places catalogue hardware, so an M4 variant lists M4 screws and a
+suppressed placement drops its occurrence — which is why `Bom.ByConfiguration` re-flattens
+per row rather than reusing one captured instance list, and why it takes a `Scene`/`Tab`/
+`Assembly` (or a `Func<Bom>`) rather than an instance list. Like a design study it is an
+ANALYSIS: it restores the part's live values and active name in a `finally`.
+
+One trap the shape of the API had to answer: **`BomLine.UnitMassGrams` is a LAZY projection
+over the part's current geometry**, so a mass read off a returned row after the walk has
+restored the part reports the restored configuration's mass for every row. Item names,
+quantities and paths are captured at `Bom.For` time and are safe; the mass is not, so
+`ConfigurationBom.TotalMassGrams` is measured INSIDE the loop and the caveat is stated on
+both types rather than left as a footgun. That the BOM's own design note already calls mass
+"the only part of a bill of materials that evaluates geometry" is precisely why it is the
+only field that could go wrong here.
+
 ### Manufacturability checks: two fidelities, said out loud
 
 `Manufacturability` (draft angle, overhang area, wall thickness) had one deliverable

@@ -92,6 +92,11 @@
       "live": true
     },
     {
+      "id": "configuration-family",
+      "page": "examples/configurations.md",
+      "live": true
+    },
+    {
       "id": "construction-preview",
       "page": "examples/viewer.md",
       "live": false,

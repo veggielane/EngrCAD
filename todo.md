@@ -3141,14 +3141,40 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     one solve there and let the constraints read a captured local; a first-class
     "evaluate once, report several numbers" seam would be better but wants a design
     (per-evaluation scratch keyed on what?) rather than a bag.
-- [ ] **Configurations / design tables: one `FeatureHistory`, N named parameter
-  sets.** A configuration is a name plus a `[Param]` value dictionary through the SAME
-  JSON seam as `SaveParameters` (one seam, so spellings cannot drift); the document
-  carries the set and the active one; the BOM rolls up per configuration. An M4…M12
-  family of one bracket is the acceptance case.
-  - Verification: save→load→save stays a byte fixed point with configurations present,
-    and switching away and back regenerates bit-identical geometry — the cache-key
-    property the undo stack already asserts, asked of a new consumer.
+- [ ] **Configuration follow-ups** (`Configurations.cs` landed: `Configuration` /
+  `ConfigurationSet` / `ConfigurationResult` on `Part.Configurations`, values through the
+  `SaveParameters` seam, `DocumentEdits.SetConfiguration`/`Add`/`Remove`,
+  document persistence with the active name round-tripping and the load NOT re-applying,
+  `Bom.ByConfiguration`; docs `examples/configurations.md`, design.md §6b). Four residuals:
+  - **Per-configuration SUPPRESSION** — "the variant without the boss", and the most-wanted
+    thing v1 does not do. It is deliberately absent rather than missed: suppression is not
+    part of the `SaveParameters` vocabulary, so it would arrive as a second field beside the
+    parameter object with its own capture, compare, round-trip and staleness rules, which is
+    the drift the one-seam rule exists to prevent. The shape a v2 would take is known and
+    small — suppression is ALREADY in the regeneration cache key and already round-trips
+    through `SaveHistory`, so it is a `suppressed: ["boss"]` array on `Configuration` plus
+    four call sites (`Capture`, `Matches`, `Activate`, `Validate`), not new machinery — but
+    it needs the decision recorded about whether a partial set that omits the array means
+    "leave suppression alone" (it must) and whether `ActiveIsModified` reads it.
+  - **A configuration cannot span PARTS.** The entry's "one `FeatureHistory`" is honoured
+    literally, so an assembly-level configuration ("the metric build") that drives several
+    parts at once has no spelling. It is not a bigger version of this: a document-level set
+    is keyed by (part, feature, param) rather than (feature, param), which means deciding
+    what happens when a member part is removed or renamed, and whether a part's own active
+    configuration is overridden or composed. SolidWorks has both and they mean different
+    things; pick deliberately rather than generalizing the type.
+  - **No host surface yet.** No MCP tool (`list_configurations`/`set_configuration` are the
+    obvious pair and the seam is already `Part.Configurations`), and no viewer control — the
+    natural place is a dropdown beside the properties panel's `[Param]` editors, writing
+    through `DocumentEdits.SetConfiguration` so it is one Ctrl+Z and never a second way to
+    apply a value (the material dropdown's precedent, including its `republish` question:
+    a configuration DOES move geometry, so unlike a material it must republish).
+  - **`DocumentEdit` has no channel for warnings**, so `SetConfiguration` drops the
+    `LoadParameters` messages a stale configuration produces; the documented answer is to
+    call `ConfigurationSet.Validate()` first or `Activate` directly. That is honest and a
+    little thin — every other edit here either cannot warn or throws — and the general
+    question (should a `DocumentEdit` be able to report non-fatal findings?) is worth
+    settling once for the whole vocabulary rather than for this one edit.
 - [ ] **Tamper-mesh follow-ups** (`TamperMesh.cs` + `TiledHilbertRoute.cs` landed: an
   anti-drill conductive serpentine over a rectangular wall, N interleaved nets, and a
   `DrillGuarantee` that is derived AND measured by certified branch and bound; docs
