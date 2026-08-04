@@ -1085,13 +1085,70 @@ reaches `SetParameters` as JSON `null` rather than as an empty string, which is 
 `SiteFor` also resolves a *piece* of a site's edge as that site, since a relief notches
 the blank and a selector can then only pick one of the pieces.
 
-**Refused by name** rather than approximated: bends along non-straight edges, closed
-corners and miters (two flanges meeting at a corner of the sheet), jogs, hems, louvres,
-curls, two flanges sharing a stretch of edge (reliefs included in the stretch), flanges
-on a flange's side edges, reliefs on a flange's tip, holes declared on a flange and
-carried into the flat pattern, and multi-body sheets. The **tear relief** is a documented
-absence rather than a refusal: it is what happens when no relief is cut, and its shape
-belongs to the press — as spring-back does.
+**Closed corners** (`WithCorner`) are ONE operation over two flanges rather than two that
+happen to meet: a full-width flange consumes its wall and splices into the faces at both
+ends, so a second flange declared afterwards on a neighbouring edge would find a wall that
+is no longer four-sided. Locating both first is the whole fix. **The miter is a closed
+form, not an intersection** — two bends of the same radius quoted on the same face have
+axes meeting over the sheet's corner, and two equal-radius cylinders with intersecting
+axes meet in ELLIPSES, the fact `Filleting`'s sharp-corner miters already stand on — so
+each band's cut is an exact `Ellipse3d` (centre = the shared axis point, one semi-axis the
+inward radial, the other reaching where the two OUTWARD-OFFSET bend lines cross, itself
+the closed-form bisector `R(ŵ_A + ŵ_B)/(1 + ŵ_A·ŵ_B)`). The two flanges' cut chains are
+the *same* curves, because the configuration is symmetric under reflection in the miter
+plane, so they are welded rather than butted and nothing lies in the miter plane at all.
+**It moves the volume identity, by exactly the material it shares**: each flange now runs
+to the miter plane rather than stopping at the corner, so the folded body gains that
+flange's cross-section's first moment about the corner line — `((R+T)³ − R³)/3` from the
+bend's annular sector plus `T·L·(R + T/2)` from the wall — while the blank is untouched,
+which is what "an unrelieved corner shares material" means (predicted 10713.242157,
+measured 10713.244229: 1.9e-7 relative, the mass-properties grade). Two build lessons: the
+bend BANDS' parameter rectangles must be lengthened past the span (the
+trim-the-domain-driven-surface rule running the other way), and the reach comes from the
+arc's own SEMI-AXIS rather than its endpoints, since past a square bend the ellipse's
+furthest point is at t = 90°, strictly inside the trimmed range.
+
+**Hems, jogs and curls** (`WithHem`/`WithJog`/`WithCurl`) are two or more ordinary bends,
+so none of them is new geometry — what is added is the declaration plus the arithmetic
+turning a shop dimension into flange lengths. A hem is two bends the SAME way rather than
+one 180° fold (which has no geometry here at all: its setback diverges, and a leg flat
+against the sheet is coincident boundary); its gap is `2R + L`, so `2R` or less is a
+CLOSED hem and refuses. A jog is two equal and OPPOSITE bends with the intermediate leg in
+closed form, `L = (offset − (2R + T)(1 − cos θ)) / sin θ`. A curl is a chain of equal hits
+and is honestly POLYGONAL, said in the API rather than approximated away.
+
+**Flange CUTOUTS** (`EdgeFlange.Cutouts`) are closed sketches in the flange's own local
+coordinates, punched through the wall and carried into the blank by the flange's rigid
+flat frame — one declaration, both views, as a relief is. The backlog expected this to
+need the wall rebuilt from a `Sketch`; measured, a HOLE does not: it is additive surgery
+on the wall's two planar faces plus one band face per profile segment, and only a change
+to the wall's OUTLINE needs the generalisation. Which of the two faces a cutout lies on is
+DERIVED from its own plane normal rather than declared.
+
+**Multi-body sheets and welded assemblies** need no sheet-metal machinery: a sheet part is
+one flange tree and one blank *by design*, and a weldment is several PARTS in an
+`Assembly` — the BOM counts them, mates position them, and `SheetMetalFeatures.UnfoldAll`
+(the one seam `--flat` and the viewer's Flat button both read) cuts them.
+
+**Mirrored placements** are Native by being re-DECLARED rather than re-placed
+(`MirroredInPlane`): the base sketch is reflected, which reverses its winding, so a
+segment at index `i` of `n` lands at `n − 1 − i`, every span reverses along its own edge
+and every cutout mirrors in its flange's local x — then the tree is placed on a PROPER
+frame, since `P = P′·FlipX`. FlipX rather than FlipZ, so the sheet's own +Z (the face
+every bend line is quoted on) never moves and `SheetBendDirection` keeps meaning one
+thing.
+
+**Refused by name** rather than approximated: **bends along non-straight edges — a
+THEOREM rather than a gap**, since folding along a curve is not an isometry of the sheet
+(a circular bend line's band is a torus segment, whose Gaussian curvature is non-zero
+where a flat sheet's is zero), so the material must stretch and there is no blank behind
+it; a cutout crossing a bend line (its flat shape is that band's *development*, not the
+flange's rigid frame); reliefs on a flange's TIP (a relief notches its parent's outline,
+and a flange's wall is still built as a plain rectangle — its holes are declarable, its
+outline is not); louvres (an interior bend line plus a lance, so not an edge flange at
+all); two flanges sharing a stretch of edge; and flanges on a flange's side edges. The
+**tear relief** is a documented absence rather than a refusal: it is what happens when no
+relief is cut, and its shape belongs to the press — as spring-back does.
 
 ## Frames & weldments (`Frames.cs`)
 

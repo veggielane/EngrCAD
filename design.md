@@ -4232,15 +4232,104 @@ the genuinely new work is a **model**, not new surface types.
   and reads the kind back off the flange tree BY NAME, and asserts the two enums' member
   sets agree, so a kind added to one and not the other fails there rather than quietly
   meaning something else.
-- **v2 still stops where corners begin.** Closed corners and miters, non-straight bend
-  lines, jogs, hems, louvres, curls, two flanges sharing a stretch of edge, flanges on a
-  flange's SIDE edges, reliefs on a flange TIP, flange-local holes carried into the flat
-  pattern, mirrored placements and multi-body sheets are all refused by name. What v2
-  removed from that list is instructive about what a "corner in disguise" really was: a
-  flange flush at ONE end only was NOT one (its two ends never meet), while a second
-  flange on a wall an earlier flange reshaped genuinely is, and the four-sided-wall check
-  still catches it. The **tear relief** is a documented absence rather than a refusal — it
-  is what happens when no relief is cut, and its shape belongs to the press, exactly as
+- **A closed corner is ONE operation over two flanges, and its miter is a closed form.**
+  v1 and v2 refused it as "the two bends' bands have to be trimmed against each other",
+  costed alongside curved-face shelling as needing surface–surface re-intersection. It
+  needs no intersection at all: two bends of the same radius quoted on the same face have
+  axes that MEET over the sheet's corner, and two equal-radius cylinders with intersecting
+  axes meet in two ELLIPSES — the same fact `Filleting`'s sharp-corner miters already
+  stand on. Each band's cut is an exact `Ellipse3d` whose centre is the shared axis point,
+  whose one semi-axis is the inward radial and whose other reaches where the two
+  OUTWARD-OFFSET bend lines cross, itself the closed-form bisector
+  `R(ŵ_A + ŵ_B)/(1 + ŵ_A·ŵ_B)`. **And the two flanges' cut chains are the SAME curves** —
+  the configuration is symmetric under reflection in the miter plane, which swaps them —
+  so they are built once and used by one face of each: nothing lies in the miter plane,
+  which is what "closed" means, welded rather than butted across a gap. The reason it is
+  one DECLARATION is topological rather than geometric: a full-width flange consumes its
+  wall and splices its cross-section into the faces at both ends, so a second flange
+  declared afterwards on a neighbouring edge finds a wall that is no longer four-sided —
+  which is precisely the refusal this replaces — and locating both before either is built
+  is the whole fix, which also lets the sheet's own corner edge fall away once both walls
+  are consumed. **It moves the volume identity, by exactly the material it shares**: each
+  flange now runs to the miter plane instead of stopping at the corner, so the folded body
+  GAINS that flange's cross-section's first moment about the corner line,
+  `((R+T)³ − R³)/3` from the annular sector plus `T·L·(R + T/2)` from the wall, while the
+  blank is untouched — which is what "an unrelieved corner shares material" means, since
+  the blank has none to give. Measured 10713.244229 against a predicted 10713.242157,
+  1.9e-7 relative, the tessellate-then-Richardson grade; exact at 70°, 90° and 110°. Two
+  build lessons: a mitred band's PARAMETER RECTANGLE has to be lengthened past the span
+  (the trim-the-domain-driven-surface rule that already re-surfaces a spliced neighbour as
+  a plane, running the other way), and the reach must be measured from the arc's own
+  SEMI-AXIS rather than from its two endpoints, because past a square bend the ellipse's
+  furthest point is at t = 90°, strictly inside the trimmed range — endpoints alone
+  under-reach and the tessellator refuses with the loop 0.04 outside the rectangle.
+- **A hem, a jog and a curl are already expressible; what was missing was the
+  declaration.** Each is two or more ordinary bends, so none needed new geometry — and a
+  hem in particular is two bends the SAME way rather than one 180° fold, which has no
+  geometry in this model at all (its outside setback `(R+T)·tan(θ/2)` diverges there) and
+  whose return leg flat against the sheet is exactly the coincident boundary the tangency
+  argument refuses. Two hits is also how a press brake makes one, so the model and the
+  process agree, and the intermediate leg IS the open gap: `gap = 2R + L`, so a gap of
+  `2R` or less is a CLOSED hem and refuses by name. A jog's leg is closed form,
+  `L = (offset − (2R + T)(1 − cos θ)) / sin θ`. A curl is honestly POLYGONAL and says so
+  in its own API doc rather than approximating a continuous roll.
+- **A flange CUTOUT did not need the wall rebuilt from a sketch, and that correction is
+  the finding.** The backlog framed flange-local holes as "one change, two features" —
+  the wall's outline generalised from a rectangle to a `Sketch`. Measured, a HOLE needs
+  none of it: it is additive surgery on the wall's two planar faces (a hole loop apiece)
+  plus one band face per profile segment, with the rectangle untouched; only a change to
+  the wall's OUTLINE (a relief on a tip, a corner tab) needs the generalisation, which is
+  therefore still open and named. Cutouts are declared in the flange's own local
+  coordinates — the same coordinates its rigid 2D frame in the blank and its 3D frame on
+  the wall both place — so one declaration reaches both views exactly as a relief does,
+  and which of the wall's two faces a cutout lies on is DERIVED from its own plane normal
+  rather than declared (it is the inside face for an Up flange and the outside for a Down
+  one, so stating it would be one more convention to get wrong).
+- **A mirrored placement is re-DECLARED, not re-placed.** The refusal was real and its
+  cause was NAMING: a flange tree is ordered and quoted on named edges, so a reflection
+  has to move the names. `MirroredInPlane` rebuilds the tree the other way round and the
+  compiler places THAT on a proper frame — `P = P′·FlipX` with `P′` proper, so placing the
+  reflected body on `P′` IS placing the original on `P`, and the reflection is spent once,
+  half in the declaration and half in the frame, never twice. Three remaps, each forced by
+  the reflection's own arithmetic: `Sketch.Mirrored` restores winding by REVERSING the
+  loop, so a segment at index `i` of `n` lands at `n − 1 − i`; an edge's parameterization
+  reverses with it, so a span `[s, s+w]` of an edge of length `L` becomes `[L−s−w, L−s]`;
+  and cutouts are quoted in the flange's own local x, so each mirrors and slides back by
+  the width. **FlipX rather than FlipZ** is load-bearing: it leaves the sheet's own +Z —
+  the face every bend line is quoted on — exactly where it was, so `SheetBendDirection`
+  keeps meaning one thing. Verified by vertex SETS through the reflection (a volume
+  comparison passes a tree flipped the wrong way round) plus `Mirror(Mirror(x))` being the
+  original, which is what proves the remaps are an involution.
+- **Multi-body sheets and welded assemblies needed no sheet-metal work**, and saying why
+  is the deliverable: a sheet part is ONE flange tree and ONE blank by design, and a
+  weldment is several PARTS in an `Assembly` — which the document model already expresses,
+  the BOM already counts and mates already position. What was missing was the seam that
+  cuts them all (`SheetMetalFeatures.UnfoldAll`, read by both the `--flat` CLI verb and the
+  viewer's Flat button so neither can grow a second opinion) and the statement of the
+  boundary: folding several bodies into one `SheetMetalBody` would make `FlatPattern` mean
+  two things at once, and a BOOLEAN of two sheet solids is a solid rather than a sheet part
+  — a union node carries no flange tree, so it has no blank.
+- **A curved bend line is refused by a THEOREM, not by a missing surface**, and the
+  backlog's premise ("a curved bend line sweeps a developable band ... needs a new swept
+  surface") was wrong in exactly the way that invites someone to go and build it. Folding
+  a sheet along a curve is NOT AN ISOMETRY of the sheet, so no flat blank produces it:
+  along a circular bend line the band is a torus segment, whose Gaussian curvature is
+  non-zero everywhere a flat sheet's is zero, so the material must stretch or shrink.
+  That is FORMING rather than bending, it has no bend allowance, and building the surface
+  would have bought a solid whose flat pattern was a lie — the one thing "the declaration
+  IS the model" exists to prevent. Measured rather than asserted: a straight bend of width
+  w spends exactly `w × BA` of blank and has exactly that much neutral-surface area, while
+  the same bend run round a circle has a Pappus area about 3% different — the material a
+  fabricator would have to find, and if the two agreed the refusal would be wrong.
+- **What is still refused, with reasons rather than deferrals**: a cutout crossing a bend
+  line (its flat shape is that band's DEVELOPMENT rather than the flange's rigid frame —
+  the flat side of it is cheap and exact, the folded side needs a general curve wrapped on
+  a cylinder); a relief on a flange TIP (the wall's OUTLINE from a sketch, the half of the
+  "one change, two features" prediction that survived); a LOUVRE (its bend line is
+  interior to a face rather than on an edge and it is lanced as well as formed, so it is
+  not an edge flange at all); two flanges sharing a stretch of edge; and flanges on a
+  flange's SIDE edges. The **tear relief** is a documented absence rather than a refusal —
+  it is what happens when no relief is cut, and its shape belongs to the press, exactly as
   spring-back does.
 
 Frames & weldments (`Frames.cs`) follow the same doctrine — a declaration (profile +
