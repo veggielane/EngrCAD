@@ -13,13 +13,71 @@ logging complements them, never replaces them.
 
 ## The conversion triangle
 
-- **Implicit → Mesh**: `SurfaceNets.Polygonize(sdf, region?, resolution, progress?)` —
-  manifold Surface Nets (dual contouring): one vertex per *sheet* a cell's inside corners
+- **Implicit → Mesh**: `SurfaceNets.Polygonize(sdf, region?, resolution, progress?, options?)`
+  — manifold dual contouring: one vertex per *sheet* a cell's inside corners
   bound (plain one-vertex-per-cell produces non-manifold edges on thin sheets and saddles),
   one quad per interior sign-changing grid edge, wound outward.
   Surfaces crossing the sampling region come out open there. The
   optional `ProgressCancel` reports coarse progress and cancels cooperatively
   (throws `OperationCanceledException`, partial results discarded).
+  - **Sharp features are ON by default** (`SurfaceNetsOptions.SharpFeatures`): a vertex goes
+    at the minimiser of `SurfaceQef` — the quadratic error of the field's own tangent planes
+    at that vertex's crossings — rather than at the mean of the crossings. **The mean lies
+    strictly inside every convex corner and every edge by construction**, so a polygonized
+    box came back chamfered at every resolution: measured, the nearest vertex to a box
+    corner sat 0.72 / 0.38 / 0.22 model units away at resolutions 16 / 24 / 32, and NOT
+    converging (0.048 at 48, 0.22 again at 64) because it is what the averaging rule
+    computes rather than an error in computing it. With the quadric a box is reproduced
+    EXACTLY: every vertex reads exactly zero from the box's own field and the volume is
+    exactly the box's, at every resolution, at any placement, and to 4.4e-12 rotated off
+    every axis. Smooth fields improve too, by an order of magnitude in volume error (sphere
+    −2.66% → +0.57% at 16, −0.119% → +0.025% at 64; torus −2.18% → +0.46% at 32), because
+    the rank-1 quadric projects the mean onto the field's own tangent plane instead of
+    leaving it inside by the chord sagitta. `SharpFeatures = false` reproduces the previous
+    output bit for bit; the cost is 1.6–2.1×, falling with resolution.
+  - **Placement never changes TOPOLOGY, which is the whole manifoldness argument.** Which
+    crossings belong to which vertex is decided before any position is computed, so the
+    index buffer handed to `HalfEdgeMesh.Build` is bit-for-bit what it always was —
+    manifoldness is preserved by construction rather than re-verified, and the golden
+    fingerprints are split into a TOPOLOGY hash asserted for both placement rules from one
+    row and POSITION hashes per rule.
+  - **The Hermite point is the crossing PROJECTED ONTO THE SURFACE, and skipping that step
+    is a defect a symmetric fixture cannot see.** A grid crossing is where the field's
+    LINEAR INTERPOLANT along a cube edge vanishes, which is on the surface only where the
+    field is linear along that edge — and at a feature it is not: a box's field near a
+    corner is a MAX of three linear pieces, so an edge whose inside sample is governed by a
+    different face crosses zero at the wrong place and the plane built through it has the
+    wrong offset. One Newton step along the gradient (`p − d/|grad| · n̂`, bounded by one
+    cell) fixes it, exactly wherever the field is locally linear. Measured: a box sharing
+    its centre with the sampling region read EXACTLY zero without the step, because the
+    corner then sits at the same fractional position on all three axes — while an
+    asymmetric box read 2.6e-2 and an offset one 3.5e-2, a quarter of the incumbent error
+    rather than none of it. All three now read under 1e-12.
+  - **`ClampCells` (default 1) is where a vertex may go, and BOTH textbook answers are
+    wrong.** Clamping to the strict cell chamfers a ROTATED box's edges by a quarter of a
+    cell (worst vertex 0.141 / 0.109 / 0.048 off the surface at 32 / 48 / 96, converging
+    only linearly) because a cell that sees both faces of an edge need not contain the edge,
+    so the minimiser on the edge LINE is legitimately just outside; not clamping at all
+    lets an under-resolved gyroid throw a vertex **4.3 cells** out, past its neighbours'
+    neighbours. Half a cell is measurably not enough (4.3e-3). One cell is the neighbourhood
+    a cell's own crossings can speak about — a fit's data, not an extrapolation beyond it —
+    and it measures 4.4e-12 on every box placement while bounding the gyroid.
+  - **Adaptive output** (`SimplifyTolerance`, opt-in; `SurfaceNetsSimplify`) merges the
+    cells whose merged quadric still describes the same surface, the tolerance being a
+    LENGTH (the RMS distance a merged vertex may sit from the planes its cluster swallowed).
+    A box collapses to **six quads** with its volume still exactly 1000; a drilled box at
+    resolution 64 goes 12 008 → 1 160 faces (10.4×) for 0.03% of volume; the smooth-blend
+    CSG fixture falls 3.3× at resolution 48 and **14.7× at 256**. Cracks are structurally
+    impossible (the connectivity is the uniform walk's face buffer RE-INDEXED, never
+    re-derived), and manifoldness is checked rather than argued — each octant's members are
+    split into connected components first, and any cluster implicated in a repeated corner,
+    a duplicate directed edge or a pinched vertex link is REVERTED, a loop that terminates
+    because un-merging can only remove violations. **It is bottom-up deliberately**: a
+    top-down octree refining on measured curvature would save the sampling too and cannot
+    certify that no feature hides between the samples it took — exactly the argument
+    `SurfaceCull` is built on — where collapsing cells the walk has visited inherits that
+    argument unchanged. The cost is stated: it saves faces and everything downstream of
+    them, and saves no evaluation time.
   - **An inside component can bound SEVERAL sheets, and giving it one vertex pinches the
     mesh there.** This is the residual the ambiguous-face fix below left behind, and it is
     a defect on ordinary models rather than on lattices: a wall about one cell thick has
@@ -885,6 +943,15 @@ affordable, and the ordering matters far more than the face count:
    for a closed mesh: a ray along the normal leaves the solid through a front-facing face,
    so the front-facing projections already cover the whole outline. An open mesh keeps
    every face, because that argument does not hold.
+   - **A NON-PLANAR face can project to a self-crossing polygon**, which `Region2d` refuses
+     by name and correctly — there is no fill rule for it that is not arbitrary. It is not
+     exotic: near the silhouette the surface is nearly edge-on, so a quad's four corners can
+     project in a different cyclic order than they occupy in 3D. The answer is the mesh's own
+     decomposition rather than a fill rule — the face IS its `PolygonFan` triangles to every
+     other consumer, and a triangle cannot self-cross — so such a face is replaced by exactly
+     those triangles. The simplicity test ASKS `Region2dValidation.TryFindCrossing`, the same
+     code the constructor would have refused with, so the decomposition fires exactly when it
+     is needed and simple projections take the incumbent path untouched.
 2. **Faces are Morton-sorted by projected centroid**, so the fold merges neighbours first
    and intermediate boundaries stay simple. Merging face 1 with face 900 produces two
    disjoint regions and no cancellation at all.
