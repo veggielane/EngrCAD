@@ -1652,6 +1652,120 @@ with different `Recovery`/`Averaging` settings — including across one transien
 stored states — would book the recovery gap between two fields of different accuracy as
 alternating stress.
 
+## 3k. Topology optimisation (`EngrCAD.Fea`)
+
+Compliance minimisation by SIMP over the tetrahedral meshes, with an optimality-criteria
+update and a filter. It was filed as small and it is: the stiffness assembly, the
+factorization and the element strain energy already existed, so **the feature is the LOOP**,
+and every decision worth recording is about what the loop may assume.
+
+### The sensitivity was almost free, and "almost" is the finding
+
+The backlog said `dc/drho_e = -p·rho^(p-1)·u_e' k0 u_e` "IS the element strain energy, which
+`StructuralResults` already computes for its stress recovery". Half right, and worth stating
+precisely because the correction changed nothing about the size of the job and everything
+about where the code went. `StructuralResults.ComputeErrorEstimate` does accumulate a
+per-element energy — and then DISCARDS it: the per-element array it fills holds the estimated
+ERROR, and the energy survives only as a global total. It is also integrated at
+`TetQuadrature.Degree3`/`Degree5`, chosen to be exact for the estimate's degree-2p integrand,
+where the quantity SIMP wants is `u_e' k0 u_e` for the `k0` the ASSEMBLY built — which means
+the assembly's own rule, `TetQuadrature.For(order)`, and no other. So the energy is computed
+in the optimiser at that rule, and the reward is an identity worth more than the saving would
+have been: `sum_e rho_e^p·E_e` and `f'u` are then the same number (measured **1.5e-15**
+relative), two constructions checking each other.
+
+### One shared path was touched, and only one
+
+`FeaAssembly.Stiffness` gained an optional per-element scale. Passing null SKIPS the multiply
+rather than multiplying by 1.0 — bit-identical for every incumbent caller, and the two are
+different statements even though only one is free. Nothing else changed: because
+design-dependent loads are refused (below), every load is already reduced to nodal forces on
+the model, so the right-hand side is a gather assembled ONCE for the whole run and the
+optimiser needs no second assembly implementation. `StructuralModel` gained one internal
+`HasVolumeLoad` flag, set where the load is applied rather than recovered by matching a
+`Conditions` message string, which is prose for a human and would break on a rewording.
+
+### Refusals protect a PROPERTY of the load, not the formulation
+
+Compliance is self-adjoint only while the load does not depend on the design, and that is what
+makes the sensitivity free. Each refusal names a case where it stops being merely inaccurate
+and becomes wrong: `Gravity`/`BodyForce` (self-weight is integrated over the full-density body
+once, so a run would minimise one structure's compliance under a different structure's
+weight), a prescribed non-zero displacement (the force moves with the stiffness, so minimising
+`f'u` maximises COMPLIANCE — the sign of the whole problem flips), and a thermal load
+(`alpha·dT` enters through `D`, so it scales with `rho^p`). Local stress constraints and
+several load cases are refused as NAMED non-goals for a different reason — each needs a
+parameter that changes the answer (an aggregation exponent, a weighting), so each is a
+separate feature with its own verification rather than a flag on this one.
+
+### The constraint is on the PHYSICAL volume, and the closed form is what caught it
+
+A row-normalised filter is not volume-preserving: near a boundary an element's neighbourhood
+is truncated, so the column sums of `W` are not the element volumes. Constraining the DESIGN
+variables therefore lets the structure hold more material than was asked for — and on the
+uniform-bar fixture, whose convex optimum at `p = 1` is exactly `c0/f`, that form returned
+**1.79·c0** against the closed form's **2.00·c0**: a compliance BELOW the true optimum, which
+is only reachable by spending volume the constraint said was not there. No picture would have
+shown it and no "the volume fraction is 0.4" assertion would have failed.
+
+It costs nothing to fix, because the filter is LINEAR: `V(x) = v'(Wx) = (W'v)·x` is exactly
+linear in the design variables, so one transpose at the start gives both the gradient and an
+exact evaluator and the bisection never applies the filter at all. `DesignVolumeFraction` is
+reported beside the physical one so the gap stays visible.
+
+### The filter's radius is an engineering input
+
+`r_min` sets the minimum member size, so it is a manufacturing statement (the thinnest wall a
+printer holds, a cutter's diameter) and it has **no default** — a default there would be a
+manufacturing decision made by a library. Weights carry element VOLUME, which the published
+uniform-grid forms do not have to: on a tetrahedral mesh a patch of small elements would
+otherwise out-vote a neighbouring patch of large ones by being numerous, and including `v_j`
+reduces exactly to the published form when the volumes are equal.
+
+`TopologyFilter.Density` is the default over `Sensitivity` on a verification argument rather
+than a convergence one: the density filter is a genuine change of variables, so the reported
+sensitivity is the EXACT gradient of the compliance that was computed, which is what makes a
+finite-difference check of it meaningful (measured 9.9e-8 through the chain rule). Sigmund's
+sensitivity filter is a heuristic — its filtered sensitivity is the gradient of nothing — and
+is offered as one, with its real advantages stated (22 iterations against 89, and a crisper
+result). `None` is not a setting but the defect, kept public so the defect can be MEASURED:
+28x the neighbour variation and an order of magnitude more mesh dependence.
+
+### Extraction marches the mesh's own tetrahedra, NOT Surface Nets
+
+The backlog proposed `Sdf` + `SurfaceNets`, on the reasoning that a density field is an
+implicit field and the repository already has that route. It has a hard obstacle:
+`SurfaceNets.Polygonize` culls blocks using the **1-Lipschitz** property, and a density field
+is not 1-Lipschitz and has no useful bound — it goes from 0 to 1 across one element, whatever
+that element's size — so the cull would drop surface silently, which is the one failure a
+completeness argument exists to prevent. Two further reasons agree: the field is DEFINED on
+this mesh, so marching its own tetrahedra is exact for the piecewise-linear nodal field and
+adds no second discretisation; and `EngrCAD.Fea` is a leaf that cannot see `EngrCAD.Implicit`
+at all, while `HalfEdgeMesh` is a type both layers share and `Shape.From(mesh)` is one call.
+
+Two rules make the surface weld by INDEX with no tolerance: a crossing is computed from the
+LOWER-INDEXED end of its edge (the exact-boolean seam rule, so every tetrahedron containing
+that edge produces bit-identical coordinates), and a crossing landing exactly on a node is
+interned as that NODE, or the interior march and the boundary cap would put two vertices at
+one position. Orientation is read off the field — the level set of a linear function is planar
+with normal `grad g`, so one dot product winds all sixteen sign cases and none of them needs a
+table.
+
+**A B-Rep is refused by name**: the level set is a faceted surface with as many facets as the
+mesh has crossings, and there is no parametric surface in it to recover. Offering one would
+mean fitting, whose tolerance would silently become part of the answer.
+
+### A density field cannot be displayed on the design space's own mesh
+
+Learned from the first docs render, and it is a general statement about this result type
+rather than about that fixture. Every other FEA page samples its field onto the part's display
+mesh, which for a box is EIGHT vertices — and a stress field is smooth enough that eight
+corners still read plausibly, while a density field varies at element scale BY DESIGN. The
+first render duly came back showing a smooth gradient over the range 0.002 to 0.116 on a field
+whose true range is 0.001 to 1: a picture of nothing, and a convincing one. The fix is to
+sample onto `TetMesh.BoundaryMesh`, whose vertices ARE analysis nodes so every sample matches
+exactly.
+
 ## 4. Implicit engine
 
 - A model is an **AST of `Sdf` nodes**; every node reports conservative `Bounds`

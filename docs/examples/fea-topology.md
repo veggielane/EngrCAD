@@ -15,9 +15,8 @@ solid-or-void rather than settling into a uniform grey mush.
 
 ```csharp render:fea-topology-cantilever
 // The DESIGN SPACE: everywhere the material is allowed to be.
-var part = new Part("bracket", Shape.Box(60, 20, 8));
-var surface = part.GetMesh();
-var tets = TetMesher.Mesh(surface, new TetMeshOptions
+var space = Shape.Box(60, 32, 5);
+var tets = TetMesher.Mesh(space.ToMesh(), new TetMeshOptions
 {
     RefineQuality = true,
     MaxElementSize = 5,       // deliberately coarse - this page is a picture, not a study
@@ -25,16 +24,29 @@ var tets = TetMesher.Mesh(surface, new TetMeshOptions
 
 var model = new StructuralModel(AnalysisMesh.Of(tets), Materials.Steel);
 model.Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX));
-model.Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -2000));
+// The tip load on the BOTTOM of the free end rather than over the whole face. A load spread
+// over the whole section is a beam problem and the answer is a spar; a corner load has to be
+// carried diagonally, which is what makes the load PATH visible.
+model.Force(
+    Facets.And(
+        Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX),
+        Facets.InBox(new Aabb(new Vector3d(29, -17, -3), new Vector3d(31, -10, 3)))),
+    new Vector3d(0, 0, -2000));
 
 var result = TopologyOptimizer.Minimize(model, new TopologyOptions
 {
     VolumeFraction = 0.35,    // keep about a third of the box
-    FilterRadius = 5.0,       // the MINIMUM MEMBER SIZE, in millimetres - see below
-    MaxIterations = 60,
+    FilterRadius = 4.0,       // the MINIMUM MEMBER SIZE, in millimetres - see below
 });
 
-foreach (var field in result.SampleOnto(surface))
+// A density field varies at ELEMENT scale, so it has to be shown on a mesh that resolves it.
+// The design space's OWN display mesh is an eight-vertex box, and colouring that interpolates
+// the entire answer across eight corners: the same picture came back reading 0.002 to 0.116
+// on a field whose true range is 0.001 to 1. The tet mesh's boundary is the mesh that
+// resolves it, and its vertices ARE analysis nodes, so every sample matches exactly.
+var skin = tets.BoundaryMesh(out _);
+var part = new Part("design space", Shape.From(skin));
+foreach (var field in result.SampleOnto(skin))
     part.AddResult(field);
 part.FieldDisplay = new FieldDisplay
 {
@@ -48,9 +60,15 @@ scene.Add(part);
 
 ![Density field over a cantilever design space](images/fea-topology-cantilever.png)
 
-Yellow is material worth keeping, dark blue is material worth removing. The load path comes out
-as a truss: a tension tie along the top, a compression strut along the bottom, and diagonals
-carrying the shear back to the root.
+Yellow is material worth keeping, dark blue is material worth removing. The load path is a
+tapered arm running from the deep root to the loaded corner — deep where the bending moment is
+largest and slender where it is not — with the boundary between keep and remove sharp rather
+than smeared: this run comes out at a **discreteness of 0.118**, so the penalisation has very
+nearly decided.
+
+Note that this is the field on the design space's SKIN. That is the honest thing to show,
+because it is where the mesh has nodes; the members running through the interior are what the
+extraction below finds.
 
 ## Which optimiser: this or a design study?
 
@@ -142,9 +160,7 @@ Turning the field into geometry is a threshold plus a polygonisation, and the th
 stated parameter whose effect on the volume is reported rather than chosen quietly:
 
 ```csharp render:fea-topology-extracted
-var box = Shape.Box(60, 20, 8);
-var surface = box.ToMesh();
-var tets = TetMesher.Mesh(surface, new TetMeshOptions
+var tets = TetMesher.Mesh(Shape.Box(60, 32, 5).ToMesh(), new TetMeshOptions
 {
     RefineQuality = true,
     MaxElementSize = 5,
@@ -152,14 +168,20 @@ var tets = TetMesher.Mesh(surface, new TetMeshOptions
 
 var model = new StructuralModel(AnalysisMesh.Of(tets), Materials.Steel);
 model.Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX));
-model.Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -2000));
+// The tip load on the BOTTOM of the free end rather than over the whole face. A load spread
+// over the whole section is a beam problem and the answer is a spar; a corner load has to be
+// carried diagonally, which is what makes the load PATH visible.
+model.Force(
+    Facets.And(
+        Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX),
+        Facets.InBox(new Aabb(new Vector3d(29, -17, -3), new Vector3d(31, -10, 3)))),
+    new Vector3d(0, 0, -2000));
 
 var result = TopologyOptimizer.Minimize(model, new TopologyOptions
 {
     VolumeFraction = 0.35,
-    FilterRadius = 5.0,
+    FilterRadius = 4.0,
     Filter = TopologyFilter.Sensitivity,   // crisper, which is what a threshold wants
-    MaxIterations = 60,
 });
 
 // The threshold is a PARAMETER of the extraction, and it moves the volume: read
@@ -167,10 +189,16 @@ var result = TopologyOptimizer.Minimize(model, new TopologyOptions
 var solid = Shape.From(result.ExtractSurface(0.5));
 
 var scene = new Scene();
-scene.Add(new Part("structure", solid) { Color = PartColor.Steel });
+scene.Add(new Part("structure", solid));
 ```
 
 ![The structure extracted at a density threshold of 0.5](images/fea-topology-extracted.png)
+
+At a threshold of 0.5 this comes out as **0.3511** of the design space against the **0.35** that
+was asked for — the gap is small here precisely because the field is nearly discrete, and on a
+grey design it would not be. That is the number to read before believing a threshold, and it is
+why `ExtractedVolumeFraction` exists as a measurement rather than the 0.5 being assumed to be
+volume-preserving.
 
 `ExtractSurface` marches the mesh's **own tetrahedra**, which is exact for the piecewise-linear
 nodal field and introduces no second discretisation. It is deliberately not `Sdf` + Surface Nets,

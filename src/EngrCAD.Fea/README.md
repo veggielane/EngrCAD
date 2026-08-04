@@ -64,6 +64,10 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `SnCurve` / `FatigueMaterials` | The Basquin S-N line (endurance limit DERIVED from its own knee) and a transcribed, verify-against-datasheet catalogue |
 | `FatigueAnalysis` / `FatigueOptions` / `MeanStressCorrection` | Two load cases → per-node alternating/mean via signed von Mises, Goodman/Gerber corrected |
 | `FatigueResults` | Per-node safety factor and log10 life, published and sampled like every other result |
+| `TopologyOptimizer` / `TopologyOptions` / `TopologyFilter` | SIMP compliance minimisation: **where should the material go**, by optimality criteria over one density per element |
+| `TopologyResult` / `TopologyIteration` / `TopologyStop` | The density field, the per-iteration history, the discreteness measure, and the threshold-plus-polygonisation route to a shape |
+| `DensityFilter` | Internal: the radius neighbourhood both filters share, volume-weighted so it generalises the published uniform-grid form rather than replacing it |
+| `DensityIsoSurface` | Internal: marching TETRAHEDRA over the nodal density field — exact for the piecewise-linear field, and deliberately not `Sdf` + Surface Nets |
 | `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent MASS, GEOMETRIC stiffness, consistent loads, quadrature |
 | `FeaAssembly` | Internal: the DOF index map, whole-model stiffness, MASS and geometric-stiffness assembly, reduction and weighted matrix sums — shared so the modal, buckling and transient solvers cannot build different `K` or `M` |
 | `ThermalElement` / `TriangleQuadrature` | Internal: conductivity, capacity, convection surface matrix, expansion load |
@@ -2478,3 +2482,116 @@ approximated.
 - **Multiaxial criteria beyond von Mises equivalence** — non-proportional paths need
   critical-plane methods (Findley, Fatemi–Socie): a different computation over a
   different input, with the reversed-pure-shear case above as the structural tell.
+
+# Topology optimisation (SIMP)
+
+Every other solver here answers *how does this part behave*. `TopologyOptimizer` answers
+**where should the material go**: a design space, supports, a load and a volume budget in,
+one density per element out. Docs page: `docs/examples/fea-topology.md`, design.md §3k.
+
+```csharp
+var tets  = TetMesher.Mesh(Shape.Box(60, 32, 5).ToMesh(),
+                           new TetMeshOptions { RefineQuality = true, MaxElementSize = 5 });
+var model = new StructuralModel(AnalysisMesh.Of(tets), Materials.Steel);
+model.Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX));
+model.Force(tipPatch, new Vector3d(0, 0, -2000));
+
+var result = TopologyOptimizer.Minimize(model, new TopologyOptions
+{
+    VolumeFraction = 0.35,
+    FilterRadius   = 4.0,      // the MINIMUM MEMBER SIZE, in model units
+});
+
+Console.WriteLine(result.ToText());                  // per-iteration table
+var solid = result.ExtractSurface(0.5);              // a HalfEdgeMesh, at a STATED threshold
+```
+
+**The feature is the loop.** The assembly, the factorization and the element strain energy all
+existed already; `FeaAssembly.Stiffness` gained an optional per-element scale (null skips the
+multiply, so every incumbent caller assembles the same bits) and that is the only change to a
+shared path.
+
+## Not the same tool as a design study
+
+| | `DesignStudy` (Modeling) | `TopologyOptimizer` |
+| --- | --- | --- |
+| variables | a handful of `[Param]` values | one density per element — thousands |
+| gradients | **impossible**, so derivative-free | **mandatory**, and free |
+| what changes | dimensions of a shape you drew | which shape there is |
+
+A design study is derivative-free *because* a parameter change can alter topology, and the two
+sides of such a step are different solids. Here the topology changing **is** the answer.
+
+## The filter is not optional, and `r_min` is an engineering input
+
+Unfiltered SIMP checkerboards — alternating solid and void overestimates its own stiffness in
+a displacement-based element, so the optimiser finds and exploits it — and is mesh-dependent.
+Both are measured rather than asserted (win-x64, the fixtures in `TopologyOptimizerTests`):
+
+| | filtered | unfiltered |
+| --- | ---: | ---: |
+| neighbour variation (each element against its face neighbours' mean) | **0.020** | **0.555** |
+| compliance at the same volume | 4834 | **3027** (37% lower, and not a better structure) |
+| structure moved between mesh refinement levels, fixed `r_min` | 0.014, 0.014 | **0.137, 0.068** |
+
+`FilterRadius` is the minimum member size, so it has **no default**: a default there would be
+a manufacturing decision made by a library. `TopologyFilter.Density` is the default because it
+is a genuine change of variables and its sensitivity is therefore the exact gradient of the
+computed compliance — which is what makes the finite-difference check meaningful.
+`TopologyFilter.Sensitivity` (Sigmund's, the 99-line paper's) converges much faster and comes
+out crisper but is a heuristic, and says so. `TopologyFilter.None` is the defect, kept public
+so it can be measured.
+
+## Verification: closed forms and identities, never a picture
+
+A plausible-looking result is this feature's failure mode, and the published 99-line
+compliances are **not** reproducible by a 3D tetrahedral solver (they are 2D plane-stress
+figures on structured quadrilaterals). What is asserted instead:
+
+| claim | measured |
+| --- | --- |
+| uniform bar, `c = c0/f^p` | exact to 9 decimals at `p = 1` and `p = 3` |
+| stepped bar reaching the fully-stressed design `rho_i ∝ N_i` | compliance within **0.04%** / **0.12%** of `(L/2)(N1+N2)²/(2fEA)` |
+| sensitivity against a central finite difference | **1.8e-7** unfiltered, **9.9e-8** through the density filter's chain rule |
+| `c = f'u` against `sum rho^p·(u_e' k0 u_e)` | **1.5e-15** relative |
+| volume constraint, every iteration | worst relative miss **7e-16** |
+| compliance monotone under the OC update | 0 rises over 60 iterations, all three filters |
+| extraction of a uniform / linear field | exactly the body / exactly the analytic slab |
+
+**The uniform-bar closed form caught a real defect**, which is why it earns its place on a
+fixture whose answer is a stationary point: with the volume constraint stated on the DESIGN
+variables rather than the physical density, the run returned `1.79·c0` against the convex
+optimum's `2.00·c0` — a compliance *below* the true optimum, reachable only by holding
+material the constraint said was not there, because a row-normalised filter is not
+volume-preserving.
+
+## The answer is a field, not a shape
+
+An element at 0.5 is an unresolved decision, not half material — `TopologyResult.Discreteness`
+(the volume-weighted mean of `4·rho·(1-rho)`, 0 for solid-or-void and 1 for uniformly grey) is
+the number that says whether thresholding it means anything, and
+`ExtractedVolumeFraction(t)` reports what the threshold actually cost.
+
+`ExtractSurface` marches the mesh's **own tetrahedra**, exact for the piecewise-linear nodal
+field. It is deliberately not `Sdf` + Surface Nets: that cull rests on the **1-Lipschitz**
+property and a density field has no such bound, so it would drop surface silently. A B-Rep is
+refused by name — the level set is faceted, there is no parametric surface in it to recover,
+and offering one would mean fitting.
+
+**Displaying it needs a mesh that resolves it.** Sampling the field onto a part's own display
+mesh — eight vertices for a box — interpolates the whole answer across eight corners: measured,
+a picture reading 0.002 to 0.116 on a field whose true range is 0.001 to 1. Sample onto
+`TetMesh.BoundaryMesh` instead, whose vertices are analysis nodes.
+
+## Refused by name
+
+| refused | why the sensitivity would be wrong |
+| --- | --- |
+| `Gravity` / `BodyForce` | self-weight is design-dependent: integrated over the full-density body once, and compliance stops being self-adjoint |
+| a prescribed non-zero displacement | the force moves with the stiffness, so minimising `f'u` maximises *compliance* — the sign of the problem flips |
+| a thermal load | `alpha·dT` enters through `D`, so the load scales with `rho^p` |
+| local stress constraints | need aggregation, whose parameter changes the answer — a separate feature |
+| several load cases | the objective is a weighted sum and the weighting is the design decision |
+
+Nothing here publishes a stress: the stiffness carries a *penalised* modulus, so an element's
+stress would be the SIMP stress rather than a physical one.

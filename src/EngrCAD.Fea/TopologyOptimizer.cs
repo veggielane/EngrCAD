@@ -463,15 +463,34 @@ public static class TopologyOptimizer
             }
             catch (InvalidOperationException ex)
             {
+                // WHICH cause it is, is decided by the design rather than guessed at: while
+                // the softest element is still well above the void floor, nothing the
+                // optimiser has done can have disconnected anything, so the mesh is the
+                // suspect — and at iteration 1 the design is uniform, which makes this a solve
+                // an ordinary static run would have failed too. Naming one cause when the
+                // other is at fault is how a message sends a reader to the wrong knob.
+                double softest = 1;
+                foreach (double rho in PhysicalDensity)
+                    softest = Math.Min(softest, rho);
+                bool emptied = softest < 10 * _options.MinimumDensity;
                 throw new FeaException(
-                    $"The stiffness could not be factorized at iteration {iteration}. A SIMP "
-                    + "void element keeps rho_min^p = "
-                    + $"{Math.Pow(_options.MinimumDensity, _options.Penalty):G3} of the solid "
-                    + "stiffness, so a region that has emptied out is soft rather than absent "
-                    + "— but a part of the mesh joined to the supports only through such a "
-                    + "region can still be effectively free. Raise "
-                    + $"{nameof(TopologyOptions.MinimumDensity)}, or check that the supports "
-                    + "hold every body in the mesh.", ex);
+                    $"The stiffness could not be factorized at iteration {iteration} "
+                    + $"(softest element density {softest:G4}). "
+                    + (emptied
+                        ? "A SIMP void element keeps rho_min^p = "
+                          + $"{Math.Pow(_options.MinimumDensity, _options.Penalty):G3} of the "
+                          + "solid stiffness, so a region that has emptied out is soft rather "
+                          + "than absent — but a part of the mesh joined to the supports only "
+                          + "through such a region can still be effectively free. Raise "
+                          + $"{nameof(TopologyOptions.MinimumDensity)}, or check that the "
+                          + "supports hold every body in the mesh."
+                        : "No element is near the void floor, so this is not the optimiser "
+                          + "emptying a region out: the same system would have failed as an "
+                          + "ordinary static solve. The usual cause is mesh quality — a sliver "
+                          + "whose Jacobian is positive but tiny leaves the assembled matrix "
+                          + "not numerically positive definite. Check TetQuality.Analyze and "
+                          + "run TetSmoothing.Smooth, or mesh at a coarser target size."),
+                    ex);
             }
             factor.Solve(_load, _free);
 
