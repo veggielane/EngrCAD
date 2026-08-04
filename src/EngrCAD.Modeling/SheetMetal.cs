@@ -172,6 +172,14 @@ public enum SheetReliefKind
 /// <para>A relief is placed at each INSET end of its flange. A flush end has no parent
 /// material beside it to relieve, so a flange spanning its whole edge is refused by name
 /// rather than silently given nothing.</para>
+///
+/// <para><b>On a flange's TIP the same declaration means the same thing, by a different
+/// route.</b> A flange's wall is built from four corners rather than from a sketch, so
+/// there is no outline to notch — the notches travel with the PARENT flange's own
+/// construction instead (<c>SheetTipNotch</c>), which is why a parent has to know about
+/// its children's reliefs before it is built. What they buy is identical: between them the
+/// child runs the full width of a tip face that is still four-sided, so it reaches the
+/// surgery as an ordinary flush flange.</para>
 /// </summary>
 /// <param name="Kind">Notch shape.</param>
 /// <param name="Width">Notch width along the bend line; null uses one sheet thickness, the
@@ -505,12 +513,9 @@ public readonly record struct SheetFlangeSite(
 ///
 /// <para><b>Refused by name</b> rather than approximated: bends along non-straight edges
 /// (folding along a curve is not an isometry of the sheet, so no flat blank produces it);
-/// a cutout crossing a bend line (its flat shape is that band's DEVELOPMENT rather than
-/// the flange's rigid frame); a relief on a flange's TIP (a relief notches its parent's
-/// OUTLINE, and a flange's wall is still built as a plain rectangle rather than from a
-/// sketch — its holes are declarable, its outline is not); louvres (an interior bend line
-/// plus a lance, so not an edge flange at all); two flanges sharing a stretch of edge; and
-/// flanges on a flange's SIDE edges.</para>
+/// a zero-width LANCE (see <see cref="SheetLouvre"/> — the tab would be coincident with
+/// the opening it came out of); two flanges sharing a stretch of edge; and flanges on a
+/// flange's SIDE edges.</para>
 /// </summary>
 public sealed class SheetMetalBody
 {
@@ -993,13 +998,14 @@ public sealed class SheetMetalBody
                 var two = bends[partner];
                 solid = SheetMetalSurgery.AddCornerFlanges(
                     solid,
-                    one.Section, one.Start, one.End, one.WallLength, one.Cutouts,
-                    two.Section, two.Start, two.End, two.WallLength, two.Cutouts);
+                    one.Section, one.Start, one.End, one.WallLength, one.Cutouts, one.TipNotches,
+                    two.Section, two.Start, two.End, two.WallLength, two.Cutouts, two.TipNotches);
                 continue;
             }
             var bend = bends[i];
             solid = SheetMetalSurgery.AddEdgeFlange(
-                solid, bend.Section, bend.Start, bend.End, bend.WallLength, bend.Cutouts);
+                solid, bend.Section, bend.Start, bend.End, bend.WallLength, bend.Cutouts,
+                bend.TipNotches);
         }
         // A louvre's tab is grown by the SAME surgery on the edge of its own lanced opening:
         // the parent's hole has a four-sided planar side wall square to the bend line at
@@ -1095,13 +1101,20 @@ public sealed class SheetMetalBody
             (start - (relief is not null && inset[0] ? reliefWidth : 0),
              start + width + (relief is not null && inset[1] ? reliefWidth : 0));
 
+        /// <summary>Notches this flange's own TIP carries, in its own local x, put here by
+        /// the CHILDREN that asked for them. A relief beside a base-flange bend notches the
+        /// blank's outline; one beside a flange-tip bend has no sketch to notch, so it
+        /// travels with the parent's construction — which is why a parent has to know about
+        /// its children's reliefs before it is built.</summary>
+        public List<(double From, double To, double Depth, bool Rounded)> TipNotches { get; } = [];
+
         public List<Node> Children { get; } = [];
     }
 
     /// <summary>The surgery arguments for one bend.</summary>
     internal readonly record struct BendArgs(
         SheetBendSection Section, Vector3d Start, Vector3d End, double WallLength,
-        IReadOnlyList<Profile> Cutouts);
+        IReadOnlyList<Profile> Cutouts, IReadOnlyList<SheetTipNotch> TipNotches);
 
     /// <summary>One louvre resolved into the numbers both views read: the bend line's two
     /// ends in the base sketch's own coordinates, the allowance the bend spends, the
@@ -1401,7 +1414,7 @@ public sealed class SheetMetalBody
                     up ? q0 : q0 - normal * thickness,
                     up ? q1 : q1 - normal * thickness,
                     resolved.WallLength * scale,
-                    []));
+                    [], []));
             }
             return bends;
         }
@@ -1588,12 +1601,6 @@ public sealed class SheetMetalBody
         {
             if (flange.Relief is not { } relief)
                 return (0, 0);
-            if (parent.Index >= 0)
-                throw new NotSupportedException(
-                    $"Flange {index} asks for a bend relief on {flange.Target}. A relief notches the parent's " +
-                    "own OUTLINE, and a flange's wall is built as a plain rectangle rather than from a sketch, " +
-                    "so reliefs are cut only on the base flange's edges. Grow the relieved flange from the " +
-                    "base, or leave the relief off and let the corner tear.");
             if (!inset[0] && !inset[1])
                 throw new ArgumentException(
                     $"Flange {index} spans the whole of {flange.Target}, so there is no parent material beside " +
@@ -1620,6 +1627,31 @@ public sealed class SheetMetalBody
                     $"Flange {index}'s relief is {reliefWidth:g6} wide but only " +
                     $"{edgeLength - start - width:g6} of {flange.Target} is left beyond the flange, so the " +
                     "notch would run off the end of the edge.");
+
+            // On a FLANGE's tip the parent is a rectangle, so containment is one comparison
+            // — and the notches are recorded on the parent, which is built before this
+            // flange and has no sketch to notch (see Node.TipNotches).
+            if (parent.Index >= 0)
+            {
+                if (reliefDepth >= parent.WallLength - Weld)
+                    throw new ArgumentException(
+                        $"Flange {index}'s relief reaches {reliefDepth:g6} back into a parent flange whose " +
+                        $"wall is only {parent.WallLength:g6} long. A notch that reached the parent's own bend " +
+                        "would cut it in two rather than relieve it; make the relief shallower or the parent " +
+                        "longer.");
+                // The parent's tip edge runs from its local x = Width down to x = 0 (the
+                // traversal `EdgeOf` returns), so an edge parameter s sits at x = W - s.
+                for (int k = 0; k < 2; k++)
+                {
+                    if (!inset[k])
+                        continue;
+                    double from = k == 0 ? start - reliefWidth : start + width;
+                    parent.TipNotches.Add((
+                        parent.Width - (from + reliefWidth), parent.Width - from,
+                        reliefDepth, relief.Kind == SheetReliefKind.Obround));
+                }
+                return (reliefWidth, reliefDepth);
+            }
 
             // A notch is drawn as a DETOUR in the outline, so one reaching past the far
             // side of the parent makes a self-intersecting blank — and that failure is
@@ -1719,9 +1751,22 @@ public sealed class SheetMetalBody
                 // flange's top face — so the folded body's holes and the blank's holes come
                 // from one declaration through two placements of one frame, which is what
                 // makes them incapable of disagreeing.
+                // A tip notch is stated as its two points ON the flange's own tangent line,
+                // which is parallel to its bend line — the surgery reads only the component
+                // along the span, so the caller never has to know which end it ordered
+                // first.
+                var notches = new List<SheetTipNotch>(node.TipNotches.Count);
+                foreach (var (from, to, depth, rounded) in node.TipNotches)
+                {
+                    notches.Add(new SheetTipNotch(
+                        frame.ToWorld(new Vector2d(from, 0), scale),
+                        frame.ToWorld(new Vector2d(to, 0), scale),
+                        depth * scale, rounded));
+                }
+
                 bends.Add(new BendArgs(
                     startSection, startSection.BendLinePoint, endSection.BendLinePoint,
-                    node.WallLength * scale, PlaceCutouts(node, frame, scale)));
+                    node.WallLength * scale, PlaceCutouts(node, frame, scale), notches));
 
                 frames[node.Index] = frame;
             }

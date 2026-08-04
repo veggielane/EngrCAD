@@ -349,15 +349,93 @@ public class SheetMetalTests
         Assert.Contains("no parent material beside it", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A relief on a flange's TIP. There is no sketch to notch there — a flange's wall is
+    /// built from four corners — so the notches travel with the PARENT's construction, and
+    /// what they buy is the same thing a base-edge relief buys: between them the child runs
+    /// the full width of a tip face that is still four-sided, so it arrives at the surgery
+    /// as an ordinary FLUSH flange.
+    ///
+    /// <para>The oracles are exact on both views and on both notch shapes: the blank loses
+    /// exactly the notches' own closed-form area, the folded body exactly that times the
+    /// thickness, and the folded-versus-flat discrepancy does not move at all — a relief
+    /// takes the same material out of each, wherever it is cut.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(SheetReliefKind.Rectangular)]
+    [InlineData(SheetReliefKind.Obround)]
+    public void AReliefOnAFlangesTipRemovesExactlyItsOwnNotchesFromBothViews(SheetReliefKind kind)
+    {
+        const double width = 4, depth = 6;
+        SheetMetalBody Body(BendRelief? relief) =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+                .WithFlange(
+                    SheetFlangeTarget.FlangeTip(0), 12, startOffset: 12, width: 26, relief: relief);
+
+        var plain = Body(null);
+        var relieved = Body(new BendRelief(kind, width, depth));
+        var solid = relieved.Solid.ToBrep();
+        solid.Validate();
+
+        double notch = new BendRelief(kind, width, depth).AreaOf(width, depth);
+        Assert.Equal(plain.Unfold().Area - 2 * notch, relieved.Unfold().Area, 9);
+        Assert.Equal(
+            FoldedVolume(plain) - 2 * notch * Thickness, BrepMassProperties.Compute(solid).Volume, 3);
+
+        // ... so at K = 0.5 the two views still agree exactly, notches and all.
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / relieved.Unfold().Volume, 6);
+    }
+
+    /// <summary>The notched tip face is what the CHILD then bends on, and it has to be
+    /// four-sided for the surgery to treat it as a plain flush wall — pinned through a
+    /// grandchild flange, since that is the only thing that asks.</summary>
     [Fact]
-    public void AReliefOnAFlangesTipIsRefusedByName()
+    public void ATipReliefLeavesAWallAGrandchildFlangeCanBendOn()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+            .WithFlange(
+                SheetFlangeTarget.FlangeTip(0), 14, startOffset: 12, width: 26,
+                relief: BendRelief.Obround(3, 5))
+            .WithFlange(SheetFlangeTarget.FlangeTip(1), 8);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+        Assert.Equal(3, body.Unfold().Bends.Count);
+    }
+
+    /// <summary>A tip relief flush at ONE end cuts ONE notch, not two — the same
+    /// independent-ends rule an inset base flange follows, one level in. Measured against
+    /// the un-relieved twin, so the count is a closed form rather than a face tally.</summary>
+    [Fact]
+    public void ATipReliefFlushAtOneEndCutsOneNotch()
+    {
+        SheetMetalBody Body(BendRelief? relief) =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+                .WithFlange(
+                    SheetFlangeTarget.FlangeTip(0), 12, startOffset: 0, width: 40, relief: relief);
+
+        var plain = Body(null);
+        var relieved = Body(BendRelief.Rectangular(4, 6));
+        relieved.Solid.ToBrep().Validate();
+
+        Assert.Equal(plain.Unfold().Area - 4 * 6, relieved.Unfold().Area, 9);
+        Assert.Equal(FoldedVolume(plain) - 4 * 6 * Thickness, FoldedVolume(relieved), 3);
+        Assert.Equal(1.0, FoldedVolume(relieved) / relieved.Unfold().Volume, 6);
+    }
+
+    [Fact]
+    public void ATipReliefDeeperThanItsParentsWallIsRefusedNamingBoth()
     {
         var body = SheetMetalBody.Base(Plate(), Spec())
             .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
-        var exception = Assert.Throws<NotSupportedException>(() => body.WithFlange(
+        var exception = Assert.Throws<ArgumentException>(() => body.WithFlange(
             SheetFlangeTarget.FlangeTip(0), 10, startOffset: 5, width: 20,
-            relief: BendRelief.Rectangular()));
-        Assert.Contains("base flange's edges", exception.Message, StringComparison.Ordinal);
+            relief: BendRelief.Rectangular(2, 40)));
+        Assert.Contains("cut it in two rather than relieve it", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

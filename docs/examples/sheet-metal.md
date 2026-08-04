@@ -172,12 +172,37 @@ takes the notch past the bend's own tangent region. A **tear relief** is deliber
 absent from the vocabulary — it is what happens when no relief is cut at all, and the
 shape the material tears into belongs to the press, not to the geometry.
 
-Reliefs are cut only on the **base flange's** edges: a flange's own wall is built as a
-plain rectangle rather than from a sketch, so a relief on a flange tip is refused by
-name. A notch that reaches past the far side of its parent — or into a hole in it — is
-refused too, naming the point: a notch is a *detour in the outline*, so one running out
-of the parent leaves a self-intersecting blank, and it does so silently (the signed area
-still reads base-minus-notches, and the extrusion still validates).
+**On a flange's tip the same declaration means the same thing, by a different route.** A
+flange's wall is built from four corners rather than from a sketch, so there is no
+outline to notch: the notches travel with the *parent flange's* own construction instead,
+which is why a parent has to know about its children's reliefs before it is built. What
+they buy is identical — between them the child runs the full width of a tip face that is
+still four-sided, so it reaches the surgery as an ordinary flush flange, and the same two
+exact statements hold (the blank loses the notches' own closed-form area, the folded body
+that times the thickness, and the folded-versus-flat discrepancy does not move).
+
+```csharp render:sheet-metal-tip-relief
+var spec = new SheetMetalSpec(Thickness: 1.5, BendRadius: 1.5, KFactor: SheetMaterials.MildSteel);
+
+var bracket = SheetMetalBody
+    .Base(Sketch.Polygon([new(0, 0), new(90, 0), new(90, 55), new(0, 55)]), spec)
+    .WithFlange(SheetFlangeTarget.BaseEdge(1), length: 28)
+    // A relief on the FLANGE's tip: the notches are cut into that flange's wall.
+    .WithFlange(
+        SheetFlangeTarget.FlangeTip(0), length: 16, startOffset: 14, width: 27,
+        relief: BendRelief.Obround(width: 4, depth: 7));
+
+var scene = new Scene();
+scene.Add(new Part("bracket", bracket.Solid) { Color = new PartColor(0.66f, 0.70f, 0.74f) });
+```
+
+![A relief notched into a flange's own tip](images/sheet-metal-tip-relief.png)
+
+A notch that reaches past the far side of its parent — or into a hole in it — is refused,
+naming the point: on the base flange a notch is a *detour in the outline*, so one running
+out of the parent leaves a self-intersecting blank, and it does so silently (the signed
+area still reads base-minus-notches, and the extrusion still validates). On a flange tip
+the same refusal is one comparison, since the parent there is a rectangle.
 
 ### Closed corners
 
@@ -530,7 +555,6 @@ Refused **by name**, rather than approximated:
 | Two flanges sharing a stretch of one edge | Two bends cannot occupy the same material — and a relief counts as part of the stretch its flange occupies. |
 | Flanges on a flange's *side* edges | Only the tip: a side flange is a corner interaction. |
 | A cutout crossing a bend line | Its flat shape is that band's *development*, not the flange's rigid frame, and the unfold is bookkeeping over rigid frames. |
-| Reliefs on a flange's tip edge | A relief notches its parent's *outline*, and a flange's wall is built as a plain rectangle rather than from a sketch. Its **holes** are declarable (see Cutouts); its outline is not. |
 | A **zero-width** lance | Not a limit but a theorem: the tab's side face would be coincident with the wall of the opening it came out of, over the whole stretch where the bend band still lies inside it. State the die clearance or the kerf. |
 | Tear reliefs, spring-back compensation | Both belong to the press rather than to the geometry — a tear relief is what happens when no relief is cut. |
 

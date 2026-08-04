@@ -87,6 +87,31 @@ public readonly record struct SheetBendSection(
 }
 
 /// <summary>
+/// One notch cut into a flange's TIP: the bend relief a CHILD flange asks for, which takes
+/// its material out of the parent flange's wall rather than out of the blank.
+///
+/// <para><b>Why this is data on the parent rather than a cut in the child.</b> A relief
+/// beside a base-flange bend notches <c>SheetMetalBody.BaseOutline</c> and so needs no
+/// surgery at all; a relief beside a flange-TIP bend has no sketch to notch, because a
+/// flange's wall is built here from four corners. So the notches travel with the parent's
+/// own construction — it is built before its children, and this is what makes its wall
+/// outline more than a rectangle.</para>
+///
+/// <para><b>What it buys is the ordinary flush case.</b> Between its two notches the child
+/// runs the full width of a tip face that is still four-sided and still planar and square
+/// to the bend line, so it arrives at <see cref="SheetMetalSurgery.AddEdgeFlange"/> as a
+/// plain flush flange — exactly what a base-edge relief does one level up.</para>
+/// </summary>
+/// <param name="From">One end of the notch, as a point on the flange's bend line; only its
+/// position ALONG the span is read, so a caller need not know which end the surgery orders
+/// first.</param>
+/// <param name="To">The other end.</param>
+/// <param name="Depth">How far the notch reaches back from the tip.</param>
+/// <param name="Rounded">A semicircular bottom of half the notch's width (the
+/// fatigue-friendly form) rather than a square one.</param>
+public readonly record struct SheetTipNotch(Vector3d From, Vector3d To, double Depth, bool Rounded);
+
+/// <summary>
 /// Sheet-metal edge-flange construction as direct topology surgery on a B-Rep solid —
 /// the same doctrine as <see cref="Filleting"/>'s rim features, and for the same reason.
 ///
@@ -150,7 +175,7 @@ public static class SheetMetalSurgery
     public static BrepSolid AddEdgeFlange(
         BrepSolid solid, in SheetBendSection section,
         in Vector3d spanStart, in Vector3d spanEnd, double wallLength) =>
-        AddEdgeFlange(solid, section, spanStart, spanEnd, wallLength, []);
+        AddEdgeFlange(solid, section, spanStart, spanEnd, wallLength, [], []);
 
     /// <inheritdoc cref="AddEdgeFlange(BrepSolid, in SheetBendSection, in Vector3d, in Vector3d, double)"/>
     /// <param name="wallCutouts">Closed profiles lying ON one of the flange wall's two
@@ -160,10 +185,22 @@ public static class SheetMetalSurgery
     public static BrepSolid AddEdgeFlange(
         BrepSolid solid, in SheetBendSection section,
         in Vector3d spanStart, in Vector3d spanEnd, double wallLength,
-        IReadOnlyList<Profile> wallCutouts)
+        IReadOnlyList<Profile> wallCutouts) =>
+        AddEdgeFlange(solid, section, spanStart, spanEnd, wallLength, wallCutouts, []);
+
+    /// <inheritdoc cref="AddEdgeFlange(BrepSolid, in SheetBendSection, in Vector3d, in Vector3d, double, IReadOnlyList{Profile})"/>
+    /// <param name="tipNotches">Bend reliefs cut into this flange's TIP, for the benefit of
+    /// flanges grown from it — see <see cref="SheetTipNotch"/>. They split the tip face into
+    /// one four-sided piece per surviving stretch, which is what lets a child arrive as an
+    /// ordinary FLUSH flange.</param>
+    public static BrepSolid AddEdgeFlange(
+        BrepSolid solid, in SheetBendSection section,
+        in Vector3d spanStart, in Vector3d spanEnd, double wallLength,
+        IReadOnlyList<Profile> wallCutouts, IReadOnlyList<SheetTipNotch> tipNotches)
     {
         ArgumentNullException.ThrowIfNull(solid);
         ArgumentNullException.ThrowIfNull(wallCutouts);
+        ArgumentNullException.ThrowIfNull(tipNotches);
         Validate(section, wallLength);
 
         var n = section.Inside;
@@ -184,7 +221,7 @@ public static class SheetMetalSurgery
         var rims = ResolveRims(site, n, section.Thickness, q0, q1, a);
 
         var flange = BuildFlange(
-            section with { BendLinePoint = q0 }, q1 - q0, wallLength, rims, wallCutouts, null);
+            section with { BendLinePoint = q0 }, q1 - q0, wallLength, rims, wallCutouts, tipNotches, null);
 
         var faces = solid.Faces.Where(f => !ReferenceEquals(f, site.Wall)).ToList();
         faces.AddRange(flange.Faces);
@@ -229,9 +266,9 @@ public static class SheetMetalSurgery
     public static BrepSolid AddCornerFlanges(
         BrepSolid solid,
         in SheetBendSection sectionA, in Vector3d startA, in Vector3d endA, double wallA,
-        IReadOnlyList<Profile> cutoutsA,
+        IReadOnlyList<Profile> cutoutsA, IReadOnlyList<SheetTipNotch> notchesA,
         in SheetBendSection sectionB, in Vector3d startB, in Vector3d endB, double wallB,
-        IReadOnlyList<Profile> cutoutsB)
+        IReadOnlyList<Profile> cutoutsB, IReadOnlyList<SheetTipNotch> notchesB)
     {
         ArgumentNullException.ThrowIfNull(solid);
         Validate(sectionA, wallA);
@@ -261,10 +298,10 @@ public static class SheetMetalSurgery
             rimsA.InsideVertex[cornerA], rimsA.OutsideVertex[cornerA]);
 
         var flangeA = BuildFlange(
-            sectionA with { BendLinePoint = q0A }, q1A - q0A, wallA, rimsA, cutoutsA,
+            sectionA with { BendLinePoint = q0A }, q1A - q0A, wallA, rimsA, cutoutsA, notchesA,
             new CornerEnd(cornerA, miter));
         var flangeB = BuildFlange(
-            sectionB with { BendLinePoint = q0B }, q1B - q0B, wallB, rimsB, cutoutsB,
+            sectionB with { BendLinePoint = q0B }, q1B - q0B, wallB, rimsB, cutoutsB, notchesB,
             new CornerEnd(cornerB, miter));
 
         var faces = solid.Faces
@@ -751,9 +788,18 @@ public static class SheetMetalSurgery
     /// share edges rather than meet across a gap.</summary>
     private sealed record CornerEnd(int End, Miter Miter);
 
+    /// <summary>The flange's TIP as built: the two chains its wall faces walk (from the Q0
+    /// end to the Q1 end, on the inside and outside surfaces) and every face the tip
+    /// contributes — one planar piece per surviving stretch, plus a band per notch
+    /// segment.</summary>
+    private sealed record TipRun(
+        (BrepEdge Edge, bool SameSense)[] Inside,
+        (BrepEdge Edge, bool SameSense)[] Outside,
+        IReadOnlyList<BrepFace> Faces);
+
     private static FlangeBuild BuildFlange(
         in SheetBendSection s0, in Vector3d span, double wallLength, Rims rims,
-        IReadOnlyList<Profile> wallCutouts, CornerEnd? corner)
+        IReadOnlyList<Profile> wallCutouts, IReadOnlyList<SheetTipNotch> tipNotches, CornerEnd? corner)
     {
         // The far end's cross-section is the near one translated along the bend line —
         // one fact, so the caller cannot hand over an inconsistent pair.
@@ -813,8 +859,14 @@ public static class SheetMetalSurgery
 
         var insideTangentEdge = Segment(tangentInsideVertex[0], tangentInsideVertex[1]);
         var outsideTangentEdge = Segment(tangentOutsideVertex[0], tangentOutsideVertex[1]);
-        var insideTipEdge = Segment(tipInsideVertex[0], tipInsideVertex[1]);
-        var outsideTipEdge = Segment(tipOutsideVertex[0], tipOutsideVertex[1]);
+
+        // The TIP, notches and all. With none declared this produces exactly the one edge
+        // pair and the one face it always did, by the same calls in the same order, so a
+        // flange with no tip relief is untouched down to the bit.
+        var tipPlane = new PlaneSurface(tangentInside[0] + u * wallLength, alongSpan, -v);
+        var tip = BuildTip(
+            tangentInside[0] + u * wallLength, alongSpan, u, v, thickness, wallLength,
+            tipInsideVertex, tipOutsideVertex, tipEnd, s0.BendLinePoint, tipPlane, tipNotches);
 
         // Bend bands. ExtrudedSurface's outward normal is generator' x direction; the
         // generator's tangent leaves the sheet along +Outward, and Outward x AxisDirection
@@ -868,6 +920,10 @@ public static class SheetMetalSurgery
                 insideHoles, outsideHoles, bandFaces);
         }
 
+        // Plane ORIGINS come from the section rather than from the (possibly mitred) end
+        // vertices: a plane's stored origin is an arbitrary in-plane point, and taking a
+        // mitred one would make the tip plane pass exactly through the miter and only
+        // nearly through the flange's own far corner.
         var flangeInside = new BrepFace(
             new PlaneSurface(tangentInside[0], alongSpan, u),
             [
@@ -875,7 +931,7 @@ public static class SheetMetalSurgery
                 [
                     new BrepCoedge(insideTangentEdge, true),
                     new BrepCoedge(insideWall[1], true),
-                    new BrepCoedge(insideTipEdge, false),
+                    .. Materialize(Reversed(tip.Inside)),
                     new BrepCoedge(insideWall[0], false),
                 ]),
                 .. insideHoles,
@@ -887,24 +943,11 @@ public static class SheetMetalSurgery
                 [
                     new BrepCoedge(outsideTangentEdge, false),
                     new BrepCoedge(outsideWall[0], true),
-                    new BrepCoedge(outsideTipEdge, true),
+                    .. Materialize(tip.Outside),
                     new BrepCoedge(outsideWall[1], false),
                 ]),
                 .. outsideHoles,
             ]);
-        // Plane ORIGINS come from the section rather than from the (possibly mitred) end
-        // vertices: a plane's stored origin is an arbitrary in-plane point, and taking a
-        // mitred one would make the tip plane pass exactly through the miter and only
-        // nearly through the flange's own far corner.
-        var flangeTip = new BrepFace(
-            new PlaneSurface(tangentInside[0] + u * wallLength, alongSpan, -v),
-            [new BrepLoop(
-            [
-                new BrepCoedge(insideTipEdge, true),
-                new BrepCoedge(tipEnd[1], true),
-                new BrepCoedge(outsideTipEdge, false),
-                new BrepCoedge(tipEnd[0], false),
-            ])]);
 
         // The flange's cross-section at each end, walked so that its own face's loop comes
         // out counter-clockwise about that face's outward normal: inside-rim first at the
@@ -924,8 +967,170 @@ public static class SheetMetalSurgery
         ];
 
         return new FlangeBuild(
-            [bendInside, bendOutside, flangeInside, flangeOutside, flangeTip, .. bandFaces], chains);
+            [bendInside, bendOutside, flangeInside, flangeOutside, .. tip.Faces, .. bandFaces], chains);
     }
+
+    /// <summary>
+    /// The flange's tip run: the surviving stretches of the tip as planar faces, each notch
+    /// as a chain of band faces, and the two chains the wall's own faces walk.
+    ///
+    /// <para>Notch positions are read as the component of their bend-line points ALONG the
+    /// span, so a caller need not know which end the surgery ordered first — the one thing
+    /// a coordinate convention could get wrong here, settled by measurement instead.</para>
+    /// </summary>
+    private static TipRun BuildTip(
+        in Vector3d tipOrigin, in Vector3d alongSpan, in Vector3d u, in Vector3d v,
+        double thickness, double wallLength,
+        BrepVertex[] tipInsideVertex, BrepVertex[] tipOutsideVertex, BrepEdge[] tipEnd,
+        in Vector3d bendLinePoint, PlaneSurface tipPlane, IReadOnlyList<SheetTipNotch> notches)
+    {
+        var origin = tipOrigin;
+        var along = alongSpan;
+        var across = v * thickness;
+        var inward = u;
+        double spanLength = (tipInsideVertex[1].Position - tipInsideVertex[0].Position).Dot(along);
+
+        var ordered = new List<(double From, double To, double Depth, bool Rounded)>(notches.Count);
+        foreach (var notch in notches)
+        {
+            double a = (notch.From - bendLinePoint).Dot(along);
+            double b = (notch.To - bendLinePoint).Dot(along);
+            ordered.Add((Math.Min(a, b), Math.Max(a, b), notch.Depth, notch.Rounded));
+        }
+        ordered.Sort((x, y) => x.From.CompareTo(y.From));
+
+        // Every refusal before a single coedge moves, as everywhere else in this file.
+        double previousTo = 0;
+        foreach (var (from, to, depth, rounded) in ordered)
+        {
+            if (!(to - from > Weld))
+                throw new ArgumentOutOfRangeException(nameof(notches),
+                    $"A tip relief spans [{from:g6}, {to:g6}] of the flange's bend line; it needs positive " +
+                    "width.");
+            if (from <= previousTo + Weld || to >= spanLength - Weld)
+                throw new ArgumentOutOfRangeException(nameof(notches),
+                    $"A tip relief spans [{from:g6}, {to:g6}] of a flange {spanLength:g6} wide, which either " +
+                    "runs off its end or overlaps the notch before it. A relief takes material from BESIDE " +
+                    "the flange it relieves, so it has to fit between that flange and the wall's own corner.");
+            if (!(depth > Weld) || depth >= wallLength - Weld)
+                throw new ArgumentOutOfRangeException(nameof(notches),
+                    $"A tip relief reaches {depth:g6} back into a wall only {wallLength:g6} long. A notch that " +
+                    "reached the bend would cut the flange in two rather than relieve it.");
+            if (rounded && depth < (to - from) / 2 - Weld)
+                throw new ArgumentOutOfRangeException(nameof(notches),
+                    $"A rounded tip relief {to - from:g6} wide has an end radius of {(to - from) / 2:g6}, " +
+                    $"deeper than its own {depth:g6}. Depth is measured to the deepest point.");
+            previousTo = to;
+        }
+
+        var inside = new List<(BrepEdge, bool)>();
+        var outside = new List<(BrepEdge, bool)>();
+        var faces = new List<BrepFace>();
+
+        var previousInside = tipInsideVertex[0];
+        var previousOutside = tipOutsideVertex[0];
+        var previousVertical = tipEnd[0];
+
+        Vector3d At(double offset, double depth) => origin + along * offset - inward * depth;
+
+        foreach (var (from, to, depth, rounded) in ordered)
+        {
+            var mouthIn = new BrepVertex(At(from, 0));
+            var mouthOut = new BrepVertex(At(from, 0) - across);
+            var farIn = new BrepVertex(At(to, 0));
+            var farOut = new BrepVertex(At(to, 0) - across);
+            var mouthVertical = Segment(mouthIn, mouthOut);
+            var farVertical = Segment(farIn, farOut);
+
+            // The stretch of tip before this notch.
+            var pieceInside = Segment(previousInside, mouthIn);
+            var pieceOutside = Segment(previousOutside, mouthOut);
+            inside.Add((pieceInside, true));
+            outside.Add((pieceOutside, true));
+            faces.Add(TipFace(tipPlane, pieceInside, mouthVertical, pieceOutside, previousVertical));
+
+            // The notch's own walls, walked from its mouth round to its far side. Each
+            // segment is a band through the sheet's thickness — the loop `PunchWall`
+            // builds, which is the point: a notch is a cutout that reaches the boundary,
+            // so it is the same swept-solid wall with its ends open.
+            double radius = (to - from) / 2;
+            double straight = rounded ? depth - radius : depth;
+            var chain = new List<Curve3d>();
+            if (straight > Weld)
+                chain.Add(new Line3d(At(from, 0), At(from, straight)));
+            if (rounded)
+            {
+                // Centre at the middle of the notch, one radius up from its deepest point;
+                // x = -along so t = 0 lands on the near side, y = -inward so the sweep dips
+                // to the bottom at t = pi/2 and rises to the far side at t = pi.
+                chain.Add(NurbsCurve.Arc(
+                    At((from + to) / 2, depth - radius), -along, -inward, radius, 0, Math.PI));
+            }
+            else
+            {
+                chain.Add(new Line3d(At(from, depth), At(to, depth)));
+            }
+            if (straight > Weld)
+                chain.Add(new Line3d(At(to, straight), At(to, 0)));
+
+            var walkInside = mouthIn;
+            var walkOutside = mouthOut;
+            var walkVertical = mouthVertical;
+            for (int i = 0; i < chain.Count; i++)
+            {
+                var generator = chain[i];
+                bool last = i == chain.Count - 1;
+                var nextInside = last ? farIn : new BrepVertex(generator.PointAt(generator.Domain.End));
+                var nextOutside = last
+                    ? farOut
+                    : new BrepVertex(generator.PointAt(generator.Domain.End) - across);
+                var nextVertical = last ? farVertical : Segment(nextInside, nextOutside);
+
+                var insideEdge = new BrepEdge(generator, generator.Domain, walkInside, nextInside);
+                var outsideEdge = new BrepEdge(
+                    generator.Transformed(Matrix4d.CreateTranslation(-across)), generator.Domain,
+                    walkOutside, nextOutside);
+                faces.Add(new BrepFace(new ExtrudedSurface(generator, -across),
+                [
+                    new BrepLoop(
+                    [
+                        new BrepCoedge(insideEdge, true),
+                        new BrepCoedge(nextVertical, true),
+                        new BrepCoedge(outsideEdge, false),
+                        new BrepCoedge(walkVertical, false),
+                    ]),
+                ]));
+                inside.Add((insideEdge, true));
+                outside.Add((outsideEdge, true));
+                (walkInside, walkOutside, walkVertical) = (nextInside, nextOutside, nextVertical);
+            }
+
+            previousInside = farIn;
+            previousOutside = farOut;
+            previousVertical = farVertical;
+        }
+
+        var lastInside = Segment(previousInside, tipInsideVertex[1]);
+        var lastOutside = Segment(previousOutside, tipOutsideVertex[1]);
+        inside.Add((lastInside, true));
+        outside.Add((lastOutside, true));
+        faces.Add(TipFace(tipPlane, lastInside, tipEnd[1], lastOutside, previousVertical));
+
+        return new TipRun([.. inside], [.. outside], faces);
+    }
+
+    /// <summary>One surviving stretch of a flange's tip: the same four-edge loop the whole
+    /// tip carried before notches existed, so an un-notched flange builds exactly what it
+    /// always did.</summary>
+    private static BrepFace TipFace(
+        PlaneSurface plane, BrepEdge inside, BrepEdge high, BrepEdge outside, BrepEdge low) =>
+        new(plane, [new BrepLoop(
+        [
+            new BrepCoedge(inside, true),
+            new BrepCoedge(high, true),
+            new BrepCoedge(outside, false),
+            new BrepCoedge(low, false),
+        ])]);
 
     /// <summary>
     /// Punches one closed profile clean through the flange's wall: a hole loop on each of
