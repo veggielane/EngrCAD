@@ -65,13 +65,22 @@ public class RecoveryLimitationTests
     /// Without that flag the same remesh is refused. The flip stage is valence-driven with no
     /// length term, so it can replace a Delaunay diagonal with a longer one — and a surface
     /// triangle that is not locally Delaunay cannot be a face of the tetrahedralization.
+    /// <para>
+    /// This contrast is why <see cref="RemeshOptions.PreventLongEdgeFlips"/> is now the
+    /// DEFAULT rather than opt-in, so the flag has to be switched off explicitly to reach the
+    /// refusal at all: a default that produces surfaces this project's own tet mesher refuses
+    /// was the wrong default.
+    /// </para>
     /// </summary>
     [Fact]
     public void TheSameSphereRemeshedWithoutTheFlipGuard_IsRefusedByName()
     {
         var remeshed = Remesher.Remesh(
             MeshPrimitives.UvSphere(10, 32, 16),
-            new RemeshOptions(3.0) { Iterations = 12, FeatureAngleDegrees = 0 }).Mesh;
+            new RemeshOptions(3.0)
+            {
+                Iterations = 12, FeatureAngleDegrees = 0, PreventLongEdgeFlips = false,
+            }).Mesh;
 
         var ex = Assert.Throws<TetMeshException>(() =>
             TetMesher.Mesh(remeshed, new TetMeshOptions { MaxSteinerPoints = 20_000 }));
@@ -128,7 +137,10 @@ public class RecoveryLimitationTests
     {
         var remeshed = Remesher.Remesh(
             MeshPrimitives.Cylinder(10, 20, 48),
-            new RemeshOptions(3.0) { Iterations = 12, FeatureAngleDegrees = 30 }).Mesh;
+            new RemeshOptions(3.0)
+            {
+                Iterations = 12, FeatureAngleDegrees = 30, PreventLongEdgeFlips = false,
+            }).Mesh;
 
         var (worstAngle, worstRadiusEdge) = WorstTriangle(remeshed);
         Assert.True(worstAngle < 5.0 || worstRadiusEdge > 5.0,
@@ -151,7 +163,13 @@ public class RecoveryLimitationTests
     {
         var remeshed = Remesher.Remesh(
             MeshPrimitives.Box(new Aabb(new Vector3d(0, 0, 0), new Vector3d(20, 20, 20))),
-            new RemeshOptions(2.0) { Iterations = 20, FeatureAngleDegrees = 30 }).Mesh;
+            new RemeshOptions(2.0)
+            {
+                // Deliberately unguarded: the point of this fixture is an AWFUL triangulation
+                // that a flat surface's patches absorb anyway, and the default guard produces
+                // a good one (worst angle 0.14 -> 31.69 degrees on exactly this input).
+                Iterations = 20, FeatureAngleDegrees = 30, PreventLongEdgeFlips = false,
+            }).Mesh;
 
         var (worstAngle, worstRadiusEdge) = WorstTriangle(remeshed);
         Assert.True(worstAngle < 5.0 || worstRadiusEdge > 5.0,
@@ -182,7 +200,10 @@ public class RecoveryLimitationTests
     {
         var remeshed = Remesher.Remesh(
             MeshPrimitives.UvSphere(10, 32, 16),
-            new RemeshOptions(3.0) { Iterations = 12, FeatureAngleDegrees = 0 }).Mesh;
+            new RemeshOptions(3.0)
+            {
+                Iterations = 12, FeatureAngleDegrees = 0, PreventLongEdgeFlips = false,
+            }).Mesh;
 
         var ex = Assert.Throws<TetMeshException>(() =>
             TetMesher.Mesh(remeshed, new TetMeshOptions

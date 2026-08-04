@@ -155,9 +155,19 @@ public sealed partial class EditableMesh
     /// <see cref="HalfEdgeMesh.Build"/> as a safety net, so the result is guaranteed
     /// genuinely manifold.
     /// </summary>
-    public HalfEdgeMesh ToMesh()
+    public HalfEdgeMesh ToMesh() => ToMesh(out _);
+
+    /// <summary>
+    /// <see cref="ToMesh()"/> plus the compaction map: <c>vertexMap[v]</c> is the built mesh's
+    /// index for live vertex <c>v</c>, or -1 for a dead slot. A caller holding per-vertex state
+    /// over the editable mesh (the remesher's pinned set) needs it to carry that state across,
+    /// and taking it from the walk that builds the mesh is what stops it being a second,
+    /// drifting copy of the compaction rule.
+    /// </summary>
+    public HalfEdgeMesh ToMesh(out int[] vertexMap)
     {
         var map = new int[_positions.Count];
+        vertexMap = map;
         Array.Fill(map, -1);
         var positions = new List<Vector3d>(_aliveVertexCount);
         for (int v = 0; v < _positions.Count; v++)

@@ -587,8 +587,9 @@ public static class TetMesher
             return $"{headline}. The first spans {_points[worst.V0]} / {_points[worst.V1]} / " +
                    $"{_points[worst.V2]}, touching surface tag(s) " +
                    $"{(nearbyTags.Count > 0 ? string.Join(", ", nearbyTags) : "none")}. {why}{quality} " +
-                   "If this surface came from Remesher.Remesh, set RemeshOptions.PreventLongEdgeFlips: " +
-                   "the flip stage is valence-driven with no length term, so it can replace a Delaunay " +
+                   "If this surface came from Remesher.Remesh, check that RemeshOptions." +
+                   "PreventLongEdgeFlips is left at its default of true: the flip stage is " +
+                   "valence-driven with no length term, so it can replace a Delaunay " +
                    "diagonal with a longer one, and a surface triangle that is not locally Delaunay " +
                    "cannot be a face of the tetrahedralization (measured: a remeshed sphere is refused " +
                    "without it and meshes in ZERO recovery rounds with it). Otherwise prefer the CAD " +

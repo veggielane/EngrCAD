@@ -171,15 +171,26 @@ public class RemesherTests
         Assert.Equal(1.0, result.Mesh.Volume(), 9);
     }
 
+    /// <summary>
+    /// Documented limitation, pinned here so it cannot change silently: feature detection reads
+    /// the dihedral of the mesh it is given, and a COARSE tessellation of a smooth surface has
+    /// large dihedrals. <c>UvSphere(12, 8)</c> facets meet at ~30°, so the default 30° feature
+    /// angle pins most of the sphere. Splitting does not help — the halves are coplanar with
+    /// their parents, so the dihedral is unchanged. Pass 0 (or a larger angle) when remeshing
+    /// tessellated curvature.
+    /// <para>
+    /// <b>Which measure shows it moved when the flip guard became the default</b>, and that is
+    /// the interesting half. It used to show up as edge LENGTH — 13.4% of edges out of band
+    /// against 0% unpinned — and the guard takes that to 0.51%, so a length test would now
+    /// read the limitation as almost gone. It is not: the pinned run's worst free triangle
+    /// angle is <b>29.2° against 38.6°</b>, and its constrained triangle count 8 against 0.
+    /// The limitation moved from the length distribution into the SHAPE, which is precisely
+    /// what <see cref="TriangleQuality"/> exists to see and what a band fraction cannot.
+    /// </para>
+    /// </summary>
     [Fact]
     public void FeatureDetectionOnCoarseCurvatureIsConservative()
     {
-        // Documented limitation, pinned here so it cannot change silently: feature detection
-        // reads the dihedral of the mesh it is given, and a COARSE tessellation of a smooth
-        // surface has large dihedrals. UvSphere(12, 8) facets meet at ~30°, so the default
-        // 30° feature angle pins most of the sphere and the remesh barely moves. Splitting
-        // does not help — the halves are coplanar with their parents, so the dihedral is
-        // unchanged. Pass 0 (or a larger angle) when remeshing tessellated curvature.
         var sphere = MeshPrimitives.UvSphere(1.0, 12, 8).Triangulated();
         var options = new RemeshOptions(0.25)
         {
@@ -187,12 +198,17 @@ public class RemesherTests
             ProjectionTarget = new MeshProjectionTarget(sphere),
         };
 
-        var pinned = Remesher.Remesh(sphere, options).Mesh;
-        var free = Remesher.Remesh(sphere, options with { FeatureAngleDegrees = 0 }).Mesh;
+        var pinned = Remesher.Remesh(sphere, options);
+        var free = Remesher.Remesh(sphere, options with { FeatureAngleDegrees = 0 });
 
-        Assert.True(FractionOutsideBand(pinned, options) > 0.05,
-            "pinned facet creases keep edges outside the band no matter how many passes run");
-        Assert.Equal(0, FractionOutsideBand(free, options));
+        Assert.True(FractionOutsideBand(pinned.Mesh, options) > FractionOutsideBand(free.Mesh, options),
+            "pinned facet creases still keep edges out of band, just far fewer of them");
+        Assert.Equal(0, FractionOutsideBand(free.Mesh, options));
+        Assert.True(free.Quality.MinAngleDegrees > pinned.Quality.MinAngleDegrees + 5,
+            $"unpinned should be markedly better shaped: {free.Quality.MinAngleDegrees:F2} " +
+            $"against {pinned.Quality.MinAngleDegrees:F2} degrees");
+        Assert.Equal(0, free.Quality.ConstrainedCount);
+        Assert.True(pinned.Quality.ConstrainedCount > 0);
     }
 
     [Fact]
@@ -531,22 +547,55 @@ public class RemesherTests
             Assert.Equal(f1[i], f2[i]);
     }
 
+    /// <summary>
+    /// The queues are seeded with the whole mesh in the sweep's own stride order, so the first
+    /// pass visits the same edges in the same order — and it produces the identical mesh
+    /// <b>as long as no split re-canonicalizes an edge that has not been visited yet</b>.
+    /// <para>
+    /// That condition is not a formality, and it is stated here because the incumbent claim
+    /// ("the seeded first pass is identical") was really a property of this fixture. The two
+    /// paths handle a stale id differently by design: <c>SweepEdges</c> SKIPS a half-edge that
+    /// is no longer the smaller of its pair, while <c>DrainEdgeQueue</c> re-canonicalizes and
+    /// processes it (it must — a collapse merges edge pairs, so the survivor is usually named
+    /// by the other half). A split renumbers twins, so after enough splits the queue processes
+    /// edges the sweep declines. Measured on this fixture: with
+    /// <see cref="RemeshOptions.PreventLongEdgeFlips"/> off, 126 splits and 35 flips and the
+    /// two meshes agree bit for bit; with it on the guard turns flips into splits (149 and 14),
+    /// the sweep and the queue take 14 and 12 flips respectively, and 8 of 213 vertices land
+    /// in different places — same vertex count, same face count, same connectivity.
+    /// </para>
+    /// </summary>
     [Fact]
-    public void QueueScheduling_FirstPassMatchesTheSweep()
+    public void QueueScheduling_FirstPassMatchesTheSweepUntilASplitRenumbersATwin()
     {
-        // The queues are seeded with the whole mesh in the sweep's own stride order, so a
-        // single-pass remesh is identical either way; only the passes AFTER it differ.
         var patch = GridPatch(7);
-        var options = new RemeshOptions(0.09) { Iterations = 1, FeatureAngleDegrees = 0 };
+        var options = new RemeshOptions(0.09)
+        {
+            Iterations = 1, FeatureAngleDegrees = 0, PreventLongEdgeFlips = false,
+        };
 
-        var (sweptPositions, sweptFaces) = Remesher.Remesh(patch, options).Mesh.ToIndexed();
-        var (queuedPositions, queuedFaces) =
-            Remesher.Remesh(patch, options with { Scheduling = RemeshScheduling.Queue }).Mesh.ToIndexed();
+        var swept = Remesher.Remesh(patch, options);
+        var queued = Remesher.Remesh(patch, options with { Scheduling = RemeshScheduling.Queue });
+        var (sweptPositions, sweptFaces) = swept.Mesh.ToIndexed();
+        var (queuedPositions, queuedFaces) = queued.Mesh.ToIndexed();
 
-        Assert.Equal(sweptPositions, queuedPositions);
+        Assert.Equal(sweptPositions, queuedPositions); // Vector3d equality is bitwise
         Assert.Equal(sweptFaces.Count, queuedFaces.Count);
         for (int i = 0; i < sweptFaces.Count; i++)
             Assert.Equal(sweptFaces[i], queuedFaces[i]);
+
+        // And the condition, pinned so nobody re-derives the stronger claim: more splits reach
+        // the re-canonicalization and the two diverge — in POSITIONS only, never in structure.
+        var guardedSweep = Remesher.Remesh(patch, options with { PreventLongEdgeFlips = true });
+        var guardedQueue = Remesher.Remesh(patch, options with
+        {
+            PreventLongEdgeFlips = true, Scheduling = RemeshScheduling.Queue,
+        });
+        Assert.True(guardedSweep.Splits > swept.Splits, "the guard should turn flips into splits");
+        Assert.Equal(guardedSweep.Splits, guardedQueue.Splits);
+        Assert.Equal(guardedSweep.Mesh.VertexCount, guardedQueue.Mesh.VertexCount);
+        Assert.Equal(guardedSweep.Mesh.FaceCount, guardedQueue.Mesh.FaceCount);
+        Assert.NotEqual(guardedSweep.Mesh.ToIndexed().Positions, guardedQueue.Mesh.ToIndexed().Positions);
     }
 
     [Fact]
@@ -706,8 +755,17 @@ public class RemesherTests
         return worst;
     }
 
+    /// <summary>
+    /// The shared bounded-maximum fixture, with <see cref="RemeshOptions.PreventLongEdgeFlips"/>
+    /// switched OFF: it is the default now, so a "baseline" has to say so explicitly.
+    /// </summary>
     private static RemeshOptions BoundedFixture(HalfEdgeMesh source, int iterations = 14) =>
-        new(2.0) { Iterations = iterations, ProjectionTarget = new MeshProjectionTarget(source) };
+        new(2.0)
+        {
+            Iterations = iterations,
+            PreventLongEdgeFlips = false,
+            ProjectionTarget = new MeshProjectionTarget(source),
+        };
 
     /// <summary>
     /// Pins the DIAGNOSIS, so it cannot rot: the edges a converged remesh leaves above the
@@ -779,6 +837,19 @@ public class RemesherTests
         // And it is not bought from the distribution — the in-band share improves too.
         Assert.True(FractionOutsideBand(bounded.Mesh, options) <=
                     FractionOutsideBand(baseline.Mesh, options));
+        // Nor from SHAPE, which is what settled making it the default. The SLIVER COUNT is the
+        // general claim and the one asserted as such; the worst single angle also improves on
+        // all three of these fixtures (0.14 -> 31.69 on the box, 0.20 -> 29.19 on the cylinder,
+        // 5.21 -> 30.93 on the sphere) but is an EXTREMUM and does not generalize — on a
+        // drilled plate, whose bore rims are pinned chains finer than the target and so cannot
+        // be coarsened, the guard keeps a 0.01 degree triangle where the baseline reads 1.40
+        // while cutting slivers 419 -> 157. Judge by the share, not the extremes; see
+        // RemeshOptions.PreventLongEdgeFlips.
+        Assert.True(bounded.Quality.SliverCount < baseline.Quality.SliverCount,
+            $"slivers {bounded.Quality.SliverCount} should beat {baseline.Quality.SliverCount}");
+        Assert.True(bounded.Quality.MinAngleDegrees > baseline.Quality.MinAngleDegrees,
+            $"on these three fixtures the extremum improves too: {bounded.Quality.MinAngleDegrees:F2} " +
+            $"against {baseline.Quality.MinAngleDegrees:F2} degrees");
         bounded.Mesh.Validate();
         AssertAllTriangles(bounded.Mesh);
     }
@@ -832,10 +903,23 @@ public class RemesherTests
         }
     }
 
-    /// <summary>Off by default — the whole existing suite is the bit-identity oracle.</summary>
+    /// <summary>
+    /// <b>On by default</b>, decided on measurement after shipping opt-in. Over a box, a
+    /// cylinder, two UV spheres and an open height-field grid at 10 / 14 / 40 passes every
+    /// measure improves — maximum, shortest edge, in-band share, worst free angle, worst
+    /// radius ratio, sliver count and run time — and the filed counter-example (a cylinder's
+    /// worst angle 0.89° → 0.58°) does not reproduce at 32, 48 or 64 segments at any of nine
+    /// pass counts. On a heavily pinned model the worst single ANGLE can go the other way
+    /// while every population figure improves (a drilled plate: 1.40° → 0.01° against slivers
+    /// 419 → 157), which is the extremes-versus-share lesson, not a trade in the mesh's
+    /// favour. The deciding argument is downstream: <c>TetMesher</c>'s
+    /// boundary recovery needs a Delaunay-clean surface and a valence flip can replace a
+    /// Delaunay diagonal with a longer one, so the old default produced surfaces the
+    /// project's own tet mesher refuses.
+    /// </summary>
     [Fact]
-    public void PreventLongEdgeFlips_IsOffByDefault() =>
-        Assert.False(new RemeshOptions(1.0).PreventLongEdgeFlips);
+    public void PreventLongEdgeFlips_IsOnByDefault() =>
+        Assert.True(new RemeshOptions(1.0).PreventLongEdgeFlips);
 
     // ---------------------------------------------------------------- face-aligned projection
 
