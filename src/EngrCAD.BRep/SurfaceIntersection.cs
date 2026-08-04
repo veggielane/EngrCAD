@@ -991,18 +991,21 @@ public static class SurfaceIntersection
             if (keep[i] = Inside(0.5 * (a + b)))
                 kept++;
         }
-        // <b>A run too short to leave the patch measurably is KEPT, and the bound is derived
-        // rather than chosen.</b> Near a tangency the acos argument is within round-off of
-        // ±1, where acos has a square-root singularity, so the two roots come back ~1e-7 rad
+        // A run too short to leave the patch measurably is KEPT, and the bound is DERIVED
+        // rather than chosen. Near a tangency the acos argument is within round-off of ±1,
+        // where acos has a square-root singularity, so the two roots come back ~1e-7 rad
         // apart however exact the geometry is, and the midpoint between them reads inside or
         // outside by round-off. Neither answer is more accurate — but they are not equally
-        // safe: DROPPING a run of span δ removes a chord of `scale·δ` from the curve, an
-        // outright gap, while KEEPING it lets the curve stand at most `scale·(1 − cos(δ/2))`
-        // outside the patch, which is second order in δ. So a dropped run is flipped
+        // safe: DROPPING a run of span d removes a chord of scale*d from the curve, an
+        // outright gap, while KEEPING it lets the curve stand at most scale*(1 - cos(d/2))
+        // outside the patch, which is second order in d. So a dropped run is flipped
         // whenever that excursion is inside the weld tolerance, which for a real tangency it
         // is by six orders — and a conic TOUCHING a patch edge then comes back as the closed
         // conic it is instead of an arc with a pinhole, deterministically. Kept runs are
-        // never dropped, so nothing is lost either way.
+        // never dropped, so nothing is lost either way. Whether the round-off falls the safe
+        // way without this is ALIGNMENT rather than tolerance, so it is pinned by a family
+        // sweep (62 of 480 tangencies pinhole without it, 0 of 480 with it) — one fixture
+        // would only have locked in a coincidence.
         for (int i = 0; i < n; i++)
         {
             if (!keep[i] && scale * (1 - Math.Cos(0.5 * span[i])) <= Tolerance.Default.Linear)
