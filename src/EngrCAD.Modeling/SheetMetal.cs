@@ -611,14 +611,22 @@ public sealed class SheetMetalBody
         public bool[] Inset { get; init; } = [false, false];
 
         /// <summary>The stretch of the parent's edge this flange occupies, RELIEFS
-        /// INCLUDED — what a sibling flange has to keep clear of. Written as one property
-        /// so the overlap check cannot forget the notches (which is how two flanges could
-        /// otherwise be placed whose reliefs eat each other's walls).</summary>
-        public double OccupiedFrom => StartOffset - (Relief is not null && Inset[0] ? ReliefWidth : 0);
+        /// INCLUDED — what a sibling flange has to keep clear of, since a notch that ate
+        /// its neighbour's wall would leave a flange with nothing to fold from.</summary>
+        public (double From, double To) Occupies =>
+            OccupiedBy(StartOffset, Width, Relief, ReliefWidth, Inset);
 
-        /// <inheritdoc cref="OccupiedFrom"/>
-        public double OccupiedTo =>
-            StartOffset + Width + (Relief is not null && Inset[1] ? ReliefWidth : 0);
+        /// <summary>
+        /// <inheritdoc cref="Occupies"/>
+        /// <para>Static because the overlap check has to ask it about a flange that is
+        /// still being resolved and so has no <see cref="Node"/> yet; the property above
+        /// asks the same rule rather than restating it, which is what stops the two
+        /// disagreeing about whether a relief counts.</para>
+        /// </summary>
+        public static (double From, double To) OccupiedBy(
+            double start, double width, BendRelief? relief, double reliefWidth, bool[] inset) =>
+            (start - (relief is not null && inset[0] ? reliefWidth : 0),
+             start + width + (relief is not null && inset[1] ? reliefWidth : 0));
 
         public List<Node> Children { get; } = [];
     }
@@ -751,21 +759,21 @@ public sealed class SheetMetalBody
             var (reliefWidth, reliefDepth) = ResolveRelief(
                 body, flange, index, radius, start, width, edgeLength, inset, parent, a2, t2, o2);
 
+            // Compared on OCCUPIED stretches, reliefs included: a notch that ate its
+            // neighbour's wall would leave a flange with nothing to fold from, and the
+            // failure would surface as a missing bend edge three stages downstream.
+            var mine = Node.OccupiedBy(start, width, flange.Relief, reliefWidth, inset);
             foreach (var sibling in parent.Children)
             {
                 if (sibling.Flange!.Target.EdgeIndex != flange.Target.EdgeIndex)
                     continue;
-                // Compared on OCCUPIED stretches, reliefs included: a notch that ate its
-                // neighbour's wall would leave a flange with nothing to fold from, and the
-                // failure would surface as a missing bend edge three stages downstream.
-                double from = start - (flange.Relief is not null && inset[0] ? reliefWidth : 0);
-                double to = start + width + (flange.Relief is not null && inset[1] ? reliefWidth : 0);
-                if (from < sibling.OccupiedTo - Weld && sibling.OccupiedFrom < to - Weld)
+                var theirs = sibling.Occupies;
+                if (mine.From < theirs.To - Weld && theirs.From < mine.To - Weld)
                     throw new ArgumentException(
-                        $"Flange {index} occupies [{from:g6}, {to:g6}] of {flange.Target} and flange " +
-                        $"{sibling.Index} occupies [{sibling.OccupiedFrom:g6}, {sibling.OccupiedTo:g6}]: two " +
-                        "bends cannot share the same stretch of one edge, and a bend relief counts as part of " +
-                        "the stretch its flange occupies.");
+                        $"Flange {index} occupies [{mine.From:g6}, {mine.To:g6}] of {flange.Target} and flange " +
+                        $"{sibling.Index} occupies [{theirs.From:g6}, {theirs.To:g6}]: two bends cannot share " +
+                        "the same stretch of one edge, and a bend relief counts as part of the stretch its " +
+                        "flange occupies.");
             }
 
             double setback = body.Spec.OutsideSetbackAt(angle, flange.BendRadius);
