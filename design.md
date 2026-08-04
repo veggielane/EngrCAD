@@ -764,6 +764,60 @@ checked rather than assumed: a temperature field crosses by node index, and two 
 same body can number their nodes differently, so the alternative is applying each node's
 temperature to some other node.
 
+### Flux at a material interface, and why this was the smaller half of §3i's job
+
+`q = -k·grad T` is discontinuous at a bonded interface in exactly the way stress is, and for
+the mirror-image reason: temperature is continuous, so the *tangential* gradient is continuous
+and the tangential flux jumps with `k`, while the *normal* component is continuous by
+conservation. `ThermalResults.NodalFlux` is indexed by node, so at such a node it holds one
+value where the physics has two. The fix is §3i's verbatim — `ComputeNodalFlux` takes the same
+`perRegion` parameter `ComputeNodalStress` does, accumulating into `AnalysisMesh`'s existing
+(node, region) slots, and `NodalFluxIn(region, node)` is the honest value while `NodalFlux`
+keeps blending, reports the blending through `InterfaceNodeCount`, and stays what a colour map
+reads.
+
+**The two claims the backlog made about the size of the job both hold, and the first one is
+the interesting one.** There is no recovery on the thermal path at all — nothing fits a
+polynomial over a patch — so nothing here has REACH, which was §3i's whole argument for
+bothering: a cross-interface *patch* corrupts nodes a full element layer inside each material,
+where a cross-interface *average* touches only the shared node. Every downstream consumer was
+checked rather than assumed: `SampleOnto`/`Fields`/`WriteVtu` read the nodal array,
+`ElementFlux` is per element, `TemperatureIn` and `StructuralModel.ThermalLoad` read
+TEMPERATURE, which is continuous. So the defect is confined to interface nodes and the fix is
+one accessor. Second claim: the slot table already existed, so no new machinery.
+
+**The oracle needed the same care and lands the other way round from the structural one.** In
+SERIES — the interface perpendicular to the flow, which is what this project's recorded
+two-material thermal fixture builds — the flux is purely normal, so both materials carry the
+*same vector* (measured 200 mW/mm² through both, with the interface at exactly 80 K) and any
+averaging reproduces it: measured, the two accessors differ by **1.6e-11 of 2000**. Note this
+is the exact complement of the structural case, where series makes the *stress* continuous and
+the *strain* jump; here series makes the *flux* continuous and the *gradient* jump. The
+arrangement that can see it is **parallel** — the interface CONTAINING the flow — where both
+materials span the same length under the same end temperatures, so both carry the same gradient
+and the flux jumps with `k`. `T = T_hot·(1 - x/L)` is then the exact solution with nothing
+manufactured: linear (so every element order reproduces it exactly), divergence-free in each
+material, and with `q·n = 0` on both sides of the interface, so the interface condition holds
+identically. Measured on a 4 mm cube at `k` = 200 and 50, exact flux 5000 and 1250 mW/mm²: the
+per-region value is exact to **4.2e-15 (linear) / 2.1e-14 (quadratic)** at every one of the
+150/810 (node, region) slots, while the one value the node-indexed field reports is wrong by
+**75% to 225%** for one of the two materials at every interface node.
+
+**And §3i's fixture trap recurs verbatim**, which is why it is measured here rather than
+restated: prescribing that linear field on the whole boundary of a SERIES bar imposes the same
+gradient on both halves — the parallel condition wearing the series geometry — and the
+mis-loaded bar duly reports a **75.0% jump**, i.e. it would look like it was proving the rule
+while measuring its own boundary data. The series control is therefore driven by end
+temperatures only, with the other four faces adiabatic, which is what the series arrangement
+*is*.
+
+Neutrality and reachability are pinned exactly as §3i's are: a single-region mesh computes the
+two arrays independently through an internal `AveragedFlux(bool)` seam and they agree bit for
+bit at both element orders, and a two-body `TetMesher` mesh has `InterfaceNodeCount == 0` with
+both accessors returning the same bits at every node (`ThermalInterfaceFluxTests`). Left open,
+and genuinely open rather than deferred: whether the thermal side wants a *superconvergent*
+recovery of its own, which is a separate feature with its own convergence table to earn.
+
 ### Shared rather than parallel-built
 
 Three things moved out rather than being written twice, and each has a reason beyond tidiness.

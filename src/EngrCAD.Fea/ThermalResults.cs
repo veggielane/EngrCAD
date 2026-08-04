@@ -13,16 +13,25 @@ namespace EngrCAD.Fea;
 /// from the solved field, so it is constant per element for 4-node tets and linear per
 /// element for 10-node ones, and it JUMPS across element faces. The nodal values here are
 /// a volume-weighted average of the elements meeting at a node, which is what a colour map
-/// wants and what converges as the mesh refines. It also smooths a genuine discontinuity —
-/// at a material interface the NORMAL flux is continuous but the tangential gradient is
-/// not, and averaging across the interface reports neither side's answer — so
-/// <see cref="ElementFlux"/> stays public, and the jump between neighbouring elements
-/// remains the standard error indicator.</para>
+/// wants and what converges as the mesh refines. <see cref="ElementFlux"/> stays public, and
+/// the jump between neighbouring elements remains the standard error indicator.</para>
+///
+/// <para><b>A MATERIAL INTERFACE is the one place that average smooths something real.</b>
+/// Where two conductivities meet, temperature is continuous, so the tangential gradient is
+/// continuous too and the tangential flux JUMPS with <c>k</c> — only the normal component is
+/// continuous. A node on that interface therefore has one right answer per material and
+/// <see cref="NodalFlux"/>, being indexed by node, holds one value.
+/// <see cref="NodalFluxIn"/> is the honest per-material value and
+/// <see cref="AnalysisMesh.InterfaceNodeCount"/> says how many nodes are affected (zero for a
+/// single-region mesh and for disjoint bodies, which share no node). This mirrors
+/// <see cref="StructuralResults.NodalStressIn"/> exactly, over the same
+/// <see cref="AnalysisMesh.RegionsAt"/> slot table.</para>
 /// </summary>
 public sealed class ThermalResults
 {
     private readonly double[] _temperature;
     private Vector3d[]? _nodalFlux;
+    private Vector3d[]? _nodalFluxPerRegion;
 
     // Not thread-safe: the lazy cache below is unsynchronised, so a first read from several
     // threads would recompute rather than corrupt. A results object belongs to whoever
@@ -106,6 +115,7 @@ public sealed class ThermalResults
                 return;
             field = value;
             _nodalFlux = null;
+            _nodalFluxPerRegion = null;
         }
     } = NodalAveraging.VolumeWeighted;
 
@@ -124,8 +134,56 @@ public sealed class ThermalResults
         return ElementGradient(element) * -Model.MaterialOf(element).ThermalConductivity;
     }
 
-    /// <summary>Averaged heat flux at every node — what a colour map shows.</summary>
-    public IReadOnlyList<Vector3d> NodalFlux => _nodalFlux ??= ComputeNodalFlux();
+    /// <summary>
+    /// Averaged heat flux at every node — what a colour map shows.
+    ///
+    /// <para><b>One value per node, which at a MATERIAL INTERFACE is one value too few</b> —
+    /// see the class remarks, <see cref="AnalysisMesh.InterfaceNodeCount"/> for how many nodes
+    /// are affected, and <see cref="NodalFluxIn"/> for the per-material value.</para>
+    /// </summary>
+    public IReadOnlyList<Vector3d> NodalFlux => NodalFluxByNode;
+
+    private Vector3d[] NodalFluxByNode => _nodalFlux ??= ComputeNodalFlux(perRegion: false);
+
+    /// <summary>
+    /// The averaged flux per (node, region) SLOT — the same rule <see cref="Averaging"/>
+    /// states, restricted to one material.
+    /// <para>Where a slot IS a node (every mesh with one region, and every mesh of disjoint
+    /// bodies) this is <see cref="NodalFluxByNode"/> itself rather than a second array holding
+    /// the same numbers: the two accumulations would be the same additions in the same order,
+    /// so computing it twice would buy nothing but a chance to drift.</para>
+    /// </summary>
+    private Vector3d[] NodalFluxPerRegion =>
+        Mesh.RegionSlotsAreNodes
+            ? NodalFluxByNode
+            : _nodalFluxPerRegion ??= ComputeNodalFlux(perRegion: true);
+
+    /// <summary>
+    /// The averaged heat flux at one node <b>as seen from one material region</b> — the
+    /// honest value where <see cref="NodalFlux"/> can only report a blend.
+    ///
+    /// <para>Equal to <see cref="NodalFlux"/> at every node touching one region, by identical
+    /// arithmetic rather than by tolerance, so switching to this accessor cannot move an
+    /// answer away from an interface. Refused by name when the node touches no element of that
+    /// region; <see cref="AnalysisMesh.RegionsAt"/> says which regions it does touch.</para>
+    /// </summary>
+    /// <param name="region">A material region id (see <see cref="AnalysisMesh.Regions"/>).</param>
+    /// <param name="node">The node.</param>
+    public Vector3d NodalFluxIn(int region, int node)
+    {
+        RequireNode(node);
+        return NodalFluxPerRegion[Mesh.RegionSlot(node, region)];
+    }
+
+    /// <summary>
+    /// The averaged flux with the material-region rule switched on or off, computed FRESH —
+    /// the test seam that lets the blend be measured against the per-material values, and that
+    /// makes the single-region neutrality claim a comparison of two independent computations
+    /// rather than of one array with itself.
+    /// <para>Production reads <see cref="NodalFlux"/> and <see cref="NodalFluxIn"/>, both of
+    /// which cache.</para>
+    /// </summary>
+    internal Vector3d[] AveragedFlux(bool perRegion) => ComputeNodalFlux(perRegion);
 
     /// <summary>The largest averaged nodal flux magnitude.</summary>
     public double MaxFluxMagnitude
@@ -171,11 +229,20 @@ public sealed class ThermalResults
         return gradient;
     }
 
-    private Vector3d[] ComputeNodalFlux()
+    /// <summary>
+    /// The averaged nodal flux, indexed either by NODE or by (node, region) SLOT.
+    /// <para>One implementation for both — the per-region pass is the same loop writing to a
+    /// different index, so the two cannot disagree about the averaging rule or the
+    /// conductivity — and for a mesh whose slots are its nodes the index expression is the
+    /// node itself, so the two are the same additions in the same order.
+    /// (<c>StructuralResults.ComputeNodalStress</c> is this method's twin.)</para>
+    /// </summary>
+    private Vector3d[] ComputeNodalFlux(bool perRegion)
     {
         int perElement = Mesh.NodesPerElement;
-        var accumulated = new Vector3d[Mesh.NodeCount];
-        var weights = new double[Mesh.NodeCount];
+        int slots = perRegion ? Mesh.RegionSlotCount : Mesh.NodeCount;
+        var accumulated = new Vector3d[slots];
+        var weights = new double[slots];
 
         Span<Vector3d> positions = stackalloc Vector3d[10];
         Span<double> values = stackalloc double[10];
@@ -189,6 +256,7 @@ public sealed class ThermalResults
                 values[i] = _temperature[nodes[i]];
             }
             double conductivity = Model.MaterialOf(e).ThermalConductivity;
+            int region = perRegion ? Mesh.RegionOf(e) : 0;
             double weight = Averaging == NodalAveraging.VolumeWeighted ? Mesh.ElementVolume(e) : 1.0;
             if (!(weight > 0))
                 continue;
@@ -199,8 +267,9 @@ public sealed class ThermalResults
                 ThermalElement.GradientAt(
                     Mesh.Order, positions[..perElement], values[..perElement], r, s, t,
                     out var gradient);
-                accumulated[nodes[i]] += gradient * (-conductivity * weight);
-                weights[nodes[i]] += weight;
+                int target = perRegion ? Mesh.RegionSlot(nodes[i], region) : nodes[i];
+                accumulated[target] += gradient * (-conductivity * weight);
+                weights[target] += weight;
             }
         }
 

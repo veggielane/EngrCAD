@@ -127,14 +127,40 @@ results.WriteVtu(Path.Combine(Path.GetTempPath(), "plate-thermal.vtu"));
 `ThermalSolveReport` is the thermal twin of `FeaSolveReport`: sizes, factor fill, timings,
 the solve residual, the temperature range, and the four heat terms — applied, through
 prescribed boundaries, through convection, and into storage — with the balance between them.
-Beyond it, `ThermalResults` gives nodal `Temperature`, averaged `NodalFlux`, per-element
-`ElementFlux`/`ElementGradient`, and `TemperatureIn` for a point inside an element.
+Beyond it, `ThermalResults` gives nodal `Temperature`, averaged `NodalFlux`, per-material
+`NodalFluxIn`, per-element `ElementFlux`/`ElementGradient`, and `TemperatureIn` for a point
+inside an element.
 
 Element values are public for the same reason the structural solver keeps `ElementStress`
 public: `q = -k·grad T` is one derivative down from the solved field, so it jumps across
-element faces, and the nodal values are a volume-weighted average. That average smooths a
-genuine discontinuity at a material interface, and the size of the jump is the standard
-error indicator.
+element faces, and the nodal values are a volume-weighted average. The size of that jump is
+the standard error indicator, and averaging it away is the standard way to hide a mesh that
+is too coarse.
+
+### At a material interface, ask for the material
+
+Where two conductivities meet, the jump is not a discretization artefact but the answer.
+Temperature is continuous across a bonded interface, so the *tangential* gradient is
+continuous and the tangential flux jumps with `k`; only the component *normal* to the
+interface is continuous, by conservation. A node sitting on that interface therefore has one
+right answer per material, and `NodalFlux` — being indexed by node, as any colour-map field
+must be — holds one value and reports the blend.
+
+```csharp
+// How many nodes are affected: zero for a single-material model, and for separate bodies,
+// which share no node.
+Console.WriteLine($"{mesh.InterfaceNodeCount} nodes blend two materials");
+
+// The honest value, per material. Away from an interface it is bit-for-bit what NodalFlux
+// says, so the two accessors are safe to mix; a region the node does not touch is refused
+// by name rather than answered with a neighbour's number.
+foreach (int region in mesh.RegionsAt(node))
+    Console.WriteLine($"  region {region}: {results.NodalFluxIn(region, node)}");
+```
+
+The magnitude is worth stating: on a two-material bar carrying 5000 and 1250 mW/mm², the one
+value an interface node can report is wrong by 75% to 225% for one of the two materials, while
+`NodalFluxIn` is exact. `StructuralResults.NodalStressIn` is the same rule for the same reason.
 
 ## Transient conduction
 

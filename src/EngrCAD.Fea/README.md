@@ -263,8 +263,9 @@ is a feature, and it is filed as one; until it lands, a bonded bi-material part 
 one surface with one material, and `AnalysisBody` serves genuinely separate bodies in one
 analysis. One consequence is worth naming because it is easy to assume the opposite: since
 disjoint bodies share no node, **`AnalysisMesh.InterfaceNodeCount` is zero for every mesh the
-public API can build today** — the per-region stress recovery decision (e) above is a
-precondition for conforming interfaces, not a fix to something a caller can currently reach.
+public API can build today** — the per-region stress recovery decision (e) above, and the
+per-region `NodalFluxIn` its thermal twin gained, are preconditions for conforming interfaces
+rather than fixes to something a caller can currently reach.
 
 ## Directional materials: `ElasticLaw`
 
@@ -1417,6 +1418,41 @@ erfc solution is derived under. The alternative — letting the initial value st
 transitioning inside the first step — was built and measured: it charges the surface node's
 whole heat-up to that step, and the consistent capacity drags its neighbours down with it, so
 a quenched bar undershot its own initial temperature by **49% of the step** against 5.8%.
+
+## Flux at a material interface
+
+`ThermalResults` carries nodal `Temperature`, per-element `ElementFlux`/`ElementGradient`,
+averaged `NodalFlux`, per-material `NodalFluxIn`, and `TemperatureIn` for a point inside an
+element. The averaging is the same **volume-weighted** rule structural results use, with the
+same consequence at a bonded interface: temperature is continuous there, so the *tangential*
+gradient is continuous and the tangential flux **jumps with `k`**, while the *normal*
+component is continuous by conservation. `NodalFlux` is indexed by node, so it holds one value
+where the physics has two; `NodalFluxIn(region, node)` is the honest value, and
+`AnalysisMesh.InterfaceNodeCount` reports how many nodes blend (zero for a single-region mesh
+and for disjoint bodies).
+
+This is the same machinery as the per-region stress recovery — the same `(node, region)` slot
+table, `ComputeNodalFlux` taking the same `perRegion` parameter — and it is a **smaller job for
+a reason worth knowing**: there is no recovery on the thermal path at all, so nothing here has
+REACH. A cross-interface *patch* corrupts nodes a whole element layer inside each material; a
+cross-interface *average* touches only the shared node. Every consumer was checked rather than
+assumed: `Fields`/`SampleOnto`/`WriteVtu` read the nodal array, `ElementFlux` is per element,
+and `TemperatureIn` and `ThermalLoad` read TEMPERATURE, which is continuous.
+
+**The arrangement that can see it is PARALLEL, and the recorded series fixture cannot.** In
+series (the interface perpendicular to the flow) the flux is purely normal, so both materials
+carry the same vector — the 200 mW/mm² this project already verifies — and any averaging
+reproduces it: measured, the two accessors differ by 1.6e-11 of 2000. That is the exact
+complement of the structural case, where series makes the *stress* continuous and the *strain*
+jump. In parallel (the interface containing the flow) both materials span the same length under
+the same end temperatures, so `T = T_hot·(1 - x/L)` is exact with nothing manufactured and the
+flux jumps with `k`. Measured on a 4 mm cube at `k` = 200 and 50, exact flux 5000 and
+1250 mW/mm²: **per-region exact to 4.2e-15 (linear) / 2.1e-14 (quadratic)** at every one of the
+150/810 slots, while the single value the node-indexed field reports is wrong by **75% to 225%**
+for one of the two materials at every interface node. And the recorded fixture trap recurs:
+prescribing that linear field on the whole boundary of a *series* bar imposes the same gradient
+on both halves — the parallel condition wearing the series geometry — and duly reports a 75.0%
+jump, so `ThermalInterfaceFluxTests` measures both loadings rather than restating the warning.
 
 ## Thermal stress
 
