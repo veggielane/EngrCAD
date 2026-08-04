@@ -454,6 +454,160 @@ public class SheetMetalTests
         Assert.Equal(1.0, FoldedVolume(body) / flat.Volume, 6);
     }
 
+    // -------------------------------------------------------------- closed corners
+
+    /// <summary>
+    /// The closed corner, and its oracle is an EXACT DISCREPANCY the same way the bend
+    /// model's is. Mitring makes each flange's material run to the miter plane rather than
+    /// stopping at the sheet's corner, so the folded body gains exactly the first moment of
+    /// that flange's own cross-section about the corner line — <c>((R+T)³ − R³)/3</c> from
+    /// the bend's annular sector plus <c>T·L·(R + T/2)</c> from the wall — while the BLANK
+    /// is untouched. That the blank cannot supply it is precisely what "an unrelieved
+    /// corner shares material" means, and predicting it in closed form is what separates
+    /// this from "the corner looks closed".
+    /// </summary>
+    [Fact]
+    public void AClosedCornerAddsExactlyTheCrossSectionsFirstMomentAboutTheCorner()
+    {
+        const double length = 22, radius = 2.5;
+        double wall = length - SheetMetalSpec.OutsideSetback(Math.PI / 2, radius, Thickness);
+
+        // The "open" reference cannot be built as one body -- two full-width flanges on
+        // adjacent edges is exactly what the corner declaration exists for -- so it is the
+        // two one-flange bodies less the plate they share. Exact, and it makes the
+        // comparison a statement about the CORNER rather than about two models.
+        double OpenFolded() =>
+            FoldedVolume(SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), length, bendRadius: radius))
+            + FoldedVolume(SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(2), length, bendRadius: radius))
+            - PlateX * PlateY * Thickness;
+        double OpenFlat() =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), length, bendRadius: radius).Unfold().Volume
+            + SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(2), length, bendRadius: radius).Unfold().Volume
+            - PlateX * PlateY * Thickness;
+        var closed = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithCorner(
+                SheetFlangeTarget.BaseEdge(1), SheetFlangeTarget.BaseEdge(2), length,
+                bendRadius: radius);
+
+        var solid = closed.Solid.ToBrep();
+        solid.Validate();
+
+        // Per flange: the bend's annular sector contributes the integral of its own radial
+        // over [R, R+T] x [0, pi/2], and the wall its area times its centroid offset.
+        double perFlange = (Math.Pow(radius + Thickness, 3) - Math.Pow(radius, 3)) / 3
+                         + Thickness * wall * (radius + Thickness / 2);
+        double added = 2 * perFlange;
+
+        Assert.Equal(OpenFlat(), closed.Unfold().Volume, 9);   // the blank is untouched
+
+        // The residual bar is the tessellate-then-Richardson mass properties' own grade
+        // (~1e-7 relative on a curved solid), not a chosen epsilon: the corner's two bend
+        // bands and the miter's two elliptical cuts are the only curved surfaces here.
+        // Measured: 2.07e-3 on a folded volume of 1.07e4, i.e. 1.9e-7 relative.
+        double folded = FoldedVolume(closed);
+        Assert.True(
+            Math.Abs(folded - (OpenFolded() + added)) < 1e-6 * folded,
+            $"predicted {OpenFolded() + added:g12}, measured {folded:g12}");
+
+        // ... so the folded-versus-flat discrepancy moves by exactly the shared material.
+        double openGap = OpenFolded() - OpenFlat();
+        double closedGap = folded - closed.Unfold().Volume;
+        Assert.True(
+            Math.Abs((closedGap - openGap) - added) < 1e-6 * folded,
+            $"the corner must move the folded-vs-flat gap by exactly {added:g12}, not " +
+            $"{closedGap - openGap:g12}");
+    }
+
+    /// <summary>
+    /// "Closed" has to mean welded rather than merely near, so the assertion is
+    /// TOPOLOGICAL: the mitred pair is one two-manifold solid whose face count is exactly
+    /// the two flanges' own (no cap and no corner patch — nothing lies in the miter plane),
+    /// and the sheet's own corner edge has fallen away because both walls were consumed.
+    /// </summary>
+    [Fact]
+    public void AClosedCornerWeldsRatherThanButting()
+    {
+        var closed = SheetMetalBody.Base(Plate(), Spec())
+            .WithCorner(SheetFlangeTarget.BaseEdge(1), SheetFlangeTarget.BaseEdge(2), 20);
+        var solid = closed.Solid.ToBrep();
+        solid.Validate();       // two-manifold: every edge used exactly twice
+
+        // A plain plate has 6 faces; each flange adds 5 (two bend bands, two wall faces, a
+        // tip) and consumes its wall. A mitred pair adds NO end caps at the corner, so the
+        // count is exactly 6 - 2 + 10 = 14.
+        Assert.Equal(14, solid.Faces.Count());
+
+        // The two flanges' walls genuinely touch: the miter's own inside-wall corner is a
+        // single vertex shared by both flanges' wall faces.
+        double radius = Radius;
+        var expected = new Vector3d(PlateX + radius, PlateY + radius, Thickness + radius);
+        var shared = solid.Vertices.Where(v => v.Position.DistanceTo(expected) < 1e-9).ToList();
+        Assert.Single(shared);
+        // ... and the sheet's own corner edge has fallen away: nothing runs from the top
+        // face's corner to the bottom face's, because both side walls were consumed.
+        Assert.DoesNotContain(solid.Edges, e =>
+            e.IsLinear(out var a, out var b)
+            && SheetMetalBody.JoinsSamePoints(
+                a, b, (PlateX, PlateY, 0), (PlateX, PlateY, Thickness)));
+    }
+
+    /// <summary>A corner is exact at any bend angle and any corner angle, because the
+    /// miter's ellipse and its wall corner are closed forms rather than an intersection.
+    /// Measured on a non-square plate at a non-square bend.</summary>
+    [Theory]
+    [InlineData(90.0)]
+    [InlineData(70.0)]
+    [InlineData(110.0)]
+    public void AClosedCornerIsExactAtAnyBendAngle(double angle)
+    {
+        const double length = 20, radius = 2;
+        double wall = length - SheetMetalSpec.OutsideSetback(angle * Math.PI / 180, radius, Thickness);
+
+        SheetMetalBody One(int edge) =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(edge), length, angle, bendRadius: radius);
+        double plate = PlateX * PlateY * Thickness;
+        double openFolded = FoldedVolume(One(1)) + FoldedVolume(One(2)) - plate;
+        double openFlat = One(1).Unfold().Volume + One(2).Unfold().Volume - plate;
+
+        var closed = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithCorner(
+                SheetFlangeTarget.BaseEdge(1), SheetFlangeTarget.BaseEdge(2), length, angle,
+                bendRadius: radius);
+
+        var solid = closed.Solid.ToBrep();
+        solid.Validate();
+        Assert.True(BrepMassProperties.Compute(solid).Volume > openFolded,
+            "a mitred corner can only ADD material to two flanges that stopped at the corner");
+        Assert.Equal(openFlat, closed.Unfold().Volume, 9);
+        Assert.True(wall > 0);
+    }
+
+    [Fact]
+    public void ACornerOfMismatchedFlangesIsRefusedNamingWhy()
+    {
+        var plate = SheetMetalBody.Base(Plate(), Spec());
+
+        // Edges that do not share a corner: "which corner" would otherwise be a guess.
+        var apart = Assert.Throws<NotSupportedException>(() =>
+            plate.WithCorner(SheetFlangeTarget.BaseEdge(1), SheetFlangeTarget.BaseEdge(3), 20)
+                .Solid.ToBrep());
+        Assert.Contains("exactly ONE shared point", apart.Message, StringComparison.Ordinal);
+
+        // Two full-width flanges on ADJACENT edges declared separately still refuse, and
+        // the refusal now names the corner declaration as the way out — which is the point:
+        // the pair has to be located before either is built.
+        var separate = Assert.Throws<NotSupportedException>(() =>
+            plate.WithFlange(SheetFlangeTarget.BaseEdge(1), 20)
+                 .WithFlange(SheetFlangeTarget.BaseEdge(2), 20)
+                 .Solid.ToBrep());
+        Assert.Contains("CORNER", separate.Message, StringComparison.Ordinal);
+    }
+
     // ------------------------------------------- multi-body sheets / welded assemblies
 
     /// <summary>

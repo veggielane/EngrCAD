@@ -162,10 +162,7 @@ public static class SheetMetalSurgery
         var a = section.AxisDirection;
 
         // Order the span along +a so every loop below reads the same way round.
-        var (q0, q1) = (spanEnd - spanStart).Dot(a) >= 0 ? (spanStart, spanEnd) : (spanEnd, spanStart);
-        if ((q1 - q0).Dot(a) <= Weld)
-            throw new ArgumentException(
-                "The flange's span along the bend line must be positive.", nameof(spanEnd));
+        var (q0, q1) = Order(spanStart, spanEnd, a);
 
         // Everything checkable is checked HERE, before a single coedge moves. Rim surgery
         // rewrites loops in place, so a refusal that fired part-way would leave a
@@ -178,11 +175,12 @@ public static class SheetMetalSurgery
         // corner there.
         var rims = ResolveRims(site, n, section.Thickness, q0, q1, a);
 
-        var flange = BuildFlange(section with { BendLinePoint = q0 }, q1 - q0, wallLength, rims, wallCutouts);
+        var flange = BuildFlange(
+            section with { BendLinePoint = q0 }, q1 - q0, wallLength, rims, wallCutouts, null);
 
         var faces = solid.Faces.Where(f => !ReferenceEquals(f, site.Wall)).ToList();
         faces.AddRange(flange.Faces);
-        CloseEnds(site, flange, rims, section, faces);
+        CloseEnds(site, flange, rims, section, faces, -1);
 
         // The wall is consumed by the bend; detaching drops its coedges from the surviving
         // rims' use lists so they read exactly two uses again.
@@ -191,6 +189,233 @@ public static class SheetMetalSurgery
         var result = new BrepSolid([new BrepShell(faces)]);
         result.Validate();
         return result;
+    }
+
+    // ------------------------------------------------------------------ closed corners
+
+    /// <summary>
+    /// Grows TWO flanges that meet at a shared corner of the sheet, MITRED against each
+    /// other so the corner closes with no gap.
+    ///
+    /// <para><b>The miter is a closed form, not an intersection.</b> Two bends of the same
+    /// radius quoted on the same face have axes that meet over the sheet's corner, and two
+    /// equal-radius cylinders with intersecting axes meet in two ELLIPSES — the exact fact
+    /// <see cref="Filleting"/> already uses for a sharp rim corner. So the corner needs no
+    /// surface–surface intersection, no boolean and no new surface type: each band's cut is
+    /// an <see cref="Ellipse3d"/> whose centre is the shared axis point, whose one semi-axis
+    /// is the inward radial and whose other reaches the point where the two OFFSET bend
+    /// lines cross.</para>
+    ///
+    /// <para><b>And the two flanges' cut chains are the SAME curves</b> — the configuration
+    /// is symmetric under reflection in the miter plane, which swaps the two flanges — so
+    /// they are built once and used by one face of each. Nothing lies in the miter plane,
+    /// which is what "closed" means: the corner is welded, not butted across a gap.</para>
+    ///
+    /// <para><b>Why one operation rather than two.</b> A full-width flange consumes its
+    /// wall and splices its cross-section into the faces at both ends, so a second flange
+    /// quoted on a neighbouring edge would find a wall that is no longer four-sided — which
+    /// is exactly the refusal this replaces. Locating BOTH before either is built is the
+    /// whole fix, and it also lets the sheet's own corner edge (used by the two walls and by
+    /// nothing else afterwards) simply fall away.</para>
+    /// </summary>
+    public static BrepSolid AddCornerFlanges(
+        BrepSolid solid,
+        in SheetBendSection sectionA, in Vector3d startA, in Vector3d endA, double wallA,
+        IReadOnlyList<Profile> cutoutsA,
+        in SheetBendSection sectionB, in Vector3d startB, in Vector3d endB, double wallB,
+        IReadOnlyList<Profile> cutoutsB)
+    {
+        ArgumentNullException.ThrowIfNull(solid);
+        Validate(sectionA, wallA);
+        Validate(sectionB, wallB);
+        RequireCompatibleCorner(sectionA, sectionB, wallA, wallB);
+
+        var (q0A, q1A) = Order(startA, endA, sectionA.AxisDirection);
+        var (q0B, q1B) = Order(startB, endB, sectionB.AxisDirection);
+        var corner = SharedCorner([q0A, q1A], [q0B, q1B]);
+
+        // Both walls are located BEFORE either is edited, which is the whole point: a
+        // full-width flange consumes its wall and splices into the faces at both ends, so
+        // the second one would otherwise find a wall that is no longer four-sided.
+        var siteA = Locate(solid, q0A, q1A, sectionA, corner);
+        var siteB = Locate(solid, q0B, q1B, sectionB, corner);
+
+        int cornerA = q0A.DistanceTo(corner) <= Weld ? 0 : 1;
+        int cornerB = q0B.DistanceTo(corner) <= Weld ? 0 : 1;
+        RequireRunsIntoTheCorner(siteA, cornerA);
+        RequireRunsIntoTheCorner(siteB, cornerB);
+
+        var rimsA = ResolveRims(siteA, sectionA.Inside, sectionA.Thickness, q0A, q1A, sectionA.AxisDirection);
+        var rimsB = ResolveRims(siteB, sectionB.Inside, sectionB.Thickness, q0B, q1B, sectionB.AxisDirection);
+
+        var miter = BuildMiter(
+            sectionA, sectionB, corner, wallA,
+            rimsA.InsideVertex[cornerA], rimsA.OutsideVertex[cornerA]);
+
+        var flangeA = BuildFlange(
+            sectionA with { BendLinePoint = q0A }, q1A - q0A, wallA, rimsA, cutoutsA,
+            new CornerEnd(cornerA, miter));
+        var flangeB = BuildFlange(
+            sectionB with { BendLinePoint = q0B }, q1B - q0B, wallB, rimsB, cutoutsB,
+            new CornerEnd(cornerB, miter));
+
+        var faces = solid.Faces
+            .Where(f => !ReferenceEquals(f, siteA.Wall) && !ReferenceEquals(f, siteB.Wall))
+            .ToList();
+        faces.AddRange(flangeA.Faces);
+        faces.AddRange(flangeB.Faces);
+        CloseEnds(siteA, flangeA, rimsA, sectionA, faces, cornerA);
+        CloseEnds(siteB, flangeB, rimsB, sectionB, faces, cornerB);
+
+        Detach(siteA.Wall);
+        Detach(siteB.Wall);
+
+        var result = new BrepSolid([new BrepShell(faces)]);
+        result.Validate();
+        return result;
+    }
+
+    /// <summary>The shared cross-section two mitred flanges weld along: five curves and the
+    /// four vertices between them, built ONCE and used by one face of each flange.</summary>
+    /// <param name="Bisector">The outer ellipse's own semi-axis toward the corner. Kept
+    /// because it BOUNDS the arc's reach past the span, which the arc's two endpoints do
+    /// not: past a square bend the ellipse's furthest point is its semi-axis, at t = 90°,
+    /// strictly inside the trimmed range.</param>
+    private sealed record Miter(
+        BrepVertex TangentInside, BrepVertex TangentOutside,
+        BrepVertex TipInside, BrepVertex TipOutside,
+        BrepEdge InsideArc, BrepEdge OutsideArc,
+        BrepEdge InsideWall, BrepEdge OutsideWall, BrepEdge Tip,
+        Vector3d Bisector);
+
+    /// <summary>The ONE point both spans reach — the sheet corner the two flanges miter at.
+    /// Refused by name when there is not exactly one, since "which corner" would otherwise
+    /// be a guess.</summary>
+    private static Vector3d SharedCorner(Vector3d[] spanA, Vector3d[] spanB)
+    {
+        var shared = spanA.Where(a => spanB.Any(b => b.DistanceTo(a) <= Weld)).ToList();
+        if (shared.Count != 1)
+            throw new NotSupportedException(
+                $"The two flanges of a closed corner must meet at exactly ONE shared point of the sheet; this " +
+                $"pair shares {shared.Count}. Quote them on edges that share a corner, and let each run the " +
+                "whole way into it.");
+        return shared[0];
+    }
+
+    private static void RequireRunsIntoTheCorner(FlangeSite site, int end)
+    {
+        if (!site.Flush[end])
+            throw new NotSupportedException(
+                "A closed corner needs both bends to run the whole way into the corner: this one stops short " +
+                "of it, which is the RELIEVED corner (inset the flange and cut a bend relief) rather than the " +
+                "closed one.");
+    }
+
+    private static void RequireCompatibleCorner(
+        in SheetBendSection a, in SheetBendSection b, double wallA, double wallB)
+    {
+        if (Math.Abs(a.BendRadius - b.BendRadius) > Weld || Math.Abs(a.Thickness - b.Thickness) > Weld)
+            throw new NotSupportedException(
+                $"A closed corner miters two bends of the SAME inside radius and thickness; these are " +
+                $"{a.BendRadius:g6}/{a.Thickness:g6} and {b.BendRadius:g6}/{b.Thickness:g6}. Two different " +
+                "radii give two cylinders of different radii, whose intersection is a quartic rather than the " +
+                "ellipse the miter is built from.");
+        if (Math.Abs(a.AngleRadians - b.AngleRadians) > Weld)
+            throw new NotSupportedException(
+                $"A closed corner miters two bends through the SAME angle; these turn " +
+                $"{a.AngleRadians * 180 / Math.PI:g6} and {b.AngleRadians * 180 / Math.PI:g6} degrees. At " +
+                "different angles the two walls end at different heights and their mitred ends do not meet.");
+        if (Math.Abs(wallA - wallB) > Weld)
+            throw new NotSupportedException(
+                $"A closed corner miters two flanges of the same length; their walls measure {wallA:g6} and " +
+                $"{wallB:g6}. Above the shorter one the miter would cut a wall with nothing on the other side " +
+                "of it.");
+        if (a.Inside.Dot(b.Inside) < 1 - Weld)
+            throw new NotSupportedException(
+                "A closed corner needs both flanges quoted on the SAME face of the sheet and folded the same " +
+                "way; these fold toward opposite faces, so their bends never meet.");
+    }
+
+    /// <summary>
+    /// The mitred cross-section, in closed form.
+    ///
+    /// <para>Both bends' axes pass through <c>corner + Inside·R</c>, so the two cylinders
+    /// share that centre and their intersection is the ellipse
+    /// <c>C₀ − Inside·r·cos t + (Q(r) − corner)·sin t</c>, where <c>Q(r)</c> is where the
+    /// two bend lines offset OUTWARD by r cross. That offset crossing has a closed form of
+    /// its own: <c>Q = corner + r(ŵ_A + ŵ_B)/(1 + ŵ_A·ŵ_B)</c>, which is the bisector, so
+    /// nothing is intersected numerically anywhere in here.</para>
+    ///
+    /// <para>The mitred WALL end is where the two flanges' wall planes and their tip planes
+    /// meet — one 3×3 solve, and the reflection that swaps the two flanges fixes the miter
+    /// line pointwise, which is why both tips land on the same point at any bend angle.</para>
+    /// </summary>
+    private static Miter BuildMiter(
+        in SheetBendSection a, in SheetBendSection b, in Vector3d corner, double wallLength,
+        BrepVertex quotedCorner, BrepVertex farCorner)
+    {
+        double c = a.Outward.Dot(b.Outward);
+        if (c <= -1 + Weld)
+            throw new NotSupportedException(
+                "The two bend lines of a closed corner point in opposite directions, so their offsets never " +
+                "cross and there is no corner to close.");
+        var bisector = (a.Outward + b.Outward) / (1 + c);
+        var centre = corner + a.Inside * a.BendRadius;
+        double angle = a.AngleRadians;
+
+        var insideArc = new Ellipse3d(
+            centre, -a.Inside * a.BendRadius, bisector * a.BendRadius);
+        var outsideArc = new Ellipse3d(
+            centre, -a.Inside * (a.BendRadius + a.Thickness), bisector * (a.BendRadius + a.Thickness));
+
+        var tangentInside = new BrepVertex(insideArc.PointAt(angle));
+        var tangentOutside = new BrepVertex(outsideArc.PointAt(angle));
+        var tipInside = new BrepVertex(WallCorner(a, b, tangentInside.Position, wallLength));
+        var tipOutside = new BrepVertex(WallCorner(a, b, tangentOutside.Position, wallLength));
+
+        return new Miter(
+            tangentInside, tangentOutside, tipInside, tipOutside,
+            new BrepEdge(insideArc, new Interval(0, angle), quotedCorner, tangentInside),
+            new BrepEdge(outsideArc, new Interval(0, angle), farCorner, tangentOutside),
+            Segment(tangentInside, tipInside),
+            Segment(tangentOutside, tipOutside),
+            Segment(tipInside, tipOutside),
+            bisector * (a.BendRadius + a.Thickness));
+    }
+
+    /// <summary>Where the two mitred walls' tips meet: the point on both wall planes at
+    /// wall-length from each flange's own tangent line. Three planes, one Cramer solve —
+    /// exact, and the same point from either flange because the miter plane's reflection
+    /// fixes it.</summary>
+    private static Vector3d WallCorner(
+        in SheetBendSection a, in SheetBendSection b, in Vector3d tangent, double wallLength)
+    {
+        // A wall plane contains the bend axis direction and the flange direction, so its
+        // normal is their cross; the tip plane is perpendicular to the flange direction at
+        // the stated length.
+        var nA = a.AxisDirection.Cross(a.FlangeDirection);
+        var nB = b.AxisDirection.Cross(b.FlangeDirection);
+        var nT = a.FlangeDirection;
+        double dA = nA.Dot(tangent);
+        double dB = nB.Dot(tangent);
+        double dT = nT.Dot(tangent) + wallLength;
+
+        var cross = nB.Cross(nT);
+        double determinant = nA.Dot(cross);
+        if (Math.Abs(determinant) <= 1e-12)
+            throw new NotSupportedException(
+                "The two flanges of a closed corner are parallel, so their walls never meet and there is no " +
+                "miter. Quote them on edges that genuinely turn a corner.");
+        return (cross * dA + nT.Cross(nA) * dB + nA.Cross(nB) * dT) / determinant;
+    }
+
+    private static (Vector3d Q0, Vector3d Q1) Order(
+        in Vector3d start, in Vector3d end, in Vector3d axis)
+    {
+        var (q0, q1) = (end - start).Dot(axis) >= 0 ? (start, end) : (end, start);
+        if ((q1 - q0).Dot(axis) <= Weld)
+            throw new ArgumentException("The flange's span along the bend line must be positive.");
+        return (q0, q1);
     }
 
     private static void Validate(in SheetBendSection section, double wallLength)
@@ -241,8 +466,13 @@ public static class SheetMetalSurgery
         BrepVertex[] InsideVertex, BrepVertex[] OutsideVertex,
         BrepEdge?[] InsideLeftover, BrepEdge?[] OutsideLeftover);
 
+    /// <summary>Is this span end the corner a mitred pair meets at?</summary>
+    private static bool AtCorner(Vector3d? corner, in Vector3d point) =>
+        corner is { } c && c.DistanceTo(point) <= Weld;
+
     private static FlangeSite Locate(
-        BrepSolid solid, in Vector3d q0, in Vector3d q1, in SheetBendSection section)
+        BrepSolid solid, in Vector3d q0, in Vector3d q1, in SheetBendSection section,
+        Vector3d? cornerPoint = null)
     {
         var inside = section.Inside;
         var outward = section.Outward;
@@ -283,9 +513,11 @@ public static class SheetMetalSurgery
         if (wall.Loops.Count != 1 || wall.OuterLoop.Coedges.Count != 4)
             throw new NotSupportedException(
                 $"The side wall at this bend line has {wall.Loops.Count} loop(s) and " +
-                $"{wall.OuterLoop.Coedges.Count} edge(s); v1 grows a flange only from a plain four-sided " +
-                "wall. A wall that has already been reshaped by a neighbouring flange means the two flanges " +
-                "meet at a CORNER, and closed corners, miters and reliefs are the follow-up to this rung.");
+                $"{wall.OuterLoop.Coedges.Count} edge(s), where a flange grows from a plain four-sided wall. " +
+                "A wall already reshaped by a neighbouring flange means the two flanges meet at a CORNER, and " +
+                "a corner is ONE operation over two flanges rather than two that happen to meet: declare it " +
+                $"with {nameof(AddCornerFlanges)} (SheetMetalBody.WithCorner), which locates both before " +
+                "either is built. To leave the corner open instead, inset one flange and cut a bend relief.");
 
         var coedges = wall.OuterLoop.Coedges;
         int index = 0;
@@ -322,9 +554,12 @@ public static class SheetMetalSurgery
         // A FLUSH end splices the flange's cross-section into the face beyond the wall, so
         // that face must be planar and square to the bend line. Checked here rather than at
         // the splice: by then the first end has already been rewritten.
-        if (flush[0])
+        // (A CORNER end splices into nothing — it welds to its partner — so it is exempt;
+        // a corner's own preconditions are checked in AddCornerFlanges, still before either
+        // wall is touched.)
+        if (flush[0] && !AtCorner(cornerPoint, q0))
             RequireSquareNeighbour(endAtQ0, -a, wall);
-        if (flush[1])
+        if (flush[1] && !AtCorner(cornerPoint, q1))
             RequireSquareNeighbour(endAtQ1, a, wall);
 
         return new FlangeSite(
@@ -483,9 +718,15 @@ public static class SheetMetalSurgery
     private static BrepEdge Segment(BrepVertex from, BrepVertex to) =>
         new(new Line3d(from.Position, to.Position), Interval.Unit, from, to);
 
+    /// <summary>The end of a flange that is MITRED into a closed corner: index plus the
+    /// shared cross-section it welds to. Everything the flange would have built for itself
+    /// at that end is taken from the miter instead, which is what makes the two flanges
+    /// share edges rather than meet across a gap.</summary>
+    private sealed record CornerEnd(int End, Miter Miter);
+
     private static FlangeBuild BuildFlange(
         in SheetBendSection s0, in Vector3d span, double wallLength, Rims rims,
-        IReadOnlyList<Profile> wallCutouts)
+        IReadOnlyList<Profile> wallCutouts, CornerEnd? corner)
     {
         // The far end's cross-section is the near one translated along the bend line —
         // one fact, so the caller cannot hand over an inconsistent pair.
@@ -526,6 +767,23 @@ public static class SheetMetalSurgery
             tipEnd[k] = Segment(tipInsideVertex[k], tipOutsideVertex[k]);
         }
 
+        // A mitred end takes the SHARED cross-section instead of its own: the same five
+        // edges and four vertices the partner flange uses, so the corner welds by index
+        // rather than by tolerance and nothing lies in the miter plane.
+        if (corner is { } cut)
+        {
+            int k = cut.End;
+            tangentInsideVertex[k] = cut.Miter.TangentInside;
+            tangentOutsideVertex[k] = cut.Miter.TangentOutside;
+            tipInsideVertex[k] = cut.Miter.TipInside;
+            tipOutsideVertex[k] = cut.Miter.TipOutside;
+            insideArc[k] = cut.Miter.InsideArc;
+            outsideArc[k] = cut.Miter.OutsideArc;
+            insideWall[k] = cut.Miter.InsideWall;
+            outsideWall[k] = cut.Miter.OutsideWall;
+            tipEnd[k] = cut.Miter.Tip;
+        }
+
         var insideTangentEdge = Segment(tangentInsideVertex[0], tangentInsideVertex[1]);
         var outsideTangentEdge = Segment(tangentOutsideVertex[0], tangentOutsideVertex[1]);
         var insideTipEdge = Segment(tipInsideVertex[0], tipInsideVertex[1]);
@@ -536,8 +794,21 @@ public static class SheetMetalSurgery
         // is -Inside, so the INSIDE band (material below it) extrudes BACK from the Q1 end
         // and the outside band forwards from Q0. Both keep the whole parameter rectangle,
         // so they tessellate on the natural grid.
+        //
+        // A MITRED end reaches PAST the span, because the corner's material runs to the
+        // miter plane rather than stopping at the sheet's corner — so the band's own
+        // parameter rectangle has to be lengthened to cover its loop. This is the
+        // trim-the-domain-driven-surface rule that already forces a spliced neighbour to be
+        // re-surfaced as a plane, running the other way: a plane has no rectangle to
+        // escape, an extrusion does. With no corner the two vectors below are the
+        // incumbent ones by REFERENCE, so nothing that already built can move.
+        var (insideSurface, outsideSurface) = corner is null
+            ? (new ExtrudedSurface(insideArcCurve[1], -span),
+               new ExtrudedSurface(outsideArcCurve[0], span))
+            : ExtendedBands(s0, s1, span, alongSpan, radius, thickness, corner);
+
         var bendInside = new BrepFace(
-            new ExtrudedSurface(insideArcCurve[1], -span),
+            insideSurface,
             [new BrepLoop(
             [
                 Use(rims.Inside, rims.InsideVertex[0], rims.InsideVertex[1]),
@@ -546,7 +817,7 @@ public static class SheetMetalSurgery
                 new BrepCoedge(insideArc[0], false),
             ])]);
         var bendOutside = new BrepFace(
-            new ExtrudedSurface(outsideArcCurve[0], span),
+            outsideSurface,
             [new BrepLoop(
             [
                 new BrepCoedge(outsideArc[0], true),
@@ -594,8 +865,12 @@ public static class SheetMetalSurgery
                 ]),
                 .. outsideHoles,
             ]);
+        // Plane ORIGINS come from the section rather than from the (possibly mitred) end
+        // vertices: a plane's stored origin is an arbitrary in-plane point, and taking a
+        // mitred one would make the tip plane pass exactly through the miter and only
+        // nearly through the flange's own far corner.
         var flangeTip = new BrepFace(
-            new PlaneSurface(tipInsideVertex[0].Position, alongSpan, -v),
+            new PlaneSurface(tangentInside[0] + u * wallLength, alongSpan, -v),
             [new BrepLoop(
             [
                 new BrepCoedge(insideTipEdge, true),
@@ -730,6 +1005,41 @@ public static class SheetMetalSurgery
         far.Add(new BrepLoop(farLoop));
     }
 
+    /// <summary>
+    /// The two bend bands of a MITRED flange, whose parameter rectangles are lengthened to
+    /// cover the corner's reach past the span.
+    /// <para>The reach is MEASURED off the miter's own four points rather than assumed from
+    /// the radius: at a square bend it is exactly <c>R + T</c>, but a shallower or steeper
+    /// bend leans the wall and its mitred corner reaches further, so a constant would be
+    /// right for one angle and wrong for the rest.</para>
+    /// </summary>
+    private static (ExtrudedSurface Inside, ExtrudedSurface Outside) ExtendedBands(
+        in SheetBendSection s0, in SheetBendSection s1, in Vector3d span, in Vector3d alongSpan,
+        double radius, double thickness, CornerEnd corner)
+    {
+        var at = corner.End == 0 ? s0.BendLinePoint : s1.BendLinePoint;
+        // The arc's own semi-axis bounds every point of it, which its two ENDPOINTS do not:
+        // past a square bend the furthest point is at t = 90°, strictly inside the range.
+        double reach = Math.Abs(corner.Miter.Bisector.Dot(alongSpan));
+        foreach (var p in (ReadOnlySpan<Vector3d>)
+        [
+            corner.Miter.TangentInside.Position, corner.Miter.TangentOutside.Position,
+            corner.Miter.TipInside.Position, corner.Miter.TipOutside.Position,
+        ])
+        {
+            reach = Math.Max(reach, Math.Abs((p - at).Dot(alongSpan)));
+        }
+
+        double low = corner.End == 0 ? reach : 0;
+        double high = corner.End == 1 ? reach : 0;
+        var stretched = span + alongSpan * (low + high);
+        return (
+            new ExtrudedSurface((s1 with { BendLinePoint = s1.BendLinePoint + alongSpan * high })
+                .Arc(radius), -stretched),
+            new ExtrudedSurface((s0 with { BendLinePoint = s0.BendLinePoint - alongSpan * low })
+                .Arc(radius + thickness), stretched));
+    }
+
     /// <summary>A coedge on an existing edge, with the sense that walks it
     /// <paramref name="from"/> to <paramref name="to"/>.</summary>
     private static BrepCoedge Use(BrepEdge edge, BrepVertex from, BrepVertex to)
@@ -762,10 +1072,15 @@ public static class SheetMetalSurgery
     /// no coedge — which is what makes "flush at one end, inset at the other" an ordinary
     /// combination rather than a third path.</summary>
     private static void CloseEnds(
-        FlangeSite site, FlangeBuild flange, Rims rims, in SheetBendSection section, List<BrepFace> faces)
+        FlangeSite site, FlangeBuild flange, Rims rims, in SheetBendSection section, List<BrepFace> faces,
+        int cornerEnd)
     {
         for (int k = 0; k < 2; k++)
         {
+            // A mitred end is closed by its PARTNER, not by a cap or a splice: the five
+            // shared edges already have their second use from the other flange's faces.
+            if (k == cornerEnd)
+                continue;
             if (site.Flush[k])
                 Splice(site.EndEdge[k], Materialize(flange.EndChains[k]), site, faces);
             else

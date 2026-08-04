@@ -425,13 +425,23 @@ public sealed class SheetMetalBody
     private readonly List<EdgeFlange> _flanges;
     private ResolvedTree? _tree;
 
-    private SheetMetalBody(Sketch baseSketch, SketchPlane plane, SheetMetalSpec spec, List<EdgeFlange> flanges)
+    private readonly List<(int A, int B)> _corners;
+
+    private SheetMetalBody(
+        Sketch baseSketch, SketchPlane plane, SheetMetalSpec spec, List<EdgeFlange> flanges,
+        List<(int A, int B)>? corners = null)
     {
         BaseSketch = baseSketch;
         Plane = plane;
         Spec = spec;
         _flanges = flanges;
+        _corners = corners ?? [];
     }
+
+    /// <summary>The declared closed corners, as pairs of flange indices. A pair is built as
+    /// ONE surgery (see <see cref="SheetMetalSurgery.AddCornerFlanges"/>) rather than as two
+    /// flanges that happen to meet.</summary>
+    public IReadOnlyList<(int A, int B)> Corners => _corners;
 
     /// <summary>The base flange: this outline, extruded along the plane's normal to the
     /// sheet's thickness.</summary>
@@ -466,7 +476,7 @@ public sealed class SheetMetalBody
     public SheetMetalBody WithFlange(EdgeFlange flange)
     {
         ArgumentNullException.ThrowIfNull(flange);
-        var body = new SheetMetalBody(BaseSketch, Plane, Spec, [.. _flanges, flange]);
+        var body = new SheetMetalBody(BaseSketch, Plane, Spec, [.. _flanges, flange], [.. _corners]);
         _ = body.Tree;
         return body;
     }
@@ -481,6 +491,52 @@ public sealed class SheetMetalBody
         WithFlange(new EdgeFlange(
             target, length, angleDegrees, direction, bendRadius, kFactor, startOffset, width, relief,
             cutouts));
+
+    /// <summary>
+    /// A CLOSED CORNER: two flanges on adjacent edges, each running the whole way into the
+    /// sheet's shared corner and MITRED against the other so the corner closes with no gap
+    /// and no boolean.
+    ///
+    /// <para><b>It is one declaration because it is one operation.</b> A full-width flange
+    /// consumes its wall and splices its cross-section into the faces at both of its ends,
+    /// so a second flange declared afterwards on a neighbouring edge finds a wall that is no
+    /// longer four-sided — which is exactly the refusal this replaces. Declaring the pair
+    /// lets both be located before either is built, and lets the sheet's own corner edge
+    /// fall away once both walls are consumed.</para>
+    ///
+    /// <para><b>The miter is closed form.</b> Two bends of the same radius quoted on the
+    /// same face have axes meeting over the corner, and two equal-radius cylinders with
+    /// intersecting axes meet in ELLIPSES — the fact <c>Filleting</c>'s sharp-corner miters
+    /// already stand on. So nothing here intersects surfaces; see
+    /// <see cref="SheetMetalSurgery.AddCornerFlanges"/>.</para>
+    ///
+    /// <para><b>What it does to the volume identity is the price of sharing material</b>,
+    /// and it is exact: each flange's material now runs to the miter plane rather than
+    /// stopping at the corner, so the folded body GAINS the first moment of the flange's own
+    /// cross-section about the corner — <c>((R+T)³ − R³)/3 + T·L·(R + T/2)</c> per flange
+    /// for a square bend — while the blank is untouched. The blank cannot supply it, which
+    /// is precisely why an unrelieved corner is the case where material must be shared.</para>
+    /// </summary>
+    /// <param name="edgeA">The first flange's bend line.</param>
+    /// <param name="edgeB">The second's; it must share exactly one endpoint with the first.</param>
+    /// <param name="length">Flange length, from the outer virtual sharp, for BOTH — a
+    /// mitred pair must be the same length or the miter would cut a wall with nothing on the
+    /// far side of it.</param>
+    public SheetMetalBody WithCorner(
+        SheetFlangeTarget edgeA, SheetFlangeTarget edgeB, double length,
+        double angleDegrees = 90, SheetBendDirection direction = SheetBendDirection.Up,
+        double? bendRadius = null, double? kFactor = null,
+        IReadOnlyList<Sketch>? cutoutsA = null, IReadOnlyList<Sketch>? cutoutsB = null)
+    {
+        var body = WithFlange(new EdgeFlange(
+                edgeA, length, angleDegrees, direction, bendRadius, kFactor, Cutouts: cutoutsA))
+            .WithFlange(new EdgeFlange(
+                edgeB, length, angleDegrees, direction, bendRadius, kFactor, Cutouts: cutoutsB));
+        var corners = new List<(int, int)>(body._corners) { (body._flanges.Count - 2, body._flanges.Count - 1) };
+        var result = new SheetMetalBody(BaseSketch, Plane, Spec, body._flanges, corners);
+        _ = result.Tree;
+        return result;
+    }
 
     /// <summary>
     /// A HEM: the edge folded back on itself, as TWO bends in the same direction rather
@@ -753,7 +809,7 @@ public sealed class SheetMetalBody
                     : [.. flange.CutoutList.Select(c => c.Mirrored().Placed((resolved.Width, 0), (1, 0)))],
             });
         }
-        return new SheetMetalBody(BaseSketch.Mirrored(), Plane, Spec, flipped);
+        return new SheetMetalBody(BaseSketch.Mirrored(), Plane, Spec, flipped, [.. _corners]);
     }
 
     /// <summary>Grows every flange onto an already-built base solid. <paramref name="top"/>
@@ -763,8 +819,33 @@ public sealed class SheetMetalBody
     internal BrepSolid BuildBrep(BrepSolid baseSolid, in SheetFrame top, double scale)
     {
         var solid = baseSolid;
-        foreach (var bend in Tree.Bends(top, scale))
+        var bends = Tree.Bends(top, scale);
+        // A declared corner is ONE surgery over two flanges, so the pair is taken out of
+        // the sequence and built together; everything else stays exactly the single-flange
+        // path it always was.
+        var paired = new Dictionary<int, int>();
+        foreach (var (a, b) in _corners)
         {
+            paired[a] = b;
+            paired[b] = a;
+        }
+        var built = new HashSet<int>();
+        for (int i = 0; i < bends.Count; i++)
+        {
+            if (!built.Add(i))
+                continue;
+            if (paired.TryGetValue(i, out int partner))
+            {
+                built.Add(partner);
+                var one = bends[i];
+                var two = bends[partner];
+                solid = SheetMetalSurgery.AddCornerFlanges(
+                    solid,
+                    one.Section, one.Start, one.End, one.WallLength, one.Cutouts,
+                    two.Section, two.Start, two.End, two.WallLength, two.Cutouts);
+                continue;
+            }
+            var bend = bends[i];
             solid = SheetMetalSurgery.AddEdgeFlange(
                 solid, bend.Section, bend.Start, bend.End, bend.WallLength, bend.Cutouts);
         }
