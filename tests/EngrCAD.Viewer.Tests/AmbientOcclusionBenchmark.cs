@@ -87,12 +87,18 @@ public class AmbientOcclusionBenchmark(ITestOutputHelper output)
     /// eight rectangles, so the flat render mesh's vertices sit in different places and
     /// their occlusion legitimately differs. Four of the 106 rendered docs PNGs moved with
     /// it, all four B-Rep-boolean scenes, none with a changed silhouette.</para>
+    /// <para>The GYROID was re-taken once Surface Nets began giving an inside component one
+    /// vertex per SHEET it bounds rather than one in total. Note what did NOT move: the flat
+    /// vertex count is 228 348 either way, because the quads are the same quads — the fix
+    /// splits a vertex two sheets were sharing, so 18 of the source mesh's 37 898 vertices
+    /// become 36, every quad keeps its four corners, and only the positions of the quads
+    /// around those pinch points move. It is the same surface with the pinch opened.</para>
     /// </summary>
     [Theory]
     [InlineData("pocket", 132, 6950379374013342215L)]
     [InlineData("drilled plate", 924, 1703752811058293293L)]
     [InlineData("csg blob", 173268, 5417102775247476765L)]
-    [InlineData("gyroid", 228348, 3787921545543771635L)]
+    [InlineData("gyroid", 228348, -177004140334870257L)]
     public void Bake_MatchesTheGoldenBitPattern(string name, int vertices, long fingerprint)
     {
         var mesh = Fixtures().First(f => f.Name == name).Mesh;

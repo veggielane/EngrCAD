@@ -21,6 +21,7 @@ namespace EngrCAD.Interop;
 /// </summary>
 public static class SurfaceNets
 {
+
     /// <summary>
     /// Grid samples held in memory at once, as a count of x-slabs sized to this budget
     /// (8 Mi doubles = 64 MB). The sampler walks the grid in a sliding window of whole
@@ -285,6 +286,8 @@ public static class SurfaceNets
             Span<int> component = stackalloc int[8];
             Span<int> neighborComponent = stackalloc int[8];
             Span<int> neighborStack = stackalloc int[8];
+            Span<int> piece = stackalloc int[12];
+            Span<int> firstOnFace = stackalloc int[8];
             // Cube edges, in the order the crossings are averaged in. The INDEX into this
             // span is the key the per-cell map is stored under, and the quad passes below
             // name the same edges by those indices: x-aligned 0..3 (by dy + 2dz), y-aligned
@@ -295,18 +298,32 @@ public static class SurfaceNets
                 (0, 2), (1, 3), (4, 6), (5, 7),
                 (0, 4), (1, 5), (2, 6), (3, 7),
             ];
-            // The cell's three LOW faces, each listed twice — once per diagonal corner pair,
-            // as (face corner mask, the pair). A face whose inside corners are EXACTLY one of
-            // its diagonals is Marching Cubes' AMBIGUOUS face: all four of its edges cross,
-            // so it carries two quad edges between the same pair of cells, and those two
-            // quads share a directed edge unless one of the cells separates them. Only the
-            // low faces are listed because a face is owned by the cell on its + side, which
-            // makes every interior face somebody's low face and tests it exactly once.
-            ReadOnlySpan<(int Face, int A, int B)> diagonals =
+            // The six cube FACES, as the four cube edges lying on each, in the order
+            // -x, +x, -y, +y, -z, +z. Two crossings on a common face are the two ends of one
+            // arc of the surface's cross-section there, which is what <c>SurfacePieces</c>
+            // below joins them by.
+            ReadOnlySpan<int> faceEdges =
             [
-                (0x55, 0, 6), (0x55, 2, 4),   // -x
-                (0x33, 0, 5), (0x33, 1, 4),   // -y
-                (0x0F, 0, 3), (0x0F, 1, 2),   // -z
+                4, 6, 8, 10,    // -x (corners 0 2 4 6)
+                5, 7, 9, 11,    // +x (corners 1 3 5 7)
+                0, 2, 8, 9,     // -y (corners 0 1 4 5)
+                1, 3, 10, 11,   // +y (corners 2 3 6 7)
+                0, 1, 4, 5,     // -z (corners 0 1 2 3)
+                2, 3, 6, 7,     // +z (corners 4 5 6 7)
+            ];
+            // The cell's three LOW faces, each listed twice — once per diagonal corner pair,
+            // as (index into faceEdges, face corner mask, the pair). A face whose inside
+            // corners are EXACTLY one of its diagonals is Marching Cubes' AMBIGUOUS face: all
+            // four of its edges cross, so it carries two quad edges between the same pair of
+            // cells, and those two quads share a directed edge unless one of the cells
+            // separates them. Only the low faces are listed because a face is owned by the
+            // cell on its + side, which makes every interior face somebody's low face and
+            // tests it exactly once.
+            ReadOnlySpan<(int FaceIndex, int Face, int A, int B)> diagonals =
+            [
+                (0, 0x55, 0, 6), (0, 0x55, 2, 4),   // -x
+                (2, 0x33, 0, 5), (2, 0x33, 1, 4),   // -y
+                (4, 0x0F, 0, 3), (4, 0x0F, 1, 2),   // -z
             ];
 
             (previousMap, currentMap) = (currentMap, previousMap);
@@ -359,6 +376,80 @@ public static class SurfaceNets
                             }
                         }
                     }
+                }
+            }
+
+            // Which SURFACE PIECE each crossing belongs to, as a union-find over the twelve
+            // cube edges (<c>-1</c> where the edge does not cross; otherwise the root edge
+            // index of its group). One vertex per piece.
+            //
+            // <b>One vertex per inside component is not enough</b>, because an inside
+            // component can bound SEVERAL sheets: the standard case is a wall about one cell
+            // thick, whose material is one connected blob while the void inside and the space
+            // outside are two — six crossings, two triangles, and giving them one vertex
+            // pinches the mesh to a point there.
+            //
+            // <b>The refinement is by the cube's own FACE adjacency</b>: two crossings on a
+            // common face are the two ends of one arc of the surface's cross-section there, so
+            // they belong to one sheet, and crossings the faces never link belong to different
+            // sheets. That is the whole rule, and it is deliberately no finer — the AMBIGUOUS
+            // face (four crossings, its inside corners a diagonal pair) keeps merging all four,
+            // which is exactly what the incumbent rule did and what the split below then
+            // resolves against the neighbour. Separating an ambiguous face's two arcs HERE is
+            // measurably wrong: the two cells sharing it would have to agree about which arc is
+            // which, and neither the face's signs nor a cut of the cube's own connectivity gets
+            // them to agree (both were built and measured — open meshes and bow-tie vertices,
+            // see the residuals in todo.md).
+            //
+            // The join is restricted to crossings of the SAME inside component, which costs
+            // nothing on an unambiguous face (its two inside ends are always in one component —
+            // they are equal, adjacent, or joined through the face's fourth corner) and is what
+            // keeps an ambiguous face from merging two components on a diagonal the cube itself
+            // separates. So pieces REFINE inside components and never merge across them, and a
+            // cell whose every component is a single piece is untouched bit for bit.
+            static void SurfacePieces(
+                int insideMask, ReadOnlySpan<(int A, int B)> edges, ReadOnlySpan<int> faceEdges,
+                ReadOnlySpan<int> component, Span<int> piece, Span<int> firstOnFace)
+            {
+                for (int e = 0; e < 12; e++)
+                {
+                    var (a, b) = edges[e];
+                    piece[e] = ((insideMask >> a) & 1) != ((insideMask >> b) & 1) ? e : -1;
+                }
+                for (int f = 0; f < 6; f++)
+                {
+                    firstOnFace.Fill(-1);
+                    for (int u = 0; u < 4; u++)
+                    {
+                        int e = faceEdges[f * 4 + u];
+                        if (piece[e] < 0)
+                            continue;
+                        var (a, b) = edges[e];
+                        int inside = component[((insideMask >> a) & 1) != 0 ? a : b];
+                        if (firstOnFace[inside] < 0)
+                            firstOnFace[inside] = e;
+                        else
+                            Union(piece, firstOnFace[inside], e);
+                    }
+                }
+                for (int e = 0; e < 12; e++)
+                {
+                    if (piece[e] >= 0)
+                        piece[e] = Find(piece, e);
+                }
+
+                static int Find(Span<int> piece, int e)
+                {
+                    while (piece[e] != e)
+                        e = piece[e] = piece[piece[e]];
+                    return e;
+                }
+
+                static void Union(Span<int> piece, int a, int b)
+                {
+                    int ra = Find(piece, a), rb = Find(piece, b);
+                    if (ra != rb)
+                        piece[Math.Max(ra, rb)] = Math.Min(ra, rb);
                 }
             }
 
@@ -424,8 +515,9 @@ public static class SurfaceNets
                         Array.Fill(map, -1);
 
                         Components(insideMask, component, stack);
+                        SurfacePieces(insideMask, edges, faceEdges, component, piece, firstOnFace);
 
-                        // Which inside components must be SPLIT, one bit per component id.
+                        // Which surface pieces must be SPLIT further, one bit per piece root.
                         //
                         // A grid face whose inside corners are exactly a diagonal pair is
                         // ambiguous: all four of its edges cross, so it carries two quad
@@ -442,15 +534,19 @@ public static class SurfaceNets
                         // pair must use an off-diagonal corner of the far face as INSIDE
                         // while a path between the outside pair needs both of them OUTSIDE.
                         // Nothing else is refined, so every other cell stays bit-identical.
-                        int splitComponents = 0;
-                        foreach (var (face, da, db) in diagonals)
+                        int splitPieces = 0;
+                        foreach (var (faceIndex, face, da, db) in diagonals)
                         {
                             if ((insideMask & face) != ((1 << da) | (1 << db)) ||
                                 component[da] != component[db])
                                 continue;
                             if (!NeighborJoins(face, da, db, j, k, neighborComponent, neighborStack))
                                 continue;
-                            splitComponents |= 1 << component[da];
+                            // All four of an ambiguous face's crossings share that face and
+                            // one inside component, so they are one piece; naming it by any
+                            // of them scopes the split to the sheet that carries the face
+                            // rather than to everything the component bounds.
+                            splitPieces |= 1 << piece[faceEdges[faceIndex * 4]];
                         }
 
                         // The far (+x) face's answer, for the neighbour that will test it.
@@ -467,15 +563,17 @@ public static class SurfaceNets
                             if ((seenComponents & (1 << id)) != 0)
                                 continue;
                             seenComponents |= 1 << id;
-                            bool split = (splitComponents & (1 << id)) != 0;
 
                             // Vertex: mean of the crossings on edges leaving the component —
-                            // all of them at once when not splitting (the original rule, same
-                            // edge order and the same arithmetic), otherwise one vertex per
-                            // outside blob reached, in first-encounter order.
+                            // one per SURFACE PIECE, which is all of them at once when the
+                            // component bounds a single sheet (the original rule, same edge
+                            // order and same arithmetic), split once more by outside blob where
+                            // an ambiguous face demands it. Groups come out in first-encounter
+                            // order.
                             while (true)
                             {
-                                int key = int.MinValue;
+                                int pieceKey = int.MinValue;
+                                int reachedKey = 0;
                                 var sum = Vector3d.Zero;
                                 int crossings = 0;
                                 for (int e = 0; e < edges.Length; e++)
@@ -490,10 +588,12 @@ public static class SurfaceNets
                                     int outsideCorner = aIn ? eb : ea;
                                     if (component[insideCorner] != id)
                                         continue;
-                                    int reached = split ? component[outsideCorner] : -1;
-                                    if (key == int.MinValue)
-                                        key = reached;
-                                    else if (reached != key)
+                                    int reached = (splitPieces & (1 << piece[e])) != 0
+                                        ? component[outsideCorner]
+                                        : -1;
+                                    if (pieceKey == int.MinValue)
+                                        (pieceKey, reachedKey) = (piece[e], reached);
+                                    else if (piece[e] != pieceKey || reached != reachedKey)
                                         continue;
                                     double t = values[corners[insideCorner]] /
                                         (values[corners[insideCorner]] - values[corners[outsideCorner]]);
