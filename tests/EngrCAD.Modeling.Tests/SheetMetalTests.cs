@@ -454,6 +454,104 @@ public class SheetMetalTests
         Assert.Equal(1.0, FoldedVolume(body) / flat.Volume, 6);
     }
 
+    // --------------------------------------------------------------- mirrored placement
+
+    /// <summary>
+    /// A mirrored sheet part is the EXACT reflection of the unmirrored one, and that is the
+    /// only oracle worth having: a flange tree is ordered and quoted on named edges, so a
+    /// reflection has to move the NAMES (segment indices, span offsets, cutout coordinates)
+    /// and every one of those remaps is a chance to produce a plausible different part.
+    /// Comparing vertex SETS through the reflection catches all of them at once, where a
+    /// volume comparison would pass a tree flipped the wrong way round.
+    /// </summary>
+    [Fact]
+    public void AMirroredSheetIsTheExactReflectionOfTheOriginal()
+    {
+        // Deliberately asymmetric in every remapped quantity: a flange on one base edge
+        // only, inset asymmetrically, with a chained flange and an off-centre cutout.
+        static SheetMetalBody Body() =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, startOffset: 8, width: 26, cutouts:
+                    [Sketch.Circle(2.5).Placed((7, 9), (1, 0))])
+                .WithFlange(SheetFlangeTarget.FlangeTip(0), 10, startOffset: 3, width: 12);
+
+        var plain = Body().Solid.ToBrep();
+        var mirrored = Body().Solid.Mirror((0, 0, 0), (1, 0, 0)).ToBrep();
+        mirrored.Validate();
+
+        Assert.Equal(plain.Faces.Count(), mirrored.Faces.Count());
+        Assert.Equal(plain.Edges.Count(), mirrored.Edges.Count());
+        Assert.Equal(
+            BrepMassProperties.Compute(plain).Volume,
+            BrepMassProperties.Compute(mirrored).Volume, 6);
+
+        // Every vertex of the mirrored solid is the reflection of one of the original's.
+        var reflected = plain.Vertices
+            .Select(v => new Vector3d(-v.Position.X, v.Position.Y, v.Position.Z))
+            .ToList();
+        foreach (var vertex in mirrored.Vertices)
+        {
+            Assert.True(
+                reflected.Any(p => p.DistanceTo(vertex.Position) < 1e-9),
+                $"mirrored vertex {vertex.Position} has no counterpart in the reflected original");
+        }
+    }
+
+    /// <summary>A mirror is Native now, in the Explain report as well as in the geometry —
+    /// and Mirror(Mirror(x)) is the original, which is what proves the remaps are an
+    /// involution rather than merely self-consistent.</summary>
+    [Fact]
+    public void AMirroredSheetIsBRepNativeAndMirroringTwiceIsTheIdentity()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, startOffset: 8, width: 26);
+
+        var report = body.Solid.Mirror((0, 0, 0), (1, 0, 0)).Explain(TargetRep.Brep);
+        Assert.True(report.IsConvertible);
+        Assert.All(report.Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+
+        var twice = body.Solid.Mirror((0, 0, 0), (1, 0, 0)).Mirror((0, 0, 0), (1, 0, 0)).ToBrep();
+        twice.Validate();
+        var once = body.Solid.ToBrep();
+        Assert.Equal(once.Faces.Count(), twice.Faces.Count());
+        foreach (var vertex in twice.Vertices)
+        {
+            Assert.True(
+                once.Vertices.Any(v => v.Position.DistanceTo(vertex.Position) < 1e-9),
+                $"a doubly mirrored sheet must be the original; {vertex.Position} is not on it");
+        }
+    }
+
+    /// <summary>A sketch's mirror restores its winding by REVERSING the loop, so a segment
+    /// at index i lands at n - 1 - i — the remap a flange target has to make. Pinned
+    /// directly, since a body-level test could pass with an index map that happens to be
+    /// symmetric on a rectangle.</summary>
+    [Fact]
+    public void AMirroredSketchKeepsItsAreaAndReversesItsSegmentOrder()
+    {
+        var sketch = Sketch.Start(0, 0)
+            .LineTo(40, 0)
+            .ArcTo((40, 20), 12, clockwise: false)
+            .LineTo(0, 20)
+            .Close()
+            .WithHole(Sketch.Circle(3).Placed((10, 10), (1, 0)));
+
+        var mirrored = sketch.Mirrored();
+        Assert.Equal(sketch.Area(), mirrored.Area(), 9);
+        Assert.Equal(sketch.Segments.Count, mirrored.Segments.Count);
+        var curves = sketch.ToCurves();
+        var flipped = mirrored.ToCurves();
+        for (int i = 0; i < curves.Count; i++)
+        {
+            // Original segment i is at n - 1 - i, traversed the other way, reflected in x.
+            var mine = curves[i].PointAt(curves[i].Domain.Start);
+            var theirs = flipped[curves.Count - 1 - i];
+            var theirEnd = theirs.PointAt(theirs.Domain.End);
+            Assert.Equal(-mine.X, theirEnd.X, 9);
+            Assert.Equal(mine.Y, theirEnd.Y, 9);
+        }
+    }
+
     // ------------------------------------------- hems, jogs and curls (multi-bend forms)
 
     /// <summary>

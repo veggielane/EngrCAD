@@ -293,6 +293,22 @@ public sealed class Sketch
             [.. Holes.Select(h => h.Placed(origin, unit))]);
     }
 
+    /// <summary>
+    /// This sketch reflected in the y axis (<c>x → −x</c>), traversal sense RESTORED.
+    ///
+    /// <para>A reflection reverses a loop's winding, so each loop's segments are mirrored,
+    /// listed in reverse order and individually reversed — one rule in one place, rather
+    /// than each segment kind half-repairing its own sense. That also means a segment at
+    /// index <c>i</c> of an <c>n</c>-segment loop lands at index <c>n − 1 − i</c>, which is
+    /// what anything naming a segment by index has to remap (a sheet-metal flange does).</para>
+    /// </summary>
+    public Sketch Mirrored()
+    {
+        static IReadOnlyList<SketchSegment> Flip(IReadOnlyList<SketchSegment> segments) =>
+            [.. segments.Select(s => s.MirroredInY()).Reverse().Select(s => s.Reversed())];
+        return new Sketch(Flip(Segments), [.. Holes.Select(h => h.Mirrored())]);
+    }
+
     /// <summary>The sketch with an inner region removed (parity handles the rest).</summary>
     public Sketch WithHole(Sketch inner)
     {

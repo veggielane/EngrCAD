@@ -697,6 +697,65 @@ public sealed class SheetMetalBody
 
     internal ResolvedTree Tree => _tree ??= ResolvedTree.Build(this);
 
+    /// <summary>
+    /// This body REBUILT the other way round: the base sketch reflected in its own y axis
+    /// and every flange re-quoted against the reflected outline. What a mirrored placement
+    /// needs, and the reason the placement alone could never do it — a flange tree is
+    /// ORDERED and quoted on named edges, so a reflection has to move the names, not the
+    /// geometry.
+    ///
+    /// <para><b>Three remaps, and each is forced by the reflection's own arithmetic.</b>
+    /// (a) <see cref="Sketch.Mirrored"/> restores the loop's winding by reversing it, so a
+    /// segment at index <c>i</c> of <c>n</c> lands at <c>n − 1 − i</c> and every
+    /// <see cref="SheetFlangeTarget.BaseEdge"/> is remapped. (b) An edge's own
+    /// parameterization reverses with it, so a flange spanning <c>[s, s + w]</c> of an edge
+    /// of length L spans <c>[L − s − w, L − s]</c> in the mirror — and the same applies to
+    /// a child on a flange's TIP, whose length is its parent's width. (c)
+    /// <see cref="EdgeFlange.Cutouts"/> are quoted in the flange's own local x, which
+    /// reverses too, so each is mirrored and slid back by the flange's width.</para>
+    ///
+    /// <para><b>What does NOT move is as load-bearing.</b> The reflection is taken in the
+    /// SKETCH plane, so the sheet's own +Z — the face every bend line is quoted on — is
+    /// untouched and <see cref="SheetBendDirection"/> keeps its meaning exactly. Bend
+    /// angles, radii, lengths and K-factors are all lengths and angles, which a reflection
+    /// preserves, so they are carried VERBATIM.</para>
+    /// </summary>
+    internal SheetMetalBody MirroredInPlane()
+    {
+        var curves = BaseSketch.ToCurves();
+        int segments = curves.Count;
+        var edgeLength = new double[segments];
+        for (int i = 0; i < segments; i++)
+            edgeLength[i] = curves[i].PointAt(curves[i].Domain.Start).DistanceTo(curves[i].PointAt(curves[i].Domain.End));
+
+        // Widths resolved on THIS body, so a flange that ran to its edge's far end (null
+        // width) keeps doing so after the flip rather than being re-derived from a
+        // reversed edge.
+        var node = Tree;
+        var flipped = new List<EdgeFlange>(_flanges.Count);
+        for (int i = 0; i < _flanges.Count; i++)
+        {
+            var flange = _flanges[i];
+            var resolved = node.NodeAt(i);
+            double span = flange.Target.ParentFlange < 0
+                ? edgeLength[flange.Target.EdgeIndex]
+                : node.NodeAt(flange.Target.ParentFlange).Width;
+            var target = flange.Target.ParentFlange < 0
+                ? SheetFlangeTarget.BaseEdge(segments - 1 - flange.Target.EdgeIndex)
+                : flange.Target;
+            flipped.Add(flange with
+            {
+                Target = target,
+                StartOffset = span - resolved.StartOffset - resolved.Width,
+                Width = resolved.Width,
+                Cutouts = flange.CutoutList.Count == 0
+                    ? null
+                    : [.. flange.CutoutList.Select(c => c.Mirrored().Placed((resolved.Width, 0), (1, 0)))],
+            });
+        }
+        return new SheetMetalBody(BaseSketch.Mirrored(), Plane, Spec, flipped);
+    }
+
     /// <summary>Grows every flange onto an already-built base solid. <paramref name="top"/>
     /// is the placed base flange's TOP face — where every bend line is quoted from — and
     /// <paramref name="scale"/> the placement's uniform factor (the compiler has already
@@ -871,6 +930,10 @@ public sealed class SheetMetalBody
                 return _sites;
             }
         }
+
+        /// <summary>One resolved flange by declaration index — what a rebuild reads to get
+        /// the SPAN a null width resolved to, rather than re-deriving it.</summary>
+        public Node NodeAt(int index) => _nodes[index];
 
         public static ResolvedTree Build(SheetMetalBody body)
         {

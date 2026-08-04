@@ -49,6 +49,19 @@ internal abstract class SketchSegment
     /// </remarks>
     public abstract SketchSegment Placed(in Vector2d origin, in Vector2d xAxis);
 
+    /// <summary>
+    /// This segment reflected in the y axis (<c>x → −x</c>). Every kind is built from
+    /// POINTS and VECTORS, and a reflection is linear, so mirroring those IS the mirrored
+    /// curve — no parameter is re-derived and no angle is recomputed from a vector.
+    /// <para>The traversal SENSE is not repaired here: a reflection reverses a loop's
+    /// winding, and restoring it is the loop's business (reverse the segment ORDER and each
+    /// segment), which is one rule in one place rather than a half-repair per kind.</para>
+    /// </summary>
+    public abstract SketchSegment MirroredInY();
+
+    /// <summary>The reflection of one point in the y axis.</summary>
+    private protected static Vector2d Flip(in Vector2d p) => new(-p.X, p.Y);
+
     /// <summary>The rigid image of one point — every override's shared arithmetic, so a
     /// segment kind cannot place its own points by a different rule from its neighbours'
     /// joints.</summary>
@@ -103,6 +116,8 @@ internal sealed class LineSeg(Vector2d start, Vector2d end) : SketchSegment
 
     public override SketchSegment Placed(in Vector2d origin, in Vector2d xAxis) =>
         new LineSeg(Place(origin, xAxis, start), Place(origin, xAxis, end));
+
+    public override SketchSegment MirroredInY() => new LineSeg(Flip(start), Flip(end));
 
     public override double Distance(in Vector2d point)
     {
@@ -174,6 +189,12 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
     /// map is, so nothing about the arc's shape or handedness can move.</summary>
     public override SketchSegment Placed(in Vector2d origin, in Vector2d xAxis) => new ArcSeg(
         Place(origin, xAxis, center), radius, startAngle + Math.Atan2(xAxis.Y, xAxis.X), sweep);
+
+    /// <summary>A reflection turns <c>(cos θ, sin θ)</c> into <c>(cos(π − θ), sin(π − θ))</c>,
+    /// so the start angle reflects about π/2 and the sweep changes SIGN — which is the same
+    /// statement as "a reflection reverses handedness", written where it is exact.</summary>
+    public override SketchSegment MirroredInY() =>
+        new ArcSeg(Flip(center), radius, Math.PI - startAngle, -sweep);
 
     public override double SignedAreaContribution() =>
         0.5 * (center.Cross(End - Start) + radius * radius * sweep);
@@ -392,6 +413,13 @@ internal sealed class EllipseSeg : SketchSegment
         _startAngle,
         _sweep);
 
+    /// <summary>The centre and BOTH semi-axis vectors reflect and the polar parameters
+    /// stay: <c>P(θ) = C + A cos θ + B sin θ</c> is linear in C, A and B, so a linear map
+    /// of those IS the mapped curve. The handedness change rides in the reflected axis
+    /// pair rather than in a sign on the sweep, which is why nothing is re-derived.</summary>
+    public override SketchSegment MirroredInY() =>
+        new EllipseSeg(Flip(_center), Flip(_a), Flip(_b), _startAngle, _sweep);
+
     /// <summary>
     /// ½∮(x dy − y dx) = ½(C × (End − Start) + (A × B)·sweep), from
     /// P × P′ = −sin θ (C × A) + cos θ (C × B) + (A × B) integrated over the sweep. The
@@ -559,6 +587,9 @@ internal sealed class CubicSeg(Vector2d p0, Vector2d c1, Vector2d c2, Vector2d p
         Place(origin, xAxis, c1),
         Place(origin, xAxis, c2),
         Place(origin, xAxis, p3));
+
+    public override SketchSegment MirroredInY() =>
+        new CubicSeg(Flip(p0), Flip(c1), Flip(c2), Flip(p3));
 
     private Vector2d PointAt(double t)
     {
