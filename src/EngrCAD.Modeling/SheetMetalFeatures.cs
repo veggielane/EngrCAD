@@ -250,6 +250,48 @@ public static class SheetMetalFeatures
     public static FlatPattern? TryUnfold(Part? part) =>
         part is not null ? TryUnfold(part.Geometry as Shape) : null;
 
+    /// <summary>
+    /// Every sheet-metal part in <paramref name="parts"/> with its own flat pattern, in
+    /// input order and each distinct part once — <b>the multi-body / welded-assembly
+    /// answer</b>, and the seam the <c>--flat</c> CLI route and the viewer's Flat button
+    /// both read so neither can grow a second opinion about which parts have a blank.
+    ///
+    /// <para><b>A sheet part is ONE flange tree and ONE blank, by design rather than by
+    /// omission.</b> A weldment of sheet metal is several PARTS — each with its own base
+    /// flange, its own tree and its own blank — held together by an <c>Assembly</c>, which
+    /// is what the document model is for; the BOM counts them, mates position them and this
+    /// call cuts them. Folding several bodies into one <see cref="SheetMetalBody"/> would
+    /// make <see cref="FlatPattern"/> mean two things at once, and a laser cuts one blank
+    /// per body either way.</para>
+    ///
+    /// <para>What is NOT a sheet part is equally deliberate: a boolean of two sheet
+    /// solids is a SOLID, and this returns nothing for it, because a union node carries no
+    /// flange tree and so has no blank to derive. Weld the parts in an assembly, not in the
+    /// geometry.</para>
+    /// </summary>
+    public static IReadOnlyList<(Part Part, FlatPattern Flat)> UnfoldAll(IEnumerable<Part> parts)
+    {
+        ArgumentNullException.ThrowIfNull(parts);
+        var seen = new HashSet<Part>(ReferenceEqualityComparer.Instance);
+        var found = new List<(Part, FlatPattern)>();
+        foreach (var part in parts)
+        {
+            if (part is not null && seen.Add(part) && TryUnfold(part) is { } flat)
+                found.Add((part, flat));
+        }
+        return found;
+    }
+
+    /// <inheritdoc cref="UnfoldAll(IEnumerable{Part})"/>
+    /// <remarks>Reads the scene's INSTANCES so an assembly's sheet parts are found however
+    /// deeply they are nested, then de-duplicates by part reference — a panel placed four
+    /// times is one blank cut four times, not four blanks.</remarks>
+    public static IReadOnlyList<(Part Part, FlatPattern Flat)> UnfoldAll(Scene scene)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        return UnfoldAll(scene.AllInstances.Select(i => i.Part));
+    }
+
     /// <summary>An <see cref="EdgeSetRef"/> naming one sheet edge by the two endpoints it
     /// runs between — the escape hatch for a design that knows exactly which bend line it
     /// means and would rather not compose a query. Not serializable (it is a lambda), so a

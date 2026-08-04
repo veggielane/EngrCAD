@@ -454,6 +454,80 @@ public class SheetMetalTests
         Assert.Equal(1.0, FoldedVolume(body) / flat.Volume, 6);
     }
 
+    // ------------------------------------------- multi-body sheets / welded assemblies
+
+    /// <summary>
+    /// A welded sheet assembly is several PARTS, each with its own flange tree and its own
+    /// blank — and this is the end-to-end proof that the document model already expresses
+    /// it: two folded panels in an assembly, placed and counted, each unfolding to its own
+    /// blank through the ONE seam the CLI and the viewer button both read.
+    ///
+    /// <para>The assertion with teeth is the MASS: the assembly weighs exactly the two
+    /// blanks' volumes times the density (at K = 0.5, where the folded and flat volumes
+    /// agree exactly), which is only true if each body kept its own material and neither
+    /// blank was counted twice.</para>
+    /// </summary>
+    [Fact]
+    public void AWeldedAssemblyOfSheetPartsUnfoldsOneBlankPerBody()
+    {
+        var side = SheetMetalBody.Base(Plate(60, 40), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 20);
+        var lid = SheetMetalBody.Base(Plate(60, 25), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(3), 12, direction: SheetBendDirection.Down);
+
+        var scene = new Scene();
+        var assembly = new Assembly("chassis");
+        var sidePart = new Part("side", side.Solid).Of(Materials.Aluminium6061);
+        var lidPart = new Part("lid", lid.Solid).Of(Materials.Aluminium6061);
+        assembly.Add(sidePart);
+        assembly.Add(lidPart, Frame3d.FromXY((0, 60, 0), Vector3d.UnitX, Vector3d.UnitY));
+        scene.AddTab("Model").Add(assembly);
+
+        // One blank per BODY, in scene order, each once.
+        var blanks = SheetMetalFeatures.UnfoldAll(scene);
+        Assert.Equal(2, blanks.Count);
+        Assert.Equal(["side", "lid"], blanks.Select(b => b.Part.Name));
+
+        // The BOM sees two items, and the assembly weighs exactly the two blanks.
+        var bom = Bom.For(scene.Tabs[0]);
+        Assert.Equal(2, bom.LineCount);
+        double density = Materials.Aluminium6061.Density;
+        Assert.Equal(
+            blanks.Sum(b => b.Flat.Volume) * density,
+            scene.AllInstances.MassProperties().Mass, 6);
+    }
+
+    /// <summary>A boolean of two sheet solids is a SOLID, not a sheet part — it carries no
+    /// flange tree, so it has no blank, and saying so is the boundary rather than a
+    /// limitation. Weld parts in an assembly, not in the geometry.</summary>
+    [Fact]
+    public void AUnionOfTwoSheetBodiesHasNoFlatPattern()
+    {
+        var a = SheetMetalBody.Base(Plate(40, 30), Spec()).Solid;
+        var b = SheetMetalBody.Base(Plate(40, 30), Spec()).Solid.Translate(0, 60, 0);
+
+        Assert.NotNull(SheetMetalFeatures.TryUnfold(new Part("a", a)));
+        Assert.Null(SheetMetalFeatures.TryUnfold(new Part("welded", a | b)));
+        Assert.Empty(SheetMetalFeatures.UnfoldAll([new Part("welded", a | b)]));
+    }
+
+    /// <summary>A panel placed four times is ONE blank cut four times, not four blanks —
+    /// de-duplication by part reference, the rule the BOM already follows.</summary>
+    [Fact]
+    public void ARepeatedSheetPartYieldsOneBlank()
+    {
+        var panel = new Part("panel", SheetMetalBody.Base(Plate(40, 30), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 12).Solid);
+        var assembly = new Assembly("stack");
+        for (int i = 0; i < 4; i++)
+            assembly.Add(panel, Frame3d.FromXY((0, 0, 10 * i), Vector3d.UnitX, Vector3d.UnitY));
+        var scene = new Scene();
+        scene.AddTab("Model").Add(assembly);
+
+        Assert.Equal(4, scene.AllInstances.Count());
+        Assert.Single(SheetMetalFeatures.UnfoldAll(scene));
+    }
+
     // --------------------------------------------------------------- mirrored placement
 
     /// <summary>

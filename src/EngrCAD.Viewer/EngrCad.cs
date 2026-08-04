@@ -700,22 +700,13 @@ public static class EngrCad
     {
         // A flat pattern belongs to a PART, not to a placement: moving a folded part does
         // not move its blank. So the instance list is used only for the debug-modifier
-        // rule, and distinct parts are taken from it in first-use order.
-        var parts = new List<Part>();
-        var seen = new HashSet<Part>(ReferenceEqualityComparer.Instance);
-        foreach (var instance in DebugFilter.Exported([.. scene.AllInstances]))
-        {
-            if (seen.Add(instance.Part))
-                parts.Add(instance.Part);
-        }
-
-        var sheets = parts
-            .Select(p => (Part: p, Flat: SheetMetalFeatures.TryUnfold(p)))
-            .Where(entry => entry.Flat is not null)
-            .ToList();
+        // rule, and SheetMetalFeatures.UnfoldAll -- the one seam the viewer's Flat button
+        // reads too -- picks the sheet parts out of it and de-duplicates them.
+        var instances = DebugFilter.Exported([.. scene.AllInstances]);
+        var sheets = SheetMetalFeatures.UnfoldAll(instances.Select(i => i.Part));
         if (sheets.Count == 0)
         {
-            Log.NoSheetParts(log, parts.Count);
+            Log.NoSheetParts(log, instances.Select(i => i.Part).Distinct().Count());
             return 1;
         }
 
@@ -732,16 +723,16 @@ public static class EngrCad
             switch (extension)
             {
                 case ".dxf":
-                    flat!.ToDxf().SaveFile(file);
+                    flat.ToDxf().SaveFile(file);
                     break;
                 case ".svg":
-                    flat!.ToDrawing().SaveFile(file);
+                    flat.ToDrawing().SaveFile(file);
                     break;
                 default:
-                    File.WriteAllText(file, flat!.BendTable());
+                    File.WriteAllText(file, flat.BendTable());
                     break;
             }
-            Log.WroteFlatPattern(log, file, part.Name, flat!.Bends.Count, flat.Area);
+            Log.WroteFlatPattern(log, file, part.Name, flat.Bends.Count, flat.Area);
         }
         return 0;
     }

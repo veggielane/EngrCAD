@@ -981,13 +981,11 @@ internal sealed class SceneHost
     /// </summary>
     private void ShowFlatPattern()
     {
-        var sheets = new List<Part>();
-        var seen = new HashSet<Part>(ReferenceEqualityComparer.Instance);
-        foreach (var instance in _instances)
-        {
-            if (seen.Add(instance.Part) && SheetMetalFeatures.TryUnfold(instance.Part) is not null)
-                sheets.Add(instance.Part);
-        }
+        // One seam with the --flat CLI route (SheetMetalFeatures.UnfoldAll), so the button
+        // and the command line cannot disagree about which parts have a blank.
+        var sheets = SheetMetalFeatures.UnfoldAll(_instances.Select(i => i.Part))
+            .Select(entry => entry.Part)
+            .ToList();
         if (sheets.Count == 0)
         {
             _statusText.Text = "Flat: this tab has no sheet-metal part";
