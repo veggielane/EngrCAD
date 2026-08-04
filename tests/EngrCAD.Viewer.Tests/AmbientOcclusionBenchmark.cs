@@ -93,12 +93,20 @@ public class AmbientOcclusionBenchmark(ITestOutputHelper output)
     /// splits a vertex two sheets were sharing, so 18 of the source mesh's 37 898 vertices
     /// become 36, every quad keeps its four corners, and only the positions of the quads
     /// around those pinch points move. It is the same surface with the pinch opened.</para>
+    /// <para>Both SDF fixtures were re-taken AGAIN when Surface Nets began placing its
+    /// vertices at the minimiser of the field's own tangent planes (dual contouring with
+    /// Hermite data) instead of at the mean of the crossings. Note again what did NOT move:
+    /// the flat vertex counts are 173 268 and 228 348 either way, because the quads are the
+    /// same quads — the grouping that decides them runs before any position is computed.
+    /// Every vertex moved a little and the occlusion each one bakes moved with it; the
+    /// surface is the same surface, placed where the field says the surface is rather than
+    /// where the average of its own crossings falls.</para>
     /// </summary>
     [Theory]
     [InlineData("pocket", 132, 6950379374013342215L)]
     [InlineData("drilled plate", 924, 1703752811058293293L)]
-    [InlineData("csg blob", 173268, 5417102775247476765L)]
-    [InlineData("gyroid", 228348, -177004140334870257L)]
+    [InlineData("csg blob", 173268, 8531903548274328920L)]
+    [InlineData("gyroid", 228348, -785811624771655578L)]
     public void Bake_MatchesTheGoldenBitPattern(string name, int vertices, long fingerprint)
     {
         var mesh = Fixtures().First(f => f.Name == name).Mesh;

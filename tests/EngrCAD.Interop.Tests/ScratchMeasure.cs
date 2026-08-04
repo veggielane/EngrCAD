@@ -26,7 +26,7 @@ public class ScratchMeasure(ITestOutputHelper output)
         var edgePt = new Vector3d(5, 5, 0);
         foreach (var (name, opt) in new (string, SurfaceNetsOptions)[]
                  { ("plain", Plain), ("sharp", SurfaceNetsOptions.Default),
-                   ("sharp-noclamp", new SurfaceNetsOptions { ClampToCell = false }) })
+                   ("sharp-noclamp", new SurfaceNetsOptions { ClampCells = double.PositiveInfinity }) })
         {
             output.WriteLine($"--- {name}");
             output.WriteLine(" res |    cell |   maxOff | corner miss |  edge miss |    volume |  vol err %");
@@ -73,7 +73,7 @@ public class ScratchMeasure(ITestOutputHelper output)
                 var plain = SurfaceNets.Polygonize(field, region, res, null, Plain);
                 var clamped = SurfaceNets.Polygonize(field, region, res, null, SurfaceNetsOptions.Default);
                 var free = SurfaceNets.Polygonize(
-                    field, region, res, null, new SurfaceNetsOptions { ClampToCell = false });
+                    field, region, res, null, new SurfaceNetsOptions { ClampCells = double.PositiveInfinity });
                 double cell = region.Size[region.LongestAxis] / res;
                 int moved = 0;
                 double worst = 0;
@@ -229,6 +229,103 @@ public class ScratchMeasure(ITestOutputHelper output)
                     $"{(double)full.FaceCount / mesh.FaceCount,5:F1} | {(mesh.Volume() - exact) / exact * 100,10:F4} | " +
                     $"{mesh.IsClosed} {mesh.NonManifoldVertices().Count} ({sw.ElapsedMilliseconds} ms)");
             }
+        }
+    }
+
+    [Fact]
+    public void AsymmetricBoxProbe()
+    {
+        if (!Enabled)
+            return;
+
+        var cases = new (string Name, Sdf Field, Aabb Region)[]
+        {
+            ("symmetric", Sdf.Box(10, 10, 10), new Aabb((-7, -7, -7), (7, 7, 7))),
+            ("asymmetric", Sdf.Box(10, 7, 4.6), new Aabb((-7, -7, -7), (7, 7, 7))),
+            ("offset", Sdf.Box(10, 10, 10).Translate((0.137, -0.41, 0.29)), new Aabb((-7, -7, -7), (7, 7, 7))),
+        };
+        output.WriteLine("case       | res |    cell | plain maxOff | sharp maxOff");
+        foreach (var (name, field, region) in cases)
+        {
+            foreach (int res in new[] { 32, 48 })
+            {
+                var p = SurfaceNets.Polygonize(field, region, res, null, Plain);
+                var s = SurfaceNets.Polygonize(field, region, res);
+                output.WriteLine(
+                    $"{name,-10} | {res,3} | {14.0 / res,7:F4} | {p.Vertices.Max(v => Math.Abs(field.Evaluate(v.Position))),12:0.###e+0} | " +
+                    $"{s.Vertices.Max(v => Math.Abs(field.Evaluate(v.Position))),12:0.###e+0}");
+            }
+        }
+    }
+
+    [Fact]
+    public void RotatedBoxProbe()
+    {
+        if (!Enabled)
+            return;
+
+        var rotation = Quaterniond.FromAxisAngle(new Vector3d(0.3, 0.8, 0.5).Normalized(), 0.7);
+        var rotated = Sdf.Box(10, 8, 6).Rotate(rotation);
+        var rotatedRegion = new Aabb((-9, -9, -9), (9, 9, 9));
+        var gyroid = Sdf.Box(10, 10, 10) & Sdf.Gyroid(8, 0.2);
+        var gyroidRegion = new Aabb((-6, -6, -6), (6, 6, 6));
+
+        output.WriteLine("clamp | res |  rotated maxOff | gyroid excursion (cells) | gyroid folds | valid");
+        foreach (double clamp in new[] { 0.0, 0.5, 1.0, 2.0, double.PositiveInfinity })
+        {
+            var options = new SurfaceNetsOptions { ClampCells = clamp };
+            foreach (int res in new[] { 48, 96 })
+            {
+                var r = SurfaceNets.Polygonize(rotated, rotatedRegion, res, null, options);
+                var g = SurfaceNets.Polygonize(gyroid, gyroidRegion, res, null, options);
+                var free = SurfaceNets.Polygonize(gyroid, gyroidRegion, res, null,
+                    new SurfaceNetsOptions { ClampCells = 0 });
+                double cell = 12.0 / res;
+                var (a, _) = g.ToIndexed();
+                var (b, _) = free.ToIndexed();
+                double worstExcursion = 0;
+                for (int i = 0; i < a.Length; i++)
+                    worstExcursion = Math.Max(worstExcursion, (a[i] - b[i]).Length / cell);
+                bool valid = true;
+                try { g.Validate(); r.Validate(); } catch { valid = false; }
+                output.WriteLine(
+                    $"{clamp,5} | {res,3} | {r.Vertices.Max(v => Math.Abs(rotated.Evaluate(v.Position))),15:0.###e+0} | " +
+                    $"{worstExcursion,24:F3} | {Folds(gyroid, g),12} | {valid}");
+            }
+        }
+
+        // Asymmetric axis-aligned box: is a CORNER still a vertex?
+        var abox = Sdf.Box(10, 7, 4.6);
+        var aregion = new Aabb((-7, -7, -7), (7, 7, 7));
+        foreach (int res in new[] { 16, 32, 48, 64 })
+        {
+            var m = SurfaceNets.Polygonize(abox, aregion, res);
+            var corner = new Vector3d(5, 3.5, 2.3);
+            double miss = m.Vertices.Min(v => (v.Position - corner).Length);
+            output.WriteLine($"asymmetric {res}: corner miss {miss:0.###e+0}, volume {m.Volume():F6} (322)");
+        }
+
+        static int Folds(Sdf field, HalfEdgeMesh mesh)
+        {
+            int folds = 0;
+            foreach (var face in mesh.Faces)
+            {
+                var vs = face.Vertices().Select(v => v.Position).ToArray();
+                var normal = Vector3d.Zero;
+                var centroid = Vector3d.Zero;
+                for (int i = 0; i < vs.Length; i++)
+                {
+                    var q = vs[(i + 1) % vs.Length];
+                    normal += new Vector3d(
+                        (vs[i].Y - q.Y) * (vs[i].Z + q.Z), (vs[i].Z - q.Z) * (vs[i].X + q.X),
+                        (vs[i].X - q.X) * (vs[i].Y + q.Y));
+                    centroid += vs[i];
+                }
+                if (normal.TryNormalize(Tolerance.Default, out var n) &&
+                    n.Dot(field.Normal(centroid / vs.Length, 1e-7)) < 0)
+                    folds++;
+            }
+            return folds;
         }
     }
 }

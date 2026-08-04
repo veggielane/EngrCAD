@@ -431,10 +431,12 @@ public static class SurfaceNets
         bool sharp = options.SharpFeatures;
         double gradientStep = cell * GradientStepCells;
         double singularRatio = options.SingularRatio;
-        bool clampToCell = options.ClampToCell;
+        double clampSlack = options.ClampCells * cell;
         var slabCrossings = new List<Vector3d>();
         var slabPending = new List<PendingVertex>();
         Vector3d[] slabNormals = [];
+        double[] slabValues = [];
+        double[] slabSlopes = [];
         // Retained for the whole mesh, and only when the adaptive pass will consume them.
         var vertexQef = options.SimplifyTolerance is null ? null : new List<SurfaceQef>();
         var vertexCell = options.SimplifyTolerance is null ? null : new List<Vector3i>();
@@ -844,14 +846,49 @@ public static class SurfaceNets
                 return;
             }
 
-            if (slabNormals.Length < slabCrossings.Count)
-                slabNormals = new Vector3d[Math.Max(slabCrossings.Count, slabNormals.Length * 2)];
-            sdf.Normals(
-                CollectionsMarshal.AsSpan(slabCrossings),
-                slabNormals.AsSpan(0, slabCrossings.Count),
-                gradientStep);
-
+            int count = slabCrossings.Count;
+            if (slabNormals.Length < count)
+            {
+                int size = Math.Max(count, slabNormals.Length * 2);
+                slabNormals = new Vector3d[size];
+                slabValues = new double[size];
+                slabSlopes = new double[size];
+            }
             var crossingSpan = CollectionsMarshal.AsSpan(slabCrossings);
+            sdf.Evaluate(crossingSpan, slabValues.AsSpan(0, count));
+            sdf.Normals(
+                crossingSpan, slabNormals.AsSpan(0, count), slabSlopes.AsSpan(0, count), gradientStep);
+
+            // The Hermite point is the crossing PROJECTED ONTO THE SURFACE, not the
+            // crossing. A grid crossing is where the field's LINEAR INTERPOLANT along a
+            // cube edge vanishes, which is on the surface only where the field is linear
+            // along that edge — and it is exactly at a feature that it is not: a box's
+            // field near a corner is a MAX of three linear pieces, so an edge whose inside
+            // sample is governed by a different face than the edge's own crosses zero at
+            // the wrong place. Measured on an offset box at resolution 32, that put the
+            // Hermite planes at offsets wrong by up to 0.08 of a cell and the vertex 0.035
+            // model units off the surface — a factor of five better than the incumbent
+            // mean, and not the identity the corner cell can give. One Newton step along
+            // the gradient fixes it, and it is exact rather than iterative wherever the
+            // field is locally linear, which is every planar face and every hard-CSG
+            // corner: the tangent plane is d(p) + grad·(x − p) = 0, so moving p by
+            // −d/|grad| along the normal lands ON that plane and the plane is then the
+            // face's own. |grad| is 1 for every exact distance field; inside a smooth
+            // blend, where the field is the documented lower bound, it is less and the
+            // step is a slight under-correction of a surface that has no sharp feature to
+            // resolve anyway.
+            for (int c = 0; c < count; c++)
+            {
+                double slope = slabSlopes[c];
+                if (slope <= 0)
+                    continue;
+                // A guard rather than a tolerance: the step is bounded by one cell, so a
+                // field that is wildly non-linear along an edge cannot fling a Hermite
+                // point out of the neighbourhood the cell is sampling.
+                double step = Math.Clamp(-slabValues[c] / slope, -cell, cell);
+                crossingSpan[c] += slabNormals[c] * step;
+            }
+
             foreach (var pending in slabPending)
             {
                 var qef = new SurfaceQef();
@@ -859,17 +896,16 @@ public static class SurfaceNets
                     qef.Add(crossingSpan[c], slabNormals[c]);
 
                 var placed = qef.Solve(singularRatio);
-                if (clampToCell)
+                if (double.IsFinite(clampSlack))
                 {
-                    // The cell's own box. A minimiser outside it is a feature the grid does
-                    // not resolve (a corner the grid DOES resolve is inside the one cell
-                    // whose samples straddle all of its planes), so the clamp cannot
-                    // chamfer a resolvable corner — see SurfaceNetsOptions.ClampToCell.
+                    // The cell grown by ClampCells on every side: the neighbourhood this
+                    // cell's own crossings can speak about. See SurfaceNetsOptions.ClampCells
+                    // for why neither the strict cell nor no clamp at all is right.
                     var low = CornerPosition(i, pending.J, pending.K, 0);
                     placed = new Vector3d(
-                        Math.Clamp(placed.X, low.X, low.X + cell),
-                        Math.Clamp(placed.Y, low.Y, low.Y + cell),
-                        Math.Clamp(placed.Z, low.Z, low.Z + cell));
+                        Math.Clamp(placed.X, low.X - clampSlack, low.X + cell + clampSlack),
+                        Math.Clamp(placed.Y, low.Y - clampSlack, low.Y + cell + clampSlack),
+                        Math.Clamp(placed.Z, low.Z - clampSlack, low.Z + cell + clampSlack));
                 }
 
                 positions[pending.Vertex] = placed;

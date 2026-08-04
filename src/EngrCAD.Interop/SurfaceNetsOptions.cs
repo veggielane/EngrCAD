@@ -57,21 +57,38 @@ public sealed record SurfaceNetsOptions
     public double FeatureAngleDegrees { get; init; } = 10;
 
     /// <summary>
-    /// Whether a feature vertex is clamped into its own cell's box.
+    /// How far outside its own cell a feature vertex may be placed, in cells. The clamp box
+    /// is the cell grown by this much on every side; 0 is the strict cell and
+    /// <see cref="double.PositiveInfinity"/> is no clamp at all.
     /// <para>
-    /// <b>Default ON, and the cost of it is measured rather than assumed</b> — see
-    /// <c>SurfaceNetsSharpFeatureTests</c>. A minimiser outside its own cell is the classic
-    /// route to self-intersecting dual contouring output, and clamping is the classic fix
-    /// whose classic objection is that it defeats the feature on exactly the cells that
-    /// needed it. Both halves are true and the measurement decides which matters: on the
-    /// exact-corner cases the clamp NEVER fires, because a box corner is by construction
-    /// inside the one cell whose eight samples straddle all three of its planes — the
-    /// clamp cannot chamfer a corner the grid resolves. What it does catch is the cell that
-    /// straddles a feature the grid does NOT resolve, where the unclamped minimiser can
-    /// leave the cell by many cell widths and cross its neighbours.
+    /// <b>Both extremes were built and measured, and both are wrong.</b> A quadric
+    /// minimiser can land outside its own cell, which is the classic route to
+    /// self-intersecting dual contouring; clamping to the cell is the classic fix and its
+    /// classic objection is that it defeats the feature on exactly the cells that needed
+    /// it. The objection is REAL and the axis-aligned box hides it completely: a ROTATED
+    /// box reads a worst vertex-off-surface of 0.141 / 0.109 / 0.048 at resolutions
+    /// 32 / 48 / 96 under a strict cell clamp — a quarter of a cell, converging only
+    /// linearly — against <b>4.5e-12 with no clamp at all</b>, because a cell that sees
+    /// both faces of an edge need not contain the edge, so the minimiser on the edge LINE
+    /// is legitimately just outside. Refusing it there chamfers precisely the feature the
+    /// quadric found.
+    /// </para>
+    /// <para>
+    /// And no clamp is unbounded: on a gyroid whose wall (0.2) is thinner than its cell,
+    /// the free solve moves vertices <b>4.3 cells</b> out — past their neighbours'
+    /// neighbours, so the quads around them stop being a discretization of anything.
+    /// </para>
+    /// <para>
+    /// The default 1 is the bound the data itself supports rather than a compromise
+    /// between the two numbers: a cell's crossings lie on its own cube edges and the
+    /// tangent planes they define are a FIT to that neighbourhood, so a point one cell
+    /// beyond is still inside the region the fit's data came from and a point three cells
+    /// beyond is an extrapolation into cells that contributed nothing. Measured, it is
+    /// exact on every box placement (4.5e-12, the free solve's own number) and bounds the
+    /// gyroid.
     /// </para>
     /// </summary>
-    public bool ClampToCell { get; init; } = true;
+    public double ClampCells { get; init; } = 1;
 
     /// <summary>
     /// Adaptive output: when set, cells whose vertices carry the same surface to within

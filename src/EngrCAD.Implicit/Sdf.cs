@@ -153,10 +153,31 @@ public abstract class Sdf
     /// ~ε_machine·|d|/h, so a step far below 1e-8 of the model size measures noise).
     /// </para>
     /// </summary>
-    public void Normals(ReadOnlySpan<Vector3d> points, Span<Vector3d> normals, double epsilon = 1e-6)
+    public void Normals(ReadOnlySpan<Vector3d> points, Span<Vector3d> normals, double epsilon = 1e-6) =>
+        Normals(points, normals, default, epsilon);
+
+    /// <summary>
+    /// <see cref="Normals(ReadOnlySpan{Vector3d}, Span{Vector3d}, double)"/> that also
+    /// reports |∇d| — the gradient's LENGTH, which the unit normal throws away and which a
+    /// caller needs to convert a field value into a distance.
+    /// <para>
+    /// It is 1 for every exact distance field (every primitive, every hard CSG combination,
+    /// every rigid transform) and less than 1 wherever the field is the lower bound the
+    /// smooth operators document, which is exactly where a consumer wants to know. Pass a
+    /// default (empty) span to skip it; the normals are the same bits either way, since the
+    /// magnitude is read off the same difference vector.
+    /// </para>
+    /// </summary>
+    public void Normals(
+        ReadOnlySpan<Vector3d> points, Span<Vector3d> normals, Span<double> gradientMagnitudes,
+        double epsilon = 1e-6)
     {
         if (normals.Length < points.Length)
             throw new ArgumentException("The normal span must be at least as long as the point span.", nameof(normals));
+        if (!gradientMagnitudes.IsEmpty && gradientMagnitudes.Length < points.Length)
+            throw new ArgumentException(
+                "The magnitude span must be empty or at least as long as the point span.",
+                nameof(gradientMagnitudes));
         if (points.Length == 0)
             return;
 
@@ -197,6 +218,8 @@ public abstract class Sdf
                         ds[at] - ds[at + 1], ds[at + 2] - ds[at + 3], ds[at + 4] - ds[at + 5]);
                     normals[start + i] =
                         gradient.TryNormalize(Tolerance.Default, out var n) ? n : Vector3d.UnitZ;
+                    if (!gradientMagnitudes.IsEmpty)
+                        gradientMagnitudes[start + i] = gradient.Length / (2 * epsilon);
                 }
             }
         }

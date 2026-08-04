@@ -192,17 +192,45 @@ public static class PlanarSection
                 continue;
 
             var loop = new List<Vector2d>(3);
+            var solid = new List<Vector3d>(3);
             foreach (var vertex in face.Vertices())
             {
                 var flat = Flat(plane, vertex.Position);
                 loop.Add(flat);
+                solid.Add(vertex.Position);
                 minX = Math.Min(minX, flat.X);
                 minY = Math.Min(minY, flat.Y);
                 maxX = Math.Max(maxX, flat.X);
                 maxY = Math.Max(maxY, flat.Y);
             }
-            if (loop.Count >= 3)
+            if (loop.Count < 3)
+                continue;
+
+            // A NON-PLANAR face can project to a self-crossing polygon, which is not a
+            // region at all — `Region2d` refuses it by name, correctly, because there is
+            // no fill rule that is not arbitrary. It is not exotic: near the silhouette
+            // the surface is nearly edge-on, so a quad's four corners can project in a
+            // different cyclic order than they occupy in 3D. The answer is not a fill rule
+            // but the mesh's own decomposition — the face IS its `PolygonFan` triangles to
+            // every other consumer in the repo, and a triangle cannot self-cross — so a
+            // face whose projection crosses is replaced by exactly those triangles. Simple
+            // projections take the incumbent path untouched, so nothing that worked before
+            // is decomposed now.
+            // The simplicity test ASKS `Region2d`'s own, rather than restating it, so the
+            // decomposition fires exactly when the constructor would have refused.
+            if (loop.Count == 3 || !Region2dValidation.TryFindCrossing([loop], out _, acrossLoops: false))
+            {
                 projected.Add(loop);
+                continue;
+            }
+            int apex = PolygonFan.Apex(solid);
+            for (int t = 0; t + 2 < loop.Count; t++)
+            {
+                projected.Add([
+                    loop[PolygonFan.Corner(apex, loop.Count, 0)],
+                    loop[PolygonFan.Corner(apex, loop.Count, t + 1)],
+                    loop[PolygonFan.Corner(apex, loop.Count, t + 2)]]);
+            }
         }
         if (projected.Count == 0)
             return [];
