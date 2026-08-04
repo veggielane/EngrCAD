@@ -215,6 +215,7 @@ document.addEventListener('click', function (event) {
           ],
         },
         { label: 'Writing examples', slug: 'writing-examples' },
+        { label: 'Changelog', slug: 'changelog' },
         { label: 'API reference', link: 'api/' },
       ],
     }),
