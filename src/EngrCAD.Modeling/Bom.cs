@@ -87,6 +87,22 @@ public sealed record BomNode(
 }
 
 /// <summary>
+/// One row of a family table: the bill of materials a part's model produces under one of its
+/// <see cref="ConfigurationSet">configurations</see>.
+/// </summary>
+/// <param name="Configuration">The configuration this row was measured under.</param>
+/// <param name="Bom">The bill of materials. Its item names, quantities and paths are frozen;
+/// its lines' MASS projections are not (see <see cref="Bom.ByConfiguration(Part, Func{Bom},
+/// bool)"/>).</param>
+/// <param name="TotalMassGrams">The whole list's mass in grams, measured WHILE this
+/// configuration was active — null when mass was not asked for, or when no line stated a
+/// material.</param>
+/// <param name="Warnings">Anything the activation reported: a value the history declined, or
+/// a regeneration that did not complete.</param>
+public sealed record ConfigurationBom(
+    string Configuration, Bom Bom, double? TotalMassGrams, IReadOnlyList<string> Warnings);
+
+/// <summary>
 /// A bill of materials: what a scene, tab or assembly is made of and how many of each.
 ///
 /// <code>
@@ -167,6 +183,121 @@ public sealed class Bom
             .ThenBy(line => order.IndexOf(line.Part))
             .ToList();
         return new Bom(lines);
+    }
+
+    // ---- per configuration ----------------------------------------------
+
+    /// <summary>
+    /// One <see cref="Bom">bill of materials</see> per configuration of a part — the family
+    /// table.
+    ///
+    /// <para><b>What actually differs between configurations, on a document whose parts are
+    /// SHARED.</b> A <see cref="Bom"/> groups by part REFERENCE, and a configuration changes
+    /// a part's parameters rather than replacing the object, so the configured part is the
+    /// same line in every row. What CAN differ is the rest of the model: a
+    /// <c>ComponentFeature</c> places catalogue hardware, so an M4 variant lists M4 screws
+    /// and an M10 variant M10 ones, and a suppressed placement drops its occurrence
+    /// altogether. That is why each row is built from a fresh flatten rather than from one
+    /// captured instance list.</para>
+    ///
+    /// <para><b>Item names, quantities and paths are frozen; per-line MASS is not.</b>
+    /// <see cref="BomLine.UnitMassGrams"/> is a lazy projection that measures the part's
+    /// CURRENT geometry, and this walk restores the part when it is done — so reading it off
+    /// a returned row afterwards reports the restored configuration's mass for every row.
+    /// Ask for <paramref name="mass"/> and read
+    /// <see cref="ConfigurationBom.TotalMassGrams"/>, which was measured while that
+    /// configuration was active.</para>
+    /// </summary>
+    /// <param name="part">The configured part.</param>
+    /// <param name="build">How to build one bill of materials — re-invoked per
+    /// configuration, so it must RE-read the model (<c>() =&gt; Bom.For(scene)</c>).</param>
+    /// <param name="mass">Measures each row's total mass while its configuration is active
+    /// (evaluates geometry — the BOM's own opt-in rule).</param>
+    public static IReadOnlyList<ConfigurationBom> ByConfiguration(
+        Part part, Func<Bom> build, bool mass = false)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        ArgumentNullException.ThrowIfNull(build);
+        var set = part.Configurations ?? throw new ArgumentException(
+            $"Part '{part.Name}' has no feature history, so it has no configurations.", nameof(part));
+        if (set.Count == 0)
+            throw new ArgumentException($"Part '{part.Name}' has no configurations.", nameof(part));
+
+        // A family table is an ANALYSIS, not an edit: it drives the model through every
+        // configuration and puts it back exactly as it found it (DesignStudy's rule), which
+        // is why the live parameter values are captured rather than the active
+        // configuration's stored ones.
+        string? active = set.Active;
+        string parameters = part.History!.SaveParameters();
+        var rows = new List<ConfigurationBom>(set.Count);
+        try
+        {
+            foreach (var configuration in set)
+            {
+                var applied = set.Activate(configuration.Name);
+                var warnings = new List<string>(applied.Warnings);
+                if (!applied.Succeeded)
+                    warnings.Add($"the model did not rebuild:\n{applied.Regeneration}");
+                var bom = build();
+                double? total = null;
+                if (mass)
+                {
+                    var known = bom.Lines.Select(line => line.TotalMassGrams).Where(m => m is not null).ToList();
+                    if (known.Count > 0)
+                        total = known.Sum(m => m!.Value);
+                }
+                rows.Add(new ConfigurationBom(configuration.Name, bom, total, warnings));
+            }
+        }
+        finally
+        {
+            set.SetActiveName(active);
+            part.History!.LoadParameters(parameters);
+            part.Regenerate();
+        }
+        return rows;
+    }
+
+    /// <summary>A bill of materials per configuration over a whole scene.</summary>
+    public static IReadOnlyList<ConfigurationBom> ByConfiguration(Part part, Scene scene, bool mass = false)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        return ByConfiguration(part, () => For(scene), mass);
+    }
+
+    /// <summary>A bill of materials per configuration over one tab.</summary>
+    public static IReadOnlyList<ConfigurationBom> ByConfiguration(Part part, Tab tab, bool mass = false)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+        return ByConfiguration(part, () => For(tab), mass);
+    }
+
+    /// <summary>A bill of materials per configuration over one assembly.</summary>
+    public static IReadOnlyList<ConfigurationBom> ByConfiguration(Part part, Assembly assembly, bool mass = false)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        return ByConfiguration(part, () => For(assembly), mass);
+    }
+
+    /// <summary>The family table as text: one section per configuration, each the ordinary
+    /// <see cref="ToText(int, bool)"/> table, with the frozen total mass in the heading when
+    /// one was measured.</summary>
+    public static string ToText(
+        IEnumerable<ConfigurationBom> configurations, int pathsShown = 3)
+    {
+        ArgumentNullException.ThrowIfNull(configurations);
+        var text = new StringBuilder();
+        foreach (var row in configurations)
+        {
+            text.Append("== ").Append(row.Configuration);
+            if (row.TotalMassGrams is { } grams)
+                text.Append($" — {grams:0.###} g");
+            text.Append(" ==\n");
+            foreach (string warning in row.Warnings)
+                text.Append("   ! ").Append(warning).Append('\n');
+            text.Append(row.Bom.ToText(pathsShown)).Append('\n');
+        }
+        return text.ToString();
     }
 
     /// <summary>

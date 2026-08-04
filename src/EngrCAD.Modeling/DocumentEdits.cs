@@ -148,6 +148,37 @@ public static class DocumentEdits
     public static DocumentEdit RemoveFeature(Part part, Feature feature) =>
         new FeatureListEdit(part, feature, null, remove: true);
 
+    // ---- configurations --------------------------------------------------
+
+    /// <summary>
+    /// Activates one of a part's <see cref="ConfigurationSet">configurations</see> — ONE
+    /// edit and ONE rebuild, however many parameters it states (composing it out of
+    /// per-feature <see cref="SetParameter"/>s would regenerate once per feature).
+    ///
+    /// <para>What undo restores is the model's LIVE parameter values, captured here, not the
+    /// previously active configuration's stored ones — the <c>MeshChange</c>
+    /// complete-journal rule. The two differ exactly when someone had edited a parameter
+    /// without capturing it, and restoring the stored values there would silently discard
+    /// that edit.</para>
+    ///
+    /// <para>Values the history declines (a configuration naming a feature that has since
+    /// been removed) are WARNINGS, not failures, and a <see cref="DocumentEdit"/> has no
+    /// channel for them: call <see cref="ConfigurationSet.Validate"/> first, or
+    /// <see cref="ConfigurationSet.Activate"/> directly when the messages matter.</para>
+    /// </summary>
+    public static DocumentEdit SetConfiguration(Part part, string name) =>
+        new ConfigurationEdit(part, name);
+
+    /// <summary>Adds a configuration to a part (no rebuild — a stored parameter set changes
+    /// no geometry until it is activated).</summary>
+    public static DocumentEdit AddConfiguration(Part part, Configuration configuration) =>
+        new ConfigurationListEdit(part, configuration, null, remove: false);
+
+    /// <summary>Removes a configuration; undo puts it back at its old index, and restores it
+    /// as ACTIVE when it was.</summary>
+    public static DocumentEdit RemoveConfiguration(Part part, string name) =>
+        new ConfigurationListEdit(part, null, name, remove: true);
+
     // ---- part properties -----------------------------------------------
 
     /// <summary>Renames a part (see <see cref="Scene.Rename"/> for the uniqueness rule the
@@ -441,6 +472,110 @@ public static class DocumentEdits
         }
     }
 
+    /// <summary>
+    /// Activating a configuration: capture the model's whole live parameter set AND the
+    /// active name, apply, regenerate once, and roll both back if the model refuses to
+    /// rebuild.
+    /// </summary>
+    private sealed class ConfigurationEdit(Part part, string name) : DocumentEdit
+    {
+        private string? _oldActive;
+        private string? _oldParameters;
+        private bool _applied;
+
+        public override string Description => $"Configuration {part.Name}: {name}";
+
+        public override void Apply()
+        {
+            var set = RequireConfigurations(part);
+            if (set.Find(name) is null)
+            {
+                throw new DocumentEditException(
+                    $"Part '{part.Name}' has no configuration named '{name}'"
+                    + $" (it has {(set.Count == 0 ? "none" : string.Join(", ", set.Names))}).");
+            }
+
+            string? oldActive = set.Active;
+            string oldParameters = part.History!.SaveParameters();
+            var result = set.Activate(name);
+            if (!result.Succeeded)
+            {
+                Restore(set, oldParameters, oldActive);
+                throw new DocumentEditException(
+                    $"{Description} was refused: the model did not rebuild.\n{result.Regeneration}",
+                    result.Regeneration);
+            }
+            _oldActive = oldActive;
+            _oldParameters = oldParameters;
+            _applied = true;
+        }
+
+        public override void Revert()
+        {
+            if (!_applied)
+                throw new DocumentEditException($"'{Description}' was never applied.");
+            var set = part.Configurations!;
+            set.SetActiveName(_oldActive);
+            part.History!.LoadParameters(_oldParameters!);
+            RegenerateOrThrow(part, $"undo of '{Description}'");
+        }
+
+        private static void Restore(ConfigurationSet set, string parameters, string? active)
+        {
+            set.SetActiveName(active);
+            set.Part.History!.LoadParameters(parameters);
+            set.Part.Regenerate();
+        }
+    }
+
+    private sealed class ConfigurationListEdit(
+        Part part, Configuration? added, string? name, bool remove) : DocumentEdit
+    {
+        private Configuration? _configuration = added;
+        private int _index = -1;
+        private bool _wasActive;
+
+        public override string Description =>
+            $"{(remove ? "Remove" : "Add")} configuration {name ?? _configuration!.Name} on {part.Name}";
+
+        public override void Apply()
+        {
+            var set = RequireConfigurations(part);
+            if (remove)
+            {
+                _index = set.IndexOf(name!);
+                if (_index < 0)
+                    throw new DocumentEditException(
+                        $"Part '{part.Name}' has no configuration named '{name}'.");
+                _configuration = set[_index];
+                _wasActive = string.Equals(set.Active, name, StringComparison.Ordinal);
+                set.Remove(name!);
+            }
+            else
+            {
+                set.Add(_configuration!);   // refuses a duplicate name before anything changes
+                _index = set.IndexOf(_configuration!.Name);
+            }
+        }
+
+        public override void Revert()
+        {
+            if (_index < 0)
+                throw new DocumentEditException($"'{Description}' was never applied.");
+            var set = part.Configurations!;
+            if (remove)
+            {
+                set.Insert(_index, _configuration!);
+                if (_wasActive)
+                    set.SetActiveName(_configuration!.Name);
+            }
+            else
+            {
+                set.Remove(_configuration!.Name);
+            }
+        }
+    }
+
     private sealed class AddOccurrenceEdit(
         Assembly assembly, Part? part, Assembly? subAssembly, Frame3d? frame, string? name) : DocumentEdit
     {
@@ -576,6 +711,13 @@ public static class DocumentEdits
     }
 
     // ---- shared helpers -------------------------------------------------
+
+    private static ConfigurationSet RequireConfigurations(Part part)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        return part.Configurations ?? throw new DocumentEditException(
+            $"Part '{part.Name}' has no feature history, so it has no configurations.");
+    }
 
     private static void RequireHistory(Part part, Feature feature)
     {

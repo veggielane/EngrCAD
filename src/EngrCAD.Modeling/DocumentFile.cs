@@ -420,6 +420,8 @@ internal static class DocumentWriter
             json["material"] = SaveMaterial(material);
         if (part.CutLength is { } cutLength)
             json["cutLength"] = cutLength; // write-only-when-stated: files without frames stay byte-identical
+        if (part.Configurations is { Count: > 0 } configurations)
+            json["configurations"] = SaveConfigurations(configurations);
 
         json["geometry"] = SaveGeometry(part, options, quality);
 
@@ -462,6 +464,37 @@ internal static class DocumentWriter
         }
 
         return json;
+    }
+
+    /// <summary>
+    /// A part's named parameter sets. The values ride as a nested OBJECT rather than as an
+    /// escaped string — one file, diffable, and it is what makes the fixed point trivial:
+    /// <see cref="Configuration"/> normalizes whatever text it is handed through the shared
+    /// JSON options, so the tree a second save writes is the tree the first one wrote,
+    /// whatever indentation the document happened to give it.
+    /// <para>Written ONLY when the part has configurations, so every document that uses none
+    /// is byte-identical to what it always was.</para>
+    /// </summary>
+    private static JsonObject SaveConfigurations(ConfigurationSet configurations)
+    {
+        var record = new JsonObject();
+        // The ACTIVE name is document state: it says which set the history's current values
+        // came from, and a reload that dropped it would leave a model whose values exactly
+        // match "M6" unable to say so. It round-trips, which is the whole test for whether
+        // an informational field belongs in the file.
+        if (configurations.Active is { } active)
+            record["active"] = active;
+        var items = new JsonArray();
+        foreach (var configuration in configurations)
+        {
+            items.Add(new JsonObject
+            {
+                ["name"] = configuration.Name,
+                ["parameters"] = JsonNode.Parse(configuration.Parameters),
+            });
+        }
+        record["items"] = items;
+        return record;
     }
 
     /// <summary>
@@ -877,6 +910,8 @@ internal static class DocumentReader
             part.Material = LoadMaterial(material);
         if (element.TryGetProperty("cutLength", out var cutLength))
             part.CutLength = cutLength.GetDouble();
+        if (element.TryGetProperty("configurations", out var configurations))
+            LoadConfigurations(configurations, part, name, warnings);
         if (element.TryGetProperty("hardware", out var hardware))
         {
             warnings.Add($"part '{name}': it was placed from catalogue item " +
@@ -931,6 +966,61 @@ internal static class DocumentReader
         }
 
         return part;
+    }
+
+    /// <summary>
+    /// Configurations back onto a loaded part. Two rules carry it.
+    /// <para><b>The active NAME is restored without applying anything.</b> The history was
+    /// saved carrying that configuration's values, so re-applying would be a no-op that costs
+    /// a regeneration — and it would also be WRONG for a document saved while modified
+    /// (active "M6", one parameter since edited), which must come back modified rather than
+    /// silently snapped back onto "M6".</para>
+    /// <para><b>A configuration naming a feature this build cannot find is kept, not
+    /// dropped.</b> Staleness is reported by <see cref="ConfigurationSet.Validate"/> and by
+    /// <see cref="ConfigurationSet.Activate"/>, at the moment it matters; the feature may yet
+    /// come back (an undone removal), and a file that quietly loses a variant is worse than
+    /// one that reports it.</para>
+    /// </summary>
+    private static void LoadConfigurations(
+        JsonElement element, Part part, string name, List<string> warnings)
+    {
+        if (part.Configurations is not { } set)
+        {
+            warnings.Add($"part '{name}': it carries configurations but came back without a "
+                + "feature history, so there is nothing for them to drive");
+            return;
+        }
+        if (element.TryGetProperty("items", out var items))
+        {
+            foreach (var record in items.EnumerateArray())
+            {
+                string configurationName = record.TryGetProperty("name", out var n)
+                    ? n.GetString() ?? "configuration"
+                    : "configuration";
+                try
+                {
+                    set.Add(new Configuration(
+                        configurationName, record.GetProperty("parameters").GetRawText()));
+                }
+                catch (Exception exception)
+                {
+                    warnings.Add($"part '{name}': configuration '{configurationName}' "
+                        + $"could not be rebuilt ({exception.Message})");
+                }
+            }
+        }
+        if (element.TryGetProperty("active", out var active) && active.GetString() is { } activeName)
+        {
+            if (set.Find(activeName) is null)
+            {
+                warnings.Add($"part '{name}': the active configuration '{activeName}' "
+                    + "is not among the ones in the file");
+            }
+            else
+            {
+                set.SetActiveName(activeName);
+            }
+        }
     }
 
     private static Annotation? LoadAnnotation(JsonElement element, string partName, List<string> warnings)
