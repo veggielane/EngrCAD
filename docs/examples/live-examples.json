@@ -585,6 +585,11 @@
       "live": true
     },
     {
+      "id": "sheet-metal-bend-slot",
+      "page": "examples/sheet-metal.md",
+      "live": true
+    },
+    {
       "id": "sheet-metal-bracket",
       "page": "examples/sheet-metal.md",
       "live": true
@@ -605,12 +610,22 @@
       "live": true
     },
     {
+      "id": "sheet-metal-louvre",
+      "page": "examples/sheet-metal.md",
+      "live": true
+    },
+    {
       "id": "sheet-metal-relief",
       "page": "examples/sheet-metal.md",
       "live": true
     },
     {
       "id": "sheet-metal-tabs",
+      "page": "examples/sheet-metal.md",
+      "live": true
+    },
+    {
+      "id": "sheet-metal-tip-relief",
       "page": "examples/sheet-metal.md",
       "live": true
     },

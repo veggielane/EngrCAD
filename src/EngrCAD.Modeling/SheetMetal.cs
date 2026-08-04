@@ -172,6 +172,14 @@ public enum SheetReliefKind
 /// <para>A relief is placed at each INSET end of its flange. A flush end has no parent
 /// material beside it to relieve, so a flange spanning its whole edge is refused by name
 /// rather than silently given nothing.</para>
+///
+/// <para><b>On a flange's TIP the same declaration means the same thing, by a different
+/// route.</b> A flange's wall is built from four corners rather than from a sketch, so
+/// there is no outline to notch — the notches travel with the PARENT flange's own
+/// construction instead (<c>SheetTipNotch</c>), which is why a parent has to know about
+/// its children's reliefs before it is built. What they buy is identical: between them the
+/// child runs the full width of a tip face that is still four-sided, so it reaches the
+/// surgery as an ordinary flush flange.</para>
 /// </summary>
 /// <param name="Kind">Notch shape.</param>
 /// <param name="Width">Notch width along the bend line; null uses one sheet thickness, the
@@ -208,6 +216,87 @@ public sealed record BendRelief(
     public double AreaOf(double width, double depth) => Kind == SheetReliefKind.Obround
         ? width * (depth - width / 2) + Math.PI * width * width / 8
         : width * depth;
+}
+
+/// <summary>
+/// A LOUVRE: a tab lanced out of the middle of a face and formed up, leaving a vent.
+///
+/// <para><b>It is not an edge flange, and it needed its own declaration for a structural
+/// reason</b>: an edge flange's bend line is an EDGE of the sheet and its material grows
+/// outboard of the blank, while a louvre's bend line is INTERIOR to a face and its
+/// material comes from the sheet itself — the tool lances three sides of a rectangle and
+/// folds the fourth. So a louvre is an interior bend line plus a lance, and neither half
+/// is anything <see cref="EdgeFlange"/> can say.</para>
+///
+/// <para><b>A lance has a WIDTH, and that is a theorem rather than a modelling choice.</b>
+/// A cut of zero width would leave the tab's own side face COINCIDENT with the wall of the
+/// opening it came out of, over the whole stretch where the bend band still lies inside
+/// that opening — two coplanar faces with opposite normals touching over an area, which is
+/// not a manifold boundary and is exactly the coincident geometry this kernel refuses
+/// everywhere else. So <see cref="Clearance"/> is the width of the cut (a punch's die
+/// clearance, a laser's kerf), it is strictly positive, and zero is refused by name.</para>
+///
+/// <para><b>What the blank does is then exact and small</b>: its outline keeps the tab (a
+/// lance separates material rather than removing it) and loses only the kerf, as a
+/// U-shaped SLOT of area <c>c·(W + 2L + 2c)</c> — one hole in
+/// <see cref="SheetMetalBody.BaseOutline"/>. The FOLDED parent loses the whole opening,
+/// tab included, because the tab has left the plane and comes back as its own flange:
+/// <see cref="SheetMetalBody.FoldedOutline"/> carries the full <c>(W + 2c) × (L + c)</c>
+/// rectangle instead. That difference IS the lance.</para>
+///
+/// <para><b>So the volume identity is untouched, and INDEPENDENT of the clearance.</b> The
+/// kerf is removed from both views identically (the bend-relief rule), and the parent's
+/// loss of <c>W·L·T</c> is returned by the tab as
+/// <c>W·θ·T·(R + T/2) + W·(L − BA)·T</c>, leaving exactly <c>W·θ·T²·(0.5 − K)</c> — one
+/// more term of the same sum an ordinary bend contributes. A construction that wrongly cut
+/// the whole tab out of the BLANK would move the blank's area by <c>W·L</c> rather than by
+/// the kerf, which is what the tests measure.</para>
+///
+/// <para><b>Length is quoted FLAT here, unlike <see cref="EdgeFlange.Length"/>.</b> A
+/// flange's length is measured from the outer virtual sharp because that is how a drawing
+/// dimensions a folded leg; a louvre's is measured along the blank from the bend line
+/// because the lance is a CUT IN THE BLANK and its length is what the laser cuts. Two
+/// conventions because they dimension two different things, each stated on its own
+/// type — the folded wall is <c>LanceLength − BA</c> and is derived rather than declared.</para>
+/// </summary>
+/// <param name="Origin">Midpoint of the bend line, in the base sketch's own coordinates.</param>
+/// <param name="Opening">In-plane direction from the bend line toward the lanced free end —
+/// which way the vent faces. Normalized; a zero vector is refused.</param>
+/// <param name="Width">Span along the bend line: the width of the tab.</param>
+/// <param name="LanceLength">How far the lance runs from the bend line, measured on the
+/// BLANK. Must exceed the bend allowance, or there is no wall past the bend.</param>
+/// <param name="AngleDegrees">How far the tab is formed up (90 stands it upright).</param>
+/// <param name="Direction">Which way it forms, relative to the sheet's own top face.</param>
+/// <param name="Clearance">Width of the lanced cut; null uses a tenth of the sheet
+/// thickness — a nominal die clearance, and close to a laser's kerf on thin sheet. Stated
+/// rather than assumed zero, for the reason above.</param>
+/// <param name="BendRadius">Inside radius override; null uses the body's spec.</param>
+/// <param name="KFactor">K-factor override; null uses the body's spec.</param>
+public sealed record SheetLouvre(
+    Vector2d Origin,
+    Vector2d Opening,
+    double Width,
+    double LanceLength,
+    double AngleDegrees = 45,
+    SheetBendDirection Direction = SheetBendDirection.Up,
+    double? Clearance = null,
+    double? BendRadius = null,
+    double? KFactor = null)
+{
+    internal double AngleRadians => AngleDegrees * Math.PI / 180;
+
+    /// <summary>The lanced cut's width, resolved against the sheet: a tenth of the
+    /// thickness unless stated.</summary>
+    public double ClearanceFor(SheetMetalSpec spec) =>
+        Clearance ?? (spec ?? throw new ArgumentNullException(nameof(spec))).Thickness / 10;
+
+    /// <summary>Area the lance removes from the blank: the U-shaped kerf and nothing
+    /// else — <c>c·(W + 2L + 2c)</c>, the opening less the tab.</summary>
+    public double KerfAreaFor(SheetMetalSpec spec)
+    {
+        double c = ClearanceFor(spec);
+        return c * (Width + 2 * LanceLength + 2 * c);
+    }
 }
 
 /// <summary>
@@ -260,7 +349,9 @@ public readonly record struct SheetFlangeTarget(int ParentFlange, int EdgeIndex)
 /// <see cref="Sketch"/> in the flange's OWN local coordinates — see
 /// <see cref="SheetMetalBody"/>'s remarks on the flange frame. They reach both views from
 /// this one declaration, exactly as a bend relief does: the folded wall is punched and the
-/// blank gains the same holes through the flange's rigid flat frame.</param>
+/// blank gains the same holes through the flange's rigid flat frame. A cutout may also run
+/// down INTO the bend (negative local y), where it must be a rectangle aligned with the
+/// bend line — see <c>SheetBendCutout</c> for why that is the complete exact tier.</param>
 public sealed record EdgeFlange(
     SheetFlangeTarget Target,
     double Length,
@@ -315,7 +406,10 @@ public readonly record struct FlatBendLine(
 /// <param name="Thickness">Sheet thickness — the flat's third dimension.</param>
 public sealed record FlatPattern(Sketch Outline, IReadOnlyList<FlatBendLine> Bends, double Thickness)
 {
-    /// <summary>Blank area (outline minus holes) — what a nesting quote is priced from.</summary>
+    /// <summary>Blank area (outline minus holes) — what a nesting quote is priced from.
+    /// A <see cref="SheetLouvre"/>'s lance costs only its KERF here (the tab stays in the
+    /// blank; it is separated, not removed), which is what its U-shaped slot hole
+    /// spells.</summary>
     public double Area => Outline.Area();
 
     /// <summary>Blank volume: <see cref="Area"/> × thickness. Compare it against the
@@ -421,12 +515,9 @@ public readonly record struct SheetFlangeSite(
 ///
 /// <para><b>Refused by name</b> rather than approximated: bends along non-straight edges
 /// (folding along a curve is not an isometry of the sheet, so no flat blank produces it);
-/// a cutout crossing a bend line (its flat shape is that band's DEVELOPMENT rather than
-/// the flange's rigid frame); a relief on a flange's TIP (a relief notches its parent's
-/// OUTLINE, and a flange's wall is still built as a plain rectangle rather than from a
-/// sketch — its holes are declarable, its outline is not); louvres (an interior bend line
-/// plus a lance, so not an edge flange at all); two flanges sharing a stretch of edge; and
-/// flanges on a flange's SIDE edges.</para>
+/// a zero-width LANCE (see <see cref="SheetLouvre"/> — the tab would be coincident with
+/// the opening it came out of); two flanges sharing a stretch of edge; and flanges on a
+/// flange's SIDE edges.</para>
 /// </summary>
 public sealed class SheetMetalBody
 {
@@ -440,22 +531,27 @@ public sealed class SheetMetalBody
     private ResolvedTree? _tree;
 
     private readonly List<(int A, int B)> _corners;
+    private readonly List<SheetLouvre> _louvres;
 
     private SheetMetalBody(
         Sketch baseSketch, SketchPlane plane, SheetMetalSpec spec, List<EdgeFlange> flanges,
-        List<(int A, int B)>? corners = null)
+        List<(int A, int B)>? corners = null, List<SheetLouvre>? louvres = null)
     {
         BaseSketch = baseSketch;
         Plane = plane;
         Spec = spec;
         _flanges = flanges;
         _corners = corners ?? [];
+        _louvres = louvres ?? [];
     }
 
     /// <summary>The declared closed corners, as pairs of flange indices. A pair is built as
     /// ONE surgery (see <see cref="SheetMetalSurgery.AddCornerFlanges"/>) rather than as two
     /// flanges that happen to meet.</summary>
     public IReadOnlyList<(int A, int B)> Corners => _corners;
+
+    /// <summary>The declared louvres, in the order they were added.</summary>
+    public IReadOnlyList<SheetLouvre> Louvres => _louvres;
 
     /// <summary>The base flange: this outline, extruded along the plane's normal to the
     /// sheet's thickness.</summary>
@@ -485,12 +581,26 @@ public sealed class SheetMetalBody
     /// </summary>
     public Sketch BaseOutline => Tree.BaseOutline;
 
+    /// <summary>
+    /// <see cref="BaseOutline"/> with each <see cref="SheetLouvre"/>'s lanced footprint as a
+    /// HOLE — the region the FOLDED sheet is extruded from.
+    ///
+    /// <para><b>This is the one place the two views legitimately differ, and the difference
+    /// IS the lance.</b> A lance separates material without removing any, so the blank keeps
+    /// the tab and <see cref="BaseOutline"/> is untouched; the folded parent has an opening
+    /// there because the tab has been formed out of the plane, and it comes back as the
+    /// louvre's own flange. With no louvres declared this IS <see cref="BaseOutline"/>, by
+    /// reference.</para>
+    /// </summary>
+    public Sketch FoldedOutline => Tree.FoldedOutline;
+
     /// <summary>This body with one more flange — a NEW body; this one is unchanged. The
     /// addition is validated here, at the call that made it.</summary>
     public SheetMetalBody WithFlange(EdgeFlange flange)
     {
         ArgumentNullException.ThrowIfNull(flange);
-        var body = new SheetMetalBody(BaseSketch, Plane, Spec, [.. _flanges, flange], [.. _corners]);
+        var body = new SheetMetalBody(
+            BaseSketch, Plane, Spec, [.. _flanges, flange], [.. _corners], [.. _louvres]);
         _ = body.Tree;
         return body;
     }
@@ -547,10 +657,35 @@ public sealed class SheetMetalBody
             .WithFlange(new EdgeFlange(
                 edgeB, length, angleDegrees, direction, bendRadius, kFactor, Cutouts: cutoutsB));
         var corners = new List<(int, int)>(body._corners) { (body._flanges.Count - 2, body._flanges.Count - 1) };
-        var result = new SheetMetalBody(BaseSketch, Plane, Spec, body._flanges, corners);
+        var result = new SheetMetalBody(BaseSketch, Plane, Spec, body._flanges, corners, [.. _louvres]);
         _ = result.Tree;
         return result;
     }
+
+    /// <summary>
+    /// A LOUVRE: a tab lanced out of the middle of the base flange and formed up, leaving a
+    /// vent. See <see cref="SheetLouvre"/> for what a lance does to the blank (nothing at
+    /// all) and why its length is quoted flat.
+    /// </summary>
+    public SheetMetalBody WithLouvre(SheetLouvre louvre)
+    {
+        ArgumentNullException.ThrowIfNull(louvre);
+        var body = new SheetMetalBody(
+            BaseSketch, Plane, Spec, [.. _flanges], [.. _corners], [.. _louvres, louvre]);
+        // Forcing the resolution here is what makes every louvre refusal fire at the CALL
+        // that made it, before any geometry exists — the rim-surgery rule, one layer up.
+        _ = body.Tree.Louvres;
+        return body;
+    }
+
+    /// <inheritdoc cref="WithLouvre(SheetLouvre)"/>
+    public SheetMetalBody WithLouvre(
+        Vector2d origin, Vector2d opening, double width, double lanceLength,
+        double angleDegrees = 45, SheetBendDirection direction = SheetBendDirection.Up,
+        double? clearance = null, double? bendRadius = null, double? kFactor = null) =>
+        WithLouvre(new SheetLouvre(
+            origin, opening, width, lanceLength, angleDegrees, direction, clearance,
+            bendRadius, kFactor));
 
     /// <summary>
     /// A HEM: the edge folded back on itself, as TWO bends in the same direction rather
@@ -823,7 +958,17 @@ public sealed class SheetMetalBody
                     : [.. flange.CutoutList.Select(c => c.Mirrored().Placed((resolved.Width, 0), (1, 0)))],
             });
         }
-        return new SheetMetalBody(BaseSketch.Mirrored(), Plane, Spec, flipped, [.. _corners]);
+        // A louvre carries no edge NAME, so nothing has to be remapped: it is a point and a
+        // direction in the sketch's own coordinates, and `Sketch.Mirrored` reflects x → −x,
+        // so reflecting both is the whole of it. Width, length, angle and radius are lengths
+        // and angles, which a reflection preserves, and the direction is quoted on the
+        // sheet's +Z, which the in-plane reflection does not move.
+        var louvres = _louvres.ConvertAll(l => l with
+        {
+            Origin = new Vector2d(-l.Origin.X, l.Origin.Y),
+            Opening = new Vector2d(-l.Opening.X, l.Opening.Y),
+        });
+        return new SheetMetalBody(BaseSketch.Mirrored(), Plane, Spec, flipped, [.. _corners], louvres);
     }
 
     /// <summary>Grows every flange onto an already-built base solid. <paramref name="top"/>
@@ -853,15 +998,33 @@ public sealed class SheetMetalBody
                 built.Add(partner);
                 var one = bends[i];
                 var two = bends[partner];
+                if (one.BendCutouts.Count > 0 || two.BendCutouts.Count > 0)
+                    throw new NotSupportedException(
+                        $"Flange {i} or {partner} is half of a CLOSED CORNER and carries a cutout that crosses " +
+                        "its bend line. A mitred band already reaches past its own span to meet its partner, " +
+                        "and a slot splits that band into three — the two edits want the same parameter " +
+                        "rectangle. Keep crossing slots off a mitred flange, or leave the corner open.");
                 solid = SheetMetalSurgery.AddCornerFlanges(
                     solid,
-                    one.Section, one.Start, one.End, one.WallLength, one.Cutouts,
-                    two.Section, two.Start, two.End, two.WallLength, two.Cutouts);
+                    one.Section, one.Start, one.End, one.WallLength, one.Cutouts, one.TipNotches,
+                    two.Section, two.Start, two.End, two.WallLength, two.Cutouts, two.TipNotches);
                 continue;
             }
             var bend = bends[i];
             solid = SheetMetalSurgery.AddEdgeFlange(
-                solid, bend.Section, bend.Start, bend.End, bend.WallLength, bend.Cutouts);
+                solid, bend.Section, bend.Start, bend.End, bend.WallLength, bend.Cutouts,
+                bend.TipNotches, bend.BendCutouts);
+        }
+        // A louvre's tab is grown by the SAME surgery on the edge of its own lanced opening:
+        // the parent's hole has a four-sided planar side wall square to the bend line at
+        // both ends, which is exactly the flush case AddEdgeFlange already builds. That is
+        // the whole reason a louvre needed a declaration and no new topology work — an
+        // interior bend line is only interior to the BLANK; in the folded parent it is an
+        // ordinary edge, because the opening put it there.
+        foreach (var louvre in Tree.LouvreBends(top, scale))
+        {
+            solid = SheetMetalSurgery.AddEdgeFlange(
+                solid, louvre.Section, louvre.Start, louvre.End, louvre.WallLength, louvre.Cutouts);
         }
         return solid;
     }
@@ -923,6 +1086,20 @@ public sealed class SheetMetalBody
         /// place, which is what makes one declaration reach both views.</summary>
         public IReadOnlyList<Sketch> Cutouts { get; init; } = [];
 
+        /// <summary>The subset of <see cref="Cutouts"/> that lies wholly in the flat WALL —
+        /// the ones punched as ordinary holes through two planar faces. The blank sees
+        /// <see cref="Cutouts"/> whole, crossing slots included, because a rigid frame places
+        /// every one of them the same way: the bend zone is a developable strip of the same
+        /// blank, so a slot running into it is drawn there and nowhere else.</summary>
+        public IReadOnlyList<Sketch> WallCutouts { get; init; } = [];
+
+        /// <summary>Cutouts that CROSS the bend line, resolved into what the surgery reads:
+        /// the slot's two ends in this flange's own local x, the bend angle it bottoms out
+        /// at, and how far up the flat wall it reaches. The angle is where the K-factor
+        /// enters the folded shape — see <c>SheetBendCutout</c>.</summary>
+        public IReadOnlyList<(double From, double To, double Angle, double Height)> BendCutouts
+        { get; init; } = [];
+
         /// <summary>Is this end of the flange inset from its edge's own end? A relief is
         /// cut at exactly the ends that are — a flush end has no parent material beside
         /// it — so this one predicate settles both the notch list and the surgery's rims.</summary>
@@ -946,13 +1123,35 @@ public sealed class SheetMetalBody
             (start - (relief is not null && inset[0] ? reliefWidth : 0),
              start + width + (relief is not null && inset[1] ? reliefWidth : 0));
 
+        /// <summary>Notches this flange's own TIP carries, in its own local x, put here by
+        /// the CHILDREN that asked for them. A relief beside a base-flange bend notches the
+        /// blank's outline; one beside a flange-tip bend has no sketch to notch, so it
+        /// travels with the parent's construction — which is why a parent has to know about
+        /// its children's reliefs before it is built.</summary>
+        public List<(double From, double To, double Depth, bool Rounded)> TipNotches { get; } = [];
+
         public List<Node> Children { get; } = [];
     }
 
     /// <summary>The surgery arguments for one bend.</summary>
     internal readonly record struct BendArgs(
         SheetBendSection Section, Vector3d Start, Vector3d End, double WallLength,
-        IReadOnlyList<Profile> Cutouts);
+        IReadOnlyList<Profile> Cutouts, IReadOnlyList<SheetTipNotch> TipNotches,
+        IReadOnlyList<SheetBendCutout> BendCutouts);
+
+    /// <summary>One louvre resolved into the numbers both views read: the bend line's two
+    /// ends in the base sketch's own coordinates, the allowance the bend spends, the
+    /// straight wall left past it, and the two outlines the two views need.</summary>
+    /// <param name="Opening">The whole rectangle the FOLDED parent loses: the tab's
+    /// footprint grown by the kerf on the three lanced sides. The tab comes back as its own
+    /// flange, and the kerf does not come back at all.</param>
+    /// <param name="Slot">What the BLANK loses: the U-shaped kerf between the tab and the
+    /// opening, i.e. the cut itself. The tab stays — a lance separates material rather than
+    /// removing it.</param>
+    internal sealed record ResolvedLouvre(
+        SheetLouvre Louvre, Vector2d BendStart, Vector2d BendEnd,
+        double Allowance, double WallLength, double InsideRadius, double Clearance,
+        Sketch Opening, Sketch Slot);
 
     /// <summary>
     /// Builds one outline as an exact chain of <see cref="Curve2d"/>s. Two rules and no
@@ -998,6 +1197,9 @@ public sealed class SheetMetalBody
 
         private IReadOnlyList<SheetFlangeSite>? _sites;
         private Sketch? _outline;
+        private Sketch? _folded;
+        private Sketch? _notched;
+        private IReadOnlyList<ResolvedLouvre>? _louvres;
 
         private ResolvedTree(
             SheetMetalBody body, Node baseNode, List<Node> nodes, IReadOnlyList<Curve2d> curves)
@@ -1029,6 +1231,216 @@ public sealed class SheetMetalBody
         /// <summary>One resolved flange by declaration index — what a rebuild reads to get
         /// the SPAN a null width resolved to, rather than re-deriving it.</summary>
         public Node NodeAt(int index) => _nodes[index];
+
+        // -------------------------------------------------------------------- louvres
+
+        /// <summary>Every declared louvre resolved, with every refusal already fired. Lazy
+        /// for the reason <see cref="Sites"/> is: adding a louvre validates its own
+        /// addition, and nothing else asks until the body is built or unfolded.</summary>
+        public IReadOnlyList<ResolvedLouvre> Louvres => _louvres ??= ResolveLouvres();
+
+        private IReadOnlyList<ResolvedLouvre> ResolveLouvres()
+        {
+            if (_body._louvres.Count == 0)
+                return [];
+            // Containment is tested against the relief-notched outline WITHOUT the lances:
+            // a louvre must sit in the sheet, and its own slot would otherwise report its
+            // own footprint as already cut away.
+            var region = new SketchRegion(NotchedOutline);
+            var resolved = new List<ResolvedLouvre>(_body._louvres.Count);
+            for (int i = 0; i < _body._louvres.Count; i++)
+                resolved.Add(ResolveLouvre(_body, region, i, _body._louvres[i], resolved));
+            return resolved;
+        }
+
+        private static ResolvedLouvre ResolveLouvre(
+            SheetMetalBody body, SketchRegion region, int index, SheetLouvre louvre,
+            List<ResolvedLouvre> earlier)
+        {
+            if (!(louvre.Opening.LengthSquared > 0))
+                throw new ArgumentException(
+                    $"Louvre {index}'s opening direction is zero; it says which way the vent faces.",
+                    nameof(louvre));
+            if (!(louvre.Width > 0))
+                throw new ArgumentOutOfRangeException(nameof(louvre),
+                    $"Louvre {index} is {louvre.Width:g6} wide; a lance has positive width.");
+            if (!(louvre.LanceLength > 0))
+                throw new ArgumentOutOfRangeException(nameof(louvre),
+                    $"Louvre {index}'s lance is {louvre.LanceLength:g6} long; it must be positive.");
+
+            double clearance = louvre.ClearanceFor(body.Spec);
+            if (!(clearance > Weld))
+                throw new ArgumentOutOfRangeException(nameof(louvre),
+                    $"Louvre {index}'s lance clearance is {clearance:g6}. A lance is a CUT and a cut has a " +
+                    "width: at zero the tab's own side face is coincident with the wall of the opening it " +
+                    "came out of, everywhere the bend band still lies inside that opening — two coplanar " +
+                    "faces with opposite normals touching over an area, which is not a manifold solid. State " +
+                    "the die clearance or the kerf.");
+
+            double radius = louvre.BendRadius ?? body.Spec.BendRadius;
+            double angle = louvre.AngleRadians;
+            double thickness = body.Spec.Thickness;
+            // Angle and K-factor are validated by the one bend model, so a louvre cannot
+            // admit a bend an edge flange refuses.
+            double allowance = body.Spec.BendAllowanceAt(angle, louvre.BendRadius, louvre.KFactor);
+            double wall = louvre.LanceLength - allowance;
+            if (!(wall > Weld))
+                throw new ArgumentOutOfRangeException(nameof(louvre),
+                    $"Louvre {index}'s lance is {louvre.LanceLength:g6} long but the bend alone develops " +
+                    $"{allowance:g6} of blank (BA = angle*(R + K*T)), leaving a wall of {wall:g6}. Lengthen " +
+                    "the lance, reduce the bend radius, or reduce the angle. Note that a louvre's length is " +
+                    "quoted FLAT — the lance is a cut in the blank — where a flange's is quoted from the " +
+                    "outer virtual sharp.");
+
+            RequireTabClearsTheOpening(index, louvre, radius, thickness, wall, clearance);
+
+            var o = louvre.Opening.Normalized();
+            var t = o.Perpendicular;
+            double halfTab = louvre.Width / 2;
+            double halfCut = halfTab + clearance;
+            double lance = louvre.LanceLength;
+            Vector2d At(double across, double along) => louvre.Origin + t * across + o * along;
+
+            var bendStart = At(-halfTab, 0);
+            var bendEnd = At(halfTab, 0);
+            // The opening: everything the folded parent gives up, tab and kerf together.
+            var opening = Sketch.Polygon(
+            [
+                At(-halfCut, 0), At(halfCut, 0), At(halfCut, lance + clearance),
+                At(-halfCut, lance + clearance),
+            ]);
+            // The slot: the kerf alone, a U round the tab. Its two ends land ON the bend
+            // line, which is interior to the plate, so the blank stays one piece.
+            var slot = Sketch.Polygon(
+            [
+                At(-halfCut, 0), At(-halfCut, lance + clearance), At(halfCut, lance + clearance),
+                At(halfCut, 0), At(halfTab, 0), At(halfTab, lance), At(-halfTab, lance), At(-halfTab, 0),
+            ]);
+
+            // Every point of the OPENING's boundary has to lie strictly inside the sheet: a
+            // lance running off an edge or into a hole would cut the tab free rather than
+            // hinge it. Sampled at the corners and the side midpoints, which claims no more
+            // than it proves — the honest limit the bend-relief containment check states.
+            var corner = opening.ToCurves().Select(c => c.PointAt(c.Domain.Start)).ToArray();
+            for (int k = 0; k < corner.Length; k++)
+            {
+                foreach (var point in (ReadOnlySpan<Vector2d>)
+                    [corner[k], (corner[k] + corner[(k + 1) % corner.Length]) * 0.5])
+                {
+                    if (region.SignedDistance(point) >= -Weld)
+                        throw new ArgumentException(
+                            $"Louvre {index}'s lance reaches {point}, which is not strictly inside the blank. " +
+                            "A lance separates material without removing any, so its whole footprint must sit " +
+                            "in the sheet: one that runs off an edge or into a hole would cut the tab free " +
+                            "rather than hinge it.");
+                }
+            }
+
+            // Two louvres sharing material would lance each other's tabs apart. Conservative
+            // on BOUNDING BOXES, as the flange-cutout test is and for the same reason: an
+            // admitted overlap produces a solid nothing can weld.
+            var mine = opening.Bounds;
+            for (int other = 0; other < earlier.Count; other++)
+            {
+                var theirs = earlier[other].Opening.Bounds;
+                if (mine.Min.X < theirs.Max.X && theirs.Min.X < mine.Max.X
+                    && mine.Min.Y < theirs.Max.Y && theirs.Min.Y < mine.Max.Y)
+                {
+                    throw new ArgumentException(
+                        $"Louvres {other} and {index} have overlapping footprints. Two lances cannot share " +
+                        "material, and the test is on bounding boxes so it errs toward refusing: separate " +
+                        "them.");
+                }
+            }
+            return new ResolvedLouvre(
+                louvre, bendStart, bendEnd, allowance, wall, radius, clearance, opening, slot);
+        }
+
+        /// <summary>
+        /// The tab must not still be BELOW the sheet's own outer face by the time it reaches
+        /// the far end of its opening, or it would run into the material beyond — the one
+        /// refusal a louvre needs that a flange does not, since a flange leaves the sheet
+        /// altogether and a tab does not.
+        /// <para>Closed form, from the outer surface alone (it bounds the tab on the side
+        /// that matters): the bend band's outer surface sits at
+        /// <c>z = (R+T)(1 − cos φ)</c> and <c>x = (R+T)·sin φ</c>, so it clears the far face
+        /// at <c>φ_T = acos(R/(R+T))</c>; past the bend the wall continues linearly and
+        /// clears at its own <c>s_T</c>. The maximum <c>x</c> over the part still below is
+        /// what has to fit.</para>
+        /// </summary>
+        private static void RequireTabClearsTheOpening(
+            int index, SheetLouvre louvre, double radius, double thickness, double wall, double clearance)
+        {
+            double angle = louvre.AngleRadians;
+            double outer = radius + thickness;
+            double phi = Math.Min(angle, Math.Acos(Math.Min(1, radius / outer)));
+            double reach = outer * Math.Sin(phi);
+            if (outer * (1 - Math.Cos(angle)) < thickness)
+            {
+                double along = Math.Min(wall, (thickness - outer * (1 - Math.Cos(angle))) / Math.Sin(angle));
+                reach = Math.Max(reach, outer * Math.Sin(angle) + along * Math.Cos(angle));
+            }
+            double room = louvre.LanceLength + clearance;
+            if (reach >= room - Weld)
+                throw new ArgumentOutOfRangeException(nameof(louvre),
+                    $"Louvre {index}'s tab is still {reach:g6} out from the bend line while below the sheet's " +
+                    $"own face, and its opening is only {room:g6} long, so the tab would run into the " +
+                    "material beyond it. Steepen the bend or lengthen the lance — a shallow tab of a given " +
+                    "length reaches FURTHER than the flat material it came from, by the thickness the bend " +
+                    "swings it through.");
+        }
+
+        /// <summary>The region the FOLDED sheet is extruded from: the relief-notched outline
+        /// with each louvre's whole OPENING punched out, since the tab has left the plane
+        /// and comes back as its own flange. With no louvres it IS
+        /// <see cref="BaseOutline"/>, by reference.</summary>
+        public Sketch FoldedOutline
+        {
+            get
+            {
+                if (_folded is not null)
+                    return _folded;
+                var outline = NotchedOutline;
+                foreach (var louvre in Louvres)
+                    outline = outline.WithHole(louvre.Opening);
+                return _folded = outline;
+            }
+        }
+
+        /// <summary>Each louvre's tab as the ordinary edge-flange surgery reads it: the bend
+        /// line is one side of the opening the footprint left, so the tab is a flush flange
+        /// on a four-sided planar wall and needs no surgery of its own.</summary>
+        public IReadOnlyList<BendArgs> LouvreBends(in SheetFrame baseFrame, double scale)
+        {
+            var bends = new List<BendArgs>(Louvres.Count);
+            double thickness = _body.Spec.Thickness * scale;
+            foreach (var resolved in Louvres)
+            {
+                var louvre = resolved.Louvre;
+                bool up = louvre.Direction == SheetBendDirection.Up;
+                var normal = baseFrame.Normal;
+                var q0 = baseFrame.ToWorld(resolved.BendStart, scale);
+                var q1 = baseFrame.ToWorld(resolved.BendEnd, scale);
+                // OUTWARD is the opening direction: at an interior bend line the material
+                // the flange replaces is the tab's own footprint, so "out of the material"
+                // points into the opening — which is the same relation an edge flange has to
+                // the sheet's own side wall, read one level in.
+                var section = new SheetBendSection(
+                    BendLinePoint: up ? q0 : q0 - normal * thickness,
+                    Inside: up ? normal : -normal,
+                    Outward: baseFrame.Direction(louvre.Opening.Normalized()),
+                    Thickness: thickness,
+                    BendRadius: resolved.InsideRadius * scale,
+                    AngleRadians: louvre.AngleRadians);
+                bends.Add(new BendArgs(
+                    section,
+                    up ? q0 : q0 - normal * thickness,
+                    up ? q1 : q1 - normal * thickness,
+                    resolved.WallLength * scale,
+                    [], [], []));
+            }
+            return bends;
+        }
 
         public static ResolvedTree Build(SheetMetalBody body)
         {
@@ -1107,7 +1519,7 @@ public sealed class SheetMetalBody
                     $"outside setback (R + T)*tan(angle/2) is already {setback:g6}. Lengthen the flange, reduce " +
                     "the bend radius, or reduce the angle.");
             double allowance = body.Spec.BendAllowanceAt(angle, flange.BendRadius, flange.KFactor);
-            RequireCutoutsFitTheWall(flange, index, width, wall);
+            var (flat, crossing) = SortCutouts(flange, index, width, wall, allowance, angle);
 
             // The flange's own flat frame: origin at the far end of its bend zone, x
             // running back along the edge so the rectangle occupies x in [0, width].
@@ -1131,6 +1543,8 @@ public sealed class SheetMetalBody
                 ReliefDepth = reliefDepth,
                 Inset = inset,
                 Cutouts = flange.CutoutList,
+                WallCutouts = flat,
+                BendCutouts = crossing,
             };
         }
 
@@ -1142,12 +1556,18 @@ public sealed class SheetMetalBody
         /// from the bend's tangent line in <c>[0, wallLength]</c>.
         /// </summary>
         /// <remarks>
-        /// <para><b>A cutout crossing the bend line is refused BY NAME rather than
-        /// clipped</b>, and the reason is the flat pattern rather than the solid: a hole
-        /// that runs into the bend zone is a hole in a CYLINDRICAL band, and its flat shape
-        /// is that band's DEVELOPMENT — a different map from the flange's rigid frame. The
-        /// unfold's whole claim is that it is bookkeeping over rigid frames, so admitting
-        /// one would mean the blank quietly stopped being derived the way it says it is.</para>
+        /// <para><b>A cutout may CROSS the bend line, and where it does it must be a
+        /// RECTANGLE aligned with it.</b> That is the complete exact tier rather than a
+        /// budget: bending is an isometry of the sheet, so a straight cut running ALONG the
+        /// bend line stays straight and one running ACROSS it becomes a circular arc, and
+        /// the wall each sweeps through the thickness is a PLANE — while a cut at any other
+        /// angle wraps to a helix and an ARC in the blank wraps to nothing with a closed
+        /// form at all. Both refusals name what they hit.</para>
+        /// <para><b>What a crossing cutout costs is the K-factor's independence from the
+        /// FOLDED shape</b>, and it cannot be otherwise: a cutout is declared flat, and the
+        /// only map from the blank to the band is the neutral-axis map, which K
+        /// parameterizes. So the angle it bottoms out at is resolved HERE, where K lives,
+        /// and <c>SheetBendSection</c> still carries none.</para>
         /// <para><b>The overlap test is on BOUNDING BOXES and so is conservative</b>: two
         /// cutouts whose boxes meet are refused even when the shapes themselves are clear
         /// of each other. That direction is the safe one — an admitted overlap puts two
@@ -1155,10 +1575,13 @@ public sealed class SheetMetalBody
         /// which is exactly what <c>Shape.Drill</c>'s own near-tangent refusal band buys
         /// for the same reason — and a refusal names both cutouts and what to move.</para>
         /// </remarks>
-        private static void RequireCutoutsFitTheWall(
-            EdgeFlange flange, int index, double width, double wallLength)
+        private static (IReadOnlyList<Sketch> Flat,
+            IReadOnlyList<(double From, double To, double Angle, double Height)> Crossing) SortCutouts(
+            EdgeFlange flange, int index, double width, double wallLength, double allowance, double angle)
         {
             var cutouts = flange.CutoutList;
+            var flat = new List<Sketch>(cutouts.Count);
+            var crossing = new List<(double, double, double, double)>();
             for (int c = 0; c < cutouts.Count; c++)
             {
                 var cutout = cutouts[c]
@@ -1170,13 +1593,6 @@ public sealed class SheetMetalBody
                         "than a cutout; declare the island as part of the wall instead.");
 
                 var bounds = cutout.Bounds;
-                if (bounds.Min.Y <= Weld)
-                    throw new NotSupportedException(
-                        $"Flange {index}'s cutout {c} reaches y = {bounds.Min.Y:g6}, i.e. into (or through) the " +
-                        "BEND. A hole that crosses the bend line is a hole in a cylindrical band, whose flat " +
-                        "shape is that band's development rather than the flange's own rigid frame — and the " +
-                        "unfold is bookkeeping over rigid frames. Move the cutout clear of the tangent line, " +
-                        "or cut it in the base sketch if it belongs to the parent.");
                 if (bounds.Max.Y >= wallLength - Weld
                     || bounds.Min.X <= Weld || bounds.Max.X >= width - Weld)
                     throw new ArgumentException(
@@ -1184,6 +1600,15 @@ public sealed class SheetMetalBody
                         $"[{bounds.Min.Y:g6}, {bounds.Max.Y:g6}], which does not lie strictly inside the wall's " +
                         $"[0, {width:g6}] by [0, {wallLength:g6}]. A cutout that reaches a wall edge is a change " +
                         "to the flange's OUTLINE rather than a hole through it.");
+
+                if (bounds.Min.Y > Weld)
+                {
+                    flat.Add(cutout);
+                }
+                else
+                {
+                    crossing.Add(ResolveBendCutout(cutout, index, c, bounds, allowance, angle));
+                }
 
                 for (int other = 0; other < c; other++)
                 {
@@ -1199,6 +1624,59 @@ public sealed class SheetMetalBody
                     }
                 }
             }
+            return (flat, crossing);
+        }
+
+        /// <summary>One cutout that crosses the bend line, resolved — and every refusal a
+        /// crossing can produce, in the order that names the most useful thing first.</summary>
+        private static (double From, double To, double Angle, double Height) ResolveBendCutout(
+            Sketch cutout, int index, int c, Aabb bounds, double allowance, double angle)
+        {
+            if (bounds.Max.Y <= Weld)
+                throw new NotSupportedException(
+                    $"Flange {index}'s cutout {c} lies wholly inside the BEND (y from {bounds.Min.Y:g6} to " +
+                    $"{bounds.Max.Y:g6}, and the tangent line is y = 0). A cutout that crosses the tangent line " +
+                    "is buildable; one that floats inside the band would leave the band a trimmed face with a " +
+                    "hole in it, which is a different construction. Move it up so it reaches the wall.");
+            if (bounds.Min.Y <= -allowance + Weld)
+                throw new NotSupportedException(
+                    $"Flange {index}'s cutout {c} reaches y = {bounds.Min.Y:g6}, past the bend zone's own " +
+                    $"{allowance:g6} of developed blank and into the PARENT. A slot may cross the bend line " +
+                    "and bottom out inside the bend; one that runs all the way through would have to notch " +
+                    "the parent's own faces too, which is a change to the parent rather than to this flange.");
+
+            // The crossing part's walls are planes and its rims lines and arcs only if it is
+            // a rectangle aligned with the bend. Checked on the whole cutout rather than on
+            // the part below the tangent line, so a refusal names one clear rule.
+            var curves = cutout.ToCurves();
+            bool aligned = curves.Count == 4;
+            foreach (var curve in curves)
+            {
+                if (curve is not Line2d line)
+                {
+                    aligned = false;
+                    break;
+                }
+                var step = line.End - line.Start;
+                if (Math.Abs(step.X) > Weld && Math.Abs(step.Y) > Weld)
+                    aligned = false;
+            }
+            if (!aligned)
+                throw new NotSupportedException(
+                    $"Flange {index}'s cutout {c} crosses the bend line and is not a rectangle aligned with " +
+                    "it. That restriction is the exact tier rather than a budget: bending is an isometry, so a " +
+                    "straight cut ALONG the bend line stays straight and one ACROSS it becomes a circular arc, " +
+                    "and the wall each sweeps through the thickness is a plane — while a cut at any other " +
+                    "angle wraps to a HELIX and an arc in the blank wraps to nothing with a closed form. Draw " +
+                    "the crossing slot as an aligned rectangle, or keep the cutout clear of the tangent line.");
+
+            // Where the slot bottoms out, as an angle into the bend. This is the ONE place
+            // the K-factor reaches the folded shape, and it has to: a cutout is punched flat
+            // and then bent, so the map that carries it is the neutral axis's.
+            return (
+                bounds.Min.X, bounds.Max.X,
+                angle * (allowance + bounds.Min.Y) / allowance,
+                bounds.Max.Y);
         }
 
         /// <summary>
@@ -1212,12 +1690,6 @@ public sealed class SheetMetalBody
         {
             if (flange.Relief is not { } relief)
                 return (0, 0);
-            if (parent.Index >= 0)
-                throw new NotSupportedException(
-                    $"Flange {index} asks for a bend relief on {flange.Target}. A relief notches the parent's " +
-                    "own OUTLINE, and a flange's wall is built as a plain rectangle rather than from a sketch, " +
-                    "so reliefs are cut only on the base flange's edges. Grow the relieved flange from the " +
-                    "base, or leave the relief off and let the corner tear.");
             if (!inset[0] && !inset[1])
                 throw new ArgumentException(
                     $"Flange {index} spans the whole of {flange.Target}, so there is no parent material beside " +
@@ -1244,6 +1716,31 @@ public sealed class SheetMetalBody
                     $"Flange {index}'s relief is {reliefWidth:g6} wide but only " +
                     $"{edgeLength - start - width:g6} of {flange.Target} is left beyond the flange, so the " +
                     "notch would run off the end of the edge.");
+
+            // On a FLANGE's tip the parent is a rectangle, so containment is one comparison
+            // — and the notches are recorded on the parent, which is built before this
+            // flange and has no sketch to notch (see Node.TipNotches).
+            if (parent.Index >= 0)
+            {
+                if (reliefDepth >= parent.WallLength - Weld)
+                    throw new ArgumentException(
+                        $"Flange {index}'s relief reaches {reliefDepth:g6} back into a parent flange whose " +
+                        $"wall is only {parent.WallLength:g6} long. A notch that reached the parent's own bend " +
+                        "would cut it in two rather than relieve it; make the relief shallower or the parent " +
+                        "longer.");
+                // The parent's tip edge runs from its local x = Width down to x = 0 (the
+                // traversal `EdgeOf` returns), so an edge parameter s sits at x = W - s.
+                for (int k = 0; k < 2; k++)
+                {
+                    if (!inset[k])
+                        continue;
+                    double from = k == 0 ? start - reliefWidth : start + width;
+                    parent.TipNotches.Add((
+                        parent.Width - (from + reliefWidth), parent.Width - from,
+                        reliefDepth, relief.Kind == SheetReliefKind.Obround));
+                }
+                return (reliefWidth, reliefDepth);
+            }
 
             // A notch is drawn as a DETOUR in the outline, so one reaching past the far
             // side of the parent makes a self-intersecting blank — and that failure is
@@ -1343,9 +1840,35 @@ public sealed class SheetMetalBody
                 // flange's top face — so the folded body's holes and the blank's holes come
                 // from one declaration through two placements of one frame, which is what
                 // makes them incapable of disagreeing.
+                // A tip notch is stated as its two points ON the flange's own tangent line,
+                // which is parallel to its bend line — the surgery reads only the component
+                // along the span, so the caller never has to know which end it ordered
+                // first.
+                var notches = new List<SheetTipNotch>(node.TipNotches.Count);
+                foreach (var (from, to, depth, rounded) in node.TipNotches)
+                {
+                    notches.Add(new SheetTipNotch(
+                        frame.ToWorld(new Vector2d(from, 0), scale),
+                        frame.ToWorld(new Vector2d(to, 0), scale),
+                        depth * scale, rounded));
+                }
+
+                // A crossing slot rides the same frame: its two ends as points on the bend
+                // line (the surgery reads only the component along the span), the ANGLE it
+                // bottoms out at verbatim — an angle is dimensionless, so a placement's
+                // uniform scale leaves it alone — and its wall height scaled.
+                var crossings = new List<SheetBendCutout>(node.BendCutouts.Count);
+                foreach (var (from, to, at, height) in node.BendCutouts)
+                {
+                    crossings.Add(new SheetBendCutout(
+                        frame.ToWorld(new Vector2d(from, 0), scale),
+                        frame.ToWorld(new Vector2d(to, 0), scale),
+                        at, height * scale));
+                }
+
                 bends.Add(new BendArgs(
                     startSection, startSection.BendLinePoint, endSection.BendLinePoint,
-                    node.WallLength * scale, PlaceCutouts(node, frame, scale)));
+                    node.WallLength * scale, PlaceCutouts(node, frame, scale), notches, crossings));
 
                 frames[node.Index] = frame;
             }
@@ -1359,12 +1882,12 @@ public sealed class SheetMetalBody
         /// </summary>
         private static IReadOnlyList<Profile> PlaceCutouts(Node node, in SheetFrame frame, double scale)
         {
-            if (node.Cutouts.Count == 0)
+            if (node.WallCutouts.Count == 0)
                 return [];
             var placement = Frame3d.FromOrthonormal(frame.Origin, frame.X, frame.Y).ToMatrix()
                 * Matrix4d.CreateScale(scale);
-            var placed = new List<Profile>(node.Cutouts.Count);
-            foreach (var cutout in node.Cutouts)
+            var placed = new List<Profile>(node.WallCutouts.Count);
+            foreach (var cutout in node.WallCutouts)
             {
                 var (outer, _) = cutout.ToProfiles();   // holes are refused at Resolve
                 placed.Add(new Profile(
@@ -1412,7 +1935,21 @@ public sealed class SheetMetalBody
                 pen.LineTo(_base.Flat.ToFlat(line.End));
             }
 
-            return new FlatPattern(WithHoles(spliced), bends, _body.Spec.Thickness);
+            // A louvre adds a bend zone and a LANCE and nothing else: the blank's coordinates
+            // are the base sketch's, so its slot needs no frame at all, and the tab itself
+            // stays in the blank because a lance separates material rather than removing it.
+            foreach (var resolved in Louvres)
+            {
+                var louvre = resolved.Louvre;
+                var out2 = louvre.Opening.Normalized() * resolved.Allowance;
+                bends.Add(new FlatBendLine(
+                    resolved.BendStart, resolved.BendEnd,
+                    resolved.BendStart + out2, resolved.BendEnd + out2,
+                    louvre.AngleDegrees, resolved.InsideRadius, resolved.Allowance,
+                    louvre.Direction == SheetBendDirection.Up));
+            }
+
+            return new FlatPattern(AddLanceSlots(WithHoles(spliced)), bends, _body.Spec.Thickness);
         }
 
         /// <summary>
@@ -1420,9 +1957,24 @@ public sealed class SheetMetalBody
         /// folded sheet's base extrusion and the flat pattern start from, so a relief is
         /// declared once and appears in both.
         /// </summary>
-        public Sketch BaseOutline => _outline ??= BuildBaseOutline();
+        public Sketch BaseOutline => _outline ??= AddLanceSlots(NotchedOutline);
 
-        private Sketch BuildBaseOutline()
+        /// <summary>The base outline with every bend RELIEF notched in and no lance slots —
+        /// the region both public outlines are built from, and the one a louvre's
+        /// containment is tested against (its own slot must not answer for it).</summary>
+        private Sketch NotchedOutline => _notched ??= BuildNotchedOutline();
+
+        /// <summary>The blank's lance slots: the kerf a lance cuts, and nothing else. With
+        /// no louvres the outline comes back by REFERENCE, so a design that declares none is
+        /// untouched down to the bit.</summary>
+        private Sketch AddLanceSlots(Sketch outline)
+        {
+            foreach (var louvre in Louvres)
+                outline = outline.WithHole(louvre.Slot);
+            return outline;
+        }
+
+        private Sketch BuildNotchedOutline()
         {
             // Nothing to notch: the declaration IS the outline, by reference. That is what
             // keeps a design with no reliefs bit-identical to what it always built.

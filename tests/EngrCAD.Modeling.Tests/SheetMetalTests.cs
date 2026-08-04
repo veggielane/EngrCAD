@@ -349,15 +349,93 @@ public class SheetMetalTests
         Assert.Contains("no parent material beside it", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A relief on a flange's TIP. There is no sketch to notch there — a flange's wall is
+    /// built from four corners — so the notches travel with the PARENT's construction, and
+    /// what they buy is the same thing a base-edge relief buys: between them the child runs
+    /// the full width of a tip face that is still four-sided, so it arrives at the surgery
+    /// as an ordinary FLUSH flange.
+    ///
+    /// <para>The oracles are exact on both views and on both notch shapes: the blank loses
+    /// exactly the notches' own closed-form area, the folded body exactly that times the
+    /// thickness, and the folded-versus-flat discrepancy does not move at all — a relief
+    /// takes the same material out of each, wherever it is cut.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(SheetReliefKind.Rectangular)]
+    [InlineData(SheetReliefKind.Obround)]
+    public void AReliefOnAFlangesTipRemovesExactlyItsOwnNotchesFromBothViews(SheetReliefKind kind)
+    {
+        const double width = 4, depth = 6;
+        SheetMetalBody Body(BendRelief? relief) =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+                .WithFlange(
+                    SheetFlangeTarget.FlangeTip(0), 12, startOffset: 12, width: 26, relief: relief);
+
+        var plain = Body(null);
+        var relieved = Body(new BendRelief(kind, width, depth));
+        var solid = relieved.Solid.ToBrep();
+        solid.Validate();
+
+        double notch = new BendRelief(kind, width, depth).AreaOf(width, depth);
+        Assert.Equal(plain.Unfold().Area - 2 * notch, relieved.Unfold().Area, 9);
+        Assert.Equal(
+            FoldedVolume(plain) - 2 * notch * Thickness, BrepMassProperties.Compute(solid).Volume, 3);
+
+        // ... so at K = 0.5 the two views still agree exactly, notches and all.
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / relieved.Unfold().Volume, 6);
+    }
+
+    /// <summary>The notched tip face is what the CHILD then bends on, and it has to be
+    /// four-sided for the surgery to treat it as a plain flush wall — pinned through a
+    /// grandchild flange, since that is the only thing that asks.</summary>
     [Fact]
-    public void AReliefOnAFlangesTipIsRefusedByName()
+    public void ATipReliefLeavesAWallAGrandchildFlangeCanBendOn()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+            .WithFlange(
+                SheetFlangeTarget.FlangeTip(0), 14, startOffset: 12, width: 26,
+                relief: BendRelief.Obround(3, 5))
+            .WithFlange(SheetFlangeTarget.FlangeTip(1), 8);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+        Assert.Equal(3, body.Unfold().Bends.Count);
+    }
+
+    /// <summary>A tip relief flush at ONE end cuts ONE notch, not two — the same
+    /// independent-ends rule an inset base flange follows, one level in. Measured against
+    /// the un-relieved twin, so the count is a closed form rather than a face tally.</summary>
+    [Fact]
+    public void ATipReliefFlushAtOneEndCutsOneNotch()
+    {
+        SheetMetalBody Body(BendRelief? relief) =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+                .WithFlange(
+                    SheetFlangeTarget.FlangeTip(0), 12, startOffset: 0, width: 40, relief: relief);
+
+        var plain = Body(null);
+        var relieved = Body(BendRelief.Rectangular(4, 6));
+        relieved.Solid.ToBrep().Validate();
+
+        Assert.Equal(plain.Unfold().Area - 4 * 6, relieved.Unfold().Area, 9);
+        Assert.Equal(FoldedVolume(plain) - 4 * 6 * Thickness, FoldedVolume(relieved), 3);
+        Assert.Equal(1.0, FoldedVolume(relieved) / relieved.Unfold().Volume, 6);
+    }
+
+    [Fact]
+    public void ATipReliefDeeperThanItsParentsWallIsRefusedNamingBoth()
     {
         var body = SheetMetalBody.Base(Plate(), Spec())
             .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
-        var exception = Assert.Throws<NotSupportedException>(() => body.WithFlange(
+        var exception = Assert.Throws<ArgumentException>(() => body.WithFlange(
             SheetFlangeTarget.FlangeTip(0), 10, startOffset: 5, width: 20,
-            relief: BendRelief.Rectangular()));
-        Assert.Contains("base flange's edges", exception.Message, StringComparison.Ordinal);
+            relief: BendRelief.Rectangular(2, 40)));
+        Assert.Contains("cut it in two rather than relieve it", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -606,6 +684,210 @@ public class SheetMetalTests
                  .WithFlange(SheetFlangeTarget.BaseEdge(2), 20)
                  .Solid.ToBrep());
         Assert.Contains("CORNER", separate.Message, StringComparison.Ordinal);
+    }
+
+    // --------------------------------------------------------------------- louvres
+
+    private static SheetMetalBody Louvred(
+        double k = SheetMaterials.Coined, double angle = 45, double? clearance = null,
+        double width = 20, double lance = 12) =>
+        SheetMetalBody.Base(Plate(), Spec(k)).WithLouvre(new SheetLouvre(
+            new Vector2d(40, 25), new Vector2d(1, 0), width, lance, angle,
+            Clearance: clearance));
+
+    /// <summary>
+    /// The louvre's own term in the volume identity, and it is the SAME term an ordinary
+    /// bend contributes: <c>W·θ·T²·(0.5 − K)</c>. That it comes out unchanged is the whole
+    /// claim — the parent loses the tab's footprint, the tab returns it as a bend plus a
+    /// wall, and the two cancel down to the K-factor's own discrepancy.
+    /// </summary>
+    [Theory]
+    [InlineData(SheetMaterials.SoftAluminium)]
+    [InlineData(SheetMaterials.MildSteel)]
+    [InlineData(SheetMaterials.Coined)]
+    public void ALouvreContributesExactlyOneMoreBendToTheVolumeIdentity(double k)
+    {
+        const double width = 20, angle = 45 * Math.PI / 180;
+        var body = Louvred(k);
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+
+        double predicted = width * angle * Thickness * Thickness * (0.5 - k);
+        double measured = BrepMassProperties.Compute(solid).Volume - body.Unfold().Volume;
+        Assert.True(
+            Math.Abs(measured - predicted) < 1e-8 * BrepMassProperties.Compute(solid).Volume,
+            $"predicted {predicted:g12}, measured {measured:g12}");
+    }
+
+    /// <summary>
+    /// What a LANCE does to the blank, exactly: it removes its own KERF and nothing else.
+    /// The tab stays — a lance separates material rather than removing it — so the blank's
+    /// area falls by <c>c·(W + 2L + 2c)</c>, while the FOLDED parent gives up the whole
+    /// opening. Both closed forms, and the pair is what says the two views differ by
+    /// precisely the lance and not by an accident of bookkeeping.
+    /// </summary>
+    [Fact]
+    public void ALanceCostsTheBlankItsKerfAndTheFoldedParentTheWholeOpening()
+    {
+        const double width = 20, lance = 12, clearance = 0.2;
+        var body = Louvred(clearance: clearance);
+
+        double kerf = clearance * (width + 2 * lance + 2 * clearance);
+        Assert.Equal(PlateX * PlateY - kerf, body.Unfold().Area, 9);
+        Assert.Equal(PlateX * PlateY - kerf, body.BaseOutline.Area(), 9);
+
+        double opening = (width + 2 * clearance) * (lance + clearance);
+        Assert.Equal(PlateX * PlateY - opening, body.FoldedOutline.Area(), 9);
+    }
+
+    /// <summary>
+    /// <b>The clearance does not move the discrepancy at all</b>, because the kerf is
+    /// removed from BOTH views identically — the bend-relief rule, applied to a lance. That
+    /// is the assertion with teeth: a construction that took the kerf out of one view only
+    /// would still produce a plausible solid and a plausible blank.
+    /// </summary>
+    [Fact]
+    public void TheLanceClearanceDoesNotMoveTheFoldedVersusFlatDiscrepancy()
+    {
+        double Gap(double clearance)
+        {
+            var body = Louvred(SheetMaterials.MildSteel, clearance: clearance);
+            return BrepMassProperties.Compute(body.Solid.ToBrep()).Volume - body.Unfold().Volume;
+        }
+
+        Assert.Equal(Gap(0.05), Gap(0.4), 6);
+    }
+
+    /// <summary>The tab has to be in the right PLACE, not merely of the right size: its tip
+    /// is where the bend model's closed form puts it, and the parent really does have an
+    /// opening under it (the folded outline's own hole).</summary>
+    [Fact]
+    public void ALouvresTabStandsWhereTheBendModelPutsIt()
+    {
+        const double angle = 60 * Math.PI / 180, lance = 12;
+        var body = Louvred(angle: 60);
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+
+        double allowance = SheetMetalSpec.BendAllowance(angle, Radius, Thickness, SheetMaterials.Coined);
+        double wall = lance - allowance;
+        // Axis one inside radius above the top face; the inside surface leaves the bend at
+        // the end radial and the wall runs on from there.
+        double tipX = 40 + Radius * Math.Sin(angle) + wall * Math.Cos(angle);
+        double tipZ = Thickness + Radius - Radius * Math.Cos(angle) + wall * Math.Sin(angle);
+        Assert.Equal(tipZ, solid.Vertices.Max(v => v.Position.Z), 9);
+
+        // Both corners of the tab's inside tip, at the ends of a 20-wide lance about y = 25.
+        foreach (double y in (ReadOnlySpan<double>)[15, 35])
+        {
+            var expected = new Vector3d(tipX, y, tipZ);
+            Assert.True(
+                solid.Vertices.Any(v => v.Position.DistanceTo(expected) < 1e-9),
+                $"no tab tip vertex at {expected}");
+        }
+        Assert.True(tipX < 40 + lance, "the tab must stay inside its own opening at this angle");
+    }
+
+    /// <summary>Louvres compose with flanges and with each other, in both directions and on
+    /// two axes — the case a single-louvre test cannot see, since the bend axis and the
+    /// opening direction are what a sign error would flip.</summary>
+    [Fact]
+    public void SeveralLouvresComposeWithAFlange()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 20)
+            .WithLouvre(new Vector2d(25, 20), new Vector2d(1, 0), 16, 10)
+            .WithLouvre(new Vector2d(55, 35), new Vector2d(0, 1), 16, 10, 60, SheetBendDirection.Down);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        var flat = body.Unfold();
+        Assert.Equal(3, flat.Bends.Count);   // one flange, two louvres
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / flat.Volume, 6);
+    }
+
+    /// <summary>A louvre carries no edge NAME, so a mirror only has to reflect a point and a
+    /// direction — asserted on vertex SETS, since a volume comparison passes a tab formed
+    /// the wrong way round.</summary>
+    [Fact]
+    public void AMirroredLouvreIsTheExactReflection()
+    {
+        static SheetMetalBody Body() =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithLouvre(new Vector2d(30, 18), new Vector2d(1, 0), 14, 9, 50);
+
+        var plain = Body().Solid.ToBrep();
+        var mirrored = Body().Solid.Mirror((0, 0, 0), (1, 0, 0)).ToBrep();
+        mirrored.Validate();
+
+        var reflected = plain.Vertices
+            .Select(v => new Vector3d(-v.Position.X, v.Position.Y, v.Position.Z))
+            .ToList();
+        foreach (var vertex in mirrored.Vertices)
+        {
+            Assert.True(
+                reflected.Any(p => p.DistanceTo(vertex.Position) < 1e-9),
+                $"mirrored vertex {vertex.Position} has no counterpart in the reflected original");
+        }
+    }
+
+    /// <summary>
+    /// <b>A zero-width lance is not a solid, and that is a theorem rather than a limit.</b>
+    /// The tab's own side face would be coincident with the wall of the opening it came out
+    /// of, everywhere the bend band still lies inside that opening — two coplanar faces with
+    /// opposite normals touching over an area.
+    /// </summary>
+    [Fact]
+    public void AZeroWidthLanceIsRefusedAsCoincidentBoundary()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => Louvred(clearance: 0));
+        Assert.Contains("coincident", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("manifold", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A SHALLOW tab reaches FURTHER out than the flat material it came from — by the
+    /// thickness the bend swings it through — so it can run into the sheet beyond its own
+    /// opening while still below the sheet's own face. Refused in closed form, and the
+    /// fixture is a real NEAR MISS rather than an absurd one: 8 degrees on a 4 mm lance
+    /// overhangs a 0.02 mm kerf by 0.048 mm, where the same lance at 45 degrees clears it
+    /// by more than a millimetre. The overhang peaks near <c>atan(T(1−K)/L)</c> and is
+    /// about <c>T²(1−K)²/2L</c>, so it is a thick-sheet, short-lance, tight-kerf failure —
+    /// which is exactly why the default clearance hides it and a fixture has to state one.
+    /// </summary>
+    [Fact]
+    public void AShallowTabThatWouldRunIntoTheSheetIsRefusedInClosedForm()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => Louvred(angle: 8, clearance: 0.02, lance: 4));
+        Assert.Contains("run into the material", exception.Message, StringComparison.Ordinal);
+
+        // The same lance and kerf at a steeper angle is fine, which is what makes the
+        // refusal about the geometry rather than about the dimensions.
+        Louvred(angle: 45, clearance: 0.02, lance: 4).Solid.ToBrep().Validate();
+    }
+
+    [Fact]
+    public void ALanceShorterThanItsOwnBendAllowanceIsRefusedNamingBoth()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => Louvred(angle: 90, lance: 2));
+        Assert.Contains("develops", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("FLAT", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALouvreRunningOffTheSheetOrOverlappingAnotherIsRefused()
+    {
+        var off = Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(Plate(), Spec()).WithLouvre(
+                new Vector2d(75, 25), new Vector2d(1, 0), 20, 12));
+        Assert.Contains("strictly inside the blank", off.Message, StringComparison.Ordinal);
+
+        var overlap = Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithLouvre(new Vector2d(40, 25), new Vector2d(1, 0), 20, 12)
+                .WithLouvre(new Vector2d(45, 25), new Vector2d(1, 0), 20, 12));
+        Assert.Contains("overlapping footprints", overlap.Message, StringComparison.Ordinal);
     }
 
     // ------------------------------------------- multi-body sheets / welded assemblies
@@ -976,15 +1258,152 @@ public class SheetMetalTests
         Assert.All(rim, v => Assert.Equal(Thickness + Radius + 6, v.Position.Z, 6));
     }
 
-    [Fact]
-    public void ACutoutThatWouldCrossTheBendIsRefusedNamingTheDevelopment()
+    // ------------------------------------------------ cutouts that CROSS the bend line
+
+    /// <summary>An axis-aligned rectangle in the flange's own local frame, spanning
+    /// x ∈ [x0, x1] and y ∈ [y0, y1] — negative y being into the bend zone.</summary>
+    private static Sketch Slot(double x0, double x1, double y0, double y1) =>
+        Sketch.Polygon([new(x0, y0), new(x1, y0), new(x1, y1), new(x0, y1)]);
+
+    private static double Allowance(double k, double angle = Math.PI / 2) =>
+        SheetMetalSpec.BendAllowance(angle, Radius, Thickness, k);
+
+    /// <summary>
+    /// A slot running out of the wall and down INTO the bend, and the closed form for what
+    /// it does to the volume identity.
+    ///
+    /// <para>The blank loses the whole rectangle, <c>w·(y₁ − y₀)·T</c>; the folded body loses
+    /// the wall part plus an annular sector, <c>w·(y₁·T + (θ − φ₀)·T·(R + T/2))</c> — and
+    /// since <c>−y₀ = (θ − φ₀)(R + K·T)</c> the difference is exactly
+    /// <c>w·(θ − φ₀)·T²·(0.5 − K)</c>. So a crossing slot removes a SLICE of the very
+    /// discrepancy the K-factor owns, which is the strongest statement available: it is the
+    /// same formula the bend itself obeys, restricted to the angle the slot takes away.</para>
+    ///
+    /// <para>Measured against the identical flange with no slot, so the assertion is about
+    /// the slot alone. The residual is one tier coarser than a plain flange's (6.9e-8 of the
+    /// folded volume against 6.2e-10) because the split arcs are sampled independently of
+    /// the band's own grid; it converges, measured −3.0e-3 / +5.4e-4 / −5.3e-5 / +1.8e-5 at
+    /// 32/64/128/256 segments per circle.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(SheetMaterials.SoftAluminium)]
+    [InlineData(SheetMaterials.MildSteel)]
+    [InlineData(SheetMaterials.Coined)]
+    public void ACutoutCrossingTheBendRemovesASliceOfTheDiscrepancyItself(double k)
     {
-        var exception = Assert.Throws<NotSupportedException>(() =>
+        const double angle = Math.PI / 2, from = 20, to = 30, height = 6;
+        double allowance = Allowance(k);
+        double y0 = -allowance / 2;
+
+        var plain = SheetMetalBody.Base(Plate(), Spec(k)).WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+        var slotted = SheetMetalBody.Base(Plate(), Spec(k))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: [Slot(from, to, y0, height)]);
+
+        var solid = slotted.Solid.ToBrep();
+        solid.Validate();
+        double folded = BrepMassProperties.Compute(solid).Volume;
+
+        // The blank loses exactly the rectangle it was drawn as — the bend zone is a
+        // developable strip of the same blank, so a rigid frame places the slot there too.
+        Assert.Equal(plain.Unfold().Area - (to - from) * (height - y0), slotted.Unfold().Area, 9);
+
+        double phi = angle * (allowance + y0) / allowance;
+        double predicted = (to - from) * (angle - phi) * Thickness * Thickness * (0.5 - k);
+        double measured = (FoldedVolume(plain) - plain.Unfold().Volume) - (folded - slotted.Unfold().Volume);
+        Assert.True(
+            Math.Abs(measured - predicted) < 1e-7 * folded,
+            $"predicted {predicted:g12}, measured {measured:g12}");
+    }
+
+    /// <summary>Two slots on one bend, on an inset DOWN flange that also carries an ordinary
+    /// wall cutout and a chained flange — the composition case, since a slot splits both
+    /// bend bands and the rims they weld to, and every one of those is shared with something
+    /// else.</summary>
+    [Fact]
+    public void CrossingSlotsComposeWithEverythingElseOnAFlange()
+    {
+        double allowance = Allowance(SheetMaterials.Coined);
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(
+                SheetFlangeTarget.BaseEdge(1), 25, startOffset: 6, width: 38,
+                direction: SheetBendDirection.Down,
+                cutouts:
+                [
+                    Slot(4, 10, -allowance / 2, 6),
+                    Slot(20, 27, -allowance * 0.8, 9),
+                    Sketch.Circle(2.5).Placed((32, 12), (1, 0)),
+                ])
+            .WithFlange(SheetFlangeTarget.FlangeTip(0), 10);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+    }
+
+    /// <summary>A mirrored placement re-declares the tree, so a crossing slot has to survive
+    /// the same remap a wall cutout does — pinned on vertex SETS, since a volume comparison
+    /// passes a slot mirrored to the wrong side.</summary>
+    [Fact]
+    public void AMirroredCrossingSlotIsTheExactReflection()
+    {
+        double allowance = Allowance(SheetMaterials.Coined);
+        SheetMetalBody Body() =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: [Slot(12, 20, -allowance / 2, 7)]);
+
+        var plain = Body().Solid.ToBrep();
+        var mirrored = Body().Solid.Mirror((0, 0, 0), (1, 0, 0)).ToBrep();
+        mirrored.Validate();
+
+        var reflected = plain.Vertices
+            .Select(v => new Vector3d(-v.Position.X, v.Position.Y, v.Position.Z))
+            .ToList();
+        foreach (var vertex in mirrored.Vertices)
+        {
+            Assert.True(
+                reflected.Any(p => p.DistanceTo(vertex.Position) < 1e-9),
+                $"mirrored vertex {vertex.Position} has no counterpart in the reflected original");
+        }
+    }
+
+    /// <summary>
+    /// <b>The aligned rectangle is the complete EXACT tier, not a budget</b>, and the two
+    /// refusals say which fact each hits: a cut at any other angle wraps to a HELIX and an
+    /// arc in the blank wraps to nothing with a closed form at all.
+    /// </summary>
+    [Fact]
+    public void ACrossingCutoutThatIsNotAnAlignedRectangleIsRefusedNamingWhy()
+    {
+        foreach (var cutout in (ReadOnlySpan<Sketch>)
+        [
+            Sketch.Circle(4).Placed((25, 1), (1, 0)),
+            Sketch.Polygon([new(20, -1), new(30, -1), new(32, 6), new(22, 6)]),
+        ])
+        {
+            var exception = Assert.Throws<NotSupportedException>(() =>
+                SheetMetalBody.Base(Plate(), Spec())
+                    .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: [cutout]));
+            Assert.Contains("rectangle aligned with", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("HELIX", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ASlotThroughTheBendIntoTheParentIsRefusedNamingTheParent()
+    {
+        double allowance = Allowance(SheetMaterials.MildSteel);
+        var through = Assert.Throws<NotSupportedException>(() =>
             SheetMetalBody.Base(Plate(), Spec())
-                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25,
-                    cutouts: [Sketch.Circle(3).Placed((20, 2), (1, 0))]));
-        Assert.Contains("BEND", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("development", exception.Message, StringComparison.Ordinal);
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: [Slot(20, 30, -allowance - 1, 6)]));
+        Assert.Contains("into the PARENT", through.Message, StringComparison.Ordinal);
+
+        // ... and one that never reaches the wall is a different construction, said so.
+        var floating = Assert.Throws<NotSupportedException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(
+                    SheetFlangeTarget.BaseEdge(1), 25,
+                    cutouts: [Slot(20, 30, -allowance * 0.8, -allowance * 0.2)]));
+        Assert.Contains("wholly inside the BEND", floating.Message, StringComparison.Ordinal);
     }
 
     [Fact]

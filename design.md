@@ -4315,10 +4315,23 @@ the genuinely new work is a **model**, not new surface types.
   worked can move; and the notch curves are emitted through the SAME frame-mapped code the
   flat pattern uses, which is sound because the base node's flat frame is the identity —
   "the blank's coordinates ARE the base sketch's" restated as an implementation.
-- **Reliefs are cut only on the base flange's edges, and the reason is asymmetric.** The
-  base is drawn as a SKETCH, so a notch is an edit to data the model already carries; a
-  flange's wall is BUILT as a plain rectangle by the surgery, so a notch there would be
-  geometry with no declaration behind it. Refused by name rather than approximated.
+- **A relief on a flange's TIP means the same thing by a different route, and the earlier
+  refusal had the premise right and the conclusion wrong.** It read "a relief notches its
+  parent's OUTLINE, and a flange's wall is built as a plain rectangle rather than from a
+  sketch" — both halves true. But there being no outline to notch does not mean there is
+  nothing to do: the notches travel with the PARENT's own construction instead
+  (`SheetTipNotch`, `Node.TipNotches`), and a parent is built before its children, which is
+  exactly why it has to know about their reliefs. `BuildTip` then emits one four-sided
+  planar piece per surviving stretch of tip plus a band per notch segment, so between its
+  notches the child runs the full width of a tip face that is still four-sided, planar and
+  square to the bend line, and arrives at `AddEdgeFlange` as an ordinary FLUSH flange —
+  the base-edge relief's own trick, one level in. With no notches the same calls in the same
+  order produce the same edge pair and the same face, so an un-notched flange is untouched
+  down to the bit. **A notch position is stated as its two points on the flange's own
+  tangent line and read as their component ALONG the span**, because that is the one thing a
+  coordinate convention could get wrong here: `Order` swaps `q0`/`q1` for an Up flange and
+  not for a Down one (since `a = Outward × Inside` is `−T` in one case and `+T` in the
+  other), so it is measured rather than derived.
 - **A notch is a DETOUR in a loop, so one that runs out of its parent is silent** — and
   measuring that is what put the guard in. On an 80×50 plate a 200-deep relief leaves a
   self-intersecting blank whose SIGNED area still reads exactly base-minus-notches (2800 =
@@ -4465,16 +4478,72 @@ the genuinely new work is a **model**, not new surface types.
   w spends exactly `w × BA` of blank and has exactly that much neutral-surface area, while
   the same bend run round a circle has a Pappus area about 3% different — the material a
   fabricator would have to find, and if the two agreed the refusal would be wrong.
-- **What is still refused, with reasons rather than deferrals**: a cutout crossing a bend
-  line (its flat shape is that band's DEVELOPMENT rather than the flange's rigid frame —
-  the flat side of it is cheap and exact, the folded side needs a general curve wrapped on
-  a cylinder); a relief on a flange TIP (the wall's OUTLINE from a sketch, the half of the
-  "one change, two features" prediction that survived); a LOUVRE (its bend line is
-  interior to a face rather than on an edge and it is lanced as well as formed, so it is
-  not an edge flange at all); two flanges sharing a stretch of edge; and flanges on a
-  flange's SIDE edges. The **tear relief** is a documented absence rather than a refusal —
-  it is what happens when no relief is cut, and its shape belongs to the press, exactly as
-  spring-back does.
+- **A cutout may CROSS the bend line, and the exact tier is the RECTANGLE ALIGNED with it —
+  a complete answer rather than a budget.** The filed framing expected a new curve type or
+  a sampled edge ("a general curve wrapped on a cylinder"); neither is needed, and the
+  reason is the isometry the curved-bend-line refusal already stands on, read the other way
+  round. Bending preserves the sheet's intrinsic geometry, so a straight cut running ALONG
+  the bend line stays straight (it becomes a ruling of the cylinder) and one running ACROSS
+  it becomes a circular ARC — and the wall each sweeps through the thickness is a PLANE. A
+  cut at any other angle wraps to a HELIX, and an arc in the blank wraps to nothing with a
+  closed form at all. So the aligned rectangle is exactly the family the kernel can carry
+  exactly, and the construction needs no new curve type, no new surface type, no trimmed
+  face and no boolean: each slot splits both bend bands into THREE (the two full-height
+  stretches either side plus a short one under it, whose arc simply sweeps less — all
+  ordinary full-domain `ExtrudedSurface` bands), splits the rims they weld to, and notches
+  both wall faces, which is a NOTCH in their outer loop rather than a hole because the slot
+  reaches their own boundary.
+- **A crossing cutout costs the K-factor's independence from the FOLDED shape, and it
+  cannot be otherwise.** `SheetBendSection` deliberately carries no K, because K decides
+  developed LENGTH and nothing about the folded shape — and that separation is what makes
+  the volume comparison a real test rather than a tautology. A crossing cutout is the one
+  feature that genuinely breaks it: the cutout is declared FLAT (punched in the blank and
+  then bent, which is exactly why holes near a bend deform), and the only map from the
+  blank to the band is the NEUTRAL-AXIS map, which K parameterizes. The resolution is to
+  put the conversion where K already lives: the modelling layer turns the cutout's flat
+  depth into an ANGLE and the surgery takes that verbatim, so the geometry stays pure and
+  the ARGUMENT is what K decided. **The identity is then the bend's own formula restricted
+  to the angle the slot takes away** — blank `w·(y₁ − y₀)·T`, folded `w·(y₁·T + (θ −
+  φ₀)·T·(R + T/2))`, and since `−y₀ = (θ − φ₀)(R + K·T)` the difference is exactly
+  `w·(θ − φ₀)·T²·(0.5 − K)`, a SLICE of the very discrepancy the K-factor owns. Two
+  orientation errors were made and caught by `Validate`, both the same mistake: OUT of the
+  material at a slot wall points INTO the slot, so the low wall's normal is `+axis` and not
+  `−axis`, and the top wall's is `−u` and not `+u`; the tell each time was "an edge's two
+  uses must have opposite sense" against the wall face sharing the edge.
+- **A LOUVRE is an interior bend line plus a lance, and the surgery it needs is none.** The
+  declaration is genuinely new — an edge flange's bend line is an EDGE of the sheet and its
+  material grows outboard of the blank, while a louvre's is interior to a face and its
+  material comes out of the sheet — but once the parent gives up the tab's footprint, that
+  bend line is an ordinary edge of an ordinary four-sided planar wall, which is exactly the
+  flush case `AddEdgeFlange` already builds. **A LANCE has a WIDTH, and that is a theorem
+  rather than a modelling choice**: at zero width the tab's own side face is coincident
+  with the wall of the opening it came out of, everywhere the bend band still lies inside
+  that opening — two coplanar faces with opposite normals touching over an area, which is
+  not a manifold boundary (measured: the mesh came back OPEN with a boundary loop on
+  exactly those faces). So the clearance is strictly positive and zero refuses by name.
+  **What each view loses then differs on purpose, and that difference IS the lance**: the
+  blank keeps the tab and loses only the U-shaped KERF, while the folded parent loses the
+  whole opening because the tab has left the plane and comes back as its own flange.
+  Because the kerf leaves both views identically (the bend-relief rule), the volume
+  identity is UNCHANGED and independent of the clearance — one more `W·θ·T²·(0.5 − K)`
+  term, with the lance contributing exactly zero.
+- **Generalising `RequireSquareNeighbour` was forced by the louvre and is a `gate should BE
+  its correctness condition` case.** It asked for a SIGNED normal, which is a proxy: the
+  sign says convex-or-reflex, and every corner of a HOLE is reflex, so every louvre failed
+  it. The correctness condition is perpendicularity alone — the tab's cross-section rises
+  out of the neighbour's plane on the far side of the shared end edge either way. And the
+  companion question answers itself: which way that neighbour's loop walks is fixed by the
+  WALL's own orientation, which is identical in both cases, so the chain direction needed no
+  change at all. Edge flanges gained reflex corners for free.
+- **What is still refused, with reasons rather than deferrals**: a crossing cutout that is
+  not an aligned rectangle, or that runs THROUGH the bend into the parent (it would notch
+  the parent's own faces, a change to the parent rather than to this flange) or floats
+  wholly inside the band (it would leave the band a trimmed face with a hole in it); a
+  crossing slot on a MITRED flange (a corner band already reaches past its span, and the
+  two edits want the same parameter rectangle); two flanges sharing a stretch of edge; and
+  flanges on a flange's SIDE edges. The **tear relief** is a documented absence rather than
+  a refusal — it is what happens when no relief is cut, and its shape belongs to the press,
+  exactly as spring-back does.
 
 Frames & weldments (`Frames.cs`) follow the same doctrine — a declaration (profile +
 skeleton) from which the members, the trims and the cut list are all derived — and
