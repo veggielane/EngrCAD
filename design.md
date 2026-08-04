@@ -2667,6 +2667,57 @@ checkout produced all seven bit-identically (SHA-256 equal), which settles it th
 project settles such things — re-verify the artifact rather than reason about the code. Never
 read a build's output directory before the build says it is done.
 
+#### Probing a pole cap that has been CUT — and a filed diagnosis that named the wrong stage
+
+Step (4)'s probe has a special path for POLE-BOUNDED faces: a disc of an axis-touching
+revolve has only its rim loop, so averaging the loop would probe ON the rim, and the probe
+moves halfway toward the pole instead *and skips the parity check*. Skipping is legitimate,
+and for a reason worth stating as a theorem rather than as a convenience: a single loop that
+WRAPS the periodic direction separates the pole from everything else, so such a face is the
+pole's side and every v strictly between the pole and the loop is inside AT EVERY u.
+
+The same sentence says what the code had wrong. "The loop" has to be its **closest approach
+to the pole**, not its average. The two coincide exactly when the loop sits at one v — every
+pole cap bounded by nothing but its own rim — and part company the moment another solid CUTS
+the cap, which leaves the loop wrapping but no longer level, so the average names a v the
+face no longer reaches everywhere.
+
+**That configuration is not exotic; it is what a blind `Shape.Drill` makes.** A drill tool is
+ONE axis-touching revolve, so its flat end is a `RevolvedSurface` pole cap where a
+`Shape.Cylinder`'s end cap is a `PlaneSurface` — and when the bore is blind that cap lands
+inside the body, so the face the bore breaks out of cuts it. Measured on a Ø6 blind hole in a
+40×30×10 plate with its axis 1 mm below the top face: the average put the probe **0.106 above
+that top face**, i.e. in the fragment on the far side of the cut, so the piece that should
+have been kept was classified away and the boolean refused with *"3 of 19 edges are used by 1
+face(s)"* — the crack running the whole rim.
+
+**The two-sided parity is not the fix**, which is worth recording because it is the obvious
+reach: `FaceGeometry.ContainsTwoSided` errs toward inside by design (its own tie-break
+resolves a disagreement to *true*), and on a cut cap the ray away from the pole crosses
+nothing while the ray toward it crosses the cut — a disagreement — so it accepts precisely
+the bad point. The rule above needs no parity test at all.
+
+**And the filed entry that asked for this named the wrong stage.** It read: *"the fix is a
+third planar-carrier recognizer — a full-turn revolve of a radial straight generator
+perpendicular to its axis is a planar ANNULUS"*, on the reasoning that the pair fell to the
+marching tracer. It does fall to the tracer, and that turns out not to matter: the
+intersection there is a straight CHORD, and a traced polyline along a straight curve lies on
+that curve at *every* point rather than only at its vertices, so the only defect the tracer
+introduces is truncation at the ends — which `SnapTracerEnds` already removes. The recognizer
+was built, and with it the whole boolean's output on this family is **bit-identical**.
+
+Establishing that took the project's own rule — run the pipeline without the suspected stage
+before theorising about it — and the recognizer was then measured on a sweep of breakout
+depths rather than on the one fixture. It **trades one refusal for another** and so is not
+reached at all (`FaceSplitter.SplitByCurves`' gate makes the same call for the same reason):
+it fixes the exactly-diametral cut and breaks two shallower ones, which fail in trimmed-face
+tessellation on the disc fragment. That blocker was then established by subtraction too, and
+it is not in the recognizer: feeding the SAME exact chord as a 25-point polyline — identical
+geometry, identical endpoints, different density — passes all three. So a straight
+`Line3d` boundary gets 2 samples from `SampleEdge` while the disc's parameterization is
+ANGULAR and the chord crosses many u columns, which is a density rule in the tessellator,
+not a gap in the intersector. Filed there, with the measurement.
+
 #### Coincident (flush) planar surface
 
 Transversal intersection is not the only way two solids can meet: they can *share*

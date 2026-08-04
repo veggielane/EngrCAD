@@ -730,6 +730,23 @@ logging complements them, never replaces them.
     fragment and the boolean classifies it away. Pinned by `ProbePointWrapTests`, whose
     fixture asserts it still CARRIES the configuration (one loop, span past three quarters
     of the period, no wrap) so it cannot quietly stop testing it.
+  - **A POLE-BOUNDED fragment is measured by its loop's CLOSEST APPROACH to the pole, not
+    by the loop's average.** A single loop that wraps the periodic direction separates the
+    pole from everything else, so the face is the pole's side and every v strictly between
+    the pole and the loop is inside AT EVERY u — which is exactly why the pole path may
+    skip the parity check, and equally why it must read the loop's minimum: an uncut cap's
+    rim sits at one v so its average IS its minimum, and a cap another solid has CUT keeps
+    a wrapping loop that is no longer level, so the average names a v the face no longer
+    reaches everywhere. That is what a blind `Shape.Drill` whose flat pole cap breaks out
+    of a face produces (`Drill`'s tool is ONE axis-touching revolve, so its flat end is a
+    `RevolvedSurface` pole cap where a `Shape.Cylinder`'s is a `PlaneSurface`): measured on
+    a Ø6 blind hole in a 40x30x10 plate with its axis 1 below the top face, the average put
+    the probe **0.106 ABOVE that top face**, so the fragment that should have been kept was
+    classified away and the whole boolean refused with "3 of 19 edges are used by 1
+    face(s)". **The two-sided parity is NOT the fix** — `FaceGeometry.ContainsTwoSided`
+    errs toward inside by design and duly accepts that very point. Pinned end to end by
+    `SideWallBreakoutBooleanTests`, whose ten-row sweep across breakout depths fails three
+    rows without the rule and none with it.
   - Drilling works into **cylinders** exactly as into boxes (the cap bounds a closed
     circular edge, so a different split/re-weld path runs): for well-posed inputs the
     result is `Validate`-clean with the right genus and exact volume in all three
