@@ -304,7 +304,14 @@ public sealed class RainflowFatigueResults
     /// a static-strength question rather than a fatigue one (the static pair's
     /// <see cref="FatigueAnalysis.Evaluate(StructuralResults, StructuralResults, SnCurve,
     /// FatigueOptions?)"/> answers it, reporting the S_ut/mean margin from two identical
-    /// cases).</para>
+    /// cases). <b>That NaN has a second cause and it is the recorded blind spot</b>: a
+    /// reversed PURE SHEAR cycle reads the same signed von Mises at both extremes (negating
+    /// a pure shear tensor is a rotation of it), so its series is constant too and is
+    /// indistinguishable here from a node that never moves. The factor inherits the scalar
+    /// equivalent's blind spot exactly as <see cref="Damage"/> does — it neither adds one
+    /// nor repairs one — so a NaN says "no cycle IN THE SCALAR EQUIVALENT", which is
+    /// critical-plane territory (see <see cref="FatigueAnalysis"/>' multiaxial
+    /// refusal).</para>
     /// </summary>
     public IReadOnlyList<double> SafetyFactor { get; }
 

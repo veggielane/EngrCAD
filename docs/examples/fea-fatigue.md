@@ -479,6 +479,17 @@ whose history never moves carries **no counted cycle**, so it reads NaN however 
 steady stress: rainflow measures cycles, and a steady load is a static-strength question
 the static pair answers instead (two identical cases report the `S_ut/σ_m` margin).
 
+> [!WARNING]
+> That NaN has **two causes and only one of them is honest**, and the second is the
+> [reversed pure shear](#what-this-deliberately-is-not) above arriving through the
+> spectrum: negating a pure shear tensor is a rotation of it, so both halves of the cycle
+> read the *same* signed von Mises and the series is constant — indistinguishable, here,
+> from a node that genuinely never moves. So a NaN factor means "this node's history
+> carries no cycle *in the scalar equivalent*", which is the reading a truly static node
+> deserves and an over-estimate for a node cycling in shear. The factor inherits the
+> scalar's blind spot exactly as the damage does — it does not add one, and it does not
+> repair one; critical-plane methods are where that case is answered.
+
 Cost follows the target, which is why they are priced separately: on a 135-node mesh with
 241 stored states and up to 93 counted cycles per node (win-x64, Release), the whole
 evaluation takes **3.5 ms** against the infinite-life target and **18.2 ms (5.2×)** against

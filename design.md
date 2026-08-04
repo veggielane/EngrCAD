@@ -1758,6 +1758,17 @@ two identical cases still carry a mean and report the `S_ut/sigma_m` margin. The
 transfer verbatim from the static path: a curve with no endurance limit has no infinite life
 to measure against, so `DesignRepetitions` is required there and named in the refusal.
 
+**That second NaN has two causes and only one of them is honest**, which is the recorded
+pure-shear blind spot arriving through the spectrum rather than a new one: negating a pure
+shear tensor is a rotation of it, so both halves of a reversed shear cycle read the SAME
+signed von Mises and the series is constant — indistinguishable, at this layer, from a node
+that genuinely never moves. The factor therefore inherits the scalar equivalence's blind spot
+exactly as the damage field already does; it neither adds one nor repairs one, and the
+statement a NaN makes is "this history carries no cycle IN THE SCALAR EQUIVALENT". Worth
+stating explicitly because the factor's NaN reads stronger than the damage field's zero — an
+absent mechanism rather than an unconsumed life — while both are the same claim and both are
+wrong in the same case.
+
 ### Refused by name
 
 Welds (hot-spot / nominal-stress category methods are their own discipline — a weld's
