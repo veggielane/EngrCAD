@@ -89,6 +89,7 @@ public sealed class SdfProjectionTarget : IProjectionTarget
     public const double RelativeGradientStep = 5e-6;
 
     private readonly Sdf _field;
+    private readonly double _lipschitz;
 
     /// <summary>Wraps <paramref name="field"/> as a projection target.</summary>
     /// <param name="field">The field whose zero level set is the surface to project onto.</param>
@@ -109,6 +110,26 @@ public sealed class SdfProjectionTarget : IProjectionTarget
         _field = field;
         Iterations = iterations;
         GradientStep = gradientStep ?? DefaultGradientStep(field);
+        _lipschitz = StepScale(field);
+    }
+
+    /// <summary>
+    /// What the one-sidedness argument above needs when the field is NOT 1-Lipschitz. The
+    /// theorem is that the surface is at least <c>|d| / L</c> away in every direction, so a
+    /// step of that length can never overshoot; L is exactly 1 for every exact field, and
+    /// dividing by it is the identity, so every incumbent target steps bit-identically. A
+    /// twisted or bent field reports a larger L and takes proportionally shorter steps —
+    /// slower convergence, never a crossing. An unbounded field has no finite bound to read,
+    /// so it keeps the incumbent step: the operators that can exceed 1 all require finite
+    /// bounds to be constructed at all.
+    /// </summary>
+    private static double StepScale(Sdf field)
+    {
+        var bounds = field.Bounds;
+        if (!Sdf.IsFinite(bounds) || bounds.IsEmpty)
+            return 1;
+        double bound = field.LipschitzBound(bounds);
+        return double.IsFinite(bound) && bound > 1 ? bound : 1;
     }
 
     /// <summary>Newton steps taken per <see cref="Project"/> call.</summary>
@@ -184,7 +205,7 @@ public sealed class SdfProjectionTarget : IProjectionTarget
             return false;
 
         normal = gradient / length;
-        next = p - normal * d;
+        next = p - normal * (_lipschitz == 1 ? d : d / _lipschitz);
         return true;
     }
 

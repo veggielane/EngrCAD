@@ -17,22 +17,31 @@ namespace EngrCAD.Interop;
 /// hand it has already produced the visit set, and the flood adds nothing.
 /// </para>
 /// <para>
-/// <b>The completeness argument, in full.</b> An <see cref="Sdf"/> in this engine is
-/// 1-Lipschitz: |d(p) − d(q)| ≤ |p − q| (the property <see cref="SdfProjectionTarget"/> and
-/// <see cref="NarrowBandSdf"/> already rest on). Take a block whose world box has centre c
-/// and half-diagonal R. Every point p in the box satisfies |c − p| ≤ R, so
-/// |d(p)| ≥ |d(c)| − |c − p| ≥ |d(c)| − R. If |d(c)| &gt; R then d has no zero anywhere in
-/// the box, so no cell of that block has a sign change, so no cell of that block would have
-/// produced a vertex or a quad. Blocks that fail the test are visited in full. The test uses
-/// ONE evaluation per block and needs no assumption beyond the Lipschitz bound — in
-/// particular it does not need d to be a lower bound on the true distance.
+/// <b>The completeness argument, in full.</b> Take a block whose world box has centre c and
+/// half-diagonal R, and let L bound the field's Lipschitz constant over the sampling region
+/// (<see cref="Sdf.LipschitzBound"/>). Every point p in the box satisfies |c − p| ≤ R, so
+/// |d(p)| ≥ |d(c)| − L·|c − p| ≥ |d(c)| − L·R. If |d(c)| &gt; L·R then d has no zero anywhere
+/// in the box, so no cell of that block has a sign change, so no cell of that block would
+/// have produced a vertex or a quad. Blocks that fail the test are visited in full. The test
+/// uses ONE evaluation per block and needs no assumption beyond that bound — in particular it
+/// does not need d to be a lower bound on the true distance.
 /// </para>
 /// <para>
-/// <see cref="SafetyCells"/> widens the test by one grid cell so that fields which are only
-/// <em>approximately</em> Lipschitz — the smooth blends, whose deviation from the true
-/// distance is bounded by a fraction of their blend radius — keep a cushion. It is not what
-/// makes the argument work; it is what makes the argument survive a blend radius smaller
-/// than a cell.
+/// <b>L is 1 for every exact field</b>, which is the whole engine's contract and was this
+/// test's original wording. It is asked for rather than assumed because the domain operators
+/// (a twist, a bend, a taper) shear space and are legitimately steeper: unwidened, the test
+/// would clear a block that really does contain surface, and the geometry would go missing
+/// with nothing to report it. The bound is read ONCE for the whole region, so a node whose
+/// factor varies with position — a twist's does, growing with the radius — reports the
+/// largest value over the region being sampled and every block inside it is covered. An
+/// infinite bound (an unbounded field under such an operator) culls nothing, which is the
+/// pre-cull walk and always correct.
+/// </para>
+/// <para>
+/// <see cref="SafetyCells"/> widens the test by one further grid cell so that fields which
+/// are only <em>approximately</em> Lipschitz — the falloff blends, whose bump is steeper than
+/// its operands inside the seam band — keep a cushion. It is not what makes the argument
+/// work; it is what makes the argument survive a blend radius smaller than a cell.
 /// </para>
 /// </summary>
 internal sealed class SurfaceCull
@@ -160,9 +169,18 @@ internal sealed class SurfaceCull
         Sdf sdf, in Vector3d origin, double cell, in Vector3i cells, ProgressCancel? progress)
     {
         double margin = SafetyCells * cell;
-        var coarse = Scan(sdf, origin, cell, cells, BlockCells * CoarseFactor, margin, null, 0, progress);
+        // One query for the whole sampled region, so the factor is valid for every block
+        // inside it. A non-finite bound means "cull nothing"; All() is exactly that walk.
+        var region = new Aabb(origin, origin + (cells.X * cell, cells.Y * cell, cells.Z * cell));
+        double lipschitz = sdf.LipschitzBound(region);
+        if (!double.IsFinite(lipschitz))
+            return All(cells);
+
+        var coarse = Scan(
+            sdf, origin, cell, cells, BlockCells * CoarseFactor, margin, null, 0, lipschitz, progress);
         var fine = Scan(
-            sdf, origin, cell, cells, BlockCells, margin, coarse, BlockCells * CoarseFactor, progress);
+            sdf, origin, cell, cells, BlockCells, margin, coarse, BlockCells * CoarseFactor,
+            lipschitz, progress);
 
         int nbi = BlockCount(cells.X, BlockCells);
         int nbj = BlockCount(cells.Y, BlockCells);
@@ -179,7 +197,8 @@ internal sealed class SurfaceCull
     /// </summary>
     private static bool[] Scan(
         Sdf sdf, in Vector3d origin, double cell, in Vector3i cells,
-        int blockCells, double margin, bool[]? parent, int parentBlockCells, ProgressCancel? progress)
+        int blockCells, double margin, bool[]? parent, int parentBlockCells, double lipschitz,
+        ProgressCancel? progress)
     {
         int nx = cells.X, ny = cells.Y, nz = cells.Z;
         int nbi = BlockCount(nx, blockCells), nbj = BlockCount(ny, blockCells), nbk = BlockCount(nz, blockCells);
@@ -215,7 +234,10 @@ internal sealed class SurfaceCull
                     var min = origin + (i0 * cell, j0 * cell, k0 * cell);
                     var max = origin + (i1 * cell, j1 * cell, k1 * cell);
                     points.Add((min + max) * 0.5);
-                    radii.Add((max - min).Length * 0.5);
+                    // L·R, the reach the Lipschitz argument needs. L is exactly 1.0 for every
+                    // exact field, and multiplying by it is the identity, so those callers get
+                    // bit-identical culling.
+                    radii.Add((max - min).Length * 0.5 * lipschitz);
                     slots.Add((bi * nbj + bj) * nbk + bk);
                 }
             }

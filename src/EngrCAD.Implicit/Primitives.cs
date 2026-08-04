@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Numerics;
 using EngrCAD.Core;
 
@@ -27,6 +28,9 @@ internal sealed class SphereSdf(double radius) : Sdf
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
         SdfBatch.Map(new Kernel(radius), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression b) =>
+        Expression.Subtract(SdfExpression.Length3(b.X, b.Y, b.Z), SdfExpression.Const(radius));
 }
 
 internal sealed class BoxSdf(Vector3d halfExtents) : Sdf
@@ -67,6 +71,25 @@ internal sealed class BoxSdf(Vector3d halfExtents) : Sdf
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
         SdfBatch.Map(new Kernel(halfExtents), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression b) =>
+        BoxBody(b, halfExtents, 0);
+
+    /// <summary>The box body, shared with <see cref="RoundedBoxSdf"/> — the rounded form is
+    /// this minus a constant, so one expression serves both and cannot drift from the other.</summary>
+    internal static Expression BoxBody(SdfExpression b, in Vector3d half, double radius)
+    {
+        var qx = b.Let(Expression.Subtract(SdfExpression.Abs(b.X), SdfExpression.Const(half.X)));
+        var qy = b.Let(Expression.Subtract(SdfExpression.Abs(b.Y), SdfExpression.Const(half.Y)));
+        var qz = b.Let(Expression.Subtract(SdfExpression.Abs(b.Z), SdfExpression.Const(half.Z)));
+        var zero = SdfExpression.Const(0);
+        var outside = SdfExpression.Length3(
+            SdfExpression.Max(qx, zero), SdfExpression.Max(qy, zero), SdfExpression.Max(qz, zero));
+        var inside = SdfExpression.Min(
+            SdfExpression.Max(qx, SdfExpression.Max(qy, qz)), zero);
+        var sum = Expression.Add(outside, inside);
+        return radius == 0 ? sum : Expression.Subtract(sum, SdfExpression.Const(radius));
+    }
 }
 
 internal sealed class CylinderSdf(double radius, double halfHeight) : Sdf
@@ -105,6 +128,20 @@ internal sealed class CylinderSdf(double radius, double halfHeight) : Sdf
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
         SdfBatch.Map(new Kernel(radius, halfHeight), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression b)
+    {
+        var zero = SdfExpression.Const(0);
+        var dRadial = b.Let(Expression.Subtract(
+            SdfExpression.Length2(b.X, b.Y), SdfExpression.Const(radius)));
+        var dAxial = b.Let(Expression.Subtract(
+            SdfExpression.Abs(b.Z), SdfExpression.Const(halfHeight)));
+        var outside = SdfExpression.Sqrt(Expression.Add(
+            SdfExpression.Square(SdfExpression.Max(dRadial, zero)),
+            SdfExpression.Square(SdfExpression.Max(dAxial, zero))));
+        var inside = SdfExpression.Min(SdfExpression.Max(dRadial, dAxial), zero);
+        return Expression.Add(outside, inside);
+    }
 }
 
 /// <summary>
@@ -180,6 +217,41 @@ internal sealed class ConeSdf(double bottomRadius, double topRadius, double half
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
         SdfBatch.Map(new Kernel(bottomRadius, topRadius, halfHeight), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression b)
+    {
+        double k2x = topRadius - bottomRadius;
+        double k2y = 2 * halfHeight;
+        var zero = SdfExpression.Const(0);
+        var qx = b.Let(SdfExpression.Length2(b.X, b.Y));
+        var qy = b.Z;
+        var radius = Expression.Condition(
+            Expression.LessThan(qy, zero),
+            SdfExpression.Const(bottomRadius), SdfExpression.Const(topRadius));
+        var cax = b.Let(Expression.Subtract(qx, SdfExpression.Min(qx, radius)));
+        var cay = b.Let(Expression.Subtract(SdfExpression.Abs(qy), SdfExpression.Const(halfHeight)));
+        var t = b.Let(SdfExpression.Clamp(
+            Expression.Divide(
+                Expression.Add(
+                    Expression.Multiply(
+                        Expression.Subtract(SdfExpression.Const(topRadius), qx), SdfExpression.Const(k2x)),
+                    Expression.Multiply(
+                        Expression.Subtract(SdfExpression.Const(halfHeight), qy), SdfExpression.Const(k2y))),
+                SdfExpression.Const(k2x * k2x + k2y * k2y)),
+            0, 1));
+        var cbx = b.Let(Expression.Add(
+            Expression.Subtract(qx, SdfExpression.Const(topRadius)),
+            Expression.Multiply(SdfExpression.Const(k2x), t)));
+        var cby = b.Let(Expression.Add(
+            Expression.Subtract(qy, SdfExpression.Const(halfHeight)),
+            Expression.Multiply(SdfExpression.Const(k2y), t)));
+        var s = Expression.Condition(
+            Expression.AndAlso(Expression.LessThan(cbx, zero), Expression.LessThan(cay, zero)),
+            SdfExpression.Const(-1), SdfExpression.Const(1));
+        return Expression.Multiply(s, SdfExpression.Sqrt(SdfExpression.Min(
+            Expression.Add(SdfExpression.Square(cax), SdfExpression.Square(cay)),
+            Expression.Add(SdfExpression.Square(cbx), SdfExpression.Square(cby)))));
+    }
 }
 
 internal sealed class TorusSdf(double majorRadius, double minorRadius) : Sdf
@@ -214,6 +286,14 @@ internal sealed class TorusSdf(double majorRadius, double minorRadius) : Sdf
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
         SdfBatch.Map(new Kernel(majorRadius, minorRadius), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression b)
+    {
+        var ring = b.Let(Expression.Subtract(
+            SdfExpression.Length2(b.X, b.Y), SdfExpression.Const(majorRadius)));
+        return Expression.Subtract(
+            SdfExpression.Length2(ring, b.Z), SdfExpression.Const(minorRadius));
+    }
 }
 
 internal sealed class CapsuleSdf(Vector3d a, Vector3d b, double radius) : Sdf
@@ -262,6 +342,27 @@ internal sealed class CapsuleSdf(Vector3d a, Vector3d b, double radius) : Sdf
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
         SdfBatch.Map(new Kernel(a, b, radius), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression e)
+    {
+        var ba = b - a;
+        var px = e.Let(Expression.Subtract(e.X, SdfExpression.Const(a.X)));
+        var py = e.Let(Expression.Subtract(e.Y, SdfExpression.Const(a.Y)));
+        var pz = e.Let(Expression.Subtract(e.Z, SdfExpression.Const(a.Z)));
+        // Dot's own association: (x*bx + y*by) + z*bz.
+        var dot = SdfExpression.Add(
+            Expression.Multiply(px, SdfExpression.Const(ba.X)),
+            Expression.Multiply(py, SdfExpression.Const(ba.Y)),
+            Expression.Multiply(pz, SdfExpression.Const(ba.Z)));
+        var h = e.Let(SdfExpression.Clamp(
+            Expression.Divide(dot, SdfExpression.Const(ba.LengthSquared)), 0, 1));
+        return Expression.Subtract(
+            SdfExpression.Length3(
+                Expression.Subtract(px, Expression.Multiply(SdfExpression.Const(ba.X), h)),
+                Expression.Subtract(py, Expression.Multiply(SdfExpression.Const(ba.Y), h)),
+                Expression.Subtract(pz, Expression.Multiply(SdfExpression.Const(ba.Z), h))),
+            SdfExpression.Const(radius));
+    }
 }
 
 internal sealed class HalfSpaceSdf(Vector3d unitNormal, double offset) : Sdf
@@ -284,6 +385,304 @@ internal sealed class HalfSpaceSdf(Vector3d unitNormal, double offset) : Sdf
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
         SdfBatch.Map(new Kernel(unitNormal, offset), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression b) =>
+        Expression.Subtract(
+            SdfExpression.Add(
+                Expression.Multiply(SdfExpression.Const(unitNormal.X), b.X),
+                Expression.Multiply(SdfExpression.Const(unitNormal.Y), b.Y),
+                Expression.Multiply(SdfExpression.Const(unitNormal.Z), b.Z)),
+            SdfExpression.Const(offset));
+}
+
+/// <summary>
+/// Box with rounded edges and corners: the box of half-extents
+/// <paramref name="innerHalfExtents"/> grown outward by <paramref name="radius"/>. Exact,
+/// because an outward offset of an exact field is exact and the inner box's field is exact.
+/// </summary>
+internal sealed class RoundedBoxSdf(Vector3d innerHalfExtents, double radius) : Sdf
+{
+    public override double Evaluate(in Vector3d p)
+    {
+        double qx = Math.Abs(p.X) - innerHalfExtents.X;
+        double qy = Math.Abs(p.Y) - innerHalfExtents.Y;
+        double qz = Math.Abs(p.Z) - innerHalfExtents.Z;
+        double outside = new Vector3d(Math.Max(qx, 0), Math.Max(qy, 0), Math.Max(qz, 0)).Length;
+        double inside = Math.Min(Math.Max(qx, Math.Max(qy, qz)), 0);
+        return outside + inside - radius;
+    }
+
+    public override Aabb Bounds
+    {
+        get
+        {
+            var half = innerHalfExtents + new Vector3d(radius, radius, radius);
+            return new Aabb(-half, half);
+        }
+    }
+
+    private readonly struct Kernel(Vector3d halfExtents, double radius) : ISdfKernel
+    {
+        private readonly Vector<double> _hx = new(halfExtents.X);
+        private readonly Vector<double> _hy = new(halfExtents.Y);
+        private readonly Vector<double> _hz = new(halfExtents.Z);
+        private readonly Vector<double> _radius = new(radius);
+
+        public Vector<double> Evaluate(Vector<double> x, Vector<double> y, Vector<double> z)
+        {
+            var zero = Vector<double>.Zero;
+            var qx = Vector.Abs(x) - _hx;
+            var qy = Vector.Abs(y) - _hy;
+            var qz = Vector.Abs(z) - _hz;
+            var ox = Vector.Max(qx, zero);
+            var oy = Vector.Max(qy, zero);
+            var oz = Vector.Max(qz, zero);
+            var outside = Vector.SquareRoot(ox * ox + oy * oy + oz * oz);
+            var inside = Vector.Min(Vector.Max(qx, Vector.Max(qy, qz)), zero);
+            return outside + inside - _radius;
+        }
+    }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
+        SdfBatch.Map(new Kernel(innerHalfExtents, radius), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression b) =>
+        BoxSdf.BoxBody(b, innerHalfExtents, radius);
+}
+
+/// <summary>
+/// Axis-aligned ellipsoid, by Quilez's scaled-implicit approximation
+/// <c>k0·(k0 − 1)/k1</c> with <c>k0 = |p/r|</c> and <c>k1 = |p/r²|</c>.
+/// <para>
+/// <b>Why an approximation at all.</b> The distance from a point to an ellipsoid is the root
+/// of a degree-6 polynomial in the Lagrange multiplier (degree 4 in 2D), with no closed
+/// form; every practical ellipsoid SDF is therefore a bound. This one is the implicit
+/// function scaled by its own gradient — a first-order estimate of the distance to the level
+/// set — and it is exact in two regimes for a structural reason rather than by luck: with
+/// equal semi-axes the expression collapses term for term to <c>|p| − r</c>, the sphere's
+/// exact distance, and far from the body the level sets round out so the ratio tends to the
+/// true distance.
+/// </para>
+/// <para>
+/// <b>The error is neither one-sided nor small at high eccentricity</b>, and the measured
+/// numbers are in <c>PrimitiveDistanceTests</c> and the project README rather than quoted
+/// as folklore here. The sign is exact everywhere, which is what boolean classification and
+/// polygonization need.
+/// </para>
+/// <para>
+/// One genuine singularity: at the exact centre both k0 and k1 vanish and the limit is
+/// direction-dependent, ranging over the semi-axes. The value returned there is
+/// <c>−min(semi-axis)</c>, which is the true distance to the boundary from the centre.
+/// </para>
+/// </summary>
+internal sealed class EllipsoidSdf(Vector3d radii) : Sdf
+{
+    public override double Evaluate(in Vector3d p)
+    {
+        double k0 = new Vector3d(p.X / radii.X, p.Y / radii.Y, p.Z / radii.Z).Length;
+        double k1 = new Vector3d(
+            p.X / (radii.X * radii.X),
+            p.Y / (radii.Y * radii.Y),
+            p.Z / (radii.Z * radii.Z)).Length;
+        if (k1 == 0)
+            return -Math.Min(radii.X, Math.Min(radii.Y, radii.Z));
+        return k0 * (k0 - 1) / k1;
+    }
+
+    public override Aabb Bounds => new(-radii, radii);
+
+    /// <summary>
+    /// Measured rather than derived: the value's gradient exceeds 1 near a high-curvature
+    /// rim, by a factor that grows with the aspect ratio. The reported bound is the aspect
+    /// ratio itself, which <c>PrimitiveDistanceTests</c> verifies numerically over a family
+    /// of eccentricities (away from the centre, where the field is genuinely discontinuous
+    /// and no finite constant can hold — a region deep inside the solid, where the cull's
+    /// only possible mistake is to skip a block that provably has no surface in it).
+    /// </summary>
+    public override double LipschitzBound(in Aabb region) =>
+        Math.Max(radii.X, Math.Max(radii.Y, radii.Z)) / Math.Min(radii.X, Math.Min(radii.Y, radii.Z));
+
+    private readonly struct Kernel(Vector3d radii) : ISdfKernel
+    {
+        private readonly Vector<double> _rx = new(radii.X);
+        private readonly Vector<double> _ry = new(radii.Y);
+        private readonly Vector<double> _rz = new(radii.Z);
+        private readonly Vector<double> _sx = new(radii.X * radii.X);
+        private readonly Vector<double> _sy = new(radii.Y * radii.Y);
+        private readonly Vector<double> _sz = new(radii.Z * radii.Z);
+        private readonly Vector<double> _centre =
+            new(-Math.Min(radii.X, Math.Min(radii.Y, radii.Z)));
+
+        public Vector<double> Evaluate(Vector<double> x, Vector<double> y, Vector<double> z)
+        {
+            var ax = x / _rx;
+            var ay = y / _ry;
+            var az = z / _rz;
+            var k0 = Vector.SquareRoot(ax * ax + ay * ay + az * az);
+            var bx = x / _sx;
+            var by = y / _sy;
+            var bz = z / _sz;
+            var k1 = Vector.SquareRoot(bx * bx + by * by + bz * bz);
+            var value = k0 * (k0 - Vector<double>.One) / k1;
+            // Mirrors the scalar guard exactly, including which comparison it uses.
+            return Vector.ConditionalSelect(
+                Vector.Equals(k1, Vector<double>.Zero), _centre, value);
+        }
+    }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
+        SdfBatch.Map(new Kernel(radii), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression b)
+    {
+        var k0 = b.Let(SdfExpression.Length3(
+            Expression.Divide(b.X, SdfExpression.Const(radii.X)),
+            Expression.Divide(b.Y, SdfExpression.Const(radii.Y)),
+            Expression.Divide(b.Z, SdfExpression.Const(radii.Z))));
+        var k1 = b.Let(SdfExpression.Length3(
+            Expression.Divide(b.X, SdfExpression.Const(radii.X * radii.X)),
+            Expression.Divide(b.Y, SdfExpression.Const(radii.Y * radii.Y)),
+            Expression.Divide(b.Z, SdfExpression.Const(radii.Z * radii.Z))));
+        return Expression.Condition(
+            Expression.Equal(k1, SdfExpression.Const(0)),
+            SdfExpression.Const(-Math.Min(radii.X, Math.Min(radii.Y, radii.Z))),
+            Expression.Divide(
+                Expression.Multiply(k0, Expression.Subtract(k0, SdfExpression.Const(1))), k1));
+    }
+}
+
+/// <summary>
+/// Square-based pyramid along +Z: base <c>size</c> square in the z = 0 plane, apex at
+/// (0, 0, height). Exact (Quilez's <c>sdPyramid</c>).
+/// <para>
+/// The published form is Y-up over a unit base, so this evaluates it on the point scaled by
+/// 1/size with the apex height likewise scaled, and multiplies the result back — a uniform
+/// scale, which keeps distances exact.
+/// </para>
+/// </summary>
+internal sealed class PyramidSdf(double baseSize, double height) : Sdf
+{
+    public override double Evaluate(in Vector3d point)
+    {
+        double s = baseSize;
+        double h = height / s;
+        // Unit-base coordinates, Y-up as the published form expects.
+        double px = Math.Abs(point.X / s);
+        double py = point.Z / s;
+        double pz = Math.Abs(point.Y / s);
+        if (pz > px)
+            (px, pz) = (pz, px);
+        px -= 0.5;
+        pz -= 0.5;
+
+        double m2 = h * h + 0.25;
+        double qx = pz;
+        double qy = h * py - 0.5 * px;
+        double qz = h * px + 0.5 * py;
+
+        double sClamp = Math.Max(-qx, 0);
+        double t = Math.Clamp((qy - 0.5 * pz) / (m2 + 0.25), 0, 1);
+
+        double a = m2 * (qx + sClamp) * (qx + sClamp) + qy * qy;
+        double b = m2 * (qx + 0.5 * t) * (qx + 0.5 * t) + (qy - m2 * t) * (qy - m2 * t);
+        double d2 = Math.Min(qy, -qx * m2 - qy * 0.5) > 0 ? 0 : Math.Min(a, b);
+
+        return Math.Sqrt((d2 + qz * qz) / m2) * Math.Sign(Math.Max(qz, -py)) * s;
+    }
+
+    public override Aabb Bounds =>
+        new((-baseSize / 2, -baseSize / 2, 0), (baseSize / 2, baseSize / 2, height));
+}
+
+/// <summary>
+/// The convex hull of two spheres along Z — a capsule whose ends differ in radius, so the
+/// side is the cone tangent to both. Exact (Quilez's <c>sdRoundCone</c>): the field is the
+/// distance to whichever of the three features (either cap or the tangent side) is nearest,
+/// and the branch between them is decided by one dot product against the tangency direction.
+/// </summary>
+internal sealed class RoundConeSdf(double bottomRadius, double topRadius, double height) : Sdf
+{
+    // The tangent line's direction in the (radius, axial) half-plane.
+    private readonly double _b = (bottomRadius - topRadius) / height;
+
+    public override double Evaluate(in Vector3d p)
+    {
+        double qx = Math.Sqrt(p.X * p.X + p.Y * p.Y);
+        double qy = p.Z;
+        double b = _b;
+        double a = Math.Sqrt(1 - b * b);
+        double k = qx * -b + qy * a;
+
+        if (k < 0)
+            return Math.Sqrt(qx * qx + qy * qy) - bottomRadius;
+        if (k > a * height)
+            return Math.Sqrt(qx * qx + (qy - height) * (qy - height)) - topRadius;
+        return qx * a + qy * b - bottomRadius;
+    }
+
+    public override Aabb Bounds
+    {
+        get
+        {
+            double lo = -bottomRadius, hi = height + topRadius;
+            double r = Math.Max(bottomRadius, topRadius);
+            return new Aabb((-r, -r, lo), (r, r, hi));
+        }
+    }
+}
+
+/// <summary>
+/// A chain link: the torus's exact field elongated along Y, which is exact because the
+/// elongation map is a translation on each side of the split (Quilez's <c>sdLink</c>).
+/// </summary>
+internal sealed class LinkSdf(double majorRadius, double minorRadius, double halfLength) : Sdf
+{
+    public override double Evaluate(in Vector3d p)
+    {
+        double qy = Math.Max(Math.Abs(p.Y) - halfLength, 0);
+        double ring = Math.Sqrt(p.X * p.X + qy * qy) - majorRadius;
+        return Math.Sqrt(ring * ring + p.Z * p.Z) - minorRadius;
+    }
+
+    public override Aabb Bounds
+    {
+        get
+        {
+            double r = majorRadius + minorRadius;
+            return new Aabb((-r, -(r + halfLength), -minorRadius), (r, r + halfLength, minorRadius));
+        }
+    }
+
+    private readonly struct Kernel(double majorRadius, double minorRadius, double halfLength) : ISdfKernel
+    {
+        private readonly Vector<double> _major = new(majorRadius);
+        private readonly Vector<double> _minor = new(minorRadius);
+        private readonly Vector<double> _half = new(halfLength);
+
+        public Vector<double> Evaluate(Vector<double> x, Vector<double> y, Vector<double> z)
+        {
+            var qy = Vector.Max(Vector.Abs(y) - _half, Vector<double>.Zero);
+            var ring = Vector.SquareRoot(x * x + qy * qy) - _major;
+            return Vector.SquareRoot(ring * ring + z * z) - _minor;
+        }
+    }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances) =>
+        SdfBatch.Map(new Kernel(majorRadius, minorRadius, halfLength), x, y, z, distances, this);
+
+    internal override Expression BuildExpression(SdfExpression b)
+    {
+        var qy = b.Let(SdfExpression.Max(
+            Expression.Subtract(SdfExpression.Abs(b.Y), SdfExpression.Const(halfLength)),
+            SdfExpression.Const(0)));
+        var ring = b.Let(Expression.Subtract(
+            SdfExpression.Length2(b.X, qy), SdfExpression.Const(majorRadius)));
+        return Expression.Subtract(
+            SdfExpression.Length2(ring, b.Z), SdfExpression.Const(minorRadius));
+    }
 }
 
 /// <remarks>
@@ -306,4 +705,26 @@ internal sealed class GyroidSdf(double cellSize, double thickness) : Sdf
     }
 
     public override Aabb Bounds => InfiniteBounds;
+
+    /// <summary>
+    /// Compiles even though it does not vectorize, and the difference is the point: an
+    /// expression tree calls <see cref="Math.Sin"/> itself, so the compiled form is the same
+    /// function on the same arguments and is bit-identical — whereas a SIMD kernel would have
+    /// to substitute a vector sine, and no vector transcendental reproduces
+    /// <see cref="Math"/>'s results. Compilation is not the same trade as vectorization.
+    /// </summary>
+    internal override Expression BuildExpression(SdfExpression b)
+    {
+        var w = SdfExpression.Const(_omega);
+        var x = b.Let(Expression.Multiply(b.X, w));
+        var y = b.Let(Expression.Multiply(b.Y, w));
+        var z = b.Let(Expression.Multiply(b.Z, w));
+        var g = SdfExpression.Add(
+            Expression.Multiply(SdfExpression.Sin(x), SdfExpression.Cos(y)),
+            Expression.Multiply(SdfExpression.Sin(y), SdfExpression.Cos(z)),
+            Expression.Multiply(SdfExpression.Sin(z), SdfExpression.Cos(x)));
+        return Expression.Subtract(
+            Expression.Divide(SdfExpression.Abs(g), SdfExpression.Const(Math.Sqrt(3) * _omega)),
+            SdfExpression.Const(thickness / 2));
+    }
 }

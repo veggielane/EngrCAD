@@ -88,8 +88,9 @@ internal sealed class NarrowBandSdf : SampledGridSdf
 
     private readonly double[] _values; // x-fastest: [(k * Ny + j) * Nx + i]
 
-    private NarrowBandSdf(in GridFrame frame, double[] values, int exactSamples, int probes)
-        : base(frame)
+    private NarrowBandSdf(
+        in GridFrame frame, double[] values, int exactSamples, int probes, double sourceBound)
+        : base(frame, sourceBound)
     {
         _values = values;
         ExactSamples = exactSamples;
@@ -111,6 +112,7 @@ internal sealed class NarrowBandSdf : SampledGridSdf
         if (!(bandWidth >= 0))
             throw new ArgumentOutOfRangeException(nameof(bandWidth), "Band width must be non-negative.");
 
+        double sourceBound = source.LipschitzBound(region);
         var frame = new GridFrame(region, cellSize);
         frame.RequireDenseAddressable();
         int total = frame.Nx * frame.Ny * frame.Nz;
@@ -119,7 +121,8 @@ internal sealed class NarrowBandSdf : SampledGridSdf
         magnitudes.AsSpan().Fill(double.PositiveInfinity); // "not yet known" for the transform
 
         var leaves = new List<Block>();
-        int probes = Classify(source, frame, bandWidth, signs, leaves, 0, 0, 0, RootSpan(frame));
+        int probes = Classify(
+            source, frame, bandWidth, signs, leaves, 0, 0, 0, RootSpan(frame), Math.Max(1, sourceBound));
 
         // The whole region can be clear of the surface — nothing to be exact about, and no
         // seed for the transform. Then the grid is simply a dense bake.
@@ -141,7 +144,11 @@ internal sealed class NarrowBandSdf : SampledGridSdf
         for (int c = 0; c < total; c++)
             magnitudes[c] *= signs[c];
 
-        return new NarrowBandSdf(frame, magnitudes, exact, probes);
+        // The band's values are the source's, and the swept far field steps at most one cell
+        // per cell along each axis (the chamfer mask's own step lengths are the true
+        // Euclidean ones), so the samples are bounded by the source's own constant and the
+        // grid's √3 interpolation factor covers the rest.
+        return new NarrowBandSdf(frame, magnitudes, exact, probes, Math.Max(1, sourceBound));
     }
 
     private static int RootSpan(in GridFrame frame)
@@ -174,7 +181,7 @@ internal sealed class NarrowBandSdf : SampledGridSdf
     /// </summary>
     private static int Classify(
         Sdf source, in GridFrame frame, double bandWidth, sbyte[] signs, List<Block> leaves,
-        int i0, int j0, int k0, int span)
+        int i0, int j0, int k0, int span, double lipschitz)
     {
         int i1 = Math.Min(i0 + span, frame.Nx);
         int j1 = Math.Min(j0 + span, frame.Ny);
@@ -187,7 +194,10 @@ internal sealed class NarrowBandSdf : SampledGridSdf
         double d = source.Evaluate((min + max) * 0.5);
         double circumradius = (max - min).Length * 0.5;
 
-        if (Math.Abs(d) - circumradius > bandWidth)
+        // |d| ≥ |d(centre)| − L·R over the node, so the node is clear of the band when
+        // |d(centre)| − L·R exceeds it. L is 1 for every exact field, and the multiply is
+        // then exact, so this is bit-identical to the un-widened test for them.
+        if (Math.Abs(d) - lipschitz * circumradius > bandWidth)
         {
             StampSign(signs, frame, i0, i1, j0, j1, k0, k1, d < 0 ? (sbyte)-1 : (sbyte)1);
             return 1;
@@ -205,7 +215,7 @@ internal sealed class NarrowBandSdf : SampledGridSdf
             for (int oj = 0; oj < 2; oj++)
                 for (int ok = 0; ok < 2; ok++)
                     probes += Classify(source, frame, bandWidth, signs, leaves,
-                        i0 + oi * half, j0 + oj * half, k0 + ok * half, half);
+                        i0 + oi * half, j0 + oj * half, k0 + ok * half, half, lipschitz);
         return probes;
     }
 

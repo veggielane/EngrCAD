@@ -378,6 +378,33 @@ internal static class SdfBatch
             destination[i] = source[i] - value;
     }
 
+    /// <summary>
+    /// destination = source − clamp(source, −half, +half) — the elongation map, one axis at
+    /// a time. <c>Math.Clamp(v, lo, hi)</c> becomes <c>min(max(v, lo), hi)</c>, which agrees
+    /// for every finite v (they differ only on a −0.0 input, whose result is a signed zero
+    /// either way and is then subtracted from itself).
+    /// </summary>
+    public static void SubtractClamped(ReadOnlySpan<double> source, double half, Span<double> destination)
+    {
+        int n = source.Length;
+        int i = 0;
+        if (Accelerated)
+        {
+            int w = Vector<double>.Count;
+            var lo = new Vector<double>(-half);
+            var hi = new Vector<double>(half);
+            ref double sr = ref MemoryMarshal.GetReference(source);
+            ref double dr = ref MemoryMarshal.GetReference(destination);
+            for (; i <= n - w; i += w)
+            {
+                var v = Vector.LoadUnsafe(ref sr, (nuint)i);
+                (v - Vector.Min(Vector.Max(v, lo), hi)).StoreUnsafe(ref dr, (nuint)i);
+            }
+        }
+        for (; i < n; i++)
+            destination[i] = source[i] - Math.Clamp(source[i], -half, half);
+    }
+
     /// <summary>destination = source ÷ value (a true divide — the scalar path divides,
     /// and a reciprocal multiply would not round identically).</summary>
     public static void Divide(ReadOnlySpan<double> source, double value, Span<double> destination)

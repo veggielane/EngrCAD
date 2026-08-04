@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using EngrCAD.Core;
@@ -64,6 +65,16 @@ internal static class NaryChildren
                 "Operands must not be null.", nameof(children));
         return copy;
     }
+
+    /// <summary>The n-ary form of the min/max rule: a fold that picks one operand's value at
+    /// each point is no steeper than its steepest operand.</summary>
+    public static double MaxBound(Sdf[] children, in Aabb region)
+    {
+        double bound = children[0].LipschitzBound(region);
+        for (int i = 1; i < children.Length; i++)
+            bound = Math.Max(bound, children[i].LipschitzBound(region));
+        return bound;
+    }
 }
 
 /// <summary>
@@ -91,6 +102,9 @@ internal sealed class NaryUnionSdf(Sdf[] children) : Sdf
         }
     }
 
+    /// <inheritdoc cref="UnionSdf.LipschitzBound"/>
+    public override double LipschitzBound(in Aabb region) => NaryChildren.MaxBound(children, region);
+
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
     {
@@ -103,6 +117,14 @@ internal sealed class NaryUnionSdf(Sdf[] children) : Sdf
             children[i].EvaluateBatch(x, y, z, other.Span);
             SdfBatch.Min(distances, other.Span);
         }
+    }
+
+    internal override Expression BuildExpression(SdfExpression e)
+    {
+        var body = e.Build(children[0]);
+        for (int i = 1; i < children.Length; i++)
+            body = SdfExpression.Min(body, e.Build(children[i]));
+        return body;
     }
 }
 
@@ -131,6 +153,9 @@ internal sealed class NaryIntersectionSdf(Sdf[] children) : Sdf
         }
     }
 
+    /// <inheritdoc cref="UnionSdf.LipschitzBound"/>
+    public override double LipschitzBound(in Aabb region) => NaryChildren.MaxBound(children, region);
+
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
     {
@@ -143,6 +168,14 @@ internal sealed class NaryIntersectionSdf(Sdf[] children) : Sdf
             children[i].EvaluateBatch(x, y, z, other.Span);
             SdfBatch.Max(distances, other.Span);
         }
+    }
+
+    internal override Expression BuildExpression(SdfExpression e)
+    {
+        var body = e.Build(children[0]);
+        for (int i = 1; i < children.Length; i++)
+            body = SdfExpression.Max(body, e.Build(children[i]));
+        return body;
     }
 }
 
@@ -189,6 +222,9 @@ internal sealed class NarySmoothUnionSdf(Sdf[] children, double k) : Sdf
         }
     }
 
+    /// <inheritdoc cref="SmoothUnionSdf.LipschitzBound"/>
+    public override double LipschitzBound(in Aabb region) => NaryChildren.MaxBound(children, region);
+
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
     {
@@ -201,6 +237,17 @@ internal sealed class NarySmoothUnionSdf(Sdf[] children, double k) : Sdf
             children[i].EvaluateBatch(x, y, z, other.Span);
             SdfBatch.SmoothMin(distances, other.Span, k);
         }
+    }
+
+    internal override Expression BuildExpression(SdfExpression e)
+    {
+        var body = e.Build(children[0]);
+        for (int i = 1; i < children.Length; i++)
+        {
+            // The fold's running value is used twice inside SmoothMin, so bind it.
+            body = BlendMath.SmoothMin(e, e.Let(body), e.Build(children[i]), k);
+        }
+        return body;
     }
 }
 
@@ -233,6 +280,19 @@ internal sealed class FalloffBlendSdf(Sdf a, Sdf b, double blendDistance, Fallof
 
     // The bump is at most blendDistance anywhere.
     public override Aabb Bounds => a.Bounds.Union(b.Bounds).Expanded(blendDistance);
+
+    /// <summary>
+    /// Propagates the OPERANDS' bounds, which is what a domain operator underneath this one
+    /// needs. It deliberately does not add the falloff bump's own steepness: that can reach
+    /// about 4.4× an operand's where both kernels sit near their steepest, but only where
+    /// BOTH surfaces are within the blend distance — a region in which |d| is itself under
+    /// twice that distance, so a cull test never clears a block there on the strength of a
+    /// large |d|. This is the pre-existing "approximately Lipschitz" case
+    /// <c>SurfaceCull.SafetyCells</c> was written to cushion, carried over unchanged rather
+    /// than re-decided here.
+    /// </summary>
+    public override double LipschitzBound(in Aabb region) =>
+        Math.Max(a.LipschitzBound(region), b.LipschitzBound(region));
 
     protected internal override void EvaluateBatch(
         ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
@@ -274,6 +334,37 @@ internal sealed class FalloffBlendSdf(Sdf a, Sdf b, double blendDistance, Fallof
                 * FalloffKernels.Evaluate(kernel, Math.Abs(fb[i]) / blendDistance);
             fa[i] = Math.Min(fa[i], fb[i]) - bump;
         }
+    }
+
+    internal override Expression BuildExpression(SdfExpression e)
+    {
+        var fa = e.Let(e.Build(a));
+        var fb = e.Let(e.Build(b));
+        var d = SdfExpression.Const(blendDistance);
+        var bump = Expression.Multiply(
+            Expression.Multiply(d, Kernel(e, Expression.Divide(SdfExpression.Abs(fa), d))),
+            Kernel(e, Expression.Divide(SdfExpression.Abs(fb), d)));
+        return Expression.Subtract(SdfExpression.Min(fa, fb), bump);
+    }
+
+    /// <summary>The falloff, term for term with <see cref="FalloffKernels.Evaluate"/>. Both
+    /// branches compile: an expression tree calls <see cref="Math.Exp"/> itself, so the
+    /// exponential kernel is exact here even though it is deliberately not vectorized.</summary>
+    private Expression Kernel(SdfExpression e, Expression t)
+    {
+        if (kernel == Falloff.Exponential)
+        {
+            var tt = e.Let(t);
+            return SdfExpression.Exp(Expression.Multiply(
+                Expression.Multiply(SdfExpression.Const(-4), tt), tt));
+        }
+        var bound = e.Let(t);
+        var s = e.Let(Expression.Subtract(
+            SdfExpression.Const(1), Expression.Multiply(bound, bound)));
+        return Expression.Condition(
+            Expression.GreaterThanOrEqual(bound, SdfExpression.Const(1)),
+            SdfExpression.Const(0),
+            Expression.Multiply(Expression.Multiply(s, s), s));
     }
 
     /// <summary>Lane-wise (1 − t²)³ with compact support — mirrors
