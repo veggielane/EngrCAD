@@ -900,6 +900,19 @@ public static class SurfaceIntersection
         }
     }
 
+    /// <summary>
+    /// The angular resolution of the crossing solve, DERIVED from <see cref="Math.Acos"/>'s
+    /// own conditioning rather than chosen: near a tangency the argument is within round-off
+    /// of ±1, where acos has a square-root singularity, so a relative input error ε comes
+    /// out as √(2ε) — about 2.1e-8 rad at double precision, and 4.2e-8 for the pair of roots
+    /// either side. Two crossings closer than that are not two crossings: they are one
+    /// tangency the arithmetic could not resolve, and merging them is what makes a conic
+    /// TOUCHING a patch edge come back as the closed conic it is instead of an arc with a
+    /// pinhole in it. Radians are dimensionless, which is why this guard is absolute where
+    /// the epsilon ladder's default is relative.
+    /// </summary>
+    private const double AcosResolution = 1e-7;
+
     private static double Wrap2Pi(double theta)
     {
         double wrapped = theta % (2 * Math.PI);
@@ -942,13 +955,9 @@ public static class SurfaceIntersection
         t.CrossingsOf(0, angles);
         t.CrossingsOf(1, angles);
         angles.Sort();
-        // Radians are dimensionless, so this guard is deliberately absolute (the epsilon
-        // ladder's stated exception): duplicate roots — a conic tangent to a patch edge, or
-        // two edges crossed at one corner — must collapse to one angle or the interval
-        // between them is decided by round-off.
         for (int i = angles.Count - 1; i > 0; i--)
         {
-            if (angles[i] - angles[i - 1] <= Tolerance.Default.Linear)
+            if (angles[i] - angles[i - 1] <= AcosResolution)
                 angles.RemoveAt(i);
         }
 

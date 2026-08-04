@@ -438,19 +438,172 @@ public class SurfaceIntersectionTests
         Assert.Equal(0.3, circle.Radius, 12);
     }
 
-    [Fact]
-    public void BoreCrossingTheWallsEdge_FabricatesNoCircle()
+    /// <summary>
+    /// The guard the <c>Promote</c> trap earns: "lies on the carrier" is not "IS the
+    /// carrier", so a clipped arc must be checked GEOMETRICALLY — every sample on the
+    /// extrusion's own parameter rectangle, never a type test.
+    /// </summary>
+    private static (double OffSurface, double OutOfDomain) OnPatch(Curve3d curve, ExtrudedSurface wall)
     {
-        // Containment is exact, and a conic that pokes out of the parallelogram must fall
-        // back rather than be silently clipped or — far worse — returned whole: an arc's
-        // ends would have to weld to the wall's own rim, which is separate work. (The
-        // tracer it defers to reports nothing here, its own pre-existing limitation on
-        // partial rims over a bounded extrusion; what this pins is that the analytic path
-        // does not paper over that with a circle the wall does not carry.)
+        double offSurface = 0, outOfDomain = 0;
+        var domain = curve.Domain;
+        for (int i = 0; i <= 200; i++)
+        {
+            var p = curve.PointAt(domain.ParameterAt(i / 200.0));
+            if (!wall.TryProjectPoint(p, out var uv, FaceGeometry.InverseEvaluationTolerance))
+                return (double.PositiveInfinity, double.PositiveInfinity);
+            offSurface = Math.Max(offSurface, p.DistanceTo(wall.PointAt(uv.X, uv.Y)));
+            outOfDomain = Math.Max(outOfDomain,
+                Math.Max(Math.Max(-uv.X, uv.X - 1), Math.Max(-uv.Y, uv.Y - 1)));
+        }
+        return (offSurface, outOfDomain);
+    }
+
+    [Fact]
+    public void BoreCrossingTheWallsTopEdge_ClipsToTheExactArc()
+    {
+        // The wall spans z ∈ [1, 2.5]; this bore's rim runs off the top. The analytic
+        // conic is real — the wall IS that plane — but only the run below z = 2.5 is
+        // surface the wall carries, so the answer is an ARC of the exact circle, not the
+        // whole circle (which would report geometry the face does not have) and not the
+        // tracer's chordal polyline (a fixed-sample floor).
+        var wall = Wall();
+        var bore = new CylinderSurface((0, 0, 2.4), Vector3d.UnitX, Vector3d.UnitZ, 0.3);
+
+        var arc = Assert.Single(SurfaceIntersection.Intersect(wall, bore, PlateRegion));
+        var segment = Assert.IsType<CurveSegment>(arc);
+        Assert.IsType<Circle3d>(segment.Base);
+
+        // Both ends land ON the wall's top edge, and at the x the TOP face's own
+        // intersection with the same cylinder reaches: ±√(r² − (2.5 − 2.4)²).
+        double xExact = Math.Sqrt(0.3 * 0.3 - 0.1 * 0.1);
+        foreach (double t in (double[])[arc.Domain.Start, arc.Domain.End])
+        {
+            var end = arc.PointAt(t);
+            Assert.Equal(2.5, end.Z, 12);
+            Assert.Equal(xExact, Math.Abs(end.X), 12);
+        }
+        // The major arc survives: it dips to the bottom of the circle at z = 2.1.
+        Assert.Equal(2.1, arc.PointAt(arc.Domain.ParameterAt(0.5)).Z, 12);
+    }
+
+    [Fact]
+    public void ClippedArc_LiesEntirelyOnTheWallItIsReportedFor()
+    {
+        // The Promote lesson, as a measurement: a curve reported for a bounded carrier
+        // must be surface that carrier actually has. Sampled against the extrusion's own
+        // (u, v), the arc never escapes [0, 1]².
+        var wall = Wall();
+        var bore = new CylinderSurface((0, 0, 2.4), Vector3d.UnitX, Vector3d.UnitZ, 0.3);
+
+        var arc = Assert.Single(SurfaceIntersection.Intersect(wall, bore, PlateRegion));
+        var (offSurface, outOfDomain) = OnPatch(arc, wall);
+        Assert.True(offSurface < 1e-12, $"off the wall by {offSurface}");
+        Assert.True(outOfDomain <= 0, $"escaped the wall's parameter rectangle by {outOfDomain}");
+    }
+
+    [Fact]
+    public void BoreCrossingTheWallsEndEdge_ClipsAgainstTheOtherPatchDirection()
+    {
+        // The same clip against the generator's own extent rather than the extrusion's:
+        // a bore drilled at the very end of a pocket wall.
         var wall = Wall();
         var bore = new CylinderSurface((4.9, 0, 1.75), Vector3d.UnitX, Vector3d.UnitZ, 0.3);
 
-        Assert.DoesNotContain(SurfaceIntersection.Intersect(wall, bore, PlateRegion), c => c is Circle3d);
+        var arc = Assert.Single(SurfaceIntersection.Intersect(wall, bore, PlateRegion));
+        double zExact = Math.Sqrt(0.3 * 0.3 - 0.1 * 0.1);
+        foreach (double t in (double[])[arc.Domain.Start, arc.Domain.End])
+        {
+            var end = arc.PointAt(t);
+            Assert.Equal(5, end.X, 12);
+            Assert.Equal(zExact, Math.Abs(end.Z - 1.75), 12);
+        }
+        Assert.Equal(4.6, arc.PointAt(arc.Domain.ParameterAt(0.5)).X, 12);
+    }
+
+    [Fact]
+    public void BoreTallerThanTheWall_ClipsToTwoArcs()
+    {
+        // A bore wider than the wall is deep leaves TWO runs, one either side — which is
+        // why membership is decided per interval rather than by an inequality on the
+        // crossing list.
+        var wall = Wall(); // z ∈ [1, 2.5]
+        var bore = new CylinderSurface((0, 0, 1.75), Vector3d.UnitX, Vector3d.UnitZ, 1.0);
+
+        var arcs = SurfaceIntersection.Intersect(wall, bore, PlateRegion);
+        Assert.Equal(2, arcs.Count);
+        double xExact = Math.Sqrt(1.0 - 0.75 * 0.75);
+        foreach (var arc in arcs)
+        {
+            var (offSurface, outOfDomain) = OnPatch(arc, wall);
+            Assert.True(offSurface < 1e-12 && outOfDomain <= 0);
+            foreach (double t in (double[])[arc.Domain.Start, arc.Domain.End])
+            {
+                var end = arc.PointAt(t);
+                Assert.Equal(xExact, Math.Abs(end.X), 12);
+                Assert.Equal(1.5, Math.Abs(end.Z - 1.75) * 2, 12); // z = 1 or z = 2.5
+            }
+        }
+        // One of them straddles the circle's own seam (θ = 0 sits at +x, inside the wall),
+        // so it must come back as ONE segment running past the domain end rather than two.
+        Assert.Contains(arcs, a => a is CurveSegment { BaseEnd: > 2 * Math.PI });
+    }
+
+    [Fact]
+    public void BoreTangentToTheWallsTopEdge_StaysAClosedCircle()
+    {
+        // Exactly tangent: the two roots of the top edge's equation coincide, and acos's
+        // square-root conditioning cannot resolve them. Merging them is what keeps the
+        // answer a CLOSED circle instead of an arc with a ~1e-8 rad pinhole.
+        var wall = Wall();
+        var bore = new CylinderSurface((0, 0, 2.2), Vector3d.UnitX, Vector3d.UnitZ, 0.3);
+
+        Assert.IsType<Circle3d>(Assert.Single(SurfaceIntersection.Intersect(wall, bore, PlateRegion)));
+    }
+
+    [Fact]
+    public void ObliqueBoreCrossingTheWallsEdge_ClipsTheEllipse()
+    {
+        // The conic need not be a circle: a tilted bore sections the wall in an ellipse,
+        // and the clip is the same closed-form harmonic solve.
+        var wall = Wall();
+        var axis = new Vector3d(0, 2, 1).Normalized();
+        var x = axis.ArbitraryPerpendicular(Tolerance.Default);
+        // Origin ON the wall plane, so the ellipse is centred at z = 2.4 and its only
+        // escape is over the top edge.
+        var bore = new CylinderSurface((0, -2.5, 2.4), x, axis.Cross(x), 0.3);
+
+        var arc = Assert.Single(SurfaceIntersection.Intersect(wall, bore, PlateRegion));
+        Assert.IsType<Ellipse3d>(Assert.IsType<CurveSegment>(arc).Base);
+        var (offSurface, outOfDomain) = OnPatch(arc, wall);
+        Assert.True(offSurface < 1e-12 && outOfDomain <= 0);
+        foreach (double t in (double[])[arc.Domain.Start, arc.Domain.End])
+            Assert.Equal(2.5, arc.PointAt(t).Z, 12);
+    }
+
+    [Fact]
+    public void SphericalCavityCrossingTheWallsEdge_ClipsTheCircle()
+    {
+        var wall = Wall();
+        var cavity = new SphereSurface((0, -2.5, 2.4), 0.3);
+
+        var arc = Assert.Single(SurfaceIntersection.Intersect(wall, cavity, PlateRegion));
+        Assert.IsType<Circle3d>(Assert.IsType<CurveSegment>(arc).Base);
+        foreach (double t in (double[])[arc.Domain.Start, arc.Domain.End])
+            Assert.Equal(2.5, arc.PointAt(t).Z, 12);
+    }
+
+    [Fact]
+    public void BoreParallelToTheWall_StillDefersToTheTracer()
+    {
+        // The axis-parallel LINE pair is not a conic, so the clip has nothing to say and
+        // the pair keeps its incumbent route. Pinned so the tier's boundary is a decision
+        // rather than an accident.
+        var wall = Wall();
+        var bore = new CylinderSurface((0, -2.5, 0), Vector3d.UnitX, Vector3d.UnitY, 0.3);
+
+        Assert.All(SurfaceIntersection.Intersect(wall, bore, PlateRegion),
+            c => Assert.IsType<PolylineCurve3d>(c.Underlying));
     }
 
     [Fact]
