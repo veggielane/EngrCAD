@@ -132,6 +132,80 @@ public abstract class Sdf
         return gradient.TryNormalize(Tolerance.Default, out var n) ? n : Vector3d.UnitZ;
     }
 
+    /// <summary>
+    /// Outward surface normals for a whole run of points — the batched twin of
+    /// <see cref="Normal"/>, and the entry point Hermite consumers want: a gradient costs
+    /// six evaluations, so a per-point loop spends six scalar calls where this spends one
+    /// batch of six times the length through the SIMD <see cref="EvaluateBatch"/> seam.
+    /// <para>
+    /// <b>Bit-for-bit identical to <see cref="Normal"/></b> at the same
+    /// <paramref name="epsilon"/>, for the same reason the batch distance entry is: the
+    /// probe coordinates are the same expressions, the batch seam is contractually
+    /// bit-identical to the scalar evaluator, and the difference and normalization are the
+    /// same two operations in the same order. A point whose gradient will not normalize
+    /// (an exact local extremum, or a field that is flat to round-off there) reports
+    /// <see cref="Vector3d.UnitZ"/>, as the scalar overload does.
+    /// </para>
+    /// <para>
+    /// <paramref name="epsilon"/> is an ABSOLUTE step and the default is inherited from
+    /// <see cref="Normal"/>; a bulk caller working at a known scale should pass one
+    /// relative to that scale (the round-off floor of a central difference is
+    /// ~ε_machine·|d|/h, so a step far below 1e-8 of the model size measures noise).
+    /// </para>
+    /// </summary>
+    public void Normals(ReadOnlySpan<Vector3d> points, Span<Vector3d> normals, double epsilon = 1e-6)
+    {
+        if (normals.Length < points.Length)
+            throw new ArgumentException("The normal span must be at least as long as the point span.", nameof(normals));
+        if (points.Length == 0)
+            return;
+
+        // Six probes per point; chunk so the coordinate scratch stays the same size the
+        // batch seam already works in.
+        const int PointsPerChunk = SdfBatch.ChunkLength / 6;
+        int chunk = Math.Min(PointsPerChunk, points.Length);
+        int probes = chunk * 6;
+        var rented = ArrayPool<double>.Shared.Rent(probes * 4);
+        try
+        {
+            var xs = rented.AsSpan(0, probes);
+            var ys = rented.AsSpan(probes, probes);
+            var zs = rented.AsSpan(probes * 2, probes);
+            var ds = rented.AsSpan(probes * 3, probes);
+
+            for (int start = 0; start < points.Length; start += chunk)
+            {
+                int length = Math.Min(chunk, points.Length - start);
+                for (int i = 0; i < length; i++)
+                {
+                    var p = points[start + i];
+                    int at = i * 6;
+                    xs[at] = p.X + epsilon; ys[at] = p.Y; zs[at] = p.Z;
+                    xs[at + 1] = p.X - epsilon; ys[at + 1] = p.Y; zs[at + 1] = p.Z;
+                    xs[at + 2] = p.X; ys[at + 2] = p.Y + epsilon; zs[at + 2] = p.Z;
+                    xs[at + 3] = p.X; ys[at + 3] = p.Y - epsilon; zs[at + 3] = p.Z;
+                    xs[at + 4] = p.X; ys[at + 4] = p.Y; zs[at + 4] = p.Z + epsilon;
+                    xs[at + 5] = p.X; ys[at + 5] = p.Y; zs[at + 5] = p.Z - epsilon;
+                }
+
+                int used = length * 6;
+                Evaluate(xs[..used], ys[..used], zs[..used], ds[..used]);
+                for (int i = 0; i < length; i++)
+                {
+                    int at = i * 6;
+                    var gradient = new Vector3d(
+                        ds[at] - ds[at + 1], ds[at + 2] - ds[at + 3], ds[at + 4] - ds[at + 5]);
+                    normals[start + i] =
+                        gradient.TryNormalize(Tolerance.Default, out var n) ? n : Vector3d.UnitZ;
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<double>.Shared.Return(rented);
+        }
+    }
+
     internal static readonly Aabb InfiniteBounds = new(
         (double.NegativeInfinity, double.NegativeInfinity, double.NegativeInfinity),
         (double.PositiveInfinity, double.PositiveInfinity, double.PositiveInfinity));

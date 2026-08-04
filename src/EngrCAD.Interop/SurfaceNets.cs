@@ -7,20 +7,64 @@ using EngrCAD.Mesh;
 namespace EngrCAD.Interop;
 
 /// <summary>
-/// Implicit → mesh conversion by Surface Nets (dual contouring without normals-based
-/// vertex placement): one vertex per connected component of a cell's inside corners, placed
-/// at the mean of that component's edge crossings; one quad per interior sign-changing grid
-/// edge. Produces closed quad-dominant meshes for smooth fields whose surface stays inside
-/// the sampled region; surfaces that cross the region boundary come out open there.
+/// Implicit → mesh conversion by Surface Nets: one vertex per connected component of a
+/// cell's inside corners (refined per surface sheet), one quad per interior sign-changing
+/// grid edge. Produces closed quad-dominant meshes for smooth fields whose surface stays
+/// inside the sampled region; surfaces that cross the region boundary come out open there.
 /// <para>
 /// Output is MANIFOLD by contract, not by hope: a component is split further where an
 /// <em>ambiguous</em> grid face — one whose inside corners are a diagonal pair — is joined
 /// by the cells on both sides, the one configuration that puts two quads on a single
 /// directed edge. See the rule and its proof in <c>ProcessSlab</c>.
 /// </para>
+/// <para>
+/// <b>Sharp features (on by default).</b> A vertex is placed at the minimiser of
+/// <see cref="SurfaceQef"/> — the quadratic error of the field's own tangent planes at
+/// that vertex's crossings — rather than at the mean of the crossings, which is what makes
+/// this dual contouring with Hermite data rather than plain Surface Nets. The mean lies
+/// strictly inside every convex corner and every edge <em>by construction</em>, so a
+/// polygonized box came back chamfered at every resolution; the planes carry the feature
+/// and a box corner is now reproduced exactly. <see cref="SurfaceNetsOptions.SharpFeatures"/>
+/// turns it off and restores the previous output bit for bit.
+/// </para>
+/// <para>
+/// <b>What this deliberately does NOT change is the GROUPING.</b> Which crossings belong to
+/// which vertex, and therefore how many vertices a cell has and which vertex each quad
+/// corner names, is decided before any position is computed and is untouched by the
+/// feature. So the index buffer handed to <see cref="HalfEdgeMesh.Build"/> is bit-for-bit
+/// what it always was and manifoldness is preserved BY CONSTRUCTION rather than by
+/// re-verification — which is also the strongest available test, and the one
+/// <c>SurfaceNetsSharpFeatureTests</c> asserts.
+/// </para>
+/// <para>
+/// <b>Adaptive output (<see cref="SurfaceNetsOptions.SimplifyTolerance"/>, opt-in).</b>
+/// The grid is uniform, so a large flat face costs one quad per cell. The adaptive pass
+/// merges vertices whose merged quadric still describes the same surface to within a
+/// stated length — see <see cref="SurfaceNetsSimplify"/> — which is BOTTOM-UP: it collapses
+/// cells the uniform walk has already visited. A top-down octree that stops subdividing
+/// where the field looks flat would save the visit as well, and it is declined for the
+/// reason <see cref="SurfaceCull"/>'s own remarks give about seed-and-flood: finitely many
+/// samples of a Lipschitz field cannot certify that no feature hides between them, so
+/// refining on measured curvature is a heuristic about geometry nobody has looked at.
+/// Collapsing what has been looked at inherits the cull's completeness argument unchanged.
+/// </para>
 /// </summary>
 public static class SurfaceNets
 {
+    /// <summary>
+    /// Central-difference step for the Hermite gradients, as a fraction of the grid cell.
+    /// <para>
+    /// Both error terms are bounded away from it: the round-off floor of a central
+    /// difference is ~ε·|d|/h, which at 1e-4 cells reads ~5e-13·resolution — under 1e-9 at
+    /// every resolution this polygonizer accepts — while the truncation error is O(h²·|d‴|)
+    /// and vanishes identically on the planar regions the feature exists to reproduce. The
+    /// third consideration is the one that fixes the direction of the choice: a step
+    /// LARGER than this starts to straddle features (a probe reaching across a crease
+    /// returns a blend of two planes), so the step wants to be as small as the round-off
+    /// floor allows rather than as large as accuracy allows.
+    /// </para>
+    /// </summary>
+    private const double GradientStepCells = 1e-4;
 
     /// <summary>
     /// Grid samples held in memory at once, as a count of x-slabs sized to this budget
@@ -47,6 +91,13 @@ public static class SurfaceNets
     /// those indices: x-aligned 0..3 (by dy + 2dz), y-aligned 4..7 (dx + 2dz), z-aligned
     /// 8..11 (dx + 2dy).
     /// </summary>
+    /// <summary>
+    /// A vertex whose slot in <c>positions</c> is reserved and whose quadric is waiting on
+    /// the slab's batched gradients: its index, the run of crossings it owns in the slab's
+    /// crossing list, and the (j, k) of the cell it belongs to (i is the slab).
+    /// </summary>
+    private readonly record struct PendingVertex(int Vertex, int First, int Count, int J, int K);
+
     private static readonly (int A, int B)[] CubeEdges =
     [
         (0, 1), (2, 3), (4, 5), (6, 7),
@@ -200,14 +251,15 @@ public static class SurfaceNets
     }
 
     /// <summary>Polygonizes over the field's own bounds plus a small margin. Requires finite bounds.</summary>
-    public static HalfEdgeMesh Polygonize(Sdf sdf, int resolution = 64, ProgressCancel? progress = null)
+    public static HalfEdgeMesh Polygonize(
+        Sdf sdf, int resolution = 64, ProgressCancel? progress = null, SurfaceNetsOptions? options = null)
     {
         var bounds = sdf.Bounds;
         if (!Sdf.IsFinite(bounds) || bounds.IsEmpty)
             throw new ArgumentException(
                 "The field has unbounded or empty bounds; pass an explicit sampling region.", nameof(sdf));
         double margin = bounds.Size[bounds.LongestAxis] / resolution * 2;
-        return Polygonize(sdf, bounds.Expanded(margin), resolution, progress);
+        return Polygonize(sdf, bounds.Expanded(margin), resolution, progress, options);
     }
 
     /// <summary>
@@ -231,8 +283,10 @@ public static class SurfaceNets
     /// <paramref name="progress"/> adds cooperative progress/cancellation (cancellation
     /// throws <see cref="OperationCanceledException"/>).
     /// </summary>
-    public static HalfEdgeMesh Polygonize(Sdf sdf, in Aabb region, int resolution, ProgressCancel? progress = null) =>
-        Polygonize(sdf, region, resolution, progress, WindowSampleBudget, cull: true);
+    public static HalfEdgeMesh Polygonize(
+        Sdf sdf, in Aabb region, int resolution, ProgressCancel? progress = null,
+        SurfaceNetsOptions? options = null) =>
+        Polygonize(sdf, region, resolution, progress, WindowSampleBudget, cull: true, options);
 
     /// <summary>
     /// The implementation, with the slab window's sample budget and the surface cull exposed
@@ -241,8 +295,9 @@ public static class SurfaceNets
     /// </summary>
     internal static HalfEdgeMesh Polygonize(
         Sdf sdf, in Aabb region, int resolution, ProgressCancel? progress, int windowSampleBudget,
-        bool cull = true)
+        bool cull = true, SurfaceNetsOptions? options = null)
     {
+        options ??= SurfaceNetsOptions.Default;
         if (region.IsEmpty)
             throw new ArgumentException("Sampling region is empty.", nameof(region));
         if (resolution < 2 || resolution > 1024)
@@ -368,6 +423,22 @@ public static class SurfaceNets
         var facesY = new List<int>?[ny];
         var facesZ = new List<int>?[nz];
 
+        // Hermite state. The cell loop records each vertex's crossings and reserves its
+        // slot; the whole slab's gradients are then taken in ONE batch (six evaluations per
+        // crossing is exactly the shape the SIMD batch entry exists for) and the quadrics
+        // solved. Reserving keeps the vertex ORDER identical to the incumbent walk's, which
+        // is what makes the face buffer bit-for-bit unchanged.
+        bool sharp = options.SharpFeatures;
+        double gradientStep = cell * GradientStepCells;
+        double singularRatio = options.SingularRatio;
+        bool clampToCell = options.ClampToCell;
+        var slabCrossings = new List<Vector3d>();
+        var slabPending = new List<PendingVertex>();
+        Vector3d[] slabNormals = [];
+        // Retained for the whole mesh, and only when the adaptive pass will consume them.
+        var vertexQef = options.SimplifyTolerance is null ? null : new List<SurfaceQef>();
+        var vertexCell = options.SimplifyTolerance is null ? null : new List<Vector3i>();
+
         SampleSlabs(0, Math.Min(window, nx + 1));
         int available = Math.Min(window, nx + 1);
         progress?.ThrowIfCancelled();
@@ -398,6 +469,15 @@ public static class SurfaceNets
         }
 
         progress?.ThrowIfCancelled();
+        if (options.SimplifyTolerance is double tolerance)
+        {
+            var simplified = SurfaceNetsSimplify.Collapse(
+                positions, AllCorners(), vertexQef!, vertexCell!,
+                tolerance, options.MaxSimplifyLevels, singularRatio);
+            progress?.Report(1);
+            return simplified;
+        }
+
         // Every face is a quad, so the half-edge builder takes the flat buffer directly:
         // no per-face array, no interface dispatch per loop, and the twin pairing is a
         // counting sort over the edges' lower endpoint rather than a hash table.
@@ -604,6 +684,7 @@ public static class SurfaceNets
                                 int reachedKey = 0;
                                 var sum = Vector3d.Zero;
                                 int crossings = 0;
+                                int firstCrossing = slabCrossings.Count;
                                 for (int e = 0; e < edges.Length; e++)
                                 {
                                     if (map[e] >= 0)
@@ -626,15 +707,29 @@ public static class SurfaceNets
                                         continue;
                                     double t = values[corners[insideCorner]] /
                                         (values[corners[insideCorner]] - values[corners[outsideCorner]]);
-                                    sum += Vector3d.Lerp(
+                                    var crossing = Vector3d.Lerp(
                                         CornerPosition(i, j, k, insideCorner),
                                         CornerPosition(i, j, k, outsideCorner), t);
+                                    sum += crossing;
+                                    if (sharp)
+                                        slabCrossings.Add(crossing);
                                     crossings++;
                                     map[e] = positions.Count;
                                 }
                                 if (crossings == 0)
                                     break;
-                                positions.Add(sum / crossings);
+                                if (sharp)
+                                {
+                                    // Reserve the slot; the quadric is solved once the whole
+                                    // slab's gradients have been taken in one batch.
+                                    slabPending.Add(new PendingVertex(
+                                        positions.Count, firstCrossing, crossings, j, k));
+                                    positions.Add(default);
+                                }
+                                else
+                                {
+                                    positions.Add(sum / crossings);
+                                }
                             }
                         }
 
@@ -644,6 +739,8 @@ public static class SurfaceNets
                     }
                 }
             }
+
+            PlaceSlabVertices(i);
 
             // The three quad passes walk grid EDGES, and an edge can only carry a quad when
             // all four cells around it produced a vertex — so the sample mask (the cell mask
@@ -735,6 +832,57 @@ public static class SurfaceNets
             (i + (c & 1)) * cell,
             (j + ((c >> 1) & 1)) * cell,
             (k + ((c >> 2) & 1)) * cell);
+
+        // Solves this slab's reserved vertices from the field's gradients at their own
+        // crossings. One batch for the whole slab, then one 3×3 eigen-solve per vertex.
+        void PlaceSlabVertices(int i)
+        {
+            if (!sharp || slabPending.Count == 0)
+            {
+                slabCrossings.Clear();
+                slabPending.Clear();
+                return;
+            }
+
+            if (slabNormals.Length < slabCrossings.Count)
+                slabNormals = new Vector3d[Math.Max(slabCrossings.Count, slabNormals.Length * 2)];
+            sdf.Normals(
+                CollectionsMarshal.AsSpan(slabCrossings),
+                slabNormals.AsSpan(0, slabCrossings.Count),
+                gradientStep);
+
+            var crossingSpan = CollectionsMarshal.AsSpan(slabCrossings);
+            foreach (var pending in slabPending)
+            {
+                var qef = new SurfaceQef();
+                for (int c = pending.First; c < pending.First + pending.Count; c++)
+                    qef.Add(crossingSpan[c], slabNormals[c]);
+
+                var placed = qef.Solve(singularRatio);
+                if (clampToCell)
+                {
+                    // The cell's own box. A minimiser outside it is a feature the grid does
+                    // not resolve (a corner the grid DOES resolve is inside the one cell
+                    // whose samples straddle all of its planes), so the clamp cannot
+                    // chamfer a resolvable corner — see SurfaceNetsOptions.ClampToCell.
+                    var low = CornerPosition(i, pending.J, pending.K, 0);
+                    placed = new Vector3d(
+                        Math.Clamp(placed.X, low.X, low.X + cell),
+                        Math.Clamp(placed.Y, low.Y, low.Y + cell),
+                        Math.Clamp(placed.Z, low.Z, low.Z + cell));
+                }
+
+                positions[pending.Vertex] = placed;
+                if (vertexQef is not null)
+                {
+                    vertexQef.Add(qef);
+                    vertexCell!.Add(new Vector3i(i, pending.J, pending.K));
+                }
+            }
+
+            slabCrossings.Clear();
+            slabPending.Clear();
+        }
 
         // One quad per interior sign-changing grid edge, wound so normals point outward.
         // Each adjacent cell contributes the vertex carrying that edge's crossing, named by
