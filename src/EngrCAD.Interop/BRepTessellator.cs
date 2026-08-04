@@ -313,8 +313,22 @@ public static class BRepTessellator
             return points;
         }
 
+        // A straight edge carries no curvature, so two samples describe it exactly — unless
+        // it bounds a face whose parameter is an ANGLE and it is not iso-parameter on it,
+        // where the two samples describe the CURVE exactly and the FACE not at all. See
+        // StraightEdgeSegments. Both ends stay the incumbent expressions, so a one-segment
+        // answer (every straight edge in the repo before this rule) is bit-identical.
         if (edge.Curve.Underlying is Line3d)
-            return [edge.Curve.PointAt(domain.Start), edge.Curve.PointAt(domain.End)];
+        {
+            int n = StraightEdgeSegments(edge, segmentsPerCircle, curveSamples);
+            if (n <= 1)
+                return [edge.Curve.PointAt(domain.Start), edge.Curve.PointAt(domain.End)];
+            var points = new List<Vector3d>(n + 1) { edge.Curve.PointAt(domain.Start) };
+            for (int i = 1; i < n; i++)
+                points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
+            points.Add(edge.Curve.PointAt(domain.End));
+            return points;
+        }
 
         // A rail of a loft that is AFFINE in v is an exact straight segment (the lerp of
         // its two sections' endpoints), and the band's own grid collapses its v columns to
@@ -696,7 +710,133 @@ public static class BRepTessellator
     /// guards Ceiling at exact integer boundaries (equal spans computed through
     /// different arithmetic may differ by an ulp and must not round apart).</summary>
     private static int AngularSegments(double span, int segmentsPerCircle) =>
-        Math.Max(1, (int)Math.Ceiling(Math.Abs(span) * segmentsPerCircle / (2 * Math.PI) - 1e-9));
+        SegmentsForSteps(Math.Abs(span) * segmentsPerCircle / (2 * Math.PI));
+
+    /// <summary>The Ceiling rule above, over a count of natural grid steps already
+    /// measured. One rule, so an edge and the grid it must weld to cannot round apart.</summary>
+    private static int SegmentsForSteps(double steps) =>
+        Math.Max(1, (int)Math.Ceiling(steps - 1e-9));
+
+    /// <summary>
+    /// How many segments a STRAIGHT edge is sampled at. Two, everywhere except where the
+    /// edge crosses the natural grid COLUMNS of a face whose parameter is an angle.
+    ///
+    /// <para>The trap is that a straight curve is described exactly by its endpoints while
+    /// the FACE it bounds may not be: a <c>Drill</c> tool's flat bottom is a full-turn
+    /// <see cref="RevolvedSurface"/> whose u is an azimuth about the pole, so a face
+    /// crossing it obliquely cuts it along a CHORD — and a chord's two endpoints both sit on
+    /// the rim, at v = 1, exactly where the arc completing the loop already is. The pulled
+    /// back loop is then a zero-area sliver running out along v = 1 and back, and the
+    /// trimmed tessellator refuses it as a winding structure it cannot read, however dense
+    /// the grid around it becomes. Measured: a Ø6 blind drill breaking out of a plate's top
+    /// face refused at every density with a 2-sample chord, and the SAME chord resampled
+    /// (identical geometry, identical endpoints) tessellates.</para>
+    ///
+    /// <para><b>The gate IS the correctness condition rather than a proxy for it</b>: the
+    /// count comes from the AZIMUTH the edge sweeps about the face's own axis, so an
+    /// iso-parameter straight edge — a cylinder's or a cone's ruling, a revolve's seam,
+    /// a helical band's generator, which is every straight edge on an angular face that
+    /// existed before this rule — sweeps nothing and stays at two samples with no separate
+    /// test to keep in step. Extra samples on a straight curve carry no fidelity cost
+    /// either: every one of them is exactly on the curve, the same argument the
+    /// baked-carrier refinement in <see cref="RefineTracerChords"/> makes.</para>
+    ///
+    /// <para>The count is the MAX over every using face, because <see cref="SampleEdge"/>
+    /// fills one polyline per edge and both sides must read it.</para>
+    /// </summary>
+    private static int StraightEdgeSegments(BrepEdge edge, int segmentsPerCircle, int curveSamples)
+    {
+        int segments = 1;
+        foreach (var use in edge.Uses)
+        {
+            if (!TryAngularDensity(use.Loop.Face.Surface, segmentsPerCircle, curveSamples,
+                    out var origin, out var axis, out double stepsPerRadian))
+                continue;
+            segments = Math.Max(
+                segments, SegmentsForSteps(SweptAzimuth(edge, origin, axis) * stepsPerRadian));
+        }
+        return segments;
+    }
+
+    /// <summary>
+    /// Whether a surface's u parameter is an ANGLE about an axis, and at what density the
+    /// natural grid samples it. The density is the surface's OWN — a partial revolve spends
+    /// <c>curveSamples</c> over its sweep rather than <c>segmentsPerCircle</c> over a full
+    /// turn — read from the same rules <see cref="GridParams"/> applies.
+    /// </summary>
+    private static bool TryAngularDensity(
+        Surface surface, int segmentsPerCircle, int curveSamples,
+        out Vector3d origin, out Vector3d axis, out double stepsPerRadian)
+    {
+        switch (surface)
+        {
+            case CylinderSurface cylinder:
+                (origin, axis, stepsPerRadian) =
+                    (cylinder.Origin, cylinder.Axis, segmentsPerCircle / (2 * Math.PI));
+                return true;
+            case RevolvedSurface revolved:
+                (origin, axis) = (revolved.AxisOrigin, revolved.AxisDirection);
+                stepsPerRadian = revolved.IsFullTurn
+                    ? segmentsPerCircle / (2 * Math.PI)
+                    : curveSamples / Math.Abs(revolved.DomainU.Length);
+                return true;
+            case HelicalSurface helical:
+                (origin, axis, stepsPerRadian) =
+                    (helical.Frame.Origin, helical.Frame.Z, segmentsPerCircle / (2 * Math.PI));
+                return true;
+        }
+        (origin, axis, stepsPerRadian) = (default, default, 0);
+        return false;
+    }
+
+    /// <summary>
+    /// The total azimuth an edge's radial sweeps about an axis — the number of natural u
+    /// columns it crosses, once multiplied by the density. Accumulated as SHORTEST steps
+    /// between samples (<c>WrapsWholeCylinder</c>'s rule) so a run straddling the seam
+    /// measures its true span, and samples whose radial vanishes are skipped: a chord
+    /// through a disk's pole has no azimuth exactly there, and the half turn across it is
+    /// carried by the samples either side.
+    /// </summary>
+    private static double SweptAzimuth(BrepEdge edge, in Vector3d origin, in Vector3d axisDirection)
+    {
+        if (!axisDirection.TryNormalize(Tolerance.Default, out var axis))
+            return 0;
+        var x = axis.ArbitraryPerpendicular(Tolerance.Default);
+        var y = axis.Cross(x);
+        var domain = edge.Domain;
+        const int samples = 32;
+        double swept = 0, previous = 0;
+        bool have = false;
+        // Scale-free: a radial is degenerate relative to the edge's own reach from the axis.
+        double extent = 0;
+        Span<Vector3d> radials = stackalloc Vector3d[samples + 1];
+        for (int i = 0; i <= samples; i++)
+        {
+            var offset = edge.Curve.PointAt(domain.ParameterAt((double)i / samples)) - origin;
+            radials[i] = offset - axis * offset.Dot(axis);
+            extent = Math.Max(extent, radials[i].Length);
+        }
+        if (extent <= 0)
+            return 0;
+        for (int i = 0; i <= samples; i++)
+        {
+            if (radials[i].Length <= extent * 1e-9)
+                continue;
+            double angle = Math.Atan2(radials[i].Dot(y), radials[i].Dot(x));
+            if (have)
+            {
+                double delta = angle - previous;
+                if (delta > Math.PI)
+                    delta -= 2 * Math.PI;
+                else if (delta < -Math.PI)
+                    delta += 2 * Math.PI;
+                swept += Math.Abs(delta);
+            }
+            previous = angle;
+            have = true;
+        }
+        return swept;
+    }
 
     /// <summary>
     /// The angle an edge riding a <see cref="Helix3d"/> or <see cref="SpiralArc3d"/> turns

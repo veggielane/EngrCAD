@@ -89,10 +89,24 @@ and that end is cut by the top face too. The removed volume converges quadratica
 the analytic disc-less-a-segment figure, and onto the same cut made with a plain
 `Shape.Cylinder`.
 
-Two limits are worth knowing. A bore whose axis lands **exactly** on the face it breaks out
-of (so the flat end is cut along a full diameter) is still refused, as is a **grazing**
-breakout — one whose opening is a small fraction of the bore's diameter. Both fail loudly
-rather than returning a solid with a crack in it.
+A bore whose axis lands **exactly** on the face it breaks out of works too, and it is the
+hardest member of the family rather than the easiest: the flat end is then cut along a full
+diameter, straight through the one point of that face where its own parameterization — an
+azimuth about the pole — does not exist.
+
+```csharp
+var level = SketchPlane.At((0, -15, 10), Vector3d.UnitX, Vector3d.UnitZ);   // axis ON the top face
+
+var halved = Shape.Extrude(Sketch.Rectangle(40, 30), 10)
+    .Drill(HoleSpec.Simple(6), [new(0, 0)], depth: 15, level);
+
+// Exactly half the bore is inside the plate, so the removal is (pi * 3^2 / 2) * 15.
+var removed = 40 * 30 * 10 - BrepMassProperties.Compute(halved.ToBrep()).Volume;
+Console.WriteLine($"{removed:F2} removed");   // 212.06 removed
+```
+
+The remaining limit is a **grazing** breakout — one whose opening is a small fraction of the
+bore's diameter. That still fails loudly rather than returning a solid with a crack in it.
 
 ## The standards catalog
 

@@ -2822,15 +2822,55 @@ was built, and with it the whole boolean's output on this family is **bit-identi
 
 Establishing that took the project's own rule — run the pipeline without the suspected stage
 before theorising about it — and the recognizer was then measured on a sweep of breakout
-depths rather than on the one fixture. It **trades one refusal for another** and so is not
-reached at all (`FaceSplitter.SplitByCurves`' gate makes the same call for the same reason):
-it fixes the exactly-diametral cut and breaks two shallower ones, which fail in trimmed-face
-tessellation on the disc fragment. That blocker was then established by subtraction too, and
-it is not in the recognizer: feeding the SAME exact chord as a 25-point polyline — identical
-geometry, identical endpoints, different density — passes all three. So a straight
-`Line3d` boundary gets 2 samples from `SampleEdge` while the disc's parameterization is
-ANGULAR and the chord crosses many u columns, which is a density rule in the tessellator,
-not a gap in the intersector. Filed there, with the measurement.
+depths rather than on the one fixture. On its own it **trades one refusal for another** and
+so was not reached at all (`FaceSplitter.SplitByCurves`' gate makes the same call for the
+same reason): it fixes the exactly-diametral cut and breaks two shallower ones, which fail in
+trimmed-face tessellation on the disc fragment. That blocker was then established by
+subtraction too, and it is not in the recognizer: feeding the SAME exact chord as a 25-point
+polyline — identical geometry, identical endpoints, different density — passes all three. So
+a straight `Line3d` boundary gets 2 samples from `SampleEdge` while the disc's
+parameterization is ANGULAR and the chord crosses many u columns: a density rule in the
+tessellator, not a gap in the intersector.
+
+#### The two halves landed TOGETHER, and each is a no-op without the other
+
+The density rule is the next section's subject; what belongs here is why the pair had to be
+one change. `BRepTessellator.SampleEdge` now gives a straight edge the **angular density of
+any face whose azimuth it crosses**, and the shape of the defect is that *a straight curve is
+described exactly by its endpoints while the face it bounds may not be*: a chord's two ends
+both sit on the disc's RIM, at the same v the arc completing the loop already occupies, so
+the pulled-back loop is a zero-area sliver out along v = 1 and back — a winding structure the
+trimmed tessellator refuses *however fine the grid around it becomes*.
+
+Measured across an eleven-row sweep of breakout depths (Ø6 blind bore, 40×30×10 plate,
+axis height z0, top face at 10):
+
+- **Baseline**: z0 = 10 refuses at every density with *"Open splitting curves must start and
+  end outside the face"*; the other ten rows pass.
+- **Recognizer alone**: z0 = 10 passes; 11.5 and 10.5 now refuse with *"the loops' winding
+  structure is unsupported"* on a 2-coedge / 65-sample disc loop — the sliver above.
+- **Density rule alone**: bit-identical to baseline on all eleven rows, z0 = 10 included.
+  With the tracer route the chord is polyline-backed, so the straight-edge branch is never
+  reached for it at all.
+- **Both**: all eleven pass, and the volume error stays one-signed and converging.
+
+The density-alone row is the interesting one, because it is what makes "land them together"
+a measurement rather than a preference: a rule that changes nothing on its own is not worth
+landing on its own, and an intersector arm that trades refusals is not worth landing at all.
+
+**One row's tessellation legitimately changed, and it is worth stating which way.** At
+z0 = 11.5 the disc's chord had been reaching the boolean as a traced polyline and the bore
+WALL was taking a coarse route with it — 222 facets at 64 segments where its neighbours at
+10.5 and 9 take 2 094 and 2 046 — so the exact chord puts that wall on the same route the
+rest of the family already uses. The cost is stated rather than hidden: the volume error goes
+2.5e-2 → 8.0e-2 at 64 segments (still one-signed, ratios 6.91 / 4.08 / 2.96), the worst
+facet-vs-surface agreement 0.99997 → 0.98054 at 96/48, and the degenerate slivers at 16/8
+go 2 → 0. Both readings now sit beside z0 = 10.5's own (0.97901) rather than apart from
+them, which is the point: **the change moves one anomalously-lucky row onto the family's
+known residual** — the drill's `RevolvedSurface` bore wall, filed in todo.md and locked by
+`DrilledBreakout_IsCleanButBelowTheAgreementFloor`, whose own numbers (0.107 / 0.694 / 0.840
+at z0 = 9) are untouched. The disc fragment itself got strictly better on both counts:
+141 → 102 facets at 64 segments and 3 305 → 426 at 256, at exactly the same area.
 
 #### Coincident (flush) planar surface
 

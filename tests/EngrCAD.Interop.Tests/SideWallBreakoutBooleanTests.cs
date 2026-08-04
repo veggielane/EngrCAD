@@ -189,14 +189,19 @@ public class SideWallBreakoutBooleanTests
     /// <para>A FAMILY rather than a fixture because whether the average lands outside
     /// depends on where the cut runs — the alignment-not-tolerance reasoning the tangency
     /// and Surface Nets sweeps use. Measured, the average put the probe 0.106 above the
-    /// plate's own top face at z0 = 9 and the whole boolean refused; three of these ten rows
-    /// (10.5, 9.5, 9) fail without the rule and none with it, while 6.5 is the control whose
-    /// cap is not cut at all.</para>
+    /// plate's own top face at z0 = 9 and the whole boolean refused; three of these eleven
+    /// rows (10.5, 9.5, 9) fail without the rule and none with it, while 6.5 is the control
+    /// whose cap is not cut at all.</para>
+    ///
+    /// <para>z0 = 10 is the DIAMETRAL cut — the top face passes exactly through the cap's
+    /// own pole — and it was the last refusal in the interior of the family until the
+    /// coaxial-disk recognizer and the straight-edge density rule landed together; see
+    /// <see cref="TheDiametralCut_ConvergesOnTheAnalyticVolume"/>.</para>
     /// </summary>
     [Fact]
     public void BlindDrilledHolesAcrossTheBreakoutFamily_AllCloseOnTheirAnalyticVolume()
     {
-        foreach (double z0 in (double[])[11.5, 10.5, 9.5, 9, 8.5, 8, 7.5, 7.2, 7.05, 6.5])
+        foreach (double z0 in (double[])[11.5, 10.5, 10, 9.5, 9, 8.5, 8, 7.5, 7.2, 7.05, 6.5])
         {
             var wall = SketchPlane.At((0, -Ly / 2, z0), Vector3d.UnitX, Vector3d.UnitZ);
             double removed = RemovedAt(z0, Ly / 2);
@@ -212,5 +217,41 @@ public class SideWallBreakoutBooleanTests
             Assert.True(error < 5e-3 * removed,
                 $"z0 {z0}: error {error:E3} exceeds {5e-3 * removed:E3} on a removed volume of {removed:F3}");
         }
+    }
+
+    /// <summary>
+    /// The DIAMETRAL cut: the breakout face passes exactly through the drill cap's own
+    /// POLE, so the surviving half-disk is bounded by a chord through the one point of the
+    /// cap where its azimuth does not exist. It refused at every density — <i>"Open
+    /// splitting curves must start and end outside the face"</i> on the plate's top face —
+    /// until two changes landed TOGETHER, and neither is sufficient alone:
+    ///
+    /// <list type="number">
+    /// <item>The coaxial-DISK recognizer in <c>SurfaceIntersection</c>, so the cut is the
+    /// exact chord rather than a marching-tracer polyline whose ends stop short of the
+    /// rim (<c>CoaxialDiskIntersectionTests</c>).</item>
+    /// <item>The straight-edge angular DENSITY rule in <c>BRepTessellator.SampleEdge</c>,
+    /// because a two-sample chord pulls back onto the disk as a zero-area sliver — both its
+    /// ends sit on the rim, where the arc closing the loop already is
+    /// (<c>StraightEdgeDensityTests</c>).</item>
+    /// </list>
+    ///
+    /// <para><b>With only the first, the family TRADES refusals</b> — z0 = 10 works and
+    /// 11.5 and 10.5 stop tessellating — which is why the recognizer was built, measured
+    /// and reverted once before, under the standing rule that an algorithm which can only
+    /// trade one refusal for another is not reached at all.</para>
+    /// </summary>
+    [Fact]
+    public void TheDiametralCut_ConvergesOnTheAnalyticVolume()
+    {
+        var wall = SketchPlane.At((0, -Ly / 2, H), Vector3d.UnitX, Vector3d.UnitZ);
+        double exact = Lx * Ly * H - RemovedAt(H, Ly / 2);
+        double[] errors = [.. new[] { 32, 64, 128, 256 }.Select(n =>
+            SoundVolume(ExtrudedPlate().Drill(HoleSpec.Simple(2 * R), [(0, 0)], Ly / 2, wall), n) - exact)];
+
+        Assert.All(errors, e => Assert.True(e > 0, $"inscribed tessellation must over-report: {e}"));
+        for (int i = 1; i < errors.Length; i++)
+            Assert.True(errors[i - 1] / errors[i] > 3.4,
+                $"ratio {errors[i - 1] / errors[i]:F2} ({string.Join(", ", errors.Select(e => e.ToString("E3")))})");
     }
 }
