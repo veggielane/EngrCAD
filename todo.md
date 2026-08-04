@@ -927,19 +927,71 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     at 32) while converging at the same rate — the analytic arc is sampled on the
     `segmentsPerCircle` angular grid and the traced rim's arc-length step happened to be
     slightly finer. Nothing to fix; recorded so the number is not mistaken for a regression.
-  - [ ] **A drill tool's flat POLE CAP breaking out of a face still refuses.** `Drill`'s tool
-    is ONE axis-touching revolve, so its flat end is a `RevolvedSurface` pole cap —
-    geometrically a disc in a plane, but not a planar carrier `TryPlanarPatch` recognizes
-    (it takes `PlaneSurface` and straight-generator `ExtrudedSurface` only). So a BLIND
-    drilled hole whose rim runs off a wall's top edge gets its wall rim clipped exactly and
-    then fails where the tool's own flat end crosses the top face: `unclosed solid, 3 of 19
-    edges used by 1 face`, the unpaired ones being that disc's rim arcs. The same hole drilled
-    THROUGH works (the flat end never lands inside the body), and the same blind cut with a
-    `Shape.Cylinder` tool works because ITS end cap is a `PlaneSurface`. Pinned by
-    `BlindDrilledHoleWhoseFLATENDAlsoBreaksOut_StillRefuses`. The fix is a third planar-carrier
-    recognizer — a full-turn revolve of a radial straight generator perpendicular to its axis
-    is a planar ANNULUS, bounded by two radii rather than by a parallelogram, so it needs its
-    own containment shape (`TryCoaxialDisk` is the precedent, for helical carriers).
+  - ~~**A drill tool's flat POLE CAP breaking out of a face still refuses.**~~ ✅ **done** —
+    and **the filed diagnosis named the wrong stage**, which is the finding. It blamed the
+    missing planar-carrier recognizer for a coaxial annulus; the cause was
+    `BrepBoolean.ProbePoint`'s POLE path, which read the loop's AVERAGE v where it must read
+    the loop's CLOSEST APPROACH to the pole. The two agree exactly on an uncut cap (its rim
+    sits at one v) and part company the moment another solid cuts it, which is what a blind
+    drill's flat bottom breaking out of a face IS — measured, the average put the probe 0.106
+    ABOVE the plate's own top face, so the surviving fragment was classified away and the
+    boolean cracked along its whole rim. Sweeping the breakout depth on a Ø6 blind hole in a
+    40×30×10 plate (axis height z0, top face at 10) fixes z0 = 10.5 / 9.5 / 9 and regresses
+    none; design.md §5 carries the reasoning and why `ContainsTwoSided` is NOT the fix.
+    Residuals below.
+    - [ ] **The annulus recognizer is BLOCKED by a `SampleEdge` density rule, not by
+      anything in `SurfaceIntersection`.** It was built, measured and reverted: with the
+      exact `Line3d` chord the boolean fixes the exactly-DIAMETRAL cut (z0 = 10, still the
+      one refusal left in the interior of the family) and BREAKS z0 = 11.5 and 10.5, which
+      then fail in trimmed-face tessellation on the disc fragment — a trade, and the
+      standing rule is that an algorithm which can only trade one refusal for another is not
+      reached at all. The blocker is established by subtraction rather than guessed: feeding
+      the SAME exact chord as a 25-point polyline (identical geometry, identical endpoints,
+      only the density different) passes **all three** rows. So a straight `Line3d` boundary
+      takes 2 samples from `BRepTessellator.SampleEdge` while the disc's own parameterization
+      is ANGULAR and the chord crosses many u columns. **The fix belongs in `SampleEdge`**:
+      an edge whose curve is straight, which bounds a face with an angular parameter and
+      which is not iso-parameter on it, needs that face's angular density — and extra
+      samples on a straight curve are free of fidelity cost, since every one of them is
+      exactly on the curve (the same argument the baked-carrier refinement makes). Expect a
+      wide verification pass (`SampleEdge` is shared by every using face, so the density must
+      be the max over them; the corpus gate and the committed docs PNGs are the oracles), and
+      note the recognizer is worth landing only together with it — on its own it buys nothing
+      measurable, because a traced polyline along a STRAIGHT curve is exact at every point
+      and `SnapTracerEnds` already removes the only defect (end truncation), so the whole
+      boolean's output on this family is bit-identical with and without it.
+    - [ ] **The drilled breakout is structurally clean but below the corpus AGREEMENT
+      floor, and the comparison says which face is at fault.** It is not a `Corpus` member
+      for that reason, and is locked instead by
+      `DrilledBreakout_IsCleanButBelowTheAgreementFloor` (which asserts BOTH sides, so a
+      fix that lifts it fails the test naming the promotion) plus an `Analytic` entry, so
+      its volume convergence IS gated. Measured: no folds and no degenerate slivers at any
+      density, every planar family exact, and the bore wall's worst facet-vs-surface
+      agreement **0.107 / 0.694 / 0.840** at 16/8, 48/24, 96/48 against floors of 0.383 /
+      0.924 / 0.981 — where the corpus member `side-wall breakout`, the SAME cut made by a
+      `Shape.Cylinder`, reads **0.9992 / 0.9999 / 0.99998**. The two differ only in the
+      tool, so it is the drill's `RevolvedSurface` bore wall and not the breakout; a plain
+      drilled-THROUGH hole is a corpus member and passes, so a drill's revolve band is fine
+      in general and the junction where the bore's rim meets the face it breaks out of is
+      what degrades it. That is the recorded traced-rim density residual (a traced rim keeps
+      whatever sample count the tracer's arc-length step gave it however fine the grid
+      around it becomes) in a new location, and it is likely the SAME `SampleEdge` density
+      work as the annulus-recognizer item above.
+    - [ ] **A GRAZING breakout still refuses, in both routes.** At a half-chord of 0.245 and
+      0.077 (Ø6 bore, z0 = 7.01 and 7.001) the drilled hole fails with *"Open splitting
+      curves must start and end outside the face"* naming the top face, and at 0.077 the
+      `Shape.Cylinder` route fails too (*"4 of 29 edges used by 1 face"*) — so this one is
+      NOT about pole caps and is the pre-existing near-tangency limit showing through.
+      Reproduce with the sweep in `SideWallBreakoutBooleanTests` extended past its last row.
+    - [ ] **`FaceSplitter.SplitByCurve` declines to split a bare pole cap by a chord.** Built
+      as a would-be unit fixture for the probe rule and measured instead: an axis-touching
+      revolve's flat cap, cut by the exact chord terminating ON its rim, comes back as ONE
+      fragment — the rim edge IS split, no interior edge is made and no second face traced —
+      at every offset (0.5 … 2.5) and azimuth (8 values) tried, and for a 25-point polyline
+      exactly as for a `Line3d`, so it is not the density rule above. Inside the boolean the
+      same cap does split (the drilled cases above), so the difference is in how `SplitAll`
+      reaches it. Worth a look, because it means the probe rule has no face-level fixture and
+      is pinned only end to end.
 
 ## Deformation / analysis follow-ups
 

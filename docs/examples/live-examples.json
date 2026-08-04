@@ -304,6 +304,11 @@
       "live": true
     },
     {
+      "id": "holes-breakout",
+      "page": "examples/holes.md",
+      "live": true
+    },
+    {
       "id": "holes-section",
       "page": "examples/holes.md",
       "live": true

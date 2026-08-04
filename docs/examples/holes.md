@@ -65,6 +65,35 @@ number to check against the far face — a blind depth that cleared it may not o
 point is there. The default stays flat, so existing designs are unchanged and a through
 hole (where the point never survives into the finished part) needs nothing.
 
+## A blind hole that breaks out of a face
+
+Drilling near an edge is ordinary practice, and a blind bore's **flat bottom** can end up
+crossing the face the bore has already broken out of. Both faces cut cleanly:
+
+```csharp render:holes-breakout
+var wall = SketchPlane.At((0, -15, 9), Vector3d.UnitX, Vector3d.UnitZ);
+
+var plate = Shape.Extrude(Sketch.Rectangle(40, 30), 10)
+    .Drill(HoleSpec.Simple(6), [new(0, 0)], depth: 15, wall);   // in from the front wall
+
+var camera = new CameraState(-Math.PI / 2 + 0.6, 0.45, 90, (0, 0, 4));
+var scene = new Scene();
+scene.Add(new Part("blind bore off the top edge", plate, Palette.Steel));
+```
+
+![A plate with a blind bore drilled in from the front wall, breaking out of the top face](images/holes-breakout.png)
+
+The bore's axis sits 1 mm below the top face and its radius is 3, so the hole opens into a
+slot along the top — and because it is BLIND, the tool's flat end stops inside the plate
+and that end is cut by the top face too. The removed volume converges quadratically onto
+the analytic disc-less-a-segment figure, and onto the same cut made with a plain
+`Shape.Cylinder`.
+
+Two limits are worth knowing. A bore whose axis lands **exactly** on the face it breaks out
+of (so the flat end is cut along a full diameter) is still refused, as is a **grazing**
+breakout — one whose opening is a small fraction of the bore's diameter. Both fail loudly
+rather than returning a solid with a crack in it.
+
 ## The standards catalog
 
 `StandardHoles` (metric, mm) supplies ISO 273 clearance fits, DIN 974-style
