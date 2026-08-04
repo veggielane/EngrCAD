@@ -3476,9 +3476,7 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     — the flange's wall built from a `Sketch` rather than as a plain rectangle, which is
     also exactly what a relief on a flange TIP is refused for today. One change, two
     features.
-  - **Multi-body sheets and welded assemblies**; **spring-back compensation** and **tear
-    reliefs** (both press properties, deliberately out of scope for geometry — a tear
-    relief is what happens when no relief is cut).
+  - **Multi-body sheets and welded assemblies**.
   - Smaller: a viewer/`--export` route that writes a part's flat pattern without a
     script (`FlatPattern.ToDxf`/`ToDrawing`/`BendTable` are all there; what is missing is
     the CLI verb and the button); and mirrored placements (rigid + uniform scale today, as
