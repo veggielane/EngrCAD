@@ -128,6 +128,31 @@
       "live": true
     },
     {
+      "id": "direct-edit-composed",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
+      "id": "direct-edit-cone",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
+      "id": "direct-edit-delete",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
+      "id": "direct-edit-move",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
+      "id": "direct-edit-offset",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
       "id": "draft-boss",
       "page": "examples/loft-draft-shell.md",
       "live": true

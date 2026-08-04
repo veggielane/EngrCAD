@@ -43,21 +43,32 @@ right-triangular prism pushed 1.5 mm on its hypotenuse the true change is 140.78
 the 127.28 that `area × distance` predicts, so the difference is 10.6% and not round-off.
 
 Curved faces work the same way, because a cylinder offsets to a cylinder and a cone to a
-cone. Pushing a bore's wall is the case where the sign convention surprises people: a bore
-wall's outward normal points *into the void*, so a **positive** offset adds material there
-and the hole closes in.
+cone — the offset stays in the same surface family, so the result is exact rather than
+approximated:
 
-```csharp render:direct-edit-bore
-var housing = Shape.Cylinder(20, 30) - Shape.Cylinder(9, 40);
+```csharp render:direct-edit-cone
+var cone = Shape.Cone(20, 12, 30);
 
-// Negative: pull the bore wall outward, widening the hole from 18 to 24 across.
-var widened = housing.OffsetFaces(-3, FaceSetRef.Cylindrical(9));
+// Push the slant face out 3 mm along its own normal. The result is still exactly a cone.
+var fattened = cone.OffsetFaces(3, FaceSetRef.Where("slant", f => !f.IsPlanar(out _, out _)));
 
 var scene = new Scene();
-scene.Add(new Part("widened", widened));
+scene.Add(new Part("fattened", fattened));
 ```
 
-![A housing whose bore has been widened](images/direct-edit-bore.png)
+![A cone frustum whose slant face has been pushed out](images/direct-edit-cone.png)
+
+The sign convention surprises people on a **bore**: a bore wall's outward normal points
+*into the void*, so a positive offset adds material there and the hole closes in. A
+negative one widens it.
+
+:::caution[Curved faces of boolean output are refused]
+A difference marks the subtracted tool's walls as reversed, and the curved-offset path
+refuses a reversed face by name. So an offset of a *curved* face reaches a primitive and
+an imported body — whose faces come from the file forward-oriented, which is the case this
+feature exists for — but **not** a bore this kernel cut with a boolean. Planar faces are
+unaffected, and the refusal is loud rather than silent.
+:::
 
 ## Moving a face
 
@@ -147,9 +158,9 @@ unchanged.
 var imported = Shape.Box(60, 40, 10);
 
 var part = imported
-    .OffsetFaces(6, FaceSetRef.PlanarWithNormal(Vector3d.UnitZ))   // thicken to 16
-    .Drill(StandardHoles.Clearance(6), [new(-20, 0), new(20, 0)], depth: 16)    // then drill it
-    .FilletEdges(2, EdgeSetRef.Convex);                          // then round it
+    .OffsetFaces(6, FaceSetRef.PlanarWithNormal(Vector3d.UnitZ))              // thicken 10 -> 16
+    .Drill(StandardHoles.Clearance(6), [new(-20, 0), new(20, 0)], depth: 16)  // then drill it
+    .Chamfer(1.5, FaceSetRef.PlanarWithNormal(Vector3d.UnitZ));               // then break the rim
 
 var scene = new Scene();
 scene.Add(new Part("edited", part));
