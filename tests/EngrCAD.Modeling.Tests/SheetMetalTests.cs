@@ -482,6 +482,37 @@ public class SheetMetalTests
         }
     }
 
+    /// <summary>The bend table is read off the same <see cref="FlatBendLine"/> records the
+    /// drawing's bend zones are drawn from, so every column is checkable against the bend
+    /// model rather than against a second derivation.</summary>
+    [Fact]
+    public void TheBendTableReportsEveryBendOffTheFlatPatternsOwnRecords()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+            .WithFlange(SheetFlangeTarget.BaseEdge(3), 18, angleDegrees: 120,
+                direction: SheetBendDirection.Down);
+
+        var flat = body.Unfold();
+        var lines = flat.BendTable().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(3, lines.Length);                       // header plus one row per bend
+        Assert.StartsWith("BEND", lines[0], StringComparison.Ordinal);
+        Assert.Contains("UP", lines[1], StringComparison.Ordinal);
+        Assert.Contains("DOWN", lines[2], StringComparison.Ordinal);
+
+        // The bend line spans the whole edge, and the allowance is the spec's own.
+        Assert.Equal(PlateY, flat.Bends[0].Length, 9);
+        Assert.Contains(
+            SheetMetalSpec.BendAllowance(Math.PI / 2, Radius, Thickness, SheetMaterials.MildSteel)
+                .ToString("0.000", System.Globalization.CultureInfo.InvariantCulture),
+            lines[1], StringComparison.Ordinal);
+
+        // A part with no bends says so with a header and nothing else, rather than an
+        // empty string a reader would take for a failure.
+        Assert.Single(SheetMetalBody.Base(Plate(), Spec()).Unfold().BendTable()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries));
+    }
+
     [Fact]
     public void TheFlatPatternExportsAsDxfWithTheBlankAndTheBendsOnSeparateLayers()
     {
@@ -657,6 +688,105 @@ public class SheetMetalTests
             Radius,
             Assert.Single(SheetMetalFeatures.BodyOf(history.Regenerate().Body, "test").Flanges)
                 .BendRadius ?? Radius);
+    }
+
+    /// <summary>
+    /// <see cref="SheetReliefOption"/> is a SECOND spelling of <see cref="SheetReliefKind"/>
+    /// (a dropdown cannot say "unset", so the feature needs its own None), and a second
+    /// spelling is a drift waiting to happen. This drives EVERY member of it through a real
+    /// regeneration and reads the kind back off the flange tree by NAME, so a kind added to
+    /// one enum and not the other fails here rather than quietly meaning something else.
+    /// </summary>
+    [Fact]
+    public void EveryReliefOptionReachesTheFlangeTreeAsItsOwnKind()
+    {
+        foreach (var option in Enum.GetValues<SheetReliefOption>())
+        {
+            var history = History(
+                new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+                new EdgeFlangeFeature
+                {
+                    Length = 25,
+                    Edge = PlusXTopEdge(),
+                    StartOffset = 10,
+                    Width = 30,
+                    Relief = option,
+                });
+            var result = history.Regenerate();
+            Assert.True(result.Succeeded, $"{option}: {result}");
+
+            var flange = Assert.Single(SheetMetalFeatures.BodyOf(result.Body, "test").Flanges);
+            if (option == SheetReliefOption.None)
+            {
+                Assert.Null(flange.Relief);
+                continue;
+            }
+            Assert.Equal(option.ToString(), flange.Relief!.Kind.ToString());
+        }
+        // ... and the kinds the geometry carries are exactly the options minus None.
+        Assert.Equal(
+            Enum.GetNames<SheetReliefKind>().Order(),
+            Enum.GetNames<SheetReliefOption>().Where(n => n != nameof(SheetReliefOption.None)).Order());
+    }
+
+    /// <summary>
+    /// A relief NOTCHES the blank, so the edge a site names arrives as pieces of itself and
+    /// a selector can only pick one of them. A piece still names the same site — the
+    /// flange's own offset and width say where on it the bend goes — which is what lets a
+    /// second flange be placed on an edge an earlier relief has already cut into.
+    /// </summary>
+    [Fact]
+    public void ASecondFlangeCanBeNamedOnAPieceOfAnAlreadyNotchedEdge()
+    {
+        // The first flange spans [5, 20] with a one-thickness relief either side, so the
+        // top face's +X edge survives as [0, 3.5] and [21.5, 50].
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature
+            {
+                Length = 20, Edge = PlusXTopEdge(), StartOffset = 5, Width = 15,
+                Relief = SheetReliefOption.Rectangular,
+            },
+            new EdgeFlangeFeature
+            {
+                Length = 20, StartOffset = 30, Width = 15,
+                Edge = SheetMetalFeatures.EdgeBetween(
+                    (PlateX, 20 + Thickness, Thickness), (PlateX, PlateY, Thickness)),
+            });
+
+        var result = history.Regenerate();
+        Assert.True(result.Succeeded, result.ToString());
+        var body = SheetMetalFeatures.BodyOf(result.Body, "test");
+        // Both flanges landed on base edge 1, which is the mapping the piece had to carry.
+        Assert.Equal(2, body.Flanges.Count);
+        Assert.All(body.Flanges, f => Assert.Equal(1, f.Target.EdgeIndex));
+        Assert.Equal(2, body.Unfold().Bends.Count);
+        result.Body!.ToBrep().Validate();
+    }
+
+    /// <summary>The relief's own dimensions are ordinary optional parameters: stated ones
+    /// reach the tree, unset ones inherit, and both survive the JSON seam.</summary>
+    [Fact]
+    public void ReliefDimensionsAreOptionalParametersAndRoundTrip()
+    {
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature
+            {
+                Length = 25, Edge = PlusXTopEdge(), StartOffset = 10, Width = 30,
+                Relief = SheetReliefOption.Obround, ReliefWidth = 4,
+            });
+        Assert.True(history.Regenerate().Succeeded);
+
+        var flange = Assert.Single(SheetMetalFeatures.BodyOf(history.Regenerate().Body, "test").Flanges);
+        Assert.Equal(4, flange.Relief!.Width);
+        Assert.Null(flange.Relief.Depth);   // unset: the body's R + T
+
+        string saved = history.SaveParameters();
+        Assert.Contains("\"Relief\": \"Obround\"", saved, StringComparison.Ordinal);
+        Assert.Contains("\"ReliefWidth\": 4", saved, StringComparison.Ordinal);
+        Assert.Single(history.LoadParameters(saved));
+        Assert.Equal(saved, history.SaveParameters());
     }
 
     [Fact]

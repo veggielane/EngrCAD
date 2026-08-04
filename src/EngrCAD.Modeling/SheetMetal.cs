@@ -287,6 +287,10 @@ public readonly record struct FlatBendLine(
     /// where a single-line bend annotation goes.</summary>
     public (Vector2d Start, Vector2d End) CenterLine =>
         ((StartTangent + StartFar) * 0.5, (EndTangent + EndFar) * 0.5);
+
+    /// <summary>Length of the bend line: how much of the brake's tooling the bend
+    /// occupies, and the width the tonnage is quoted per.</summary>
+    public double Length => StartTangent.DistanceTo(EndTangent);
 }
 
 /// <summary>
@@ -307,6 +311,30 @@ public sealed record FlatPattern(Sketch Outline, IReadOnlyList<FlatBendLine> Ben
     /// differ by <c>Σ width·θ·T²·(0.5 − K)</c> otherwise, which is the K-factor doing its
     /// job rather than an error.</summary>
     public double Volume => Area * Thickness;
+
+    /// <summary>
+    /// The bend table a press brake is set up from: one row per bend in the order the
+    /// flanges were declared, giving the length of the bend line, the angle, which way it
+    /// folds, the inside radius and the allowance.
+    /// <para>Every column is READ OFF <see cref="Bends"/> — the same records the drawing's
+    /// bend zones are drawn from — rather than recomputed from the flange tree, so the
+    /// table and the picture cannot disagree about a bend. A pattern with no bends returns
+    /// a header and nothing else, which is the honest answer for a flat part.</para>
+    /// </summary>
+    public string BendTable()
+    {
+        var text = new System.Text.StringBuilder();
+        text.AppendLine("BEND  LENGTH   ANGLE  DIR   RADIUS  ALLOWANCE");
+        for (int i = 0; i < Bends.Count; i++)
+        {
+            var bend = Bends[i];
+            text.AppendLine(string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{i + 1,4}  {bend.Length,6:0.000}  {bend.AngleDegrees,6:0.0}  " +
+                $"{(bend.Up ? "UP  " : "DOWN"),-4}  {bend.InsideRadius,6:0.000}  {bend.Allowance,9:0.000}"));
+        }
+        return text.ToString();
+    }
 
     /// <summary>
     /// The flat pattern as a DXF document — what a laser or turret shop actually cuts
@@ -467,9 +495,31 @@ public sealed class SheetMetalBody
             if (JoinsSamePoints(site.Start, site.End, start, end))
                 return site;
         }
+        // A bend relief NOTCHES the blank, so an edge a site names can arrive as two or
+        // three pieces of itself. A piece still names the same site — the flange's own
+        // StartOffset and Width say where on it the bend goes — so a picked sub-segment
+        // resolves rather than reporting an edge the body does not carry. The exact match
+        // is tried first, so nothing that already resolved can be answered differently.
+        foreach (var site in Sites)
+        {
+            if (LiesOn(site, start) && LiesOn(site, end))
+                return site;
+        }
         throw new ArgumentException(
             $"The edge from {start} to {end} is not one of this sheet body's flange-able edges. It carries " +
             $"{Sites.Count}: {string.Join(", ", Sites.Select(s => s.Target.ToString()))}.", nameof(edge));
+    }
+
+    /// <summary>Is a point on a site's own segment, at the weld tier? Both were built from
+    /// the same frame chain, so the absolute tier is right.</summary>
+    private static bool LiesOn(in SheetFlangeSite site, in Vector3d point)
+    {
+        var along = site.End - site.Start;
+        double lengthSquared = along.LengthSquared;
+        if (lengthSquared <= 0)
+            return false;
+        double t = (point - site.Start).Dot(along) / lengthSquared;
+        return t >= -Weld && t <= 1 + Weld && (site.Start + along * t).DistanceTo(point) <= Weld;
     }
 
     /// <summary>Do two segments join the same pair of points, either way round? The one
