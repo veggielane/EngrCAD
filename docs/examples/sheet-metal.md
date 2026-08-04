@@ -339,10 +339,11 @@ history.Add(new EdgeFlangeFeature
 {
     Length = 25,
     Edge = SheetMetalFeatures.EdgeBetween((80, 0, 1.5), (80, 50, 1.5)),
-    // A relief is a parameter like any other. It is an enum with its own None rather
-    // than a nullable one, because a [Param] dropdown lists the type's members and so
-    // has no way to say "unset" -- the same rule that keeps KFactor's sentinel 0.
-    Relief = SheetReliefOption.None,
+    // A relief is a parameter like any other, and an OPTIONAL one: null cuts none. It
+    // can be the geometry's own nullable enum because a [Param] dropdown now offers a
+    // "(none)" row for one -- the rule is that a parameter whose editor can express
+    // absence takes the nullable type.
+    Relief = null,
 });
 
 var result = history.Regenerate();

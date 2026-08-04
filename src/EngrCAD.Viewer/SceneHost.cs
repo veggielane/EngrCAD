@@ -1924,10 +1924,17 @@ internal sealed class SceneHost
 
         if (kind == ParamEditorKind.Choice)
         {
+            // Rows from ParamEditors.EnumChoices, which puts a "(none)" row in front of a
+            // NULLABLE enum's members — so an optional enum parameter can be moved off a
+            // value and back, which is exactly what a bare Enum.GetNames dropdown could
+            // not say. Labels are shown and MEMBERS applied, so the "(none)" row reaches
+            // ApplyParameter as an empty string and travels the JSON seam as null.
+            var members = ParamEditors.EnumChoices(parameter);
+            string? stated = parameter.Value?.ToString();
             var combo = new ComboBox
             {
-                ItemsSource = Enum.GetNames(type),
-                SelectedItem = parameter.Value?.ToString(),
+                ItemsSource = members.Select(ParamEditors.EnumLabel).ToList(),
+                SelectedIndex = Math.Max(0, members.ToList().IndexOf(stated)),
                 FontSize = 12,
                 Padding = new Thickness(4, 2),
                 Margin = new Thickness(0, 0, 0, 4),
@@ -1936,8 +1943,8 @@ internal sealed class SceneHost
             Describe(combo, parameter);
             combo.SelectionChanged += (_, _) =>
             {
-                if (combo.SelectedItem is string member)
-                    ApplyParameter(part, feature, name, member);
+                if (combo.SelectedIndex >= 0 && combo.SelectedIndex < members.Count)
+                    ApplyParameter(part, feature, name, members[combo.SelectedIndex] ?? "");
             };
             return combo;
         }
@@ -2036,7 +2043,14 @@ internal sealed class SceneHost
         System.Text.Json.Nodes.JsonNode? value;
         try
         {
-            value = System.Text.Json.Nodes.JsonNode.Parse(text);
+            // EMPTY means "not stated", which is the one value a nullable [Param] carries
+            // that no non-empty text can spell — and it is already how EditableValue
+            // DISPLAYS an unset value, so this closes the loop rather than inventing a
+            // convention. On a non-nullable parameter a null is refused by the same
+            // Convert that already refused the empty string, so nothing that worked moves.
+            value = string.IsNullOrWhiteSpace(text)
+                ? null
+                : System.Text.Json.Nodes.JsonNode.Parse(text);
         }
         catch (System.Text.Json.JsonException)
         {

@@ -40,6 +40,11 @@ public enum ParamEditorKind
 /// </summary>
 public static class ParamEditors
 {
+    /// <summary>The row an editor shows for a value that is not stated. One spelling, so a
+    /// material dropdown, an optional enum and any future one cannot disagree about what
+    /// "unset" looks like.</summary>
+    public const string NoneLabel = "(none)";
+
     /// <summary>The editor <paramref name="parameter"/> deserves.</summary>
     public static ParamEditorKind KindFor(ParamInfo parameter)
     {
@@ -51,6 +56,40 @@ public static class ParamEditors
             return ParamEditorKind.Choice;
         return IsNumeric(type) && HasRange(parameter) ? ParamEditorKind.Slider : ParamEditorKind.Text;
     }
+
+    /// <summary>
+    /// The rows an enum dropdown offers: the type's members, and — for a NULLABLE enum —
+    /// a leading <c>null</c> that the panel renders as <see cref="NoneLabel"/>.
+    ///
+    /// <para><b>Why this exists.</b> A dropdown's rows used to be exactly
+    /// <c>Enum.GetNames</c>, so a nullable enum parameter had no way to say "unset" — the
+    /// same shape of gap a slider has, and the reason
+    /// <c>EdgeFlangeFeature.Relief</c> was once a SECOND enum carrying its own
+    /// <c>None</c> beside the geometry's own kind. With the row present the optional-value
+    /// rule reaches its enum form and the second spelling (and the drift a second spelling
+    /// invites) goes away: <b>a parameter whose editor can express absence takes the
+    /// nullable type.</b></para>
+    ///
+    /// <para>A non-nullable enum gets its members and nothing else, which is what keeps
+    /// every incumbent dropdown exactly the list it was.</para>
+    /// </summary>
+    public static IReadOnlyList<string?> EnumChoices(ParamInfo parameter)
+    {
+        ArgumentNullException.ThrowIfNull(parameter);
+        var underlying = Nullable.GetUnderlyingType(parameter.Type);
+        var type = underlying ?? parameter.Type;
+        if (!type.IsEnum)
+            return [];
+        string[] members = Enum.GetNames(type);
+        if (underlying is null)
+            return members;
+        var rows = new List<string?>(members.Length + 1) { null };
+        rows.AddRange(members);
+        return rows;
+    }
+
+    /// <summary>The label an <see cref="EnumChoices"/> row shows.</summary>
+    public static string EnumLabel(string? member) => member ?? NoneLabel;
 
     /// <summary>True when the parameter's range is genuinely bounded and has travel — an
     /// unbounded <c>[Param]</c> (the default is ±infinity) has nothing to map a slider
@@ -116,7 +155,7 @@ public static class ParamEditors
     }
 
     /// <summary>The label a <see cref="MaterialChoices"/> row shows.</summary>
-    public static string MaterialLabel(Material? material) => material?.Name ?? "(none)";
+    public static string MaterialLabel(Material? material) => material?.Name ?? NoneLabel;
 
     private static bool IsNumeric(Type type) =>
         type == typeof(double) || type == typeof(float) || type == typeof(int) || type == typeof(long);

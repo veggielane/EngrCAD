@@ -725,16 +725,18 @@ public class SheetMetalTests
     }
 
     /// <summary>
-    /// <see cref="SheetReliefOption"/> is a SECOND spelling of <see cref="SheetReliefKind"/>
-    /// (a dropdown cannot say "unset", so the feature needs its own None), and a second
-    /// spelling is a drift waiting to happen. This drives EVERY member of it through a real
-    /// regeneration and reads the kind back off the flange tree by NAME, so a kind added to
-    /// one enum and not the other fails here rather than quietly meaning something else.
+    /// <see cref="EdgeFlangeFeature.Relief"/> is a NULLABLE <see cref="SheetReliefKind"/>
+    /// now that a dropdown can say "unset" (<c>ParamEditors.EnumChoices</c>), so the SECOND
+    /// enum this used to need — and the drift a second spelling invites — is gone. Every
+    /// kind, and the null, is still driven through a real regeneration and read back off
+    /// the flange tree BY NAME, since the map from parameter to declaration is what a
+    /// reader has to trust.
     /// </summary>
     [Fact]
     public void EveryReliefOptionReachesTheFlangeTreeAsItsOwnKind()
     {
-        foreach (var option in Enum.GetValues<SheetReliefOption>())
+        SheetReliefKind?[] options = [null, .. Enum.GetValues<SheetReliefKind>().Cast<SheetReliefKind?>()];
+        foreach (var option in options)
         {
             var history = History(
                 new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
@@ -750,17 +752,13 @@ public class SheetMetalTests
             Assert.True(result.Succeeded, $"{option}: {result}");
 
             var flange = Assert.Single(SheetMetalFeatures.BodyOf(result.Body, "test").Flanges);
-            if (option == SheetReliefOption.None)
+            if (option is null)
             {
                 Assert.Null(flange.Relief);
                 continue;
             }
             Assert.Equal(option.ToString(), flange.Relief!.Kind.ToString());
         }
-        // ... and the kinds the geometry carries are exactly the options minus None.
-        Assert.Equal(
-            Enum.GetNames<SheetReliefKind>().Order(),
-            Enum.GetNames<SheetReliefOption>().Where(n => n != nameof(SheetReliefOption.None)).Order());
     }
 
     /// <summary>
@@ -779,7 +777,7 @@ public class SheetMetalTests
             new EdgeFlangeFeature
             {
                 Length = 20, Edge = PlusXTopEdge(), StartOffset = 5, Width = 15,
-                Relief = SheetReliefOption.Rectangular,
+                Relief = SheetReliefKind.Rectangular,
             },
             new EdgeFlangeFeature
             {
@@ -808,7 +806,7 @@ public class SheetMetalTests
             new EdgeFlangeFeature
             {
                 Length = 25, Edge = PlusXTopEdge(), StartOffset = 10, Width = 30,
-                Relief = SheetReliefOption.Obround, ReliefWidth = 4,
+                Relief = SheetReliefKind.Obround, ReliefWidth = 4,
             });
         Assert.True(history.Regenerate().Succeeded);
 

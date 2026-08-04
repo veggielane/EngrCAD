@@ -1074,10 +1074,14 @@ bend line is an `EdgeSetRef` resolved per regeneration and mapped back into the 
 The flange's per-bend overrides are also where the optional-parameter rule above is
 applied: `Width` and `BendRadius` are `double?` (null = take the body's), `KFactor` keeps
 a sentinel 0 because it is the one with a finite range and therefore the one behind a
-slider. `Relief` is the same rule again in its enum form — a `[Param]` enum gets a
-DROPDOWN, whose rows are the type's own members, so it cannot say "unset" either;
-`SheetReliefOption` is therefore `SheetReliefKind` plus a `None`, with a test driving
-every member through a regeneration so the second spelling cannot drift from the first.
+slider. `Relief` is the same rule again in its enum form, and the editor moved rather
+than the model: `ParamEditors.EnumChoices` now puts a leading **"(none)" row** in front
+of a NULLABLE enum's members, so a dropdown can say "unset" — which retired the second
+enum (`SheetReliefOption`, `SheetReliefKind` plus its own `None`) that existed only
+because it could not. `Relief` is a `SheetReliefKind?`, there is one spelling, and the
+drift the second one invited is gone. Its numeric twin came free: an EMPTY text box
+reaches `SetParameters` as JSON `null` rather than as an empty string, which is what
+`EditableValue` already displayed an unset value as.
 `SiteFor` also resolves a *piece* of a site's edge as that site, since a relief notches
 the blank and a selector can then only pick one of the pieces.
 

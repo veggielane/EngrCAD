@@ -51,31 +51,6 @@ public sealed class BaseFlangeFeature(Sketch sketch) : Feature
 }
 
 /// <summary>
-/// Which bend relief an <see cref="EdgeFlangeFeature"/> cuts: <see cref="SheetReliefKind"/>
-/// plus the <see cref="None"/> the geometry type spells as a null <see cref="BendRelief"/>.
-///
-/// <para><b>Why this is a second enum rather than a nullable one.</b> A <c>[Param]</c> enum
-/// gets a DROPDOWN, whose rows are the underlying type's members — so it has no way to say
-/// "unset", exactly as a slider has none. That is the rule <see cref="EdgeFlangeFeature"/>
-/// already follows for its numeric overrides: a parameter whose editor can express absence
-/// takes the nullable type, one whose editor cannot keeps a member outside the geometry's
-/// own vocabulary. The cost of a second spelling is that it could drift from
-/// <see cref="SheetReliefKind"/>, so the coverage is pinned by a test that drives EVERY
-/// member through a regeneration and reads the kind back off the flange tree.</para>
-/// </summary>
-public enum SheetReliefOption
-{
-    /// <summary>No relief: the corner is left to tear, which is what a tear relief is.</summary>
-    None,
-
-    /// <inheritdoc cref="SheetReliefKind.Rectangular"/>
-    Rectangular,
-
-    /// <inheritdoc cref="SheetReliefKind.Obround"/>
-    Obround,
-}
-
-/// <summary>
 /// One edge flange on a sheet part. The bend line is named with an
 /// <see cref="EdgeSetRef"/> resolved against the regenerated body, then mapped back into
 /// the flange tree by <see cref="SheetMetalBody.SiteFor"/> — so "the flange on THAT edge"
@@ -137,11 +112,13 @@ public sealed class EdgeFlangeFeature : Feature
     public double KFactor { get; init; }
 
     /// <summary>The <see cref="BendRelief"/> notched beside each INSET end of this flange;
-    /// <see cref="SheetReliefOption.None"/> cuts none. A dropdown cannot say "unset", which
-    /// is why this is an enum with its own None rather than a nullable one — the same rule
-    /// <see cref="KFactor"/> follows.</summary>
-    [Param(Description = "Bend relief cut beside each inset end")]
-    public SheetReliefOption Relief { get; init; } = SheetReliefOption.None;
+    /// <b>null cuts none</b>, which is the "let it tear" choice. Nullable rather than a
+    /// second enum carrying its own <c>None</c>: a dropdown now offers a "(none)" row for
+    /// a nullable enum (<c>ParamEditors.EnumChoices</c>), so the editor CAN express absence
+    /// and the rule the class remarks state applies — one spelling, and nothing to drift
+    /// from <see cref="SheetReliefKind"/>.</summary>
+    [Param(Description = "Bend relief cut beside each inset end; empty cuts none")]
+    public SheetReliefKind? Relief { get; init; }
 
     /// <summary>Relief width along the bend line; <b>null uses one sheet thickness</b>.</summary>
     [Param(Min = 1e-9, Units = "mm", Description = "Relief width; empty uses one sheet thickness")]
@@ -186,18 +163,12 @@ public sealed class EdgeFlangeFeature : Feature
             DeclaredRelief())).Solid;
     }
 
-    /// <summary>This feature's relief as the geometry vocabulary spells it: null for
-    /// <see cref="SheetReliefOption.None"/>, otherwise the matching
-    /// <see cref="SheetReliefKind"/>. Written as an explicit map rather than an ordinal
-    /// cast, so adding a kind to one enum and not the other is a compile error here rather
-    /// than a silently shifted meaning.</summary>
-    public BendRelief? DeclaredRelief() => Relief switch
-    {
-        SheetReliefOption.None => null,
-        SheetReliefOption.Rectangular => new BendRelief(SheetReliefKind.Rectangular, ReliefWidth, ReliefDepth),
-        SheetReliefOption.Obround => new BendRelief(SheetReliefKind.Obround, ReliefWidth, ReliefDepth),
-        _ => throw new NotSupportedException($"Unknown bend relief option {Relief}."),
-    };
+    /// <summary>This feature's relief as the geometry vocabulary spells it: null when none
+    /// was asked for, otherwise the declared kind with its two optional dimensions. There
+    /// is no enum mapping left to get wrong — the parameter carries
+    /// <see cref="SheetReliefKind"/> itself.</summary>
+    public BendRelief? DeclaredRelief() =>
+        Relief is { } kind ? new BendRelief(kind, ReliefWidth, ReliefDepth) : null;
 }
 
 /// <summary>Shared helpers for the sheet-metal features.</summary>
