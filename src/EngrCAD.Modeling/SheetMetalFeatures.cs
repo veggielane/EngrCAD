@@ -80,6 +80,27 @@ public sealed class BaseFlangeFeature(Sketch sketch) : Feature
 public sealed class EdgeFlangeFeature : Feature
 {
     private readonly EdgeSetRef _edge = EdgeSetRef.Convex;
+    private readonly IReadOnlyList<Sketch> _cutouts;
+
+    /// <summary>A plain flange.</summary>
+    public EdgeFlangeFeature() : this([]) { }
+
+    /// <summary>A flange whose WALL carries cutouts, each a closed sketch in the flange's
+    /// own local coordinates (x along the bend line from the flange's start, y out from the
+    /// bend's tangent line). They are constructor INPUTS rather than <c>[Param]</c>s for
+    /// the same reason a hole feature's <c>HoleSpec</c> is: a sketch is authored geometry,
+    /// not a number an editor can offer — and, like one, it round-trips exactly through the
+    /// public curve vocabulary in <see cref="SaveInputs"/>.</summary>
+    public EdgeFlangeFeature(params Sketch[] cutouts)
+    {
+        ArgumentNullException.ThrowIfNull(cutouts);
+        _cutouts = [.. cutouts];
+    }
+
+    internal EdgeFlangeFeature(IReadOnlyList<Sketch> cutouts) => _cutouts = cutouts;
+
+    /// <summary>The cutouts this flange punches through its wall.</summary>
+    public IReadOnlyList<Sketch> Cutouts => _cutouts;
 
     [Param(Min = 1e-9, Units = "mm", Description = "Flange length from the outer virtual sharp")]
     public double Length { get; init; } = 20;
@@ -160,7 +181,22 @@ public sealed class EdgeFlangeFeature : Feature
             KFactor > 0 ? KFactor : null,
             StartOffset,
             Width,
-            DeclaredRelief())).Solid;
+            DeclaredRelief(),
+            _cutouts)).Solid;
+    }
+
+    /// <summary>The wall cutouts, exactly, through the public curve vocabulary — the same
+    /// seam a sketch extrude's profile round-trips through, so nothing is flattened and a
+    /// saved history rebuilds the same holes. A flange with none writes nothing, which is
+    /// what keeps every existing file byte-identical.</summary>
+    protected internal override JsonNode? SaveInputs()
+    {
+        if (_cutouts.Count == 0)
+            return null;
+        var cutouts = new JsonArray();
+        foreach (var cutout in _cutouts)
+            cutouts.Add(InputJson.SaveSketch(cutout));
+        return new JsonObject { ["cutouts"] = cutouts };
     }
 
     /// <summary>This feature's relief as the geometry vocabulary spells it: null when none

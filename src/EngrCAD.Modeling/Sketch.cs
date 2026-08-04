@@ -268,6 +268,31 @@ public sealed class Sketch
             start, start + (control - start) * (2.0 / 3.0), end + (control - end) * (2.0 / 3.0), end);
     }
 
+    /// <summary>
+    /// This sketch placed on a rigid 2D frame: local <c>(x, y)</c> becomes
+    /// <c>origin + x·xAxis + y·xAxis.Perpendicular</c>. A rotation and a translation, so
+    /// every segment moves EXACTLY — an arc keeps its radius and its signed sweep, an
+    /// ellipse both semi-axes, a Bézier its control polygon — and holes ride with it.
+    ///
+    /// <para>Deliberately RIGID rather than affine. It exists because a sheet-metal
+    /// flange's frame in the blank and its frame on the folded wall are the SAME rigid
+    /// frame for the same local coordinates, which is what makes an unfold bookkeeping;
+    /// an affine map would turn an arc into an ellipse and put a re-fit inside a path
+    /// whose whole claim is that nothing is fitted.</para>
+    /// </summary>
+    /// <param name="origin">Where local (0, 0) lands.</param>
+    /// <param name="xAxis">Where local (1, 0) points; normalized, so a zero-length axis is
+    /// refused rather than silently collapsing the sketch to a point.</param>
+    public Sketch Placed(Vector2d origin, Vector2d xAxis)
+    {
+        if (!(xAxis.LengthSquared > 0))
+            throw new ArgumentException("A placement frame's X axis must be non-zero.", nameof(xAxis));
+        var unit = xAxis.Normalized();
+        return new Sketch(
+            [.. Segments.Select(s => s.Placed(origin, unit))],
+            [.. Holes.Select(h => h.Placed(origin, unit))]);
+    }
+
     /// <summary>The sketch with an inner region removed (parity handles the rest).</summary>
     public Sketch WithHole(Sketch inner)
     {

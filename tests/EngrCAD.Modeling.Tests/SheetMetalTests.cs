@@ -454,6 +454,185 @@ public class SheetMetalTests
         Assert.Equal(1.0, FoldedVolume(body) / flat.Volume, 6);
     }
 
+    // ------------------------------------------------------- cutouts on a flange wall
+
+    /// <summary>
+    /// A flange cutout is ONE declaration reaching BOTH views, exactly as a bend relief is:
+    /// the folded wall is punched and the blank gains the same hole through the flange's
+    /// own rigid frame. So the load-bearing assertion is the volume-identity one — the
+    /// folded-versus-flat discrepancy must be UNCHANGED, since the cutout removes the same
+    /// material from each — beside two exact statements about how much each view lost.
+    /// A blanket "the two volumes agree" waves through a cutout that reached only one.
+    /// </summary>
+    [Theory]
+    [InlineData(SheetMaterials.Coined)]
+    [InlineData(SheetMaterials.MildSteel)]
+    [InlineData(SheetMaterials.SoftAluminium)]
+    public void AFlangeCutoutRemovesTheSameMaterialFromBothViews(double k)
+    {
+        const double length = 25, radius = 4;
+        var plain = SheetMetalBody.Base(Plate(), Spec(k))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), length);
+        var holed = SheetMetalBody.Base(Plate(), Spec(k))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), length,
+                cutouts: [Sketch.Circle(radius).Placed((25, 8), (1, 0))]);
+
+        double area = Math.PI * radius * radius;
+        var solid = holed.Solid.ToBrep();
+        solid.Validate();
+
+        // The blank loses exactly the circle; the folded body loses exactly circle x T.
+        Assert.Equal(plain.Unfold().Area - area, holed.Unfold().Area, 9);
+        Assert.Equal(FoldedVolume(plain) - area * Thickness, FoldedVolume(holed), 3);
+
+        // ... and therefore the discrepancy the K-factor owns does not move at all.
+        double plainGap = FoldedVolume(plain) - plain.Unfold().Volume;
+        double holedGap = FoldedVolume(holed) - holed.Unfold().Volume;
+        Assert.True(
+            Math.Abs(holedGap - plainGap) < 1e-8 * FoldedVolume(plain),
+            $"a cutout must not move the folded-vs-flat gap: {plainGap:g12} -> {holedGap:g12}");
+    }
+
+    /// <summary>The hole has to be in the right PLACE, not merely of the right size — and
+    /// the place is what a rigid frame pair is for. Measured on the folded solid's own
+    /// bounds and on the blank's own signed distance, two independent readings of one
+    /// declaration.</summary>
+    [Fact]
+    public void AFlangeCutoutLandsWhereItsLocalCoordinatesSay()
+    {
+        // Local (x, y): x runs BACK along the bend line from the flange's far end, y out
+        // from the tangent line. So x = 10 is at plate y = 40, and y = 6 is 6 above the
+        // bend's tangent (z = T + R + 6).
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25,
+                cutouts: [Sketch.Circle(3).Placed((10, 6), (1, 0))]);
+
+        var blank = body.Unfold().Outline;
+        var hole = Assert.Single(blank.Holes);
+        // In the blank the flange's frame origin sits at the far tangent line, so the hole
+        // is 10 back along the edge (y = 40) and 6 past the bend zone.
+        double allowance = SheetMetalSpec.BendAllowance(
+            Math.PI / 2, Radius, Thickness, SheetMaterials.MildSteel);
+        Assert.Equal(PlateX + allowance + 6, hole.Bounds.Center.X, 9);
+        Assert.Equal(PlateY - 10, hole.Bounds.Center.Y, 9);
+
+        // And on the folded solid: the bore's rim vertices sit on the wall at z centred on
+        // T + R + 6, on both faces of the wall.
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        var rim = solid.Vertices
+            .Where(v => Math.Abs(v.Position.Y - (PlateY - 10)) < 5)
+            .Where(v => v.Position.X > PlateX + Radius - 1e-9)
+            .ToList();
+        Assert.NotEmpty(rim);
+        Assert.All(rim, v => Assert.Equal(Thickness + Radius + 6, v.Position.Z, 6));
+    }
+
+    [Fact]
+    public void ACutoutThatWouldCrossTheBendIsRefusedNamingTheDevelopment()
+    {
+        var exception = Assert.Throws<NotSupportedException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25,
+                    cutouts: [Sketch.Circle(3).Placed((20, 2), (1, 0))]));
+        Assert.Contains("BEND", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("development", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ACutoutReachingTheWallsEdgeOrOverlappingASiblingIsRefused()
+    {
+        // Past the tip: that is a change to the flange's OUTLINE, not a hole through it.
+        Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts:
+                    [Sketch.Circle(3).Placed((20, 19), (1, 0))]));
+
+        // Two cutouts whose extents meet: refused, conservatively and by name.
+        var overlap = Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts:
+                [
+                    Sketch.Circle(3).Placed((20, 9), (1, 0)),
+                    Sketch.Circle(3).Placed((24, 9), (1, 0)),
+                ]));
+        Assert.Contains("overlapping extents", overlap.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Several cutouts of several kinds, on a flange that itself carries a child
+    /// flange — the composition test, since a cutout must not disturb the tip edge a child
+    /// bends on.</summary>
+    [Fact]
+    public void SeveralCutoutsComposeWithAChainedFlange()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 30, cutouts:
+            [
+                Sketch.Circle(3).Placed((10, 8), (1, 0)),
+                Sketch.Rectangle(8, 5).Placed((30, 12), (1, 0)),
+                Sketch.Slot(10, 4).Placed((25, 5), (1, 0)),
+            ])
+            .WithFlange(SheetFlangeTarget.FlangeTip(0), 12);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        var flat = body.Unfold();
+        Assert.Equal(3, flat.Outline.Holes.Count);
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / flat.Volume, 6);
+    }
+
+    /// <summary>A wall cutout is a constructor INPUT (a sketch is authored geometry, not a
+    /// number an editor can offer), so what has to hold is the `SaveInputs` contract: it
+    /// round-trips exactly through the public curve vocabulary and rebuilds the same
+    /// holes. A flange with none writes NO inputs record, which is what keeps a history
+    /// saved before cutouts existed loadable.</summary>
+    [Fact]
+    public void FlangeCutoutsRoundTripThroughTheFeatureRegistry()
+    {
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature(
+                Sketch.Circle(3).Placed((12, 8), (1, 0)),
+                Sketch.Rectangle(6, 4).Placed((30, 10), (1, 0)))
+            {
+                Length = 25,
+                Edge = PlusXTopEdge(),
+            });
+        Assert.True(history.Regenerate().Succeeded);
+
+        string saved = history.SaveHistory();
+        Assert.Contains("\"cutouts\"", saved, StringComparison.Ordinal);
+
+        var loaded = FeatureHistory.LoadHistory(saved);
+        // The lambda-backed EDGE is the documented opaque case and warns; that is not what
+        // this test is about, and the cutouts must come back regardless.
+        Assert.Contains(loaded.Warnings, w => w.Contains("Edge", StringComparison.Ordinal));
+        var rebuilt = Assert.IsType<EdgeFlangeFeature>(loaded.History.Features[1]);
+        Assert.Equal(2, rebuilt.Cutouts.Count);
+        Assert.Equal(Math.PI * 9, rebuilt.Cutouts[0].Area(), 9);
+        Assert.Equal(24, rebuilt.Cutouts[1].Area(), 9);
+        // The rebuilt cutouts drive the same geometry, read off a body built from THEM.
+        Assert.Equal(
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: rebuilt.Cutouts)
+                .Unfold().Area,
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts:
+                [
+                    Sketch.Circle(3).Placed((12, 8), (1, 0)),
+                    Sketch.Rectangle(6, 4).Placed((30, 10), (1, 0)),
+                ])
+                .Unfold().Area,
+            12);
+
+        // A flange with NO cutouts writes no inputs record at all, so a history saved
+        // before cutouts existed still loads (the factory reads a missing record as none).
+        var plain = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature { Length = 25, Edge = PlusXTopEdge() });
+        Assert.DoesNotContain("\"cutouts\"", plain.SaveHistory(), StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------- the flat pattern
 
     [Fact]

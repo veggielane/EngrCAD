@@ -141,9 +141,21 @@ public static class SheetMetalSurgery
     /// <see cref="SheetBendSection.OutsideSetback"/>.</param>
     public static BrepSolid AddEdgeFlange(
         BrepSolid solid, in SheetBendSection section,
-        in Vector3d spanStart, in Vector3d spanEnd, double wallLength)
+        in Vector3d spanStart, in Vector3d spanEnd, double wallLength) =>
+        AddEdgeFlange(solid, section, spanStart, spanEnd, wallLength, []);
+
+    /// <inheritdoc cref="AddEdgeFlange(BrepSolid, in SheetBendSection, in Vector3d, in Vector3d, double)"/>
+    /// <param name="wallCutouts">Closed profiles lying ON one of the flange wall's two
+    /// planar faces, each punched clean through the wall. Which face they lie on is
+    /// DERIVED from their own plane rather than declared (see <c>PunchWall</c>), so a
+    /// caller cannot state one and supply the other.</param>
+    public static BrepSolid AddEdgeFlange(
+        BrepSolid solid, in SheetBendSection section,
+        in Vector3d spanStart, in Vector3d spanEnd, double wallLength,
+        IReadOnlyList<Profile> wallCutouts)
     {
         ArgumentNullException.ThrowIfNull(solid);
+        ArgumentNullException.ThrowIfNull(wallCutouts);
         Validate(section, wallLength);
 
         var n = section.Inside;
@@ -166,7 +178,7 @@ public static class SheetMetalSurgery
         // corner there.
         var rims = ResolveRims(site, n, section.Thickness, q0, q1, a);
 
-        var flange = BuildFlange(section with { BendLinePoint = q0 }, q1 - q0, wallLength, rims);
+        var flange = BuildFlange(section with { BendLinePoint = q0 }, q1 - q0, wallLength, rims, wallCutouts);
 
         var faces = solid.Faces.Where(f => !ReferenceEquals(f, site.Wall)).ToList();
         faces.AddRange(flange.Faces);
@@ -471,7 +483,8 @@ public static class SheetMetalSurgery
         new(new Line3d(from.Position, to.Position), Interval.Unit, from, to);
 
     private static FlangeBuild BuildFlange(
-        in SheetBendSection s0, in Vector3d span, double wallLength, Rims rims)
+        in SheetBendSection s0, in Vector3d span, double wallLength, Rims rims,
+        IReadOnlyList<Profile> wallCutouts)
     {
         // The far end's cross-section is the near one translated along the bend line —
         // one fact, so the caller cannot hand over an inconsistent pair.
@@ -541,24 +554,45 @@ public static class SheetMetalSurgery
                 Use(rims.Outside, rims.OutsideVertex[1], rims.OutsideVertex[0]),
             ])]);
 
+        // Wall cutouts: each is punched straight through, so the two planar wall faces gain
+        // a hole loop apiece and the hole's own wall arrives as one band face per profile
+        // segment. Built BEFORE the two faces because a BrepFace takes its whole loop list
+        // at construction.
+        var insideHoles = new List<BrepLoop>();
+        var outsideHoles = new List<BrepLoop>();
+        var bandFaces = new List<BrepFace>();
+        var insideNormal = v;                      // = InsideNormalAfterBend
+        foreach (var cutout in wallCutouts)
+        {
+            PunchWall(
+                cutout, insideNormal, thickness,
+                insideHoles, outsideHoles, bandFaces);
+        }
+
         var flangeInside = new BrepFace(
             new PlaneSurface(tangentInside[0], alongSpan, u),
-            [new BrepLoop(
             [
-                new BrepCoedge(insideTangentEdge, true),
-                new BrepCoedge(insideWall[1], true),
-                new BrepCoedge(insideTipEdge, false),
-                new BrepCoedge(insideWall[0], false),
-            ])]);
+                new BrepLoop(
+                [
+                    new BrepCoedge(insideTangentEdge, true),
+                    new BrepCoedge(insideWall[1], true),
+                    new BrepCoedge(insideTipEdge, false),
+                    new BrepCoedge(insideWall[0], false),
+                ]),
+                .. insideHoles,
+            ]);
         var flangeOutside = new BrepFace(
             new PlaneSurface(tangentOutside[0], u, alongSpan),
-            [new BrepLoop(
             [
-                new BrepCoedge(outsideTangentEdge, false),
-                new BrepCoedge(outsideWall[0], true),
-                new BrepCoedge(outsideTipEdge, true),
-                new BrepCoedge(outsideWall[1], false),
-            ])]);
+                new BrepLoop(
+                [
+                    new BrepCoedge(outsideTangentEdge, false),
+                    new BrepCoedge(outsideWall[0], true),
+                    new BrepCoedge(outsideTipEdge, true),
+                    new BrepCoedge(outsideWall[1], false),
+                ]),
+                .. outsideHoles,
+            ]);
         var flangeTip = new BrepFace(
             new PlaneSurface(tipInsideVertex[0].Position, alongSpan, -v),
             [new BrepLoop(
@@ -587,7 +621,112 @@ public static class SheetMetalSurgery
         ];
 
         return new FlangeBuild(
-            [bendInside, bendOutside, flangeInside, flangeOutside, flangeTip], chains);
+            [bendInside, bendOutside, flangeInside, flangeOutside, flangeTip, .. bandFaces], chains);
+    }
+
+    /// <summary>
+    /// Punches one closed profile clean through the flange's wall: a hole loop on each of
+    /// the two planar wall faces plus one band face per profile segment.
+    ///
+    /// <para><b>Which face the profile lies on is DERIVED, not declared.</b> A cutout is
+    /// quoted on the flange's own top face, which is the INSIDE face for an Up flange and
+    /// the OUTSIDE one for a Down flange — so a caller stating it would have one more
+    /// convention to get wrong. Instead the profile's own plane normal decides: with
+    /// <paramref name="insideNormal"/> the wall's inside-face normal, a profile wound
+    /// counter-clockwise about it is on the inside face and one wound the other way is on
+    /// the outside, and the punch direction follows. That is the same rule
+    /// <c>SolidFactory.Extrude</c> applies to a hole profile, read the other way round.</para>
+    ///
+    /// <para>The loop structure is <c>BuildSweptSolid</c>'s verbatim, which is the point:
+    /// a hole through a flat plate is a swept solid's hole and nothing here is a second
+    /// answer to how one is wound. The near face — the one the profile lies on — takes the
+    /// REVERSED coedges (it is the sweep's bottom cap, whose normal opposes the sweep) and
+    /// the far face the forward ones.</para>
+    /// </summary>
+    private static void PunchWall(
+        Profile cutout, in Vector3d insideNormal, double thickness,
+        List<BrepLoop> insideHoles, List<BrepLoop> outsideHoles, List<BrepFace> bandFaces)
+    {
+        // A hole's winding is opposite the material's, so a profile wound CCW about the
+        // inside normal bounds material on the inside face: that is the face it lies on,
+        // and the punch runs from it to the other one.
+        bool onInside = cutout.Normal.Dot(insideNormal) > 0;
+        var near = onInside ? insideHoles : outsideHoles;
+        var far = onInside ? outsideHoles : insideHoles;
+        var push = onInside ? -insideNormal * thickness : insideNormal * thickness;
+        var translation = Matrix4d.CreateTranslation(push);
+        var direction = push;
+
+        if (cutout.IsSingleClosedCurve)
+        {
+            // A circular cutout: one closed generator, so the band is a single face with
+            // two ring loops and the seam vertex is shared by both rings' closed edges.
+            var generator = cutout.Segments[0];
+            var domain = generator.Domain;
+            var seamNear = new BrepVertex(generator.PointAt(domain.Start));
+            var seamFar = new BrepVertex(translation.TransformPoint(seamNear.Position));
+            var nearEdge = new BrepEdge(generator, domain, seamNear, seamNear);
+            var farEdge = new BrepEdge(generator.Transformed(translation), domain, seamFar, seamFar);
+
+            bandFaces.Add(new BrepFace(new ExtrudedSurface(generator, direction),
+            [
+                new BrepLoop([new BrepCoedge(nearEdge, sameSense: true)]),
+                new BrepLoop([new BrepCoedge(farEdge, sameSense: false)]),
+            ]));
+            near.Add(new BrepLoop([new BrepCoedge(nearEdge, sameSense: false)]));
+            far.Add(new BrepLoop([new BrepCoedge(farEdge, sameSense: true)]));
+            return;
+        }
+
+        int n = cutout.Segments.Count;
+        var nearVertices = new BrepVertex[n];
+        var farVertices = new BrepVertex[n];
+        for (int i = 0; i < n; i++)
+        {
+            var q = cutout.Segments[i].PointAt(cutout.Segments[i].Domain.Start);
+            nearVertices[i] = new BrepVertex(q);
+            farVertices[i] = new BrepVertex(translation.TransformPoint(q));
+        }
+
+        var nearEdges = new BrepEdge[n];
+        var farEdges = new BrepEdge[n];
+        var railEdges = new BrepEdge[n];
+        for (int i = 0; i < n; i++)
+        {
+            var segment = cutout.Segments[i];
+            int next = (i + 1) % n;
+            nearEdges[i] = new BrepEdge(segment, segment.Domain, nearVertices[i], nearVertices[next]);
+            farEdges[i] = new BrepEdge(
+                segment.Transformed(translation), segment.Domain, farVertices[i], farVertices[next]);
+            railEdges[i] = new BrepEdge(
+                new Line3d(nearVertices[i].Position, farVertices[i].Position),
+                Interval.Unit, nearVertices[i], farVertices[i]);
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            int next = (i + 1) % n;
+            bandFaces.Add(new BrepFace(new ExtrudedSurface(cutout.Segments[i], direction),
+            [
+                new BrepLoop(
+                [
+                    new BrepCoedge(nearEdges[i], sameSense: true),
+                    new BrepCoedge(railEdges[next], sameSense: true),
+                    new BrepCoedge(farEdges[i], sameSense: false),
+                    new BrepCoedge(railEdges[i], sameSense: false),
+                ]),
+            ]));
+        }
+
+        var nearLoop = new List<BrepCoedge>(n);
+        for (int i = n - 1; i >= 0; i--)
+            nearLoop.Add(new BrepCoedge(nearEdges[i], sameSense: false));
+        near.Add(new BrepLoop(nearLoop));
+
+        var farLoop = new List<BrepCoedge>(n);
+        for (int i = 0; i < n; i++)
+            farLoop.Add(new BrepCoedge(farEdges[i], sameSense: true));
+        far.Add(new BrepLoop(farLoop));
     }
 
     /// <summary>A coedge on an existing edge, with the sense that walks it

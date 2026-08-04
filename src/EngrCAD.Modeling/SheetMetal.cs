@@ -253,6 +253,11 @@ public readonly record struct SheetFlangeTarget(int ParentFlange, int EdgeIndex)
 /// be flush with the edge or inset from it, independently.</param>
 /// <param name="Relief">The <see cref="BendRelief"/> notched into the parent beside each
 /// INSET end of this flange; null cuts none, which is the "let it tear" choice.</param>
+/// <param name="Cutouts">Holes punched through this flange's WALL, each a closed
+/// <see cref="Sketch"/> in the flange's OWN local coordinates — see
+/// <see cref="SheetMetalBody"/>'s remarks on the flange frame. They reach both views from
+/// this one declaration, exactly as a bend relief does: the folded wall is punched and the
+/// blank gains the same holes through the flange's rigid flat frame.</param>
 public sealed record EdgeFlange(
     SheetFlangeTarget Target,
     double Length,
@@ -262,9 +267,13 @@ public sealed record EdgeFlange(
     double? KFactor = null,
     double StartOffset = 0,
     double? Width = null,
-    BendRelief? Relief = null)
+    BendRelief? Relief = null,
+    IReadOnlyList<Sketch>? Cutouts = null)
 {
     internal double AngleRadians => AngleDegrees * Math.PI / 180;
+
+    /// <summary>The declared cutouts, never null — one spelling for "none".</summary>
+    internal IReadOnlyList<Sketch> CutoutList => Cutouts ?? [];
 }
 
 /// <summary>One bend as it appears on the flat pattern: the strip of blank the bend
@@ -467,9 +476,11 @@ public sealed class SheetMetalBody
         SheetFlangeTarget target, double length, double angleDegrees = 90,
         SheetBendDirection direction = SheetBendDirection.Up,
         double? bendRadius = null, double? kFactor = null,
-        double startOffset = 0, double? width = null, BendRelief? relief = null) =>
+        double startOffset = 0, double? width = null, BendRelief? relief = null,
+        IReadOnlyList<Sketch>? cutouts = null) =>
         WithFlange(new EdgeFlange(
-            target, length, angleDegrees, direction, bendRadius, kFactor, startOffset, width, relief));
+            target, length, angleDegrees, direction, bendRadius, kFactor, startOffset, width, relief,
+            cutouts));
 
     /// <summary>The folded solid as a <see cref="Shape"/> — B-Rep native, built by
     /// topology surgery rather than by booleans (see <see cref="SheetMetalSurgery"/>).</summary>
@@ -549,7 +560,10 @@ public sealed class SheetMetalBody
     {
         var solid = baseSolid;
         foreach (var bend in Tree.Bends(top, scale))
-            solid = SheetMetalSurgery.AddEdgeFlange(solid, bend.Section, bend.Start, bend.End, bend.WallLength);
+        {
+            solid = SheetMetalSurgery.AddEdgeFlange(
+                solid, bend.Section, bend.Start, bend.End, bend.WallLength, bend.Cutouts);
+        }
         return solid;
     }
 
@@ -605,6 +619,11 @@ public sealed class SheetMetalBody
         public double ReliefWidth { get; init; }
         public double ReliefDepth { get; init; }
 
+        /// <summary>Holes through this flange's wall, in the flange's own local
+        /// coordinates — the same coordinates its flat frame and its 3D frame both
+        /// place, which is what makes one declaration reach both views.</summary>
+        public IReadOnlyList<Sketch> Cutouts { get; init; } = [];
+
         /// <summary>Is this end of the flange inset from its edge's own end? A relief is
         /// cut at exactly the ends that are — a flush end has no parent material beside
         /// it — so this one predicate settles both the notch list and the surgery's rims.</summary>
@@ -633,7 +652,8 @@ public sealed class SheetMetalBody
 
     /// <summary>The surgery arguments for one bend.</summary>
     internal readonly record struct BendArgs(
-        SheetBendSection Section, Vector3d Start, Vector3d End, double WallLength);
+        SheetBendSection Section, Vector3d Start, Vector3d End, double WallLength,
+        IReadOnlyList<Profile> Cutouts);
 
     /// <summary>
     /// Builds one outline as an exact chain of <see cref="Curve2d"/>s. Two rules and no
@@ -784,6 +804,7 @@ public sealed class SheetMetalBody
                     $"outside setback (R + T)*tan(angle/2) is already {setback:g6}. Lengthen the flange, reduce " +
                     "the bend radius, or reduce the angle.");
             double allowance = body.Spec.BendAllowanceAt(angle, flange.BendRadius, flange.KFactor);
+            RequireCutoutsFitTheWall(flange, index, width, wall);
 
             // The flange's own flat frame: origin at the far end of its bend zone, x
             // running back along the edge so the rectangle occupies x in [0, width].
@@ -806,7 +827,75 @@ public sealed class SheetMetalBody
                 ReliefWidth = reliefWidth,
                 ReliefDepth = reliefDepth,
                 Inset = inset,
+                Cutouts = flange.CutoutList,
             };
+        }
+
+        /// <summary>
+        /// Every refusal a flange CUTOUT can produce, all of them before any geometry is
+        /// built. A cutout is a hole through the flange's flat WALL, so what has to hold is
+        /// that it lies strictly inside that wall's rectangle in the flange's own local
+        /// coordinates: <c>x</c> along the bend line in <c>[0, width]</c> and <c>y</c> out
+        /// from the bend's tangent line in <c>[0, wallLength]</c>.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>A cutout crossing the bend line is refused BY NAME rather than
+        /// clipped</b>, and the reason is the flat pattern rather than the solid: a hole
+        /// that runs into the bend zone is a hole in a CYLINDRICAL band, and its flat shape
+        /// is that band's DEVELOPMENT — a different map from the flange's rigid frame. The
+        /// unfold's whole claim is that it is bookkeeping over rigid frames, so admitting
+        /// one would mean the blank quietly stopped being derived the way it says it is.</para>
+        /// <para><b>The overlap test is on BOUNDING BOXES and so is conservative</b>: two
+        /// cutouts whose boxes meet are refused even when the shapes themselves are clear
+        /// of each other. That direction is the safe one — an admitted overlap puts two
+        /// crossing hole loops on one face and produces a solid that cannot be welded,
+        /// which is exactly what <c>Shape.Drill</c>'s own near-tangent refusal band buys
+        /// for the same reason — and a refusal names both cutouts and what to move.</para>
+        /// </remarks>
+        private static void RequireCutoutsFitTheWall(
+            EdgeFlange flange, int index, double width, double wallLength)
+        {
+            var cutouts = flange.CutoutList;
+            for (int c = 0; c < cutouts.Count; c++)
+            {
+                var cutout = cutouts[c]
+                    ?? throw new ArgumentNullException(nameof(flange), $"Flange {index}'s cutout {c} is null.");
+                if (cutout.Holes.Count > 0)
+                    throw new NotSupportedException(
+                        $"Flange {index}'s cutout {c} has holes of its own. A hole inside a hole is an ISLAND " +
+                        "of material with nothing joining it to the wall, so it would be a second body rather " +
+                        "than a cutout; declare the island as part of the wall instead.");
+
+                var bounds = cutout.Bounds;
+                if (bounds.Min.Y <= Weld)
+                    throw new NotSupportedException(
+                        $"Flange {index}'s cutout {c} reaches y = {bounds.Min.Y:g6}, i.e. into (or through) the " +
+                        "BEND. A hole that crosses the bend line is a hole in a cylindrical band, whose flat " +
+                        "shape is that band's development rather than the flange's own rigid frame — and the " +
+                        "unfold is bookkeeping over rigid frames. Move the cutout clear of the tangent line, " +
+                        "or cut it in the base sketch if it belongs to the parent.");
+                if (bounds.Max.Y >= wallLength - Weld
+                    || bounds.Min.X <= Weld || bounds.Max.X >= width - Weld)
+                    throw new ArgumentException(
+                        $"Flange {index}'s cutout {c} spans x [{bounds.Min.X:g6}, {bounds.Max.X:g6}] and y " +
+                        $"[{bounds.Min.Y:g6}, {bounds.Max.Y:g6}], which does not lie strictly inside the wall's " +
+                        $"[0, {width:g6}] by [0, {wallLength:g6}]. A cutout that reaches a wall edge is a change " +
+                        "to the flange's OUTLINE rather than a hole through it.");
+
+                for (int other = 0; other < c; other++)
+                {
+                    var theirs = cutouts[other].Bounds;
+                    if (bounds.Min.X < theirs.Max.X && theirs.Min.X < bounds.Max.X
+                        && bounds.Min.Y < theirs.Max.Y && theirs.Min.Y < bounds.Max.Y)
+                    {
+                        throw new ArgumentException(
+                            $"Flange {index}'s cutouts {other} and {c} have overlapping extents. Two hole loops " +
+                            "that cross put a face's boundary in a state nothing can weld, so the test is on " +
+                            "bounding boxes and errs toward refusing: separate them, or draw the pair as one " +
+                            "cutout.");
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -933,16 +1022,46 @@ public sealed class SheetMetalBody
                 var parent = frames[node.Parent];
                 var startSection = SectionAt(parent, node, node.StartOffset, thickness, scale);
                 var endSection = SectionAt(parent, node, node.StartOffset + node.Width, thickness, scale);
-                bends.Add(new BendArgs(
-                    startSection, startSection.BendLinePoint, endSection.BendLinePoint, node.WallLength * scale));
 
                 bool up = node.Flange!.Direction == SheetBendDirection.Up;
-                frames[node.Index] = new SheetFrame(
+                var frame = new SheetFrame(
                     up ? endSection.InsideTangentPoint : endSection.OutsideTangentPoint,
                     -parent.Direction(node.EdgeTangent),
                     endSection.FlangeDirection);
+
+                // A cutout is declared in the flange's own local coordinates, and the frame
+                // just computed is the 3D placement of exactly those coordinates on the
+                // flange's top face — so the folded body's holes and the blank's holes come
+                // from one declaration through two placements of one frame, which is what
+                // makes them incapable of disagreeing.
+                bends.Add(new BendArgs(
+                    startSection, startSection.BendLinePoint, endSection.BendLinePoint,
+                    node.WallLength * scale, PlaceCutouts(node, frame, scale)));
+
+                frames[node.Index] = frame;
             }
             return (frames, bends);
+        }
+
+        /// <summary>
+        /// One flange's cutouts placed in 3D on its own top face. The frame's X and Y are
+        /// already unit and orthogonal, so the placement is that frame's matrix times the
+        /// uniform scale — no re-derivation and nothing normalized twice.
+        /// </summary>
+        private static IReadOnlyList<Profile> PlaceCutouts(Node node, in SheetFrame frame, double scale)
+        {
+            if (node.Cutouts.Count == 0)
+                return [];
+            var placement = Frame3d.FromOrthonormal(frame.Origin, frame.X, frame.Y).ToMatrix()
+                * Matrix4d.CreateScale(scale);
+            var placed = new List<Profile>(node.Cutouts.Count);
+            foreach (var cutout in node.Cutouts)
+            {
+                var (outer, _) = cutout.ToProfiles();   // holes are refused at Resolve
+                placed.Add(new Profile(
+                    [.. outer.Segments.Select(s => (Curve3d)new TransformedCurve(s, placement))]));
+            }
+            return placed;
         }
 
         /// <summary>The bend cross-section at parameter <paramref name="s"/> along the
@@ -984,7 +1103,7 @@ public sealed class SheetMetalBody
                 pen.LineTo(_base.Flat.ToFlat(line.End));
             }
 
-            return new FlatPattern(WithBaseHoles(spliced), bends, _body.Spec.Thickness);
+            return new FlatPattern(WithHoles(spliced), bends, _body.Spec.Thickness);
         }
 
         /// <summary>
@@ -1036,6 +1155,23 @@ public sealed class SheetMetalBody
             var outline = Sketch.FromCurves(curves);
             foreach (var hole in _body.BaseSketch.Holes)
                 outline = outline.WithHole(hole);
+            return outline;
+        }
+
+        /// <summary>
+        /// The blank's holes: the base sketch's, plus every flange's own cutouts placed by
+        /// that flange's rigid FLAT frame. The folded body punches the same declarations
+        /// through the same frame in 3D, which is why a cutout cannot land in two places —
+        /// the notch rule for reliefs, applied to a hole.
+        /// </summary>
+        private Sketch WithHoles(IReadOnlyList<Curve2d> curves)
+        {
+            var outline = WithBaseHoles(curves);
+            foreach (var node in _nodes)
+            {
+                foreach (var cutout in node.Cutouts)
+                    outline = outline.WithHole(cutout.Placed(node.Flat.Origin, node.Flat.X));
+            }
             return outline;
         }
 
