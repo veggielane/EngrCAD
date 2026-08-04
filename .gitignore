@@ -31,3 +31,4 @@ launchSettings.json
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 scratch/
+*.stackdump
