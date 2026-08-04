@@ -280,6 +280,22 @@ public class TessellationCorpusQualityTests
                     - Shape.Cylinder(3, 120)
                         .Rotate(Vector3d.UnitX, -Math.PI / 2)
                         .Translate((0, 0, 9))).ToBrep();
+            case "drilled breakout":
+                // The same breakout cut by Shape.Drill instead, which is a different
+                // tessellation input in both faces that matter: a drill tool is ONE
+                // axis-touching revolve, so the bore wall is a RevolvedSurface band rather
+                // than a CylinderSurface, and the tool's flat end is a POLE CAP that -- the
+                // bore being BLIND -- the top face CUTS. That cut cap is what used to crack
+                // the boolean, ProbePoint's pole path having measured the wrapping loop by
+                // its average v rather than by its closest approach to the pole.
+                //
+                // NOT a Corpus member: it is structurally clean but does not clear the
+                // normal-agreement floor at any density -- see
+                // DrilledBreakout_IsCleanButBelowTheAgreementFloor.
+                return Shape.Extrude(Sketch.Rectangle(40, 30), 10)
+                    .Drill(HoleSpec.Simple(6), [new(0, 0)], 15,
+                        SketchPlane.At((0, -15, 9), Vector3d.UnitX, Vector3d.UnitZ))
+                    .ToBrep();
             default:
                 return Shape.Wedge(20, 12, 8, topX: 6, topOffsetX: 3).ToBrep();
         }
@@ -451,6 +467,10 @@ public class TessellationCorpusQualityTests
             // r^2 acos(d/r) - d sqrt(r^2 - d^2) with d = 1.
             { "side-wall breakout", 40.0 * 30 * 10
                 - (Math.PI * 9 - (9 * Math.Acos(1 / 3.0) - Math.Sqrt(8))) * 30 },
+            // The same cross-section, drilled BLIND to half the plate's depth, so the
+            // tool's flat end stops inside the body and the top face cuts it too.
+            { "drilled breakout", 40.0 * 30 * 10
+                - (Math.PI * 9 - (9 * Math.Acos(1 / 3.0) - Math.Sqrt(8))) * 15 },
             // A quadratic-NURBS-path sweep of a radius-5 circle: Pappus does not apply to
             // a curved path, so the reference is the finest tessellation and only the
             // RATIO is asserted (see the test).
@@ -535,6 +555,51 @@ public class TessellationCorpusQualityTests
             Assert.Equal(0, report.Slivers);
             Assert.InRange(report.Triangles, 1, maxTriangles);
             Assert.True(report.WorstDot >= worstFloor, $"worst agreement regressed — {where}");
+
+            var mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples);
+            mesh.Validate();
+            Assert.True(mesh.IsClosed, $"welded open — {where}");
+        }
+    }
+
+    /// <summary>
+    /// The second member below the gate's floor, and the interesting part is WHICH half of
+    /// it is below: a blind <see cref="Shape.Drill"/> whose flat pole cap breaks out of the
+    /// top face is structurally CLEAN — no folds and no degenerate slivers at any density —
+    /// while the worst facet-vs-surface agreement on its bore wall runs 0.107 / 0.694 /
+    /// 0.840 at 16/8, 48/24 and 96/48, under floors of 0.383 / 0.924 / 0.981.
+    ///
+    /// <para>The comparison that says what it is about is <c>side-wall breakout</c>, a
+    /// Corpus member: the SAME cut made by a <see cref="Shape.Cylinder"/> reads 0.9992 /
+    /// 0.9999 / 0.99998. Both differ only in the tool, so this is the drill tool's
+    /// <c>RevolvedSurface</c> bore wall rather than the breakout — and it is the recorded
+    /// traced-rim density residual (a traced rim keeps whatever sample count the tracer's
+    /// arc-length step gave it however fine the grid around it becomes), located here at
+    /// the junction where the bore's rim meets the face it breaks out of. A plain drilled
+    /// THROUGH hole is a Corpus member and passes, so a drill's revolve band is fine in
+    /// general; the breakout junction is what degrades it.</para>
+    ///
+    /// <para>Committed baselines rather than tolerances, the rule the sphere-piercing test
+    /// states: a move in EITHER direction wants understanding before the numbers change.</para>
+    /// </summary>
+    [Fact]
+    public void DrilledBreakout_IsCleanButBelowTheAgreementFloor()
+    {
+        var solid = Build("drilled breakout");
+        foreach (var (segmentsPerCircle, curveSamples, worstFloor) in
+            (ReadOnlySpan<(int, int, double)>)[(16, 8, 0.10), (48, 24, 0.69), (96, 48, 0.83)])
+        {
+            var report = TessellationQuality.Audit(solid, segmentsPerCircle, curveSamples);
+            string where = $"at {segmentsPerCircle}/{curveSamples}: {report.Describe()}";
+            Assert.True(report.Folds == 0, $"facets face inward — {where}");
+            Assert.Equal(0, report.Slivers);
+            Assert.Equal(0, report.Unprojectable);
+            Assert.True(report.WorstDot >= worstFloor, $"worst agreement regressed — {where}");
+            // The half that IS at corpus grade, and the half a fix has to move: every
+            // planar family stays exact, so nothing but the revolve band is in question.
+            Assert.True(
+                report.WorstDot < NormalAgreementFloor(segmentsPerCircle),
+                $"this now CLEARS the floor — promote it into Corpus and delete this test: {where}");
 
             var mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples);
             mesh.Validate();

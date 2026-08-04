@@ -960,6 +960,23 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
       measurable, because a traced polyline along a STRAIGHT curve is exact at every point
       and `SnapTracerEnds` already removes the only defect (end truncation), so the whole
       boolean's output on this family is bit-identical with and without it.
+    - [ ] **The drilled breakout is structurally clean but below the corpus AGREEMENT
+      floor, and the comparison says which face is at fault.** It is not a `Corpus` member
+      for that reason, and is locked instead by
+      `DrilledBreakout_IsCleanButBelowTheAgreementFloor` (which asserts BOTH sides, so a
+      fix that lifts it fails the test naming the promotion) plus an `Analytic` entry, so
+      its volume convergence IS gated. Measured: no folds and no degenerate slivers at any
+      density, every planar family exact, and the bore wall's worst facet-vs-surface
+      agreement **0.107 / 0.694 / 0.840** at 16/8, 48/24, 96/48 against floors of 0.383 /
+      0.924 / 0.981 — where the corpus member `side-wall breakout`, the SAME cut made by a
+      `Shape.Cylinder`, reads **0.9992 / 0.9999 / 0.99998**. The two differ only in the
+      tool, so it is the drill's `RevolvedSurface` bore wall and not the breakout; a plain
+      drilled-THROUGH hole is a corpus member and passes, so a drill's revolve band is fine
+      in general and the junction where the bore's rim meets the face it breaks out of is
+      what degrades it. That is the recorded traced-rim density residual (a traced rim keeps
+      whatever sample count the tracer's arc-length step gave it however fine the grid
+      around it becomes) in a new location, and it is likely the SAME `SampleEdge` density
+      work as the annulus-recognizer item above.
     - [ ] **A GRAZING breakout still refuses, in both routes.** At a half-chord of 0.245 and
       0.077 (Ø6 bore, z0 = 7.01 and 7.001) the drilled hole fails with *"Open splitting
       curves must start and end outside the face"* naming the top face, and at 0.077 the
