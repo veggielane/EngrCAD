@@ -33,6 +33,46 @@ internal abstract class SketchSegment
 
     public abstract double Distance(in Vector2d point);
 
+    /// <summary>
+    /// This segment placed on a rigid 2D frame: the frame's origin plus
+    /// <c>x·frame.X + y·frame.Y</c>, with Y the X axis turned a quarter turn
+    /// counter-clockwise. A rotation and a translation and nothing else, so every
+    /// segment kind moves EXACTLY — a radius stays a radius and an ellipse keeps both
+    /// semi-axes, with no similarity to spend and nothing to re-fit.
+    /// </summary>
+    /// <remarks>
+    /// Rigid rather than affine deliberately: the consumer is a sheet-metal flange's own
+    /// local coordinates, whose 2D frame in the blank and 3D frame on the wall are the
+    /// SAME rigid frame (that is what makes the unfold bookkeeping rather than geometry).
+    /// A general affine map would change an arc into an ellipse and put a re-fit in a
+    /// path whose whole claim is that nothing is fitted.
+    /// </remarks>
+    public abstract SketchSegment Placed(in Vector2d origin, in Vector2d xAxis);
+
+    /// <summary>
+    /// This segment reflected in the y axis (<c>x → −x</c>). Every kind is built from
+    /// POINTS and VECTORS, and a reflection is linear, so mirroring those IS the mirrored
+    /// curve — no parameter is re-derived and no angle is recomputed from a vector.
+    /// <para>The traversal SENSE is not repaired here: a reflection reverses a loop's
+    /// winding, and restoring it is the loop's business (reverse the segment ORDER and each
+    /// segment), which is one rule in one place rather than a half-repair per kind.</para>
+    /// </summary>
+    public abstract SketchSegment MirroredInY();
+
+    /// <summary>The reflection of one point in the y axis.</summary>
+    private protected static Vector2d Flip(in Vector2d p) => new(-p.X, p.Y);
+
+    /// <summary>The rigid image of one point — every override's shared arithmetic, so a
+    /// segment kind cannot place its own points by a different rule from its neighbours'
+    /// joints.</summary>
+    private protected static Vector2d Place(in Vector2d origin, in Vector2d xAxis, in Vector2d local) =>
+        origin + xAxis * local.X + xAxis.Perpendicular * local.Y;
+
+    /// <summary>The rigid image of a DIRECTION (no translation) — for the stored vectors
+    /// an ellipse carries.</summary>
+    private protected static Vector2d PlaceVector(in Vector2d xAxis, in Vector2d local) =>
+        xAxis * local.X + xAxis.Perpendicular * local.Y;
+
     /// <summary>Splits into y-monotone pieces for robust even–odd parity.</summary>
     public abstract IEnumerable<MonotonePiece> MonotonePieces();
 
@@ -73,6 +113,11 @@ internal sealed class LineSeg(Vector2d start, Vector2d end) : SketchSegment
     public override Curve3d ToCurve() => new Line3d((start.X, start.Y, 0), (end.X, end.Y, 0));
 
     public override Curve2d ToCurve2d() => new Line2d(start, end);
+
+    public override SketchSegment Placed(in Vector2d origin, in Vector2d xAxis) =>
+        new LineSeg(Place(origin, xAxis, start), Place(origin, xAxis, end));
+
+    public override SketchSegment MirroredInY() => new LineSeg(Flip(start), Flip(end));
 
     public override double Distance(in Vector2d point)
     {
@@ -138,6 +183,18 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
     public bool IsFullCircle => Math.Abs(Math.Abs(sweep) - 2 * Math.PI) < 1e-12;
 
     public override SketchSegment Reversed() => new ArcSeg(center, radius, startAngle + sweep, -sweep);
+
+    /// <summary>A rigid frame turns an arc by the frame's own angle and leaves the radius
+    /// and the SWEEP untouched — the sweep is a signed angle, and a rotation is what this
+    /// map is, so nothing about the arc's shape or handedness can move.</summary>
+    public override SketchSegment Placed(in Vector2d origin, in Vector2d xAxis) => new ArcSeg(
+        Place(origin, xAxis, center), radius, startAngle + Math.Atan2(xAxis.Y, xAxis.X), sweep);
+
+    /// <summary>A reflection turns <c>(cos θ, sin θ)</c> into <c>(cos(π − θ), sin(π − θ))</c>,
+    /// so the start angle reflects about π/2 and the sweep changes SIGN — which is the same
+    /// statement as "a reflection reverses handedness", written where it is exact.</summary>
+    public override SketchSegment MirroredInY() =>
+        new ArcSeg(Flip(center), radius, Math.PI - startAngle, -sweep);
 
     public override double SignedAreaContribution() =>
         0.5 * (center.Cross(End - Start) + radius * radius * sweep);
@@ -344,6 +401,25 @@ internal sealed class EllipseSeg : SketchSegment
     public override SketchSegment Reversed() =>
         new EllipseSeg(_center, _a, _b, _startAngle + _sweep, -_sweep);
 
+    /// <summary>The centre and BOTH semi-axis VECTORS ride the frame; the polar parameters
+    /// are untouched because they are measured in the ellipse's own axis frame, which the
+    /// rotation carries with it — the same reasoning the constrained-sketch rebuild uses,
+    /// and the reason a rotated ellipse is the ordinary case here rather than a third
+    /// parameter.</summary>
+    public override SketchSegment Placed(in Vector2d origin, in Vector2d xAxis) => new EllipseSeg(
+        Place(origin, xAxis, _center),
+        PlaceVector(xAxis, _a),
+        PlaceVector(xAxis, _b),
+        _startAngle,
+        _sweep);
+
+    /// <summary>The centre and BOTH semi-axis vectors reflect and the polar parameters
+    /// stay: <c>P(θ) = C + A cos θ + B sin θ</c> is linear in C, A and B, so a linear map
+    /// of those IS the mapped curve. The handedness change rides in the reflected axis
+    /// pair rather than in a sign on the sweep, which is why nothing is re-derived.</summary>
+    public override SketchSegment MirroredInY() =>
+        new EllipseSeg(Flip(_center), Flip(_a), Flip(_b), _startAngle, _sweep);
+
     /// <summary>
     /// ½∮(x dy − y dx) = ½(C × (End − Start) + (A × B)·sweep), from
     /// P × P′ = −sin θ (C × A) + cos θ (C × B) + (A × B) integrated over the sweep. The
@@ -501,6 +577,19 @@ internal sealed class CubicSeg(Vector2d p0, Vector2d c1, Vector2d c2, Vector2d p
     public Vector2d Control1 => c1;
     public Vector2d Control2 => c2;
     public Vector2d P3 => p3;
+
+    /// <summary>Only the CONTROL POINTS move, which IS the placed curve: a Bézier is an
+    /// affine combination of them at every parameter, so mapping the four points maps the
+    /// curve exactly (the same property that makes a transformed NURBS a lossless STEP
+    /// export and text-on-a-path Native in all three representations).</summary>
+    public override SketchSegment Placed(in Vector2d origin, in Vector2d xAxis) => new CubicSeg(
+        Place(origin, xAxis, p0),
+        Place(origin, xAxis, c1),
+        Place(origin, xAxis, c2),
+        Place(origin, xAxis, p3));
+
+    public override SketchSegment MirroredInY() =>
+        new CubicSeg(Flip(p0), Flip(c1), Flip(c2), Flip(p3));
 
     private Vector2d PointAt(double t)
     {

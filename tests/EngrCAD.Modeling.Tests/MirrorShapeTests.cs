@@ -360,20 +360,26 @@ public class MirrorShapeTests
     }
 
     [Fact]
-    public void MirroredSheetMetal_StaysRefusedByName()
+    public void MirroredSheetMetal_IsNativeByRebuildingTheTree()
     {
-        // The one node in this family that is NOT isometry-commuting, and it is refused
-        // for a stated reason rather than by omission: a flange tree is an ORDERED tree
-        // of bends quoted on named edges, and a reflection reverses the sense of every
-        // one of them, so the body would have to be rebuilt the other way round rather
-        // than re-placed.
-        var body = SheetMetalBody.Base(Sketch.Rectangle(80, 50), new SheetMetalSpec(1.5, 2));
-        var sheet = body.Solid.Mirror((0, 0, 0), Vector3d.UnitX);
+        // The one node in this family that does NOT commute with an isometry, and the
+        // reason is naming rather than geometry: a flange tree is an ORDERED tree of bends
+        // quoted on named edges, so a reflection has to move the NAMES. It is therefore
+        // re-DECLARED rather than re-placed (SheetMetalBody.MirroredInPlane), which is what
+        // took it from Impossible to Native — and what is left Impossible is the genuinely
+        // different case, a shear or non-uniform scale, which has no answer at all.
+        var body = SheetMetalBody
+            .Base(Sketch.Rectangle(80, 50), new SheetMetalSpec(1.5, 2))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 20, startOffset: 6, width: 30);
 
-        var report = sheet.Explain(TargetRep.Brep);
-        Assert.False(report.IsConvertible);
-        Assert.Contains(report.Entries, e => e.Support == NodeSupport.Impossible &&
-            e.Detail is not null && e.Detail.Contains("MIRROR"));
+        var report = body.Solid.Mirror((0, 0, 0), Vector3d.UnitX).Explain(TargetRep.Brep);
+        Assert.True(report.IsConvertible);
+        Assert.All(report.Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+
+        var sheared = body.Solid.Scale(2, 1, 1).Explain(TargetRep.Brep);
+        Assert.False(sheared.IsConvertible);
+        Assert.Contains(sheared.Entries, e => e.Support == NodeSupport.Impossible &&
+            e.Detail is not null && e.Detail.Contains("LENGTHS"));
     }
 
     [Fact]

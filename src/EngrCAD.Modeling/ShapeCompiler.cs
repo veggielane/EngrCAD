@@ -131,20 +131,21 @@ internal static class ShapeCompiler
                             "a non-uniform scale or shear does not commute with the loft's parameterization"));
                 break;
             case SheetMetalShape:
-                // Rigid + uniform only: thickness, bend radius and flange length are all
-                // LENGTHS, so a shear or non-uniform scale would give the sheet a
-                // different thickness in every direction and the bend a different radius
-                // round its own arc.
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                // Similarities only, MIRRORED INCLUDED: thickness, bend radius and flange
+                // length are all LENGTHS and every bend angle an ANGLE, both of which any
+                // similarity preserves — while a shear or non-uniform scale would give the
+                // sheet a different thickness in every direction and the bend a different
+                // radius round its own arc. A reflection is re-DECLARED rather than
+                // re-placed (SheetMetalBody.MirroredInPlane rebuilds the tree the other way
+                // round), which is what the earlier refusal here was waiting for.
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "base flange extruded, each bend welded in as topology (SheetMetalSurgery); flange " +
                         "geometry validates at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                        "a sheet's thickness, bend radius and flange lengths are LENGTHS, so only a rigid "
-                        + "placement with a uniform scale re-places them; a shear or non-uniform scale would "
-                        + "give the sheet a different thickness in every direction, and a MIRROR would need "
-                        + "the flange tree rebuilt the other way round (a follow-up, filed with loft/draft/"
-                        + "shell)"));
+                        "a sheet's thickness, bend radius and flange lengths are LENGTHS, so only a similarity "
+                        + "re-places them; a shear or non-uniform scale would give the sheet a different "
+                        + "thickness in every direction and the bend a different radius round its own arc"));
                 break;
             case LoftShape:
                 // Similarities only (mirrored included): the loft's chord-length
@@ -654,9 +655,20 @@ internal static class ShapeCompiler
 
             case SheetMetalShape sheet:
             {
-                Decompose(m, shape, out _, out _, out double sheetScale); // rigid + uniform only
-                var body = sheet.Body;
-                var effective = m * body.Plane.ToMatrix();
+                // Similarity, mirrored included. A reflection cannot be re-PLACED (a flange
+                // tree is ordered and quoted on named edges) but it can be re-DECLARED:
+                // MirroredInPlane rebuilds the tree against a reflected base sketch, and
+                // the frame handed down negates its own X to match, so the sheet's +Z --
+                // the face every bend line is quoted on -- never moves and Up/Down keep
+                // meaning one thing.
+                DecomposeSimilarity(m, shape, out _, out _, out double sheetScale, out bool sheetMirrored);
+                var body = sheetMirrored ? sheet.Body.MirroredInPlane() : sheet.Body;
+                // P = P'·FlipX with P' proper, so placing the REFLECTED body on P' IS
+                // placing the original on P — the reflection is spent once, half in the
+                // declaration and half in the frame, and never twice.
+                var effective = sheetMirrored
+                    ? m * body.Plane.ToMatrix() * FlipX
+                    : m * body.Plane.ToMatrix();
                 // BaseOutline, not BaseSketch: a bend relief is a NOTCH in the blank rather
                 // than a cut in the folded body, so the sheet is extruded from the outline
                 // the reliefs left. With none declared the two are the same object.
@@ -1549,6 +1561,13 @@ internal static class ShapeCompiler
     }
 
     private static readonly Matrix4d FlipY = Matrix4d.CreateScale(new Vector3d(1, -1, 1));
+
+    /// <summary>Reflection in a sketch plane's own x — the half of a mirrored SHEET
+    /// placement that the frame carries, the other half being the flange tree rebuilt the
+    /// other way round. FlipX rather than <see cref="FlipZ"/> deliberately: it leaves the
+    /// sheet's +Z, the face every bend line is quoted on, exactly where it was, so
+    /// <c>SheetBendDirection</c> keeps meaning one thing.</summary>
+    private static readonly Matrix4d FlipX = Matrix4d.CreateScale(new Vector3d(-1, 1, 1));
 
     /// <summary>
     /// Decomposes a thread's placement, mirrored placements included:

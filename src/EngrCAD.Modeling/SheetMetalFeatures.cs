@@ -51,31 +51,6 @@ public sealed class BaseFlangeFeature(Sketch sketch) : Feature
 }
 
 /// <summary>
-/// Which bend relief an <see cref="EdgeFlangeFeature"/> cuts: <see cref="SheetReliefKind"/>
-/// plus the <see cref="None"/> the geometry type spells as a null <see cref="BendRelief"/>.
-///
-/// <para><b>Why this is a second enum rather than a nullable one.</b> A <c>[Param]</c> enum
-/// gets a DROPDOWN, whose rows are the underlying type's members — so it has no way to say
-/// "unset", exactly as a slider has none. That is the rule <see cref="EdgeFlangeFeature"/>
-/// already follows for its numeric overrides: a parameter whose editor can express absence
-/// takes the nullable type, one whose editor cannot keeps a member outside the geometry's
-/// own vocabulary. The cost of a second spelling is that it could drift from
-/// <see cref="SheetReliefKind"/>, so the coverage is pinned by a test that drives EVERY
-/// member through a regeneration and reads the kind back off the flange tree.</para>
-/// </summary>
-public enum SheetReliefOption
-{
-    /// <summary>No relief: the corner is left to tear, which is what a tear relief is.</summary>
-    None,
-
-    /// <inheritdoc cref="SheetReliefKind.Rectangular"/>
-    Rectangular,
-
-    /// <inheritdoc cref="SheetReliefKind.Obround"/>
-    Obround,
-}
-
-/// <summary>
 /// One edge flange on a sheet part. The bend line is named with an
 /// <see cref="EdgeSetRef"/> resolved against the regenerated body, then mapped back into
 /// the flange tree by <see cref="SheetMetalBody.SiteFor"/> — so "the flange on THAT edge"
@@ -105,6 +80,27 @@ public enum SheetReliefOption
 public sealed class EdgeFlangeFeature : Feature
 {
     private readonly EdgeSetRef _edge = EdgeSetRef.Convex;
+    private readonly IReadOnlyList<Sketch> _cutouts;
+
+    /// <summary>A plain flange.</summary>
+    public EdgeFlangeFeature() : this([]) { }
+
+    /// <summary>A flange whose WALL carries cutouts, each a closed sketch in the flange's
+    /// own local coordinates (x along the bend line from the flange's start, y out from the
+    /// bend's tangent line). They are constructor INPUTS rather than <c>[Param]</c>s for
+    /// the same reason a hole feature's <c>HoleSpec</c> is: a sketch is authored geometry,
+    /// not a number an editor can offer — and, like one, it round-trips exactly through the
+    /// public curve vocabulary in <see cref="SaveInputs"/>.</summary>
+    public EdgeFlangeFeature(params Sketch[] cutouts)
+    {
+        ArgumentNullException.ThrowIfNull(cutouts);
+        _cutouts = [.. cutouts];
+    }
+
+    internal EdgeFlangeFeature(IReadOnlyList<Sketch> cutouts) => _cutouts = cutouts;
+
+    /// <summary>The cutouts this flange punches through its wall.</summary>
+    public IReadOnlyList<Sketch> Cutouts => _cutouts;
 
     [Param(Min = 1e-9, Units = "mm", Description = "Flange length from the outer virtual sharp")]
     public double Length { get; init; } = 20;
@@ -137,11 +133,13 @@ public sealed class EdgeFlangeFeature : Feature
     public double KFactor { get; init; }
 
     /// <summary>The <see cref="BendRelief"/> notched beside each INSET end of this flange;
-    /// <see cref="SheetReliefOption.None"/> cuts none. A dropdown cannot say "unset", which
-    /// is why this is an enum with its own None rather than a nullable one — the same rule
-    /// <see cref="KFactor"/> follows.</summary>
-    [Param(Description = "Bend relief cut beside each inset end")]
-    public SheetReliefOption Relief { get; init; } = SheetReliefOption.None;
+    /// <b>null cuts none</b>, which is the "let it tear" choice. Nullable rather than a
+    /// second enum carrying its own <c>None</c>: a dropdown now offers a "(none)" row for
+    /// a nullable enum (<c>ParamEditors.EnumChoices</c>), so the editor CAN express absence
+    /// and the rule the class remarks state applies — one spelling, and nothing to drift
+    /// from <see cref="SheetReliefKind"/>.</summary>
+    [Param(Description = "Bend relief cut beside each inset end; empty cuts none")]
+    public SheetReliefKind? Relief { get; init; }
 
     /// <summary>Relief width along the bend line; <b>null uses one sheet thickness</b>.</summary>
     [Param(Min = 1e-9, Units = "mm", Description = "Relief width; empty uses one sheet thickness")]
@@ -183,21 +181,30 @@ public sealed class EdgeFlangeFeature : Feature
             KFactor > 0 ? KFactor : null,
             StartOffset,
             Width,
-            DeclaredRelief())).Solid;
+            DeclaredRelief(),
+            _cutouts)).Solid;
     }
 
-    /// <summary>This feature's relief as the geometry vocabulary spells it: null for
-    /// <see cref="SheetReliefOption.None"/>, otherwise the matching
-    /// <see cref="SheetReliefKind"/>. Written as an explicit map rather than an ordinal
-    /// cast, so adding a kind to one enum and not the other is a compile error here rather
-    /// than a silently shifted meaning.</summary>
-    public BendRelief? DeclaredRelief() => Relief switch
+    /// <summary>The wall cutouts, exactly, through the public curve vocabulary — the same
+    /// seam a sketch extrude's profile round-trips through, so nothing is flattened and a
+    /// saved history rebuilds the same holes. A flange with none writes nothing, which is
+    /// what keeps every existing file byte-identical.</summary>
+    protected internal override JsonNode? SaveInputs()
     {
-        SheetReliefOption.None => null,
-        SheetReliefOption.Rectangular => new BendRelief(SheetReliefKind.Rectangular, ReliefWidth, ReliefDepth),
-        SheetReliefOption.Obround => new BendRelief(SheetReliefKind.Obround, ReliefWidth, ReliefDepth),
-        _ => throw new NotSupportedException($"Unknown bend relief option {Relief}."),
-    };
+        if (_cutouts.Count == 0)
+            return null;
+        var cutouts = new JsonArray();
+        foreach (var cutout in _cutouts)
+            cutouts.Add(InputJson.SaveSketch(cutout));
+        return new JsonObject { ["cutouts"] = cutouts };
+    }
+
+    /// <summary>This feature's relief as the geometry vocabulary spells it: null when none
+    /// was asked for, otherwise the declared kind with its two optional dimensions. There
+    /// is no enum mapping left to get wrong — the parameter carries
+    /// <see cref="SheetReliefKind"/> itself.</summary>
+    public BendRelief? DeclaredRelief() =>
+        Relief is { } kind ? new BendRelief(kind, ReliefWidth, ReliefDepth) : null;
 }
 
 /// <summary>Shared helpers for the sheet-metal features.</summary>
@@ -234,6 +241,56 @@ public static class SheetMetalFeatures
     /// pattern only where there is one.</summary>
     public static FlatPattern? TryUnfold(Shape? body) =>
         body is SheetMetalShape sheet ? sheet.Body.Unfold() : null;
+
+    /// <summary>The flat pattern of a PART, or null when its geometry is not a sheet body —
+    /// what a viewer button and the <c>--flat</c> CLI route ask, so neither has to know how
+    /// a part carries its shape. Deliberately reads <see cref="Part.Geometry"/> rather than
+    /// meshing or lowering anything: an unfold is bookkeeping over the flange tree, so
+    /// offering a blank must never cost a tessellation.</summary>
+    public static FlatPattern? TryUnfold(Part? part) =>
+        part is not null ? TryUnfold(part.Geometry as Shape) : null;
+
+    /// <summary>
+    /// Every sheet-metal part in <paramref name="parts"/> with its own flat pattern, in
+    /// input order and each distinct part once — <b>the multi-body / welded-assembly
+    /// answer</b>, and the seam the <c>--flat</c> CLI route and the viewer's Flat button
+    /// both read so neither can grow a second opinion about which parts have a blank.
+    ///
+    /// <para><b>A sheet part is ONE flange tree and ONE blank, by design rather than by
+    /// omission.</b> A weldment of sheet metal is several PARTS — each with its own base
+    /// flange, its own tree and its own blank — held together by an <c>Assembly</c>, which
+    /// is what the document model is for; the BOM counts them, mates position them and this
+    /// call cuts them. Folding several bodies into one <see cref="SheetMetalBody"/> would
+    /// make <see cref="FlatPattern"/> mean two things at once, and a laser cuts one blank
+    /// per body either way.</para>
+    ///
+    /// <para>What is NOT a sheet part is equally deliberate: a boolean of two sheet
+    /// solids is a SOLID, and this returns nothing for it, because a union node carries no
+    /// flange tree and so has no blank to derive. Weld the parts in an assembly, not in the
+    /// geometry.</para>
+    /// </summary>
+    public static IReadOnlyList<(Part Part, FlatPattern Flat)> UnfoldAll(IEnumerable<Part> parts)
+    {
+        ArgumentNullException.ThrowIfNull(parts);
+        var seen = new HashSet<Part>(ReferenceEqualityComparer.Instance);
+        var found = new List<(Part, FlatPattern)>();
+        foreach (var part in parts)
+        {
+            if (part is not null && seen.Add(part) && TryUnfold(part) is { } flat)
+                found.Add((part, flat));
+        }
+        return found;
+    }
+
+    /// <inheritdoc cref="UnfoldAll(IEnumerable{Part})"/>
+    /// <remarks>Reads the scene's INSTANCES so an assembly's sheet parts are found however
+    /// deeply they are nested, then de-duplicates by part reference — a panel placed four
+    /// times is one blank cut four times, not four blanks.</remarks>
+    public static IReadOnlyList<(Part Part, FlatPattern Flat)> UnfoldAll(Scene scene)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        return UnfoldAll(scene.AllInstances.Select(i => i.Part));
+    }
 
     /// <summary>An <see cref="EdgeSetRef"/> naming one sheet edge by the two endpoints it
     /// runs between — the escape hatch for a design that knows exactly which bend line it

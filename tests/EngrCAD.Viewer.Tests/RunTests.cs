@@ -130,6 +130,98 @@ public class RunTests
         }
     }
 
+    // ---- --flat: sheet-metal flat patterns ----
+
+    private static Scene SheetScene(int sheets = 1)
+    {
+        var scene = new Scene();
+        for (int i = 0; i < sheets; i++)
+        {
+            var body = SheetMetalBody
+                .Base(Sketch.Rectangle(80, 50), new SheetMetalSpec(1.5, 2.0))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+            scene.Add(new Part($"panel{i}", body.Solid));
+        }
+        scene.Add(new Part("block", Shape.Box(10, 10, 10)));
+        return scene;
+    }
+
+    /// <summary>
+    /// The CLI route exists so a blank can be cut without writing a script, and it must
+    /// derive that blank exactly as a script would: the assertions are on the CONTENT
+    /// (the bend layer a press brake reads, both tangent lines of the one bend) rather
+    /// than on the file existing, since an empty DXF also exists.
+    /// </summary>
+    [Fact]
+    public void Flat_WritesTheBlankAndItsBendLines()
+    {
+        var path = TempFile(".dxf");
+        try
+        {
+            Assert.Equal(0, EngrCad.Run(["--flat", path], () => SheetScene()));
+            string text = File.ReadAllText(path);
+            Assert.Contains("CUT", text, StringComparison.Ordinal);
+            Assert.Contains("BEND", text, StringComparison.Ordinal);
+            // One bend, two tangent lines, and the CENTER line type the layer declares.
+            Assert.Contains("CENTER", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Flat_WritesTheBendTableAsText()
+    {
+        var path = TempFile(".txt");
+        try
+        {
+            Assert.Equal(0, EngrCad.Run(["--flat", path], () => SheetScene()));
+            string[] lines = File.ReadAllLines(path);
+            Assert.StartsWith("BEND", lines[0], StringComparison.Ordinal);
+            Assert.Equal(2, lines.Count(l => l.Trim().Length > 0));   // header plus one bend
+            Assert.Contains("UP", lines[1], StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>Each sheet part has its OWN blank, so one path cannot serve two: with
+    /// several the stem takes the part's name. Guessing one would be a wrong answer
+    /// wearing a right one's clothes.</summary>
+    [Fact]
+    public void Flat_WithSeveralSheetParts_WritesOneFileEach()
+    {
+        var path = TempFile(".dxf");
+        string stem = Path.Combine(
+            Path.GetDirectoryName(path)!, Path.GetFileNameWithoutExtension(path));
+        try
+        {
+            Assert.Equal(0, EngrCad.Run(["--flat", path], () => SheetScene(2)));
+            Assert.False(File.Exists(path));
+            Assert.True(File.Exists($"{stem}-panel0.dxf"));
+            Assert.True(File.Exists($"{stem}-panel1.dxf"));
+        }
+        finally
+        {
+            foreach (string file in new[] { path, $"{stem}-panel0.dxf", $"{stem}-panel1.dxf" })
+                File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public void Flat_MissingPathBadExtensionOrNoSheetPart_FailsLoudly()
+    {
+        Assert.Equal(2, EngrCad.Run(["--flat"], () => SheetScene()));
+        Assert.Equal(2, EngrCad.Run(["--flat", TempFile(".step")], () => SheetScene()));
+        // A scene with no sheet body has no flat pattern; that is an error, not an
+        // empty file (exit 1, the "nothing to export" code).
+        Assert.Equal(1, EngrCad.Run(["--flat", TempFile(".dxf")], BracketScene));
+    }
+
     [Fact]
     public void Export_MissingPathOrBadExtension_FailsWithUsageCode()
     {

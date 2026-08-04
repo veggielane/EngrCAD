@@ -37,6 +37,9 @@ public class ParamEditorTests
         public Fit Fit { get; init; } = Fit.Slip;
 
         [Param]
+        public Fit? OptionalFit { get; init; }
+
+        [Param]
         public string Label { get; init; } = "";
 
         [Param(Min = 4, Max = 4)]
@@ -90,6 +93,47 @@ public class ParamEditorTests
                 double.NegativeInfinity, double.PositiveInfinity, null, null)));
         Assert.Equal(ParamEditorKind.Slider,
             ParamEditors.KindFor(new ParamInfo("Angle", typeof(double?), 30.0, 0, 90, "deg", null)));
+    }
+
+    /// <summary>
+    /// The optional-ENUM editor, and the reason it earns its place: a dropdown whose rows
+    /// are exactly <c>Enum.GetNames</c> has no way to say "unset", so a nullable enum
+    /// parameter could be moved off "inherit" and never back — the same gap a slider has,
+    /// and the gap that made <c>EdgeFlangeFeature.Relief</c> a SECOND enum carrying its own
+    /// <c>None</c> beside the geometry's own kind. The leading null row closes it, and a
+    /// non-nullable enum's list must be untouched or every incumbent dropdown grows a row
+    /// that means nothing.
+    /// </summary>
+    [Fact]
+    public void ANullableEnumOffersANoneRow_AndAPlainEnumDoesNot()
+    {
+        Assert.Equal(ParamEditorKind.Choice, ParamEditors.KindFor(Param("OptionalFit")));
+        Assert.Equal([null, "Slip", "Press", "Tap"], ParamEditors.EnumChoices(Param("OptionalFit")));
+        Assert.Equal(["Slip", "Press", "Tap"], ParamEditors.EnumChoices(Param("Fit")));
+
+        // Rows carry MEMBER names (what the JSON seam parses back) and are LABELLED for a
+        // reader — the two are separate on purpose, since "(none)" is not an enum member.
+        Assert.Equal(ParamEditors.NoneLabel, ParamEditors.EnumLabel(null));
+        Assert.Equal("Press", ParamEditors.EnumLabel("Press"));
+        Assert.Empty(ParamEditors.EnumChoices(Param("Depth")));
+    }
+
+    /// <summary>The other half of an optional enum being editable: the model layer has to
+    /// take the null back. Asserted through the SAME JSON seam every editor writes through,
+    /// because a dropdown row that no seam accepts is not an editor.</summary>
+    [Fact]
+    public void AnUnsetOptionalEnumRoundTripsThroughTheParameterSeam()
+    {
+        var flange = new EdgeFlangeFeature { Relief = SheetReliefKind.Obround };
+        var history = new FeatureHistory();
+        history.Add(new BaseFlangeFeature(Sketch.Rectangle(40, 30)));
+        history.Add(flange);
+
+        Assert.Contains("\"Relief\": \"Obround\"", history.SaveParameters(), StringComparison.Ordinal);
+        Assert.Empty(history.LoadParameters(
+            "{\"" + flange.Name + "\": {\"Relief\": null}}"));
+        Assert.Null(((EdgeFlangeFeature)history.Features[1]).Relief);
+        Assert.Contains("\"Relief\": null", history.SaveParameters(), StringComparison.Ordinal);
     }
 
     [Fact]

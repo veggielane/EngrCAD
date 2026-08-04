@@ -454,6 +454,633 @@ public class SheetMetalTests
         Assert.Equal(1.0, FoldedVolume(body) / flat.Volume, 6);
     }
 
+    // -------------------------------------------------------------- closed corners
+
+    /// <summary>
+    /// The closed corner, and its oracle is an EXACT DISCREPANCY the same way the bend
+    /// model's is. Mitring makes each flange's material run to the miter plane rather than
+    /// stopping at the sheet's corner, so the folded body gains exactly the first moment of
+    /// that flange's own cross-section about the corner line — <c>((R+T)³ − R³)/3</c> from
+    /// the bend's annular sector plus <c>T·L·(R + T/2)</c> from the wall — while the BLANK
+    /// is untouched. That the blank cannot supply it is precisely what "an unrelieved
+    /// corner shares material" means, and predicting it in closed form is what separates
+    /// this from "the corner looks closed".
+    /// </summary>
+    [Fact]
+    public void AClosedCornerAddsExactlyTheCrossSectionsFirstMomentAboutTheCorner()
+    {
+        const double length = 22, radius = 2.5;
+        double wall = length - SheetMetalSpec.OutsideSetback(Math.PI / 2, radius, Thickness);
+
+        // The "open" reference cannot be built as one body -- two full-width flanges on
+        // adjacent edges is exactly what the corner declaration exists for -- so it is the
+        // two one-flange bodies less the plate they share. Exact, and it makes the
+        // comparison a statement about the CORNER rather than about two models.
+        double OpenFolded() =>
+            FoldedVolume(SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), length, bendRadius: radius))
+            + FoldedVolume(SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(2), length, bendRadius: radius))
+            - PlateX * PlateY * Thickness;
+        double OpenFlat() =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), length, bendRadius: radius).Unfold().Volume
+            + SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(2), length, bendRadius: radius).Unfold().Volume
+            - PlateX * PlateY * Thickness;
+        var closed = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithCorner(
+                SheetFlangeTarget.BaseEdge(1), SheetFlangeTarget.BaseEdge(2), length,
+                bendRadius: radius);
+
+        var solid = closed.Solid.ToBrep();
+        solid.Validate();
+
+        // Per flange: the bend's annular sector contributes the integral of its own radial
+        // over [R, R+T] x [0, pi/2], and the wall its area times its centroid offset.
+        double perFlange = (Math.Pow(radius + Thickness, 3) - Math.Pow(radius, 3)) / 3
+                         + Thickness * wall * (radius + Thickness / 2);
+        double added = 2 * perFlange;
+
+        Assert.Equal(OpenFlat(), closed.Unfold().Volume, 9);   // the blank is untouched
+
+        // The residual bar is the tessellate-then-Richardson mass properties' own grade
+        // (~1e-7 relative on a curved solid), not a chosen epsilon: the corner's two bend
+        // bands and the miter's two elliptical cuts are the only curved surfaces here.
+        // Measured: 2.07e-3 on a folded volume of 1.07e4, i.e. 1.9e-7 relative.
+        double folded = FoldedVolume(closed);
+        Assert.True(
+            Math.Abs(folded - (OpenFolded() + added)) < 1e-6 * folded,
+            $"predicted {OpenFolded() + added:g12}, measured {folded:g12}");
+
+        // ... so the folded-versus-flat discrepancy moves by exactly the shared material.
+        double openGap = OpenFolded() - OpenFlat();
+        double closedGap = folded - closed.Unfold().Volume;
+        Assert.True(
+            Math.Abs((closedGap - openGap) - added) < 1e-6 * folded,
+            $"the corner must move the folded-vs-flat gap by exactly {added:g12}, not " +
+            $"{closedGap - openGap:g12}");
+    }
+
+    /// <summary>
+    /// "Closed" has to mean welded rather than merely near, so the assertion is
+    /// TOPOLOGICAL: the mitred pair is one two-manifold solid whose face count is exactly
+    /// the two flanges' own (no cap and no corner patch — nothing lies in the miter plane),
+    /// and the sheet's own corner edge has fallen away because both walls were consumed.
+    /// </summary>
+    [Fact]
+    public void AClosedCornerWeldsRatherThanButting()
+    {
+        var closed = SheetMetalBody.Base(Plate(), Spec())
+            .WithCorner(SheetFlangeTarget.BaseEdge(1), SheetFlangeTarget.BaseEdge(2), 20);
+        var solid = closed.Solid.ToBrep();
+        solid.Validate();       // two-manifold: every edge used exactly twice
+
+        // A plain plate has 6 faces; each flange adds 5 (two bend bands, two wall faces, a
+        // tip) and consumes its wall. A mitred pair adds NO end caps at the corner, so the
+        // count is exactly 6 - 2 + 10 = 14.
+        Assert.Equal(14, solid.Faces.Count());
+
+        // The two flanges' walls genuinely touch: the miter's own inside-wall corner is a
+        // single vertex shared by both flanges' wall faces.
+        double radius = Radius;
+        var expected = new Vector3d(PlateX + radius, PlateY + radius, Thickness + radius);
+        var shared = solid.Vertices.Where(v => v.Position.DistanceTo(expected) < 1e-9).ToList();
+        Assert.Single(shared);
+        // ... and the sheet's own corner edge has fallen away: nothing runs from the top
+        // face's corner to the bottom face's, because both side walls were consumed.
+        Assert.DoesNotContain(solid.Edges, e =>
+            e.IsLinear(out var a, out var b)
+            && SheetMetalBody.JoinsSamePoints(
+                a, b, (PlateX, PlateY, 0), (PlateX, PlateY, Thickness)));
+    }
+
+    /// <summary>A corner is exact at any bend angle and any corner angle, because the
+    /// miter's ellipse and its wall corner are closed forms rather than an intersection.
+    /// Measured on a non-square plate at a non-square bend.</summary>
+    [Theory]
+    [InlineData(90.0)]
+    [InlineData(70.0)]
+    [InlineData(110.0)]
+    public void AClosedCornerIsExactAtAnyBendAngle(double angle)
+    {
+        const double length = 20, radius = 2;
+        double wall = length - SheetMetalSpec.OutsideSetback(angle * Math.PI / 180, radius, Thickness);
+
+        SheetMetalBody One(int edge) =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(edge), length, angle, bendRadius: radius);
+        double plate = PlateX * PlateY * Thickness;
+        double openFolded = FoldedVolume(One(1)) + FoldedVolume(One(2)) - plate;
+        double openFlat = One(1).Unfold().Volume + One(2).Unfold().Volume - plate;
+
+        var closed = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithCorner(
+                SheetFlangeTarget.BaseEdge(1), SheetFlangeTarget.BaseEdge(2), length, angle,
+                bendRadius: radius);
+
+        var solid = closed.Solid.ToBrep();
+        solid.Validate();
+        Assert.True(BrepMassProperties.Compute(solid).Volume > openFolded,
+            "a mitred corner can only ADD material to two flanges that stopped at the corner");
+        Assert.Equal(openFlat, closed.Unfold().Volume, 9);
+        Assert.True(wall > 0);
+    }
+
+    [Fact]
+    public void ACornerOfMismatchedFlangesIsRefusedNamingWhy()
+    {
+        var plate = SheetMetalBody.Base(Plate(), Spec());
+
+        // Edges that do not share a corner: "which corner" would otherwise be a guess.
+        var apart = Assert.Throws<NotSupportedException>(() =>
+            plate.WithCorner(SheetFlangeTarget.BaseEdge(1), SheetFlangeTarget.BaseEdge(3), 20)
+                .Solid.ToBrep());
+        Assert.Contains("exactly ONE shared point", apart.Message, StringComparison.Ordinal);
+
+        // Two full-width flanges on ADJACENT edges declared separately still refuse, and
+        // the refusal now names the corner declaration as the way out — which is the point:
+        // the pair has to be located before either is built.
+        var separate = Assert.Throws<NotSupportedException>(() =>
+            plate.WithFlange(SheetFlangeTarget.BaseEdge(1), 20)
+                 .WithFlange(SheetFlangeTarget.BaseEdge(2), 20)
+                 .Solid.ToBrep());
+        Assert.Contains("CORNER", separate.Message, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------- multi-body sheets / welded assemblies
+
+    /// <summary>
+    /// A welded sheet assembly is several PARTS, each with its own flange tree and its own
+    /// blank — and this is the end-to-end proof that the document model already expresses
+    /// it: two folded panels in an assembly, placed and counted, each unfolding to its own
+    /// blank through the ONE seam the CLI and the viewer button both read.
+    ///
+    /// <para>The assertion with teeth is the MASS: the assembly weighs exactly the two
+    /// blanks' volumes times the density (at K = 0.5, where the folded and flat volumes
+    /// agree exactly), which is only true if each body kept its own material and neither
+    /// blank was counted twice.</para>
+    /// </summary>
+    [Fact]
+    public void AWeldedAssemblyOfSheetPartsUnfoldsOneBlankPerBody()
+    {
+        var side = SheetMetalBody.Base(Plate(60, 40), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 20);
+        var lid = SheetMetalBody.Base(Plate(60, 25), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(3), 12, direction: SheetBendDirection.Down);
+
+        var scene = new Scene();
+        var assembly = new Assembly("chassis");
+        var sidePart = new Part("side", side.Solid).Of(Materials.Aluminium6061);
+        var lidPart = new Part("lid", lid.Solid).Of(Materials.Aluminium6061);
+        assembly.Add(sidePart);
+        assembly.Add(lidPart, Frame3d.FromXY((0, 60, 0), Vector3d.UnitX, Vector3d.UnitY));
+        scene.AddTab("Model").Add(assembly);
+
+        // One blank per BODY, in scene order, each once.
+        var blanks = SheetMetalFeatures.UnfoldAll(scene);
+        Assert.Equal(2, blanks.Count);
+        Assert.Equal(["side", "lid"], blanks.Select(b => b.Part.Name));
+
+        // The BOM sees two items, and the assembly weighs exactly the two blanks.
+        var bom = Bom.For(scene.Tabs[0]);
+        Assert.Equal(2, bom.LineCount);
+        double density = Materials.Aluminium6061.Density;
+        Assert.Equal(
+            blanks.Sum(b => b.Flat.Volume) * density,
+            scene.AllInstances.MassProperties().Mass, 6);
+    }
+
+    /// <summary>A boolean of two sheet solids is a SOLID, not a sheet part — it carries no
+    /// flange tree, so it has no blank, and saying so is the boundary rather than a
+    /// limitation. Weld parts in an assembly, not in the geometry.</summary>
+    [Fact]
+    public void AUnionOfTwoSheetBodiesHasNoFlatPattern()
+    {
+        var a = SheetMetalBody.Base(Plate(40, 30), Spec()).Solid;
+        var b = SheetMetalBody.Base(Plate(40, 30), Spec()).Solid.Translate(0, 60, 0);
+
+        Assert.NotNull(SheetMetalFeatures.TryUnfold(new Part("a", a)));
+        Assert.Null(SheetMetalFeatures.TryUnfold(new Part("welded", a | b)));
+        Assert.Empty(SheetMetalFeatures.UnfoldAll([new Part("welded", a | b)]));
+    }
+
+    /// <summary>A panel placed four times is ONE blank cut four times, not four blanks —
+    /// de-duplication by part reference, the rule the BOM already follows.</summary>
+    [Fact]
+    public void ARepeatedSheetPartYieldsOneBlank()
+    {
+        var panel = new Part("panel", SheetMetalBody.Base(Plate(40, 30), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 12).Solid);
+        var assembly = new Assembly("stack");
+        for (int i = 0; i < 4; i++)
+            assembly.Add(panel, Frame3d.FromXY((0, 0, 10 * i), Vector3d.UnitX, Vector3d.UnitY));
+        var scene = new Scene();
+        scene.AddTab("Model").Add(assembly);
+
+        Assert.Equal(4, scene.AllInstances.Count());
+        Assert.Single(SheetMetalFeatures.UnfoldAll(scene));
+    }
+
+    // --------------------------------------------------------------- mirrored placement
+
+    /// <summary>
+    /// A mirrored sheet part is the EXACT reflection of the unmirrored one, and that is the
+    /// only oracle worth having: a flange tree is ordered and quoted on named edges, so a
+    /// reflection has to move the NAMES (segment indices, span offsets, cutout coordinates)
+    /// and every one of those remaps is a chance to produce a plausible different part.
+    /// Comparing vertex SETS through the reflection catches all of them at once, where a
+    /// volume comparison would pass a tree flipped the wrong way round.
+    /// </summary>
+    [Fact]
+    public void AMirroredSheetIsTheExactReflectionOfTheOriginal()
+    {
+        // Deliberately asymmetric in every remapped quantity: a flange on one base edge
+        // only, inset asymmetrically, with a chained flange and an off-centre cutout.
+        static SheetMetalBody Body() =>
+            SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, startOffset: 8, width: 26, cutouts:
+                    [Sketch.Circle(2.5).Placed((7, 9), (1, 0))])
+                .WithFlange(SheetFlangeTarget.FlangeTip(0), 10, startOffset: 3, width: 12);
+
+        var plain = Body().Solid.ToBrep();
+        var mirrored = Body().Solid.Mirror((0, 0, 0), (1, 0, 0)).ToBrep();
+        mirrored.Validate();
+
+        Assert.Equal(plain.Faces.Count(), mirrored.Faces.Count());
+        Assert.Equal(plain.Edges.Count(), mirrored.Edges.Count());
+        Assert.Equal(
+            BrepMassProperties.Compute(plain).Volume,
+            BrepMassProperties.Compute(mirrored).Volume, 6);
+
+        // Every vertex of the mirrored solid is the reflection of one of the original's.
+        var reflected = plain.Vertices
+            .Select(v => new Vector3d(-v.Position.X, v.Position.Y, v.Position.Z))
+            .ToList();
+        foreach (var vertex in mirrored.Vertices)
+        {
+            Assert.True(
+                reflected.Any(p => p.DistanceTo(vertex.Position) < 1e-9),
+                $"mirrored vertex {vertex.Position} has no counterpart in the reflected original");
+        }
+    }
+
+    /// <summary>A mirror is Native now, in the Explain report as well as in the geometry —
+    /// and Mirror(Mirror(x)) is the original, which is what proves the remaps are an
+    /// involution rather than merely self-consistent.</summary>
+    [Fact]
+    public void AMirroredSheetIsBRepNativeAndMirroringTwiceIsTheIdentity()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, startOffset: 8, width: 26);
+
+        var report = body.Solid.Mirror((0, 0, 0), (1, 0, 0)).Explain(TargetRep.Brep);
+        Assert.True(report.IsConvertible);
+        Assert.All(report.Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+
+        var twice = body.Solid.Mirror((0, 0, 0), (1, 0, 0)).Mirror((0, 0, 0), (1, 0, 0)).ToBrep();
+        twice.Validate();
+        var once = body.Solid.ToBrep();
+        Assert.Equal(once.Faces.Count(), twice.Faces.Count());
+        foreach (var vertex in twice.Vertices)
+        {
+            Assert.True(
+                once.Vertices.Any(v => v.Position.DistanceTo(vertex.Position) < 1e-9),
+                $"a doubly mirrored sheet must be the original; {vertex.Position} is not on it");
+        }
+    }
+
+    /// <summary>A sketch's mirror restores its winding by REVERSING the loop, so a segment
+    /// at index i lands at n - 1 - i — the remap a flange target has to make. Pinned
+    /// directly, since a body-level test could pass with an index map that happens to be
+    /// symmetric on a rectangle.</summary>
+    [Fact]
+    public void AMirroredSketchKeepsItsAreaAndReversesItsSegmentOrder()
+    {
+        var sketch = Sketch.Start(0, 0)
+            .LineTo(40, 0)
+            .ArcTo((40, 20), 12, clockwise: false)
+            .LineTo(0, 20)
+            .Close()
+            .WithHole(Sketch.Circle(3).Placed((10, 10), (1, 0)));
+
+        var mirrored = sketch.Mirrored();
+        Assert.Equal(sketch.Area(), mirrored.Area(), 9);
+        Assert.Equal(sketch.Segments.Count, mirrored.Segments.Count);
+        var curves = sketch.ToCurves();
+        var flipped = mirrored.ToCurves();
+        for (int i = 0; i < curves.Count; i++)
+        {
+            // Original segment i is at n - 1 - i, traversed the other way, reflected in x.
+            var mine = curves[i].PointAt(curves[i].Domain.Start);
+            var theirs = flipped[curves.Count - 1 - i];
+            var theirEnd = theirs.PointAt(theirs.Domain.End);
+            Assert.Equal(-mine.X, theirEnd.X, 9);
+            Assert.Equal(mine.Y, theirEnd.Y, 9);
+        }
+    }
+
+    // ------------------------------------------- hems, jogs and curls (multi-bend forms)
+
+    /// <summary>
+    /// A hem is TWO bends in the same direction, and the number that has to be right is the
+    /// GAP — measured on the built solid rather than assumed from the arithmetic that set
+    /// the intermediate leg. The returned leg's facing surface must sit exactly
+    /// <c>gap</c> above the sheet's own quoted face, and it must run back OVER the sheet
+    /// (the direction claim a one-sided test would miss).
+    /// </summary>
+    [Theory]
+    [InlineData(SheetBendDirection.Up)]
+    [InlineData(SheetBendDirection.Down)]
+    public void AHemReturnsOverTheSheetAtExactlyTheDeclaredGap(SheetBendDirection direction)
+    {
+        const double gap = 6, returnLength = 20, radius = 1.0;
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithHem(SheetFlangeTarget.BaseEdge(1), returnLength, gap, bendRadius: radius,
+                direction: direction);
+
+        Assert.Equal(2, body.Flanges.Count);
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+
+        // The sheet's quoted face is z = T for an Up hem and z = 0 for a Down one; the
+        // returned leg faces it across exactly the gap, on the same side the fold went.
+        int sign = direction == SheetBendDirection.Up ? 1 : -1;
+        double quoted = direction == SheetBendDirection.Up ? Thickness : 0;
+        double facing = quoted + sign * gap;
+        var onLeg = solid.Vertices
+            .Where(v => Math.Abs(v.Position.Z - facing) < 1e-6)
+            .ToList();
+        Assert.NotEmpty(onLeg);
+        // ... and the leg runs BACK over the plate: its far end is inboard of the bend line.
+        Assert.True(onLeg.Min(v => v.Position.X) < PlateX,
+            "a hem's returned leg must fold back over the sheet, not away from it");
+    }
+
+    [Fact]
+    public void AClosedHemIsRefusedNamingTheCoincidentFaces()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithHem(SheetFlangeTarget.BaseEdge(1), 20, gap: 2 * Radius));
+        Assert.Contains("CLOSED hem", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("coincident", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A jog steps the sheet sideways and leaves it PARALLEL to itself. Both halves are
+    /// measured on the built solid: the step is exactly the declared offset, and the far
+    /// leg's own faces are parallel to the sheet's (which is what the two bends being equal
+    /// and opposite buys, and what a single-bend model could not produce).
+    /// </summary>
+    [Theory]
+    [InlineData(90.0)]
+    [InlineData(45.0)]
+    [InlineData(120.0)]
+    public void AJogStepsByExactlyItsOffsetAndLeavesTheSheetParallel(double angle)
+    {
+        const double offset = 12, run = 20;
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithJog(SheetFlangeTarget.BaseEdge(1), offset, run, angle);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+
+        // The far leg is the only material past the jog: its two planar faces are
+        // horizontal (parallel to the sheet) and sit at the offset above it.
+        var horizontal = solid.Faces
+            .Where(f => f.IsPlanar(out _, out var n) && Math.Abs(Math.Abs(n.Z) - 1) < 1e-9)
+            .Select(f => f.Bounds().Center.Z)
+            .ToList();
+        Assert.Contains(horizontal, z => Math.Abs(z - (Thickness + offset)) < 1e-9);
+        Assert.Contains(horizontal, z => Math.Abs(z - (offset)) < 1e-9);
+    }
+
+    [Fact]
+    public void AJogSmallerThanItsOwnBendsIsRefusedNamingTheMinimum()
+    {
+        // At 90 degrees the two bends alone step 2R + T = 5.5, so 4 is impossible.
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SheetMetalBody.Base(Plate(), Spec()).WithJog(SheetFlangeTarget.BaseEdge(1), 4, 20));
+        Assert.Contains("5.5", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A curl is a CHAIN of hits, so what it produces is a polygonal roll rather than a
+    /// cylinder — which is what the API says and what this measures: the declared total
+    /// turn arrives as the sum of the segments' turns, read off the built solid's own
+    /// faces. A part rolled 270 degrees has its far leg pointing back at the sheet.
+    /// </summary>
+    [Fact]
+    public void ACurlTurnsThroughItsDeclaredTotalAsAChainOfBends()
+    {
+        const int segments = 6;
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithCurl(SheetFlangeTarget.BaseEdge(1), 270, segments, bendRadius: 1.0, legLength: 0.8);
+
+        Assert.Equal(segments, body.Flanges.Count);
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+
+        // Each hit turns 45 degrees, so the last leg's own direction is 270 degrees from
+        // the sheet's: it points back inboard and DOWNWARD. Read off the last flange's
+        // tip face, whose normal is the leg's own direction.
+        var flat = body.Unfold();
+        Assert.Equal(segments, flat.Bends.Count);
+        Assert.All(flat.Bends, b => Assert.Equal(45, b.AngleDegrees, 9));
+    }
+
+    [Fact]
+    public void ACurlOfOneSegmentOrPastAHalfTurnPerBendIsRefused()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SheetMetalBody.Base(Plate(), Spec()).WithCurl(SheetFlangeTarget.BaseEdge(1), 270, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SheetMetalBody.Base(Plate(), Spec()).WithCurl(SheetFlangeTarget.BaseEdge(1), 400, 2));
+    }
+
+    // ------------------------------------------------------- cutouts on a flange wall
+
+    /// <summary>
+    /// A flange cutout is ONE declaration reaching BOTH views, exactly as a bend relief is:
+    /// the folded wall is punched and the blank gains the same hole through the flange's
+    /// own rigid frame. So the load-bearing assertion is the volume-identity one — the
+    /// folded-versus-flat discrepancy must be UNCHANGED, since the cutout removes the same
+    /// material from each — beside two exact statements about how much each view lost.
+    /// A blanket "the two volumes agree" waves through a cutout that reached only one.
+    /// </summary>
+    [Theory]
+    [InlineData(SheetMaterials.Coined)]
+    [InlineData(SheetMaterials.MildSteel)]
+    [InlineData(SheetMaterials.SoftAluminium)]
+    public void AFlangeCutoutRemovesTheSameMaterialFromBothViews(double k)
+    {
+        const double length = 25, radius = 4;
+        var plain = SheetMetalBody.Base(Plate(), Spec(k))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), length);
+        var holed = SheetMetalBody.Base(Plate(), Spec(k))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), length,
+                cutouts: [Sketch.Circle(radius).Placed((25, 8), (1, 0))]);
+
+        double area = Math.PI * radius * radius;
+        var solid = holed.Solid.ToBrep();
+        solid.Validate();
+
+        // The blank loses exactly the circle; the folded body loses exactly circle x T.
+        Assert.Equal(plain.Unfold().Area - area, holed.Unfold().Area, 9);
+        Assert.Equal(FoldedVolume(plain) - area * Thickness, FoldedVolume(holed), 3);
+
+        // ... and therefore the discrepancy the K-factor owns does not move at all.
+        double plainGap = FoldedVolume(plain) - plain.Unfold().Volume;
+        double holedGap = FoldedVolume(holed) - holed.Unfold().Volume;
+        Assert.True(
+            Math.Abs(holedGap - plainGap) < 1e-8 * FoldedVolume(plain),
+            $"a cutout must not move the folded-vs-flat gap: {plainGap:g12} -> {holedGap:g12}");
+    }
+
+    /// <summary>The hole has to be in the right PLACE, not merely of the right size — and
+    /// the place is what a rigid frame pair is for. Measured on the folded solid's own
+    /// bounds and on the blank's own signed distance, two independent readings of one
+    /// declaration.</summary>
+    [Fact]
+    public void AFlangeCutoutLandsWhereItsLocalCoordinatesSay()
+    {
+        // Local (x, y): x runs BACK along the bend line from the flange's far end, y out
+        // from the tangent line. So x = 10 is at plate y = 40, and y = 6 is 6 above the
+        // bend's tangent (z = T + R + 6).
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25,
+                cutouts: [Sketch.Circle(3).Placed((10, 6), (1, 0))]);
+
+        var blank = body.Unfold().Outline;
+        var hole = Assert.Single(blank.Holes);
+        // In the blank the flange's frame origin sits at the far tangent line, so the hole
+        // is 10 back along the edge (y = 40) and 6 past the bend zone.
+        double allowance = SheetMetalSpec.BendAllowance(
+            Math.PI / 2, Radius, Thickness, SheetMaterials.MildSteel);
+        Assert.Equal(PlateX + allowance + 6, hole.Bounds.Center.X, 9);
+        Assert.Equal(PlateY - 10, hole.Bounds.Center.Y, 9);
+
+        // And on the folded solid: the bore's rim vertices sit on the wall at z centred on
+        // T + R + 6, on both faces of the wall.
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        var rim = solid.Vertices
+            .Where(v => Math.Abs(v.Position.Y - (PlateY - 10)) < 5)
+            .Where(v => v.Position.X > PlateX + Radius - 1e-9)
+            .ToList();
+        Assert.NotEmpty(rim);
+        Assert.All(rim, v => Assert.Equal(Thickness + Radius + 6, v.Position.Z, 6));
+    }
+
+    [Fact]
+    public void ACutoutThatWouldCrossTheBendIsRefusedNamingTheDevelopment()
+    {
+        var exception = Assert.Throws<NotSupportedException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25,
+                    cutouts: [Sketch.Circle(3).Placed((20, 2), (1, 0))]));
+        Assert.Contains("BEND", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("development", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ACutoutReachingTheWallsEdgeOrOverlappingASiblingIsRefused()
+    {
+        // Past the tip: that is a change to the flange's OUTLINE, not a hole through it.
+        Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts:
+                    [Sketch.Circle(3).Placed((20, 19), (1, 0))]));
+
+        // Two cutouts whose extents meet: refused, conservatively and by name.
+        var overlap = Assert.Throws<ArgumentException>(() =>
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts:
+                [
+                    Sketch.Circle(3).Placed((20, 9), (1, 0)),
+                    Sketch.Circle(3).Placed((24, 9), (1, 0)),
+                ]));
+        Assert.Contains("overlapping extents", overlap.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Several cutouts of several kinds, on a flange that itself carries a child
+    /// flange — the composition test, since a cutout must not disturb the tip edge a child
+    /// bends on.</summary>
+    [Fact]
+    public void SeveralCutoutsComposeWithAChainedFlange()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 30, cutouts:
+            [
+                Sketch.Circle(3).Placed((10, 8), (1, 0)),
+                Sketch.Rectangle(8, 5).Placed((30, 12), (1, 0)),
+                Sketch.Slot(10, 4).Placed((25, 5), (1, 0)),
+            ])
+            .WithFlange(SheetFlangeTarget.FlangeTip(0), 12);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        var flat = body.Unfold();
+        Assert.Equal(3, flat.Outline.Holes.Count);
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / flat.Volume, 6);
+    }
+
+    /// <summary>A wall cutout is a constructor INPUT (a sketch is authored geometry, not a
+    /// number an editor can offer), so what has to hold is the `SaveInputs` contract: it
+    /// round-trips exactly through the public curve vocabulary and rebuilds the same
+    /// holes. A flange with none writes NO inputs record, which is what keeps a history
+    /// saved before cutouts existed loadable.</summary>
+    [Fact]
+    public void FlangeCutoutsRoundTripThroughTheFeatureRegistry()
+    {
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature(
+                Sketch.Circle(3).Placed((12, 8), (1, 0)),
+                Sketch.Rectangle(6, 4).Placed((30, 10), (1, 0)))
+            {
+                Length = 25,
+                Edge = PlusXTopEdge(),
+            });
+        Assert.True(history.Regenerate().Succeeded);
+
+        string saved = history.SaveHistory();
+        Assert.Contains("\"cutouts\"", saved, StringComparison.Ordinal);
+
+        var loaded = FeatureHistory.LoadHistory(saved);
+        // The lambda-backed EDGE is the documented opaque case and warns; that is not what
+        // this test is about, and the cutouts must come back regardless.
+        Assert.Contains(loaded.Warnings, w => w.Contains("Edge", StringComparison.Ordinal));
+        var rebuilt = Assert.IsType<EdgeFlangeFeature>(loaded.History.Features[1]);
+        Assert.Equal(2, rebuilt.Cutouts.Count);
+        Assert.Equal(Math.PI * 9, rebuilt.Cutouts[0].Area(), 9);
+        Assert.Equal(24, rebuilt.Cutouts[1].Area(), 9);
+        // The rebuilt cutouts drive the same geometry, read off a body built from THEM.
+        Assert.Equal(
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts: rebuilt.Cutouts)
+                .Unfold().Area,
+            SheetMetalBody.Base(Plate(), Spec())
+                .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, cutouts:
+                [
+                    Sketch.Circle(3).Placed((12, 8), (1, 0)),
+                    Sketch.Rectangle(6, 4).Placed((30, 10), (1, 0)),
+                ])
+                .Unfold().Area,
+            12);
+
+        // A flange with NO cutouts writes no inputs record at all, so a history saved
+        // before cutouts existed still loads (the factory reads a missing record as none).
+        var plain = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature { Length = 25, Edge = PlusXTopEdge() });
+        Assert.DoesNotContain("\"cutouts\"", plain.SaveHistory(), StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------- the flat pattern
 
     [Fact]
@@ -581,6 +1208,46 @@ public class SheetMetalTests
         var exception = Assert.Throws<NotSupportedException>(
             () => body.WithFlange(SheetFlangeTarget.BaseEdge(arcIndex), 20));
         Assert.Contains("must be STRAIGHT", exception.Message, StringComparison.Ordinal);
+        // The refusal states a THEOREM rather than a missing surface type, which is the
+        // whole difference: a curved bend line is not something this kernel has not got
+        // round to, it is something no flat blank can produce.
+        Assert.Contains("isometry", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Gaussian curvature", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The reason a curved bend line is refused, MEASURED rather than asserted: the band a
+    /// circular bend line would sweep is a torus segment, and a torus has non-zero Gaussian
+    /// curvature everywhere a flat sheet's is zero — so the material would have to stretch.
+    /// Read off the kernel's own surface rather than from the formula, by comparing the
+    /// area a torus band actually has against the area the flat blank would spend on it
+    /// (which is what a bend allowance is): they differ, and by a straight bend's own
+    /// standard they must not.
+    /// </summary>
+    [Fact]
+    public void ACurvedBendLineWouldNotBeAnIsometryOfTheSheet()
+    {
+        const double rho = 30, radius = 2, angle = Math.PI / 2;
+
+        // A STRAIGHT bend of width w spends exactly w x BA of blank and has exactly that
+        // much neutral-surface area: an isometry, which is what makes the unfold work.
+        double allowance = SheetMetalSpec.BendAllowance(angle, radius, Thickness, SheetMaterials.Coined);
+        double straightWidth = 2 * Math.PI * rho;
+        double straightArea = straightWidth * allowance;
+
+        // The same bend run round a circle of radius rho is a TORUS band: by Pappus its
+        // neutral-surface area is the generator's length times the distance its CENTROID
+        // travels, and the centroid does not sit on the bend line — so the area is not the
+        // blank's, and the gap is the material that would have to come from somewhere.
+        double neutral = radius + SheetMaterials.Coined * Thickness;   // neutral-surface radius
+        double centroidOffset = neutral * (1 - Math.Cos(angle / 2)) * 2 / angle * Math.Sin(angle / 2);
+        double torusArea = allowance * 2 * Math.PI * (rho + centroidOffset);
+
+        Assert.True(
+            Math.Abs(torusArea - straightArea) > 1e-6 * straightArea,
+            "if these agreed, folding along a curve would be an isometry and the refusal would be wrong");
+        // ... and the gap is what a fabricator has to stretch or shrink: about 3% here.
+        Assert.InRange(Math.Abs(torusArea - straightArea) / straightArea, 0.01, 0.10);
     }
 
     [Fact]
@@ -595,9 +1262,12 @@ public class SheetMetalTests
     [Fact]
     public void AHemIsRefusedRatherThanApproximated()
     {
+        // A hem is TWO bends, so a single 180-degree fold stays refused — and the refusal
+        // now names the call that does build one, rather than the version that did not.
         var body = SheetMetalBody.Base(Plate(), Spec());
-        Assert.Throws<ArgumentOutOfRangeException>(
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
             () => body.WithFlange(SheetFlangeTarget.BaseEdge(1), 20, angleDegrees: 180));
+        Assert.Contains(nameof(SheetMetalBody.WithHem), exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -725,16 +1395,18 @@ public class SheetMetalTests
     }
 
     /// <summary>
-    /// <see cref="SheetReliefOption"/> is a SECOND spelling of <see cref="SheetReliefKind"/>
-    /// (a dropdown cannot say "unset", so the feature needs its own None), and a second
-    /// spelling is a drift waiting to happen. This drives EVERY member of it through a real
-    /// regeneration and reads the kind back off the flange tree by NAME, so a kind added to
-    /// one enum and not the other fails here rather than quietly meaning something else.
+    /// <see cref="EdgeFlangeFeature.Relief"/> is a NULLABLE <see cref="SheetReliefKind"/>
+    /// now that a dropdown can say "unset" (<c>ParamEditors.EnumChoices</c>), so the SECOND
+    /// enum this used to need — and the drift a second spelling invites — is gone. Every
+    /// kind, and the null, is still driven through a real regeneration and read back off
+    /// the flange tree BY NAME, since the map from parameter to declaration is what a
+    /// reader has to trust.
     /// </summary>
     [Fact]
     public void EveryReliefOptionReachesTheFlangeTreeAsItsOwnKind()
     {
-        foreach (var option in Enum.GetValues<SheetReliefOption>())
+        SheetReliefKind?[] options = [null, .. Enum.GetValues<SheetReliefKind>().Cast<SheetReliefKind?>()];
+        foreach (var option in options)
         {
             var history = History(
                 new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
@@ -750,17 +1422,13 @@ public class SheetMetalTests
             Assert.True(result.Succeeded, $"{option}: {result}");
 
             var flange = Assert.Single(SheetMetalFeatures.BodyOf(result.Body, "test").Flanges);
-            if (option == SheetReliefOption.None)
+            if (option is null)
             {
                 Assert.Null(flange.Relief);
                 continue;
             }
             Assert.Equal(option.ToString(), flange.Relief!.Kind.ToString());
         }
-        // ... and the kinds the geometry carries are exactly the options minus None.
-        Assert.Equal(
-            Enum.GetNames<SheetReliefKind>().Order(),
-            Enum.GetNames<SheetReliefOption>().Where(n => n != nameof(SheetReliefOption.None)).Order());
     }
 
     /// <summary>
@@ -779,7 +1447,7 @@ public class SheetMetalTests
             new EdgeFlangeFeature
             {
                 Length = 20, Edge = PlusXTopEdge(), StartOffset = 5, Width = 15,
-                Relief = SheetReliefOption.Rectangular,
+                Relief = SheetReliefKind.Rectangular,
             },
             new EdgeFlangeFeature
             {
@@ -808,7 +1476,7 @@ public class SheetMetalTests
             new EdgeFlangeFeature
             {
                 Length = 25, Edge = PlusXTopEdge(), StartOffset = 10, Width = 30,
-                Relief = SheetReliefOption.Obround, ReliefWidth = 4,
+                Relief = SheetReliefKind.Obround, ReliefWidth = 4,
             });
         Assert.True(history.Regenerate().Succeeded);
 

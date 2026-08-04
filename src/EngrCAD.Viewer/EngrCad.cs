@@ -459,6 +459,17 @@ public static class EngrCad
             return Export(sceneFactory(), args[exportIndex + 1], options, log);
         }
 
+        int flatIndex = Array.IndexOf(args, "--flat");
+        if (flatIndex >= 0)
+        {
+            if (flatIndex + 1 >= args.Length)
+            {
+                Log.UsageFlat(log);
+                return 2;
+            }
+            return ExportFlatPatterns(sceneFactory(), args[flatIndex + 1], log);
+        }
+
         int renderIndex = Array.IndexOf(args, "--render");
         if (renderIndex >= 0)
         {
@@ -663,6 +674,79 @@ public static class EngrCad
             case "z": axis = SectionAxis.Z; return true;
             default: axis = default; return false;
         }
+    }
+
+    // ---- headless flat patterns ----
+
+    /// <summary>
+    /// <c>--flat out.dxf|.svg|.txt</c>: every sheet-metal part's FLAT PATTERN — the blank
+    /// a laser cuts plus the bend lines a press brake folds on, or the bend table it is set
+    /// up from.
+    ///
+    /// <para><b>Its own verb rather than an <c>--export</c> extension</b>, because
+    /// "this scene as DXF" is genuinely ambiguous — a drawing sheet, a section and a flat
+    /// pattern are three different 2D answers to it — while <c>--flat</c> says exactly one
+    /// thing. Nothing is computed here that a script could not: <c>FlatPattern.ToDxf</c>,
+    /// <c>ToDrawing</c> and <c>BendTable</c> are the whole implementation, which is the
+    /// point (a CLI route must not be a second way to derive a blank).</para>
+    ///
+    /// <para>A scene may hold several sheet parts and each has its OWN blank, so one path
+    /// cannot serve them: with exactly one sheet part the file is written where the caller
+    /// asked, and with several each takes <c>&lt;stem&gt;-&lt;part&gt;&lt;ext&gt;</c> and
+    /// says so in the log. Debug modifiers apply exactly as they do to an export (a Hidden
+    /// part has no blank cut for it).</para>
+    /// </summary>
+    private static int ExportFlatPatterns(Scene scene, string path, ILogger log)
+    {
+        // A flat pattern belongs to a PART, not to a placement: moving a folded part does
+        // not move its blank. So the instance list is used only for the debug-modifier
+        // rule, and SheetMetalFeatures.UnfoldAll -- the one seam the viewer's Flat button
+        // reads too -- picks the sheet parts out of it and de-duplicates them.
+        var instances = DebugFilter.Exported([.. scene.AllInstances]);
+        var sheets = SheetMetalFeatures.UnfoldAll(instances.Select(i => i.Part));
+        if (sheets.Count == 0)
+        {
+            Log.NoSheetParts(log, instances.Select(i => i.Part).Distinct().Count());
+            return 1;
+        }
+
+        string extension = Path.GetExtension(path).ToLowerInvariant();
+        if (extension is not (".dxf" or ".svg" or ".txt"))
+        {
+            Log.UnsupportedFlatFormat(log, Path.GetExtension(path));
+            return 2;
+        }
+
+        foreach (var (part, flat) in sheets)
+        {
+            string file = sheets.Count == 1 ? path : PerPartPath(path, part.Name);
+            switch (extension)
+            {
+                case ".dxf":
+                    flat.ToDxf().SaveFile(file);
+                    break;
+                case ".svg":
+                    flat.ToDrawing().SaveFile(file);
+                    break;
+                default:
+                    File.WriteAllText(file, flat.BendTable());
+                    break;
+            }
+            Log.WroteFlatPattern(log, file, part.Name, flat.Bends.Count, flat.Area);
+        }
+        return 0;
+    }
+
+    /// <summary>One sheet part's own file when a scene holds several — the caller's stem
+    /// with the part's name appended. Characters a path cannot carry become '_', so a part
+    /// named "bracket / left" still writes a file rather than throwing.</summary>
+    private static string PerPartPath(string path, string partName)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        string safe = new([.. partName.Select(c => invalid.Contains(c) ? '_' : c)]);
+        string directory = Path.GetDirectoryName(path) ?? "";
+        string stem = Path.GetFileNameWithoutExtension(path);
+        return Path.Combine(directory, $"{stem}-{safe}{Path.GetExtension(path)}");
     }
 
     // ---- headless export ----

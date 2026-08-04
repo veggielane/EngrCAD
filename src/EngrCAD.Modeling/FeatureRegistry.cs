@@ -89,6 +89,12 @@ public sealed class FeatureRegistry
         RegisterFactory(typeof(BaseFlangeFeature), inputs =>
             new BaseFlangeFeature(
                 InputJson.LoadSketch(Require(inputs, nameof(BaseFlangeFeature)).GetProperty("sketch"))));
+        // An edge flange's only INPUT is its wall cutouts, and a flange with none writes no
+        // "inputs" record at all — so the factory takes a MISSING record as "no cutouts"
+        // rather than refusing, which is what keeps every history written before cutouts
+        // existed loadable.
+        RegisterFactory(typeof(EdgeFlangeFeature), inputs =>
+            new EdgeFlangeFeature(InputJson.LoadSketchList(inputs, "cutouts")));
         RegisterFactory(typeof(ComponentFeature), inputs =>
         {
             var element = Require(inputs, nameof(ComponentFeature));
@@ -399,6 +405,16 @@ internal static class InputJson
         if (sketch.Holes.Count > 0)
             json["holes"] = new JsonArray([.. sketch.Holes.Select(h => (JsonNode)SaveCurves(h.ToCurves()))]);
         return json;
+    }
+
+    /// <summary>A named ARRAY of sketches, or an empty list when the record — or the whole
+    /// "inputs" object — is absent. An optional input has to read as absent rather than as
+    /// a refusal, or a history written before it existed stops loading.</summary>
+    internal static IReadOnlyList<Sketch> LoadSketchList(JsonElement? inputs, string name)
+    {
+        if (inputs is not { } element || !element.TryGetProperty(name, out var array))
+            return [];
+        return [.. array.EnumerateArray().Select(LoadSketch)];
     }
 
     internal static Sketch LoadSketch(JsonElement element)

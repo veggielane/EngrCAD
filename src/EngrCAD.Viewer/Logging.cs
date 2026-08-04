@@ -109,6 +109,10 @@ internal static partial class Log
                 + " --rpc-token requires the token value")]
     internal static partial void UsageRpc(ILogger logger);
 
+    [LoggerMessage(EventId = 18, Level = LogLevel.Error,
+        Message = "--flat requires a file path (.dxf, .svg or .txt)")]
+    internal static partial void UsageFlat(ILogger logger);
+
     // ---- headless export / render ----
 
     [LoggerMessage(EventId = 20, Level = LogLevel.Information,
@@ -171,6 +175,23 @@ internal static partial class Log
     [LoggerMessage(EventId = 33, Level = LogLevel.Warning,
         Message = "skipping '{PartName}': {Reason}")]
     internal static partial void SkippingPart(ILogger logger, string partName, string reason);
+
+    // ---- flat patterns (--flat) ----
+
+    [LoggerMessage(EventId = 34, Level = LogLevel.Information,
+        Message = "wrote {Path} (flat pattern of '{PartName}': {BendCount} bend(s), blank area {Area:0.###})")]
+    internal static partial void WroteFlatPattern(
+        ILogger logger, string path, string partName, int bendCount, double area);
+
+    [LoggerMessage(EventId = 35, Level = LogLevel.Error,
+        Message = "None of the {PartCount} part(s) is a sheet-metal body, so there is no flat pattern to write."
+                + " A flat pattern is derived from a SheetMetalBody's own flange tree.")]
+    internal static partial void NoSheetParts(ILogger logger, int partCount);
+
+    [LoggerMessage(EventId = 36, Level = LogLevel.Error,
+        Message = "Unsupported flat-pattern format '{Extension}' — use .dxf (cut), .svg (view) or"
+                + " .txt (bend table).")]
+    internal static partial void UnsupportedFlatFormat(ILogger logger, string extension);
 
     // ---- live modeling loop ----
 
