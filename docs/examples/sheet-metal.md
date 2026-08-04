@@ -109,9 +109,11 @@ if (!report.IsConvertible) throw new Exception(report.ToString());
 ### Partial flanges
 
 Give a flange a `startOffset` and a `width` and it occupies part of the edge, leaving
-the wall intact either side. A flange must span the **whole** edge or be **inset from
-both ends** — flush at one end only puts the bend into a corner, which v1 refuses
-rather than approximates.
+the wall intact either side. **A flange's two ends are independent**: each is either
+*flush* with its edge's own end — where the flange's cross-section is spliced into the
+neighbouring wall — or *inset* from it, where the flange gets a cap and the leftover
+wall a stub. A flange running to one end of a plate is one of each, which is the
+ordinary shop case and needs no special path.
 
 ```csharp render:sheet-metal-tabs
 var spec = new SheetMetalSpec(Thickness: 1.2, BendRadius: 1.2, KFactor: SheetMaterials.Aluminium);
@@ -127,6 +129,52 @@ scene.Add(new Part("tabbed", tabbed.Solid) { Color = new PartColor(0.72f, 0.68f,
 ```
 
 ![Mounting tabs and an obtuse flange](images/sheet-metal-tabs.png)
+
+### Bend reliefs
+
+Where a flange stops short of its edge, the parent material beside the bend has to give
+way — so a **bend relief** is notched into it. Give a flange a `BendRelief` and one is
+cut at each *inset* end (a flush end has no parent material beside it to relieve).
+
+**A relief is a notch in the blank, not a cut in the folded body.** It changes
+`BaseOutline` — the base sketch with every relief cut into it — which is what the folded
+sheet is extruded from *and* what the flat pattern starts from. So there is no boolean
+and no second description: the same declaration produces both views, exactly as an edge
+flange does. It also makes the geometry *simpler*, because between its two notches a
+relieved flange runs the full width of the shortened wall, which is the ordinary flush
+case.
+
+```csharp render:sheet-metal-relief
+var spec = new SheetMetalSpec(Thickness: 2, BendRadius: 2, KFactor: SheetMaterials.MildSteel);
+
+var bracket = SheetMetalBody
+    .Base(Sketch.Polygon([new(0, 0), new(110, 0), new(110, 60), new(0, 60)]), spec)
+    .WithFlange(
+        SheetFlangeTarget.BaseEdge(1), length: 24, startOffset: 14, width: 32,
+        relief: BendRelief.Obround(width: 5, depth: 10))
+    .WithFlange(
+        SheetFlangeTarget.BaseEdge(3), length: 18, startOffset: 20, width: 24,
+        relief: BendRelief.Rectangular(width: 4, depth: 8));
+
+var scene = new Scene();
+scene.Add(new Part("relieved", bracket.Solid) { Color = new PartColor(0.62f, 0.66f, 0.72f) });
+```
+
+![Obround and rectangular bend reliefs](images/sheet-metal-relief.png)
+
+| | |
+| --- | --- |
+| `BendRelief.Rectangular(width, depth)` | Two sides and a flat bottom. |
+| `BendRelief.Obround(width, depth)` | Rounded at the bottom with a semicircle of half the width — the fatigue-friendly form, since a square inside corner is a stress raiser. `Depth` reaches the *deepest* point, so it can never be less than half the width. |
+
+Both dimensions default: **width** to one sheet thickness, **depth** to `R + T`, which
+takes the notch past the bend's own tangent region. A **tear relief** is deliberately
+absent from the vocabulary — it is what happens when no relief is cut at all, and the
+shape the material tears into belongs to the press, not to the geometry.
+
+Reliefs are cut only on the **base flange's** edges: a flange's own wall is built as a
+plain rectangle rather than from a sketch, so a relief on a flange tip is refused by
+name.
 
 ## The flat pattern
 
@@ -156,6 +204,48 @@ var svg = chassis.Unfold().ToDrawing().ToSvg();
 ```
 
 ![The flat pattern, with bend zones chain-dashed](images/sheet-metal-flat.svg)
+
+Reliefs appear in the blank as the notches they are, because the blank *is* the outline
+they were cut into:
+
+```csharp svg:sheet-metal-relief-flat
+var spec = new SheetMetalSpec(Thickness: 2, BendRadius: 2, KFactor: SheetMaterials.MildSteel);
+
+var svg = SheetMetalBody
+    .Base(Sketch.Polygon([new(0, 0), new(110, 0), new(110, 60), new(0, 60)]), spec)
+    .WithFlange(
+        SheetFlangeTarget.BaseEdge(1), length: 24, startOffset: 14, width: 32,
+        relief: BendRelief.Obround(width: 5, depth: 10))
+    .WithFlange(
+        SheetFlangeTarget.BaseEdge(3), length: 18, startOffset: 20, width: 24,
+        relief: BendRelief.Rectangular(width: 4, depth: 8))
+    .Unfold()
+    .ToDrawing()
+    .ToSvg();
+```
+
+![The relieved blank, notches and all](images/sheet-metal-relief-flat.svg)
+
+### The bend table
+
+`BendTable()` is the press brake's setup sheet: one row per bend in declaration order,
+with the length of the bend line, the angle, which way it folds, the inside radius and
+the allowance. Every column is read off the same `FlatBendLine` records the drawing's
+bend zones are drawn from, so the table and the picture cannot disagree.
+
+```csharp run:sheet-metal-bend-table
+var spec = new SheetMetalSpec(1.5, 1.5);
+var body = SheetMetalBody.Base(Sketch.Rectangle(80, 50), spec)
+    .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+    .WithFlange(SheetFlangeTarget.BaseEdge(3), 18, direction: SheetBendDirection.Down);
+
+Console.WriteLine(body.Unfold().BendTable());
+// BEND  LENGTH   ANGLE  DIR   RADIUS  ALLOWANCE
+//    1  50.000    90.0  UP     1.500      3.394
+//    2  50.000    90.0  DOWN   1.500      3.394
+var rows = body.Unfold().BendTable().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+if (rows.Length != 3) throw new Exception("a header and one row per bend");
+```
 
 ### Out to the shop
 
@@ -208,6 +298,23 @@ double predicted = 50 * (Math.PI / 2) * 1.5 * 1.5 * (0.5 - SheetMaterials.MildSt
 if (Math.Abs(gap - predicted) > 1e-4) throw new Exception($"gap {gap:g10}, predicted {predicted:g10}");
 ```
 
+**A bend relief leaves that discrepancy exactly where it was**, which is what makes the
+oracle worth extending rather than replacing: a relief takes the same material out of the
+folded body and out of the blank, so it contributes nothing to the gap. A relief that
+notched only one of the two views — the failure a "the volumes are about equal" test
+waves through — shows up here as a gap wrong by the whole notch volume.
+
+```csharp run:sheet-metal-relief-identity
+var spec = new SheetMetalSpec(1.5, 2.0, SheetMaterials.SoftAluminium);
+var body = SheetMetalBody.Base(Sketch.Polygon([new(0, 0), new(80, 0), new(80, 50), new(0, 50)]), spec)
+    .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, startOffset: 10, width: 30,
+        relief: BendRelief.Obround(width: 3, depth: 4));
+
+double gap = BrepMassProperties.Compute(body.Solid.ToBrep()).Volume - body.Unfold().Volume;
+double predicted = 30 * (Math.PI / 2) * 1.5 * 1.5 * (0.5 - SheetMaterials.SoftAluminium);
+if (Math.Abs(gap - predicted) > 1e-4) throw new Exception($"gap {gap:g10}, predicted {predicted:g10}");
+```
+
 ## As a parametric feature
 
 `BaseFlangeFeature` and `EdgeFlangeFeature` put sheet metal in the
@@ -229,6 +336,10 @@ history.Add(new EdgeFlangeFeature
 {
     Length = 25,
     Edge = SheetMetalFeatures.EdgeBetween((80, 0, 1.5), (80, 50, 1.5)),
+    // A relief is a parameter like any other. It is an enum with its own None rather
+    // than a nullable one, because a [Param] dropdown lists the type's members and so
+    // has no way to say "unset" -- the same rule that keeps KFactor's sentinel 0.
+    Relief = SheetReliefOption.None,
 });
 
 var result = history.Regenerate();
@@ -239,19 +350,21 @@ var flat = SheetMetalFeatures.TryUnfold(result.Body)!;
 if (flat.Bends.Count != 1) throw new Exception("expected one bend");
 ```
 
-## What v1 does not do
+## What is not supported
 
 Refused **by name**, rather than approximated:
 
 | Not supported | Why |
 | --- | --- |
 | Bends along non-straight edges | A curved bend line sweeps a developable band, not a cylinder. |
-| Closed corners, miters, bend reliefs | The corner between two flanges is the genuinely fiddly part; approximating it would put material where there is none. |
-| A flange flush at one end only | The bend then meets its neighbouring wall in a corner — the same case as above, in disguise. |
+| Closed corners and miters | Two flanges meeting at a corner of the sheet: their bends' bands have to be trimmed against each other and a corner face built. Caught as a wall that is no longer four-sided. |
 | Jogs, hems, louvres, curls | Each is a different forming operation with its own geometry; a hem in particular folds the flange back against the sheet, which is coincident boundary. |
-| Two flanges sharing a stretch of one edge | Two bends cannot occupy the same material. |
+| Two flanges sharing a stretch of one edge | Two bends cannot occupy the same material — and a relief counts as part of the stretch its flange occupies. |
 | Flanges on a flange's *side* edges | Only the tip: a side flange is a corner interaction. |
+| Reliefs on a flange's tip edge | A relief notches its parent's *outline*, and a flange's wall is built as a plain rectangle rather than from a sketch. |
+| Holes and cuts declared *on* a flange | Cut them on the folded solid; the flat pattern will not know about them. Base-sketch holes do carry through. |
 | Multi-body sheets, welded assemblies | One flange tree, one body. |
-| Spring-back compensation | A property of the press, not of the geometry. |
+| Mirrored placements | A flange tree is ordered and quoted on named edges, so a reflection needs it rebuilt the other way round rather than re-placed. |
+| Tear reliefs, spring-back compensation | Both belong to the press rather than to the geometry — a tear relief is what happens when no relief is cut. |
 
 Every one of these throws with a message naming what it hit and what to do instead.

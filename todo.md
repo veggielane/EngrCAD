@@ -3400,28 +3400,28 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   logger sees its own booleans; consider `SurfaceNets.Polygonize` and `MeshRepair`
   timing at the same standard; a `--log-kernel` switch on `EngrCad.Run` wiring the
   host console logger into the kernel seams.
-- [ ] **Sheet metal v2 — corners, reliefs and the rest of the vocabulary.** v1 landed
-  (`Modeling/SheetMetal.cs`, `SheetMetalFeatures.cs`, `BRep/SheetMetalSurgery.cs`, docs
-  `examples/sheet-metal.md`): the K-factor bend model, base flange + edge flanges as
-  direct topology surgery, the flange tree, `Unfold()` to a `Sketch` with bend lines, DXF
-  and SVG out, and the folded-versus-flat volume identity as the oracle. What it refuses
-  BY NAME is the backlog, roughly in the order the refusals bite:
+- [ ] **Sheet metal v3 — corners, and the rest of the vocabulary.** v1 landed the K-factor
+  bend model, base + edge flanges as direct topology surgery, the flange tree, `Unfold()`,
+  DXF/SVG out and the folded-versus-flat volume identity. **v2 landed** a flange flush at
+  ONE end only (the two ends are independent and share no coedge — it was never a corner
+  case), **bend reliefs** as notches in the blank rather than booleans in the folded body
+  (rectangular and obround, in the feature system, with the volume identity extended to say
+  a relief cannot move the discrepancy), `FlatPattern.BendTable()`, and `SiteFor` resolving
+  a PIECE of a notched edge. What is still refused BY NAME, roughly in the order the
+  refusals bite:
   - **Closed corners and miters.** The genuinely fiddly part, and the one that unlocks
-    most real parts: two flanges on adjacent edges of one plate. v1 detects it (the
-    consumed wall is no longer four-sided) and refuses. The corner needs the two bends'
+    most real parts: two flanges on adjacent edges of one plate. Detected (the consumed
+    wall is no longer four-sided) and refused. The corner needs the two bends'
     bands trimmed against each other and a corner face built — the same
     surface–surface-re-intersection machinery that blocks curved-face shelling and
     non-perpendicular fillet corners, so the three are worth costing together.
-  - **A flange flush at ONE end only.** Currently refused as "the corner case in
-    disguise", which it is — but the common shop case (a flange running to one end of a
-    plate) deserves the small special case: the neighbouring wall's loop is spliced at
-    one end and a cap built at the other.
-  - **Bend reliefs** (rectangular / obround / tear). Pocket subtractions at known
-    coordinates, i.e. the exact sketch-pocket case, so mostly plumbing — but they change
-    the FLAT pattern too, which is where the design work is.
+    **The relief work narrows what is left**: a corner between two RELIEVED flanges is
+    already buildable, because each relief notches the blank and the two bends then run
+    between notches instead of into each other — so what genuinely remains is the
+    *unrelieved* corner, i.e. the one where material must be shared.
   - **Jogs, hems, curls and louvres.** Each is a different forming operation; a hem is
     the interesting one, since folding a flange back against the sheet produces
-    coincident faces that v1's tangency argument explicitly refuses.
+    coincident faces that the tangency argument explicitly refuses.
   - **Bends along non-straight edges** (a developable band rather than a cylinder) —
     needs a new swept surface, not just new bookkeeping.
   - **Holes and cuts ON a flange, carried into the flat pattern.** Today a hole must be
@@ -3429,13 +3429,26 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     not know about it. The unfold walker already has each flange's rigid 2D↔3D frame
     pair, so the mapping exists; what is missing is a place to declare a flange-local
     sketch and the decision about what to do with a hole that crosses a bend.
-  - **Multi-body sheets and welded assemblies**; **spring-back compensation** (a press
-    property, deliberately out of scope for geometry).
-  - Smaller: a `SheetMetalDrawing`-style bend TABLE beside the flat pattern (angle,
-    direction, radius, allowance per bend — `FlatBendLine` already carries the data);
-    a viewer/`--export` route that writes a part's flat pattern without a script; and
-    mirrored placements (v1 is rigid + uniform scale, as loft/draft/shell are).
-  - Five cross-cutting cleanups the sheet-metal review surfaced, each outside the
+    **v2 sharpened the shape of this one**: a relief showed that an edit to the BASE
+    sketch reaches both views for free, so a flange-local sketch wants the same treatment
+    — the flange's wall built from a `Sketch` rather than as a plain rectangle, which is
+    also exactly what a relief on a flange TIP is refused for today. One change, two
+    features.
+  - **Multi-body sheets and welded assemblies**; **spring-back compensation** and **tear
+    reliefs** (both press properties, deliberately out of scope for geometry — a tear
+    relief is what happens when no relief is cut).
+  - Smaller: a viewer/`--export` route that writes a part's flat pattern without a
+    script (`FlatPattern.ToDxf`/`ToDrawing`/`BendTable` are all there; what is missing is
+    the CLI verb and the button); and mirrored placements (rigid + uniform scale today, as
+    loft/draft/shell are — a flange tree is ORDERED and edge-quoted, so a reflection needs
+    it rebuilt the other way round rather than re-placed).
+  - An **optional-ENUM param editor**, the twin of the filed optional-numeric one:
+    `ParamEditors.KindFor` gives a nullable enum a dropdown of the underlying type's
+    members, with no row for "unset", which is why `EdgeFlangeFeature.Relief` is a second
+    enum carrying its own `None` rather than a `SheetReliefKind?`. A "(none)" row would
+    let it be the nullable type (and the same for `SheetReliefOption`'s two-enum drift
+    risk, which is pinned by test today).
+  - Four cross-cutting cleanups the sheet-metal review surfaced, each outside the
     feature and each with callers beyond it, so all deliberately NOT folded in:
     (a) **`TopologyEditor.Use(edge, from, to)`** — "the coedge sense that walks from→to"
     as an assertion rather than a convention. `SheetMetalSurgery` has it privately;
@@ -3455,21 +3468,26 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     (d) **`Distance3d.ClosestPointOnSegment`** — the repo now has four private segment
     routines (`Region2dBoolean`, `ThreadSdf`, `ShapeNodes`, `SheetMetalSurgery`), which is
     the exact count that triggered the `ClosestPointOnTriangle` promotion.
-    (e) ~~Nullable `[Param]` values~~ — **landed**, and the diagnosis was half right.
-    `FeatureHistory.Convert` did throw on `Nullable`1` (swallowed into a warning, so the
-    value was silently dropped on load), and four lines in the shared seam fixed it. But
-    the conclusion — that the serializer is what forced `0` to mean "inherit" in
-    `EdgeFlangeFeature` — is not the whole reason: `ParamEditors.KindFor` offers a SLIDER
-    whenever `[Param(Min=, Max=)]` is finite at both ends, and a slider cannot say
-    "unset". So `Width` and `BendRadius` became `double?` (unbounded above, hence text
-    boxes) while `KFactor` keeps its sentinel, and the residual is filed above as an
-    optional-numeric editor.
   - One correction the v1 work made to the original assessment, worth keeping: it
     claimed "folded and unfolded volumes must agree exactly, a strong built-in test
     oracle". They agree exactly only at **K = 0.5** — a constant-thickness bend holds
     `θ·T·(R + T/2)` per unit width while the blank spends `θ·T·(R + K·T)` — so the real
     oracle is the exact DIFFERENCE `Σ width·θ·T²·(0.5 − K)`, which is strictly stronger
-    (a blanket agreement test passes a model with K wired to a constant).
+    (a blanket agreement test passes a model with K wired to a constant). **v2 added the
+    second half**: a bend relief leaves that difference UNCHANGED, since it removes the
+    same material from both views — so the identity is a test of the relief too, and the
+    one failure mode ("the notch reached only the blank") that an approximate agreement
+    cannot see.
+  - Two of the v2 backlog's own predictions were wrong and are worth recording. **Bend
+    reliefs were filed as "pocket subtractions, i.e. the exact sketch-pocket case, so
+    mostly plumbing — but they change the FLAT pattern too, which is where the design work
+    is."** Both halves invert: there is no pocket and no boolean (a relief notches the
+    BLANK, which is what both views are derived from), and the flat pattern was the easy
+    half precisely because of that — the notch is emitted through the same frame-mapped
+    code the flange detour already used. **And "a flange flush at one end only ... is the
+    corner case in disguise, which it is"** — it is not: the two ends touch no common
+    coedge, so it is one flush end and one inset end, and the fix was to stop branching on
+    a single flag rather than to add a special case.
 - [ ] nuget.org publish — pack VERIFIED solution-wide at 0.1.0 (12 packages, zero
   warnings; every src project has a Description and a packaged README;
   `RepositoryType` added). Remaining, all Chris's to confirm: the placeholder

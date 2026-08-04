@@ -974,21 +974,41 @@ in EngrCAD.BRep, the `Filleting` rim-surgery doctrine): a bend meets both the pa
 sheet and the flange wall *tangentially*, which is the coincident/tangent input the v1
 boolean refuses — and there is nothing to compute anyway, since every face is a closed
 form off `SheetBendSection`. Two exact `ExtrudedSurface` arc bands plus three planes
-are welded into the parent's loops; a full-width flange splices its cross-section into
-the neighbouring walls' loops, an inset one splits the wall into stubs and caps its own
-ends.
+are welded into the parent's loops. **A flange's two ends are independent**: a FLUSH end
+splices the cross-section into the neighbouring face's loop (which must be planar and
+square to the bend line), an INSET end caps the flange and stubs the leftover wall, and
+the two share no coedge — so a flange running to one end of a plate is one of each rather
+than a third path.
+
+**A bend relief is a NOTCH IN THE BLANK, not a cut in the folded body.** `BendRelief`
+(rectangular or obround, defaulting to one thickness wide by `R + T` deep) notches
+`SheetMetalBody.BaseOutline` — the base sketch with every relief cut into it, which is
+what the folded sheet is extruded from *and* what the flat pattern starts from. So there
+is no boolean and no second description, and it makes the geometry simpler rather than
+harder: between its two notches a relieved flange runs the full width of the shortened
+wall, reaching the surgery as an ordinary flush flange. With no relief declared,
+`BaseOutline` **is** `BaseSketch`, by reference. A relief is cut at each *inset* end (a
+flush end has no parent material beside it), and only on the base flange's edges — a
+flange's own wall is built as a plain rectangle rather than from a sketch, so a relief
+there is refused by name.
 
 **`Unfold()` is bookkeeping, not geometry re-derivation**: it walks the flange tree,
 gives each bend its allowance and splices a rectangle into the blank. Base-sketch holes
 carry through unchanged, because the flat pattern's coordinates *are* the base sketch's.
 `FlatPattern` carries the blank plus one `FlatBendLine` per bend (both tangent lines,
-angle, radius, allowance, up/down) and exports via `ToDxf()` (CUT / BEND layers, the
-BEND layer given the CENTER line type) or `ToDrawing()` for SVG.
+angle, radius, allowance, up/down, and the bend line's `Length`) and exports via
+`ToDxf()` (CUT / BEND layers, the BEND layer given the CENTER line type), `ToDrawing()`
+for SVG, or `BendTable()` for the press brake's setup sheet — every column read off those
+same records rather than recomputed from the flange tree, so the table and the drawing
+cannot disagree about a bend.
 
 **The oracle**: a bend's folded material is `θ·T·(R + T/2)` per unit width while the
 blank spends `θ·T·(R + K·T)`, so folded and flat volumes agree **exactly at K = 0.5**
 and differ by **`Σ width·θ·T²·(0.5 − K)`** otherwise — a closed form, tested in both
-direction and magnitude.
+direction and magnitude. **A relief leaves that discrepancy UNCHANGED**, because it takes
+the same material out of the folded body and out of the blank: a relief that notched only
+one of the two views shows up as a gap wrong by the whole notch volume, where a "the
+volumes are close enough" test would wave it through.
 
 `BaseFlangeFeature` and `EdgeFlangeFeature` put all of it in the feature history; the
 bend line is an `EdgeSetRef` resolved per regeneration and mapped back into the tree by
@@ -996,13 +1016,20 @@ bend line is an `EdgeSetRef` resolved per regeneration and mapped back into the 
 The flange's per-bend overrides are also where the optional-parameter rule above is
 applied: `Width` and `BendRadius` are `double?` (null = take the body's), `KFactor` keeps
 a sentinel 0 because it is the one with a finite range and therefore the one behind a
-slider.
+slider. `Relief` is the same rule again in its enum form — a `[Param]` enum gets a
+DROPDOWN, whose rows are the type's own members, so it cannot say "unset" either;
+`SheetReliefOption` is therefore `SheetReliefKind` plus a `None`, with a test driving
+every member through a regeneration so the second spelling cannot drift from the first.
+`SiteFor` also resolves a *piece* of a site's edge as that site, since a relief notches
+the blank and a selector can then only pick one of the pieces.
 
-**v1 refuses by name** rather than approximating: bends along non-straight edges,
-closed corners / miters / bend reliefs, a flange flush at one end only, jogs, hems,
-louvres, two flanges sharing a stretch of edge, flanges on a flange's side edges, and
-multi-body sheets. Spring-back is out of scope (a property of the press, not the
-geometry).
+**Refused by name** rather than approximated: bends along non-straight edges, closed
+corners and miters (two flanges meeting at a corner of the sheet), jogs, hems, louvres,
+curls, two flanges sharing a stretch of edge (reliefs included in the stretch), flanges
+on a flange's side edges, reliefs on a flange's tip, holes declared on a flange and
+carried into the flat pattern, and multi-body sheets. The **tear relief** is a documented
+absence rather than a refusal: it is what happens when no relief is cut, and its shape
+belongs to the press — as spring-back does.
 
 ## Frames & weldments (`Frames.cs`)
 
