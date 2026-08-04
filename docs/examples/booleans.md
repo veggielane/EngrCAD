@@ -42,6 +42,32 @@ and Euler–Poincaré with the correct genus, so downstream operations (tessella
 STEP export, further booleans) get a watertight solid. For soft, blended joins use
 [smooth booleans](implicit.md) instead.
 
+## Cuts that break out of more than one face
+
+A tool does not have to stay inside the face it enters. Here a cross bore is placed
+high enough that its rim runs off the **top** of the walls it pierces, opening the
+plate into a channel — three faces cut by one cylinder:
+
+```csharp render:booleans-breakout
+var plate = Shape.Extrude(Sketch.Rectangle(60, 30), 12);   // sketch extrusion
+var channel = Shape.Cylinder(radius: 5, height: 80)
+    .RotateX(-Math.PI / 2)                                 // axis along Y
+    .Translate(0, 0, 11);                                  // rim runs off the top face
+
+var scene = new Scene();
+scene.Add(new Part("channel", plate - channel, Palette.Steel));
+```
+
+![A plate with a cross bore that breaks out through the top face](images/booleans-breakout.png)
+
+That the plate is a **sketch extrusion** rather than a `Shape.Box` matters to the
+kernel, though not to you: an extrusion's side walls are bounded planar patches, so
+the bore's rim is a real circle of the wall's plane with only an arc of it on the
+wall. The exact conic is clipped to the arc the wall carries, in closed form, so the
+arc's ends land on the wall's top edge exactly where the top face's own cut begins —
+which is what lets the pieces weld. The volume converges quadratically onto the
+analytic answer, and matches the same plate built as a box to 1e-11.
+
 ## Convex hull
 
 `Shape.Hull(operands...)` (OpenSCAD's `hull()`) wraps its operands in the tightest

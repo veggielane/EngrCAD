@@ -865,12 +865,51 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   32/96/192 (fold-free, volume converging) against 0.858 / 0.9995 / 0.9998 for a Ø10
   drill through a Ø26 one. Same fixed-sampling floor recorded under the whole-solid
   fillet booleans; a density-aware tracer step would close both.
-- [ ] **The tracer reports NOTHING for a conic partially crossing a bounded extrusion's
-  edge** — a bore whose rim runs off the side wall it pierces. Pre-existing and separate
-  from the bounded-patch tier above, which correctly *defers* that case rather than
-  fabricating a whole circle the wall does not carry (pinned by
-  `BoreCrossingTheWallsEdge_FabricatesNoCircle`). Clipping the conic to the patch would
-  produce arcs whose endpoints must weld to the face boundary — that is the real work.
+- ~~**The tracer reports NOTHING for a conic partially crossing a bounded extrusion's
+  edge**~~ ✅ **done** — a bore whose rim runs off the side wall it pierces. `TryPatchQuadric`
+  now CLIPS the conic to the runs the patch carries (`ClipConicToPatch`): each patch
+  coordinate is a harmonic `c + a·cos θ + b·sin θ` of the conic's own angle, so each of the
+  four edges is one `acos`, and membership is decided at the midpoint of each interval
+  between consecutive roots. A conic wholly inside is returned as ITSELF by reference, so
+  every previously-accepted input is bit-identical; a run straddling the seam comes back as
+  ONE `CurveSegment` past the domain end. **The endpoints weld because the cut angles are
+  closed form** — measured `|z − top| = 0` exactly and 0–4.4e-16 (0–2 ulps) from the top
+  plane's own `±√(r² − d²)` — and every sample stays inside the extrusion's `[0, 1]²`
+  (escape 0.000), which is the geometric `Promote` guard. A Ø6 bore through a sketch
+  extrusion's walls and out of its top went from REFUSED at every density ("unclosed solid:
+  6 of 20 edges used by 1 face") to +1.2252 / +0.3065 / +0.0766 / +0.0192 at 32/64/128/256,
+  ratio exactly 4.00, one-signed — and matches the SAME plate built as a `Shape.Box` (whose
+  walls are unbounded planes) to 1e-11 at every density. A TANGENT conic is kept CLOSED by a
+  derived asymmetry rather than an epsilon (dropping a short run loses a `scale·δ` chord,
+  keeping it costs only `scale·(1 − cos(δ/2))`), and that guard needs a FAMILY to show it
+  firing: 62 of 480 tangency configurations pinhole without it, 0 of 480 with it. Corpus
+  member `side-wall breakout`. Two residuals below.
+  - [ ] **The tracer's fixed-sampling floor did NOT reproduce here, and the entry's premise
+    was wrong about it.** The item was filed expecting the recorded signature (a
+    non-converging error whose sign flips). Measured, the case the tracer CAN reach — a
+    blind bore whose rim runs off one wall — converges quadratically through the tracer too
+    (+0.4050 / +0.0997 / +0.0250 / +0.0063, ratios 4.06 / 3.98 / 4.00), because
+    `SnapTracerEnds` and `SampleEdge`'s baked-carrier refinement already remove the floor
+    once a usable branch exists. What the tracer could not do was produce a usable branch at
+    all when BOTH walls are crossed, so the failure being fixed is a REFUSAL, not a floor.
+    Worth knowing before the next entry predicts a floor: the clipped route's absolute error
+    on that blind case is ~13% LARGER than the tracer's at every density (+0.4573 vs +0.4050
+    at 32) while converging at the same rate — the analytic arc is sampled on the
+    `segmentsPerCircle` angular grid and the traced rim's arc-length step happened to be
+    slightly finer. Nothing to fix; recorded so the number is not mistaken for a regression.
+  - [ ] **A drill tool's flat POLE CAP breaking out of a face still refuses.** `Drill`'s tool
+    is ONE axis-touching revolve, so its flat end is a `RevolvedSurface` pole cap —
+    geometrically a disc in a plane, but not a planar carrier `TryPlanarPatch` recognizes
+    (it takes `PlaneSurface` and straight-generator `ExtrudedSurface` only). So a BLIND
+    drilled hole whose rim runs off a wall's top edge gets its wall rim clipped exactly and
+    then fails where the tool's own flat end crosses the top face: `unclosed solid, 3 of 19
+    edges used by 1 face`, the unpaired ones being that disc's rim arcs. The same hole drilled
+    THROUGH works (the flat end never lands inside the body), and the same blind cut with a
+    `Shape.Cylinder` tool works because ITS end cap is a `PlaneSurface`. Pinned by
+    `BlindDrilledHoleWhoseFLATENDAlsoBreaksOut_StillRefuses`. The fix is a third planar-carrier
+    recognizer — a full-turn revolve of a radial straight generator perpendicular to its axis
+    is a planar ANNULUS, bounded by two radii rather than by a parallelogram, so it needs its
+    own containment shape (`TryCoaxialDisk` is the precedent, for helical carriers).
 
 ## Deformation / analysis follow-ups
 

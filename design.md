@@ -2297,6 +2297,77 @@ because it is a deviation the caller chose to accept rather than a degeneracy gu
 This is the gateway to trimming: the traced/analytic curves are exactly what face
 splitting and B-Rep booleans will consume.
 
+#### Clipping a conic to a bounded patch — the harmonic, and why the ends weld
+
+A bounded planar carrier meeting a quadric (`TryPatchQuadric`) gets the same exact conic a
+real `PlaneSurface` gets, and for a long time it was accepted only when the conic lay
+WHOLLY inside the parallelogram; a bore whose rim ran off the wall it pierces fell through
+to the tracer, which could not close the boolean at all. Clipping it needs no new
+machinery, because **the patch coordinates are affine in the point and a conic is affine in
+(cos θ, sin θ)**, so each coordinate along the conic is exactly one harmonic
+`c + a·cos θ + b·sin θ` and each of the patch's four edges is one equation
+`R·cos(θ − φ) = level − c`, whose two roots are `φ ± acos(…)`.
+
+Three decisions carry it.
+
+**Membership is decided at interval MIDPOINTS, not by an inequality over the crossing
+list.** The four edge constraints are independent — two crossings of `s = 0` can bracket a
+stretch that leaves through `t = 1` — so the runs are not a simple alternation. Between two
+consecutive roots the conic is strictly inside or strictly outside *every* constraint, so
+one midpoint decides an interval exactly and no epsilon enters the test at all.
+
+**A conic wholly inside is returned as ITSELF, by reference.** That is what makes the change
+free for everything that already worked: an accepted input produces bit-for-bit what it did
+(the whole suite and all 135 rendered docs images are unchanged), and a closed curve stays
+closed, which the wrap-splitting and hole-splitting paths key on. A surviving run that
+straddles the seam comes back as ONE `CurveSegment` running past the domain end — legal
+precisely because the base is closed, and necessary, or the seam would leave two edges where
+the geometry has one.
+
+**Closed form is not an accuracy preference, it is what makes the endpoints weld.** A
+clipped end becomes a VERTEX shared with the neighbouring face: a bore breaking out of a
+wall's top edge ends exactly where the top face's own intersection curve begins. Measured on
+a Ø6 bore off a wall's top edge, the arc's ends land on the patch boundary **exactly**
+(`|z − top| = 0`) and within **0 and 4.4e-16** — 0 to 2 ulps — of the top plane's own
+`±√(r² − d²)`, seven orders inside the weld tier, where the tracer stops up to one march
+step short of the boundary and never reaches it. The result is that the same solid built
+with BOUNDED walls (a sketch extrusion) and with UNBOUNDED walls (a box) now measures the
+same at every density (1e-11), which is a stronger statement than either convergence table:
+the clip reproduces the plane's own answer rather than merely converging near it.
+
+The guard against the recorded `Promote` trap — "lies on the carrier" is not "IS the
+carrier" — is geometric and measured rather than a type test: every sample of a clipped arc
+must project into the extrusion's own `[0, 1]²`, and does, with escape **0.000**.
+
+**The one place a tolerance is unavoidable is a TANGENCY, and the rule there is derived
+from which mistake is cheaper rather than from a measured epsilon.** Near a tangency the
+`acos` argument is within round-off of ±1, where `acos` has a square-root singularity, so
+the two roots come back ~1e-7 rad apart however exact the geometry is, and the midpoint
+between them reads inside or outside by round-off — neither reading more accurate than the
+other. They are not equally *safe*, though, and the asymmetry is exact: dropping a run of
+angular span δ removes a chord of `scale·δ` of genuine curve — an outright gap in the
+boundary — while keeping it leaves the curve at most `scale·(1 − cos(δ/2))` outside the
+patch, which is *second order* in δ. At a real tangency that is 2.7e-15 against a lost
+8e-8, six orders apart. So a dropped run is flipped to kept whenever the excursion it admits
+is within the weld tolerance, kept runs are never dropped, and a touching conic comes back
+as the closed conic it is. This is the clip's own version of the standing "err toward
+KEEPING" rule that `ClipToFace` states one layer up, with a derivation instead of a policy.
+
+**And whether the round-off falls the safe way without that rule is ALIGNMENT rather than
+tolerance**, which decides the shape of the test: two hand-picked tangencies both passed
+with the rule disabled, and only a family sweep shows it firing — 62 of 480 configurations
+come back with a pinhole in them without it, 0 of 480 with it. The same lesson as the
+Surface Nets ambiguous face and the torus silhouette's pinholes; a single fixture would have
+locked in a coincidence.
+
+**And the entry that asked for this predicted the wrong failure mode**, which is worth
+keeping. It expected the recorded fixed-sampling-floor signature (a non-converging error
+whose sign flips). Measured, the case the tracer CAN reach — a blind bore off one wall —
+converges quadratically through the tracer too, because `SnapTracerEnds` and `SampleEdge`'s
+baked-carrier refinement already remove that floor once a usable branch exists. What the
+tracer could not do was produce a usable branch at all when both walls are crossed, so the
+failure being fixed is a REFUSAL rather than a floor.
+
 ### Trimming groundwork
 
 - **Inverse evaluation** `Surface.TryProjectPoint(point) → (u, v)`: exact overrides for

@@ -799,12 +799,12 @@ public static class SurfaceIntersection
     /// than sharing code with it: the switch is the boolean pipeline's whole regression
     /// surface, and an unbounded <see cref="PlaneSurface"/> must keep taking it verbatim.</para>
     /// <para>Containment is decided EXACTLY, not by sampling: the patch coordinates (s, t)
-    /// are affine in the point, so on a conic each runs centre ± hypot(a, b) over the two
-    /// semi-axis images — a closed-form range. A conic that pokes out of the wall, and the
-    /// axis-parallel line pair, both return false and fall through to the marching tracer
-    /// exactly as before. Clipping a conic to the wall's rim would produce arcs whose
-    /// endpoints must weld to a face boundary; that is separate work, not a silent
-    /// side effect of this one.</para>
+    /// are affine in the point, so each is a HARMONIC of the conic's own angle,
+    /// c + a·cos θ + b·sin θ, whose crossings of the patch's four edges are a closed-form
+    /// <c>acos</c>. A conic wholly inside the patch is returned as ITSELF (bit-for-bit the
+    /// incumbent result); one that pokes out is CLIPPED to the runs the patch carries — see
+    /// <see cref="ClipConicToPatch"/>. The axis-parallel line pair still returns false and
+    /// falls through to the marching tracer.</para>
     /// </remarks>
     private static bool TryPatchQuadric(
         in PlanarPatch patch, Surface other, in Aabb region, out List<Curve3d> curves)
@@ -843,6 +843,7 @@ public static class SurfaceIntersection
         var sRow = patch.E2.Cross(normal) / scale;
         var tRow = normal.Cross(patch.E1) / scale;
 
+        var clipped = new List<Curve3d>(curves.Count);
         foreach (var curve in curves)
         {
             Vector3d centre, axisX, axisY;
@@ -858,21 +859,193 @@ public static class SurfaceIntersection
                     return false; // the axis-parallel line pair: defer to the tracer
             }
             var offset = centre - patch.Corner;
-            if (!WithinUnitRange(offset.Dot(sRow), axisX.Dot(sRow), axisY.Dot(sRow)) ||
-                !WithinUnitRange(offset.Dot(tRow), axisX.Dot(tRow), axisY.Dot(tRow)))
-                return false;
+            ClipConicToPatch(
+                curve,
+                new Harmonic(offset.Dot(sRow), axisX.Dot(sRow), axisY.Dot(sRow)),
+                new Harmonic(offset.Dot(tRow), axisX.Dot(tRow), axisY.Dot(tRow)),
+                Math.Max(axisX.Length, axisY.Length),
+                clipped);
         }
+        curves = clipped;
         return true;
     }
 
     /// <summary>
-    /// Whether centre + a·cos θ + b·sin θ stays in [0, 1] for every θ — its exact range is
-    /// centre ± hypot(a, b).
+    /// One patch coordinate along a conic: s(θ) = <paramref name="Constant"/> +
+    /// <paramref name="Cos"/>·cos θ + <paramref name="Sin"/>·sin θ. Both patch coordinates
+    /// are affine in the point and a conic is affine in (cos θ, sin θ), so this is exact
+    /// rather than a fit.
     /// </summary>
-    private static bool WithinUnitRange(double centre, double a, double b)
+    private readonly record struct Harmonic(double Constant, double Cos, double Sin)
     {
-        double amplitude = Math.Sqrt(a * a + b * b);
-        return centre - amplitude >= 0 && centre + amplitude <= 1;
+        public double At(double theta) => Constant + Cos * Math.Cos(theta) + Sin * Math.Sin(theta);
+
+        /// <summary>Amplitude R with the phase φ such that the value is Constant + R·cos(θ − φ).</summary>
+        public double Amplitude => Math.Sqrt(Cos * Cos + Sin * Sin);
+
+        /// <summary>The two θ at which the value equals <paramref name="level"/>, if any.</summary>
+        public void CrossingsOf(double level, List<double> into)
+        {
+            double amplitude = Amplitude;
+            // Exact-zero guard: a coordinate that does not vary along the conic never
+            // crosses, and there is no phase to take.
+            if (amplitude == 0)
+                return;
+            double ratio = (level - Constant) / amplitude;
+            if (ratio < -1 || ratio > 1)
+                return;
+            double phase = Math.Atan2(Sin, Cos);
+            double half = Math.Acos(ratio);
+            into.Add(Wrap2Pi(phase + half));
+            into.Add(Wrap2Pi(phase - half));
+        }
+    }
+
+    /// <summary>
+    /// Duplicate roots collapse: two patch edges crossed at one CORNER give the same angle
+    /// twice, and a zero-span interval between them has no midpoint to decide. A structural
+    /// cleanup rather than a model tolerance — what happens near a TANGENCY, where the roots
+    /// are close but not equal, is decided by the derived rule in
+    /// <see cref="ClipConicToPatch"/> instead. Radians are dimensionless, so this is
+    /// absolute where the epsilon ladder's default is relative.
+    /// </summary>
+    private const double DuplicateRootAngle = 1e-9;
+
+    private static double Wrap2Pi(double theta)
+    {
+        double wrapped = theta % (2 * Math.PI);
+        return wrapped < 0 ? wrapped + 2 * Math.PI : wrapped;
+    }
+
+    /// <summary>
+    /// The runs of a closed conic that the bounded patch actually carries, appended to
+    /// <paramref name="output"/> as <see cref="CurveSegment"/>s over the conic itself.
+    ///
+    /// <para><b>A conic wholly inside is appended VERBATIM</b>, by reference — so every
+    /// input the containment test used to accept produces bit-for-bit what it always did,
+    /// and a closed curve stays closed (the wrap-splitting and hole-splitting paths key on
+    /// <see cref="Curve3d.IsClosed"/>).</para>
+    ///
+    /// <para><b>The cut angles are closed form, which is what makes the endpoints weld.</b>
+    /// A clipped end becomes a VERTEX shared with the neighbouring face — a bore breaking
+    /// out of the wall's top edge ends exactly where the top face's own intersection curve
+    /// starts — so it must not carry a sampling error. Each patch edge is one equation
+    /// <c>c + a·cos θ + b·sin θ = level</c>, i.e. <c>R·cos(θ − φ) = level − c</c>, whose two
+    /// roots are <c>φ ± acos(…)</c>: the same accuracy as the conic's own construction, where
+    /// the marching tracer this path used to defer to stops up to one march step short of
+    /// the boundary and never reaches it at all.</para>
+    ///
+    /// <para>Membership is decided at each interval's MIDPOINT rather than by an inequality
+    /// on the crossing list, because the four edge constraints are independent: two
+    /// crossings of the s = 0 edge may bracket a stretch that leaves through t = 1. A
+    /// midpoint of an interval between consecutive crossings is strictly inside or strictly
+    /// outside every constraint, so the exact test is the right one and no epsilon
+    /// enters.</para>
+    /// </summary>
+    /// <param name="scale">The conic's largest semi-axis in MODEL units — the Lipschitz
+    /// constant turning an angular span into a length, which is what makes the short-run
+    /// rule below a statement about geometry rather than about radians.</param>
+    private static void ClipConicToPatch(
+        Curve3d conic, Harmonic s, Harmonic t, double scale, List<Curve3d> output)
+    {
+        // Both callers are Circle3d/Ellipse3d, whose parameter IS the angle over [0, 2π],
+        // so the crossing angles below are curve parameters with nothing to map.
+        double period = conic.Domain.Length;
+        var angles = new List<double>();
+        s.CrossingsOf(0, angles);
+        s.CrossingsOf(1, angles);
+        t.CrossingsOf(0, angles);
+        t.CrossingsOf(1, angles);
+        angles.Sort();
+        for (int i = angles.Count - 1; i > 0; i--)
+        {
+            if (angles[i] - angles[i - 1] <= DuplicateRootAngle)
+                angles.RemoveAt(i);
+        }
+
+        bool Inside(double theta)
+        {
+            double su = s.At(theta), tu = t.At(theta);
+            return su >= 0 && su <= 1 && tu >= 0 && tu <= 1;
+        }
+
+        if (angles.Count == 0)
+        {
+            // No patch edge is ever reached: the conic is wholly inside or wholly outside.
+            if (Inside(0))
+                output.Add(conic);
+            return;
+        }
+
+        // Cyclic intervals between consecutive crossings; each is entirely in or entirely
+        // out, so one midpoint decides it.
+        int n = angles.Count;
+        var keep = new bool[n];
+        var span = new double[n];
+        int kept = 0;
+        for (int i = 0; i < n; i++)
+        {
+            double a = angles[i];
+            double b = i + 1 < n ? angles[i + 1] : angles[0] + period;
+            span[i] = b - a;
+            if (keep[i] = Inside(0.5 * (a + b)))
+                kept++;
+        }
+        // A run too short to leave the patch measurably is KEPT, and the bound is DERIVED
+        // rather than chosen. Near a tangency the acos argument is within round-off of ±1,
+        // where acos has a square-root singularity, so the two roots come back ~1e-7 rad
+        // apart however exact the geometry is, and the midpoint between them reads inside or
+        // outside by round-off. Neither answer is more accurate — but they are not equally
+        // safe: DROPPING a run of span d removes a chord of scale*d from the curve, an
+        // outright gap, while KEEPING it lets the curve stand at most scale*(1 - cos(d/2))
+        // outside the patch, which is second order in d. So a dropped run is flipped
+        // whenever that excursion is inside the weld tolerance, which for a real tangency it
+        // is by six orders — and a conic TOUCHING a patch edge then comes back as the closed
+        // conic it is instead of an arc with a pinhole, deterministically. Kept runs are
+        // never dropped, so nothing is lost either way. Whether the round-off falls the safe
+        // way without this is ALIGNMENT rather than tolerance, so it is pinned by a family
+        // sweep (62 of 480 tangencies pinhole without it, 0 of 480 with it) — one fixture
+        // would only have locked in a coincidence.
+        for (int i = 0; i < n; i++)
+        {
+            if (!keep[i] && scale * (1 - Math.Cos(0.5 * span[i])) <= Tolerance.Default.Linear)
+            {
+                keep[i] = true;
+                kept++;
+            }
+        }
+        if (kept == 0)
+            return;
+        if (kept == n)
+        {
+            // Every interval survives: a conic merely TANGENT to a patch edge is still the
+            // whole conic, and must come back as the closed curve it is.
+            output.Add(conic);
+            return;
+        }
+        // Start where a kept run begins, so a run straddling the seam is emitted as ONE
+        // segment running past the domain end — legal on a closed base, and required, or
+        // the seam would leave two edges where the geometry has one.
+        int start = 0;
+        while (!(keep[start] && !keep[(start + n - 1) % n]))
+            start++;
+        for (int offset = 0; offset < n;)
+        {
+            if (!keep[(start + offset) % n])
+            {
+                offset++;
+                continue;
+            }
+            int length = 0;
+            while (offset + length < n && keep[(start + offset + length) % n])
+                length++;
+            double from = angles[(start + offset) % n];
+            double to = angles[(start + offset + length) % n];
+            if (to <= from)
+                to += period;
+            output.Add(new CurveSegment(conic, from, to));
+            offset += length;
+        }
     }
 
     /// <summary>

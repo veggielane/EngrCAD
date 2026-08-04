@@ -54,7 +54,7 @@ public class TessellationCorpusQualityTests
         "variable fillet",
         "rounded box", "rounded tetrahedron", "partial fillet run", "variable fillet run",
         "revolved vase", "partial revolve", "swept tube", "torus", "cone",
-        "sketch pocket", "engraved plate", "wedge",
+        "sketch pocket", "engraved plate", "wedge", "side-wall breakout",
     ];
 
     internal static BrepSolid Build(string name)
@@ -270,6 +270,16 @@ public class TessellationCorpusQualityTests
                         .LineTo(12, 4)
                         .BezierTo(new(4, 10), new(-4, -2), new(-12, 4))
                         .Close(), 1.0, At(1.5))).ToBrep();
+            case "side-wall breakout":
+                // A bore through a sketch extrusion's SIDE WALLS whose rim runs off the top
+                // of each. The wall is a BOUNDED planar patch, so the rim is a real circle
+                // of the wall's plane with only an arc of it on the wall; the analytic tier
+                // clips the conic to the runs the patch carries. Until it did, the pair fell
+                // to the marching tracer and the boolean came back unclosed.
+                return (Shape.Extrude(Sketch.Rectangle(40, 30), 10)
+                    - Shape.Cylinder(3, 120)
+                        .Rotate(Vector3d.UnitX, -Math.PI / 2)
+                        .Translate((0, 0, 9))).ToBrep();
             default:
                 return Shape.Wedge(20, 12, 8, topX: 6, topOffsetX: 3).ToBrep();
         }
@@ -436,6 +446,11 @@ public class TessellationCorpusQualityTests
             // terminations are flush planar cuts at the run's ends, so the removal is
             // exactly (1 - pi/4) * L * (r0^2 + r0 r1 + r1^2) / 3.
             { "variable fillet run", 30.0 * 20 * 6 - (1 - Math.PI / 4) * 30 * (1 + 2 + 4) / 3 },
+            // 40 x 30 x 10 less a Ø6 bore at z = 9 that breaks out of the top face: the
+            // removed cross-section is the disc LESS the circular segment above z = 10,
+            // r^2 acos(d/r) - d sqrt(r^2 - d^2) with d = 1.
+            { "side-wall breakout", 40.0 * 30 * 10
+                - (Math.PI * 9 - (9 * Math.Acos(1 / 3.0) - Math.Sqrt(8))) * 30 },
             // A quadratic-NURBS-path sweep of a radius-5 circle: Pappus does not apply to
             // a curved path, so the reference is the finest tessellation and only the
             // RATIO is asserted (see the test).
