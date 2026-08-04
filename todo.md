@@ -247,23 +247,53 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   fingerprints and all 97 docs PNGs are untouched. Reproduced on three gyroid variants and,
   tellingly, on a plain `Sphere(10).Shell(0.6)` at resolution 44 — a one-cell-thick wall,
   not a lattice. Residuals:
-  - [ ] **A saddle cell whose inside is connected but whose OUTSIDE splits in two has two
-    surface components and still gets ONE shared vertex** — the mean of crossings from two
-    separate sheets. Manifold, so not this bug, but a geometry-quality question: the general
-    rule is one vertex per (inside blob, outside blob) interface, which is exactly the
-    surface-component count. Measured cost of adopting it unconditionally: 204 split cells
-    in the res-88 gyroid against the 6 that were actually broken, plus 1 cell in the `csg`
-    golden and 2 in `torus` — so it moves fingerprints and probably PNGs, and wants its own
-    decision with renders looked at, not a silent ride-along on a manifoldness fix.
-  - [ ] **Only ONE of the two cells splits** (the + side owns the test), because the sliding
-    window cannot promise a cell the slab beyond its + neighbour and the window may be as
-    small as two slabs. Manifoldness needs only one side, but the result is side-asymmetric;
-    making it symmetric means either a 4-slab window (breaking the "output is independent of
-    the window size" invariant, which is locked by test) or carrying a second forward record.
-  - [ ] **A non-manifold interior VERTEX is neither checked nor proven absent.** `Build`
-    rejects duplicated directed edges and bow-tie *boundary* vertices; an interior vertex
-    whose link is two fans would pass. Nothing has produced one, but the contract claim
-    should say what it covers.
+  - ~~**A saddle cell whose inside is connected but whose OUTSIDE splits in two has two
+    surface components and still gets ONE shared vertex.**~~ ✅ **done** — and the entry was
+    wrong twice. It said "Manifold, so not this bug": it is NOT manifold, it is a PINCH
+    vertex, and once `HalfEdgeMesh.NonManifoldVertices()` existed to count them it measured
+    **984** on `Sphere(10).Shell(0.6)` at resolution 44 and up to **3 066** on
+    `Box(10) & Gyroid(8, 0.2)`. And the rule it proposed — one vertex per (inside blob,
+    outside blob) interface — is NOT the surface-component count, which is the finding:
+    on the four-isolated-corners cube (inside `{0,3,5,6}`) every one of the twelve crossings
+    is its own (inside, outside) pair, so that rule would return twelve vertices where the
+    surface is four triangles. The correct refinement is by the cube's own FACE adjacency
+    (two crossings on a common face are the two ends of one arc), restricted to one inside
+    component; the interface rule agrees with it only when no face is ambiguous. The 204/1/2
+    figures the entry quoted belonged to the interface rule, not to this one: the face rule
+    leaves ALL THREE golden fingerprints untouched and moves 2 of 135 docs PNGs, both gyroid
+    figures that carry the defect, by 339 and 315 pixels of 1.79 million (0.019%) — the dark
+    specks the pinch points rendered as along a hole's rim. Residual below.
+  - [ ] **The ambiguous face's split is applied by ONE of the two cells, and that PINCHES the
+    other** — the residual left after the sheet refinement above, and now the only source of
+    pinch vertices measured. The + side owns the test because the sliding window cannot
+    promise a cell the slab beyond its + neighbour; manifoldness needs only one side to
+    separate, but the minus-side cell then keeps one vertex against its neighbour's two and
+    its link falls into fans. Measured after the sheet fix: `Sphere(10).Shell(0.6)` 984 →
+    **240** at resolution 44, `Box(10) & Gyroid(8, 0.2)` 2 768 → **642** at 56, and
+    `Sphere(16).Lattice(Gyroid(6, 1.5))` 1 728 → 1 686 at 44 — the one family the sheet fix
+    barely helps, because essentially all of its pinches are this. Pinned as values in
+    `SurfaceNetsPinchTests.TheAmbiguousFaceResidualIsMeasured`.
+    **Two closures were BUILT and both measured worse, so neither should be redone as
+    written.** (a) Resolve the ambiguous face by the **asymptotic decider** — the sign of the
+    bilinear interpolant at the face's saddle, which reduces to comparing `a·c` against `b·d`
+    over the corners in cyclic order and which both cells read off the same four doubles, so
+    it is face-local and shared by construction. (b) Keep the incumbent resolution but **cut**
+    an ambiguous face's pairing wherever the rest of the cube already links its two arcs.
+    Both drove the pinch count to **zero** on every fixture; both also produced OPEN meshes
+    and `Vertex N lies on more than one boundary edge fan` across the same family, because a
+    cell's grouping must match what its NEIGHBOURS do and a face-local pairing does not make
+    two different cube interiors agree about which crossings end up on one vertex. What is
+    left to try is the shape neither of those has: make the resolution a function of the
+    MINUS-side cell alone (which the + cell can already read — `previousFarJoins` for x, a
+    direct neighbour flood for y and z), so both cells decide the same way, and pair
+    accordingly; the theorem the incumbent split already relies on (a cell cannot join both
+    an ambiguous face's inside pair and its outside pair) then says the minus cell's two arcs
+    stay apart, which is what rules out the duplicate directed edge. The + cell may still
+    merge them, so it also needs its cycle cut at that face — that half is unverified.
+  - ~~**A non-manifold interior VERTEX is neither checked nor proven absent.**~~ ✅ **done**
+    — `NonManifoldVertices()` names them and `Validate()` refuses them; `Build` deliberately
+    does not, since a pinch is sometimes the correct answer (the difference of two tangent
+    equal-radius cylinders).
 - [ ] **`MeshSdf` batch queries: two levers measured, both declined — don't redo either.**
   74–85% of a mesh narrow band's wall clock is inside `Bvh.Nearest`, so the headroom is
   real, but *seeding* the branch and bound measured 1.12–1.20× (`MeshSdfBatchTests`) and a

@@ -14,12 +14,42 @@ logging complements them, never replaces them.
 ## The conversion triangle
 
 - **Implicit → Mesh**: `SurfaceNets.Polygonize(sdf, region?, resolution, progress?)` —
-  manifold Surface Nets (dual contouring): one vertex per *connected component of inside
-  corners* per cell (plain one-vertex-per-cell produces non-manifold edges on thin
-  sheets and saddles), one quad per interior sign-changing grid edge, wound outward.
+  manifold Surface Nets (dual contouring): one vertex per *sheet* a cell's inside corners
+  bound (plain one-vertex-per-cell produces non-manifold edges on thin sheets and saddles),
+  one quad per interior sign-changing grid edge, wound outward.
   Surfaces crossing the sampling region come out open there. The
   optional `ProgressCancel` reports coarse progress and cancels cooperatively
   (throws `OperationCanceledException`, partial results discarded).
+  - **An inside component can bound SEVERAL sheets, and giving it one vertex pinches the
+    mesh there.** This is the residual the ambiguous-face fix below left behind, and it is
+    a defect on ordinary models rather than on lattices: a wall about one cell thick has
+    connected material with the void inside and the space outside as two separate blobs, so
+    the cell's six crossings are two triangles and averaging all six puts both triangles on
+    one point — a vertex whose link is two fans, which `HalfEdgeMesh.Build` deliberately
+    admits (a pinch is sometimes the correct answer; see its remarks) and `Validate` reports.
+    Measured before the fix: `Sphere(10).Shell(0.6)` carried **984** pinch vertices at
+    resolution 44 and 528 at 56, `Box(10) & Gyroid(8, 0.2)` up to **3 066** at 64.
+    The refinement is by the cube's own **face adjacency** — two crossings on a common face
+    are the two ends of one arc of the surface's cross-section there, so they belong to one
+    sheet — restricted to crossings of the same inside component, as a union-find over the
+    twelve cube edges. That partition is a pure function of the eight corner SIGNS, so it is
+    a 256-entry **table** (four bits per cube edge packed into a `long`) rather than a
+    per-cell computation: measured on the reference machine (i9-9900K, win-x64, Release, best
+    of seven after a wall-clock warm-up budget), computing it per cell costs **1.15–1.51×**
+    on the whole polygonization (csg res 128 20.3 → 30.6 ms, csg res 256 87.8 → 101.3, a thin
+    shell at res 128 67.6 → 80.8, a gyroid at res 96 61.4 → 80.6) where the table costs
+    **1.01–1.07×** (20.9 / 93.9 / 71.2 / 62.3 — and part of even that is the extra vertices
+    the fix legitimately creates). It only ever splits, never merges, and a cell whose every
+    component is a single sheet is untouched **bit for bit**: all three golden fingerprints
+    (`sphere`, `csg`, `torus`) and 133 of the 135 rendered docs PNGs are unchanged, and the
+    two that move are the two gyroid figures that carry the defect — 339 and 315 pixels of
+    1.79 million (0.019%), each inside one small box, and what changes is that the little
+    dark specks the pinch points rendered as along a hole's rim are gone.
+    An ambiguous face keeps merging all four of its crossings here, deliberately — see the
+    residual at the end of the next bullet. Coverage is `SurfaceNetsPinchTests`, which
+    sweeps fields and resolutions (it is an alignment question, not a tolerance one — the
+    counts are not monotone in resolution) and asserts each row still *carries* the
+    configuration, counted independently off the sampled signs.
   - **The inside-corner rule alone is NOT manifold, and the gap is the ambiguous face.**
     A grid face whose inside corners are exactly a diagonal pair (Marching Cubes' ambiguous
     face) has all four of its edges crossing, so it carries two quad edges between the same
@@ -45,6 +75,20 @@ logging complements them, never replaces them.
     never in lattices. Cost is unmeasurable at res 192/256 (a second 8-corner flood fill is
     O(cells with a sign change), i.e. O(n²) against the O(n³) walk); allocation rises ~2 MB
     at res 256, the map going from 8 ints per mixed cell to 12.
+    - **Residual: the split is applied by ONE of the two cells, and that pinches the other.**
+      Manifoldness needs only one side to separate, but where the split fires the minus-side
+      cell keeps one vertex against its neighbour's two and its link falls into fans. Every
+      pinch vertex left after the sheet refinement traced back to exactly this configuration
+      (`Sphere(10).Shell(0.6)` at resolution 44: 984 → **240**; `Box(10) & Gyroid(8, 0.2)` at
+      56: 2 768 → **642**; `Sphere(16).Lattice(Gyroid(6, 1.5))` is the one family it barely
+      helps, 1 728 → 1 686 at 44). Closing it needs both cells to reach the same resolution
+      of the face, and **two ways of doing that were built and measured worse**: an
+      asymptotic-decider face resolution (the bilinear saddle's sign, which both cells read
+      off the same four values) and cutting an ambiguous face's pairing wherever the cube's
+      own connectivity already links its two arcs. Both drove the pinch count to zero on
+      every fixture and both produced OPEN meshes and bow-tie vertices on the same family,
+      because a cell's grouping has to match what its neighbours do and a face-local rule
+      does not make the cells' interiors agree. See todo.md for the measurements.
   - **Sampling is deinterleaved and streamed.** The grid is never materialized as points:
     coordinates are generated from the indices straight into pooled x/y/z scratch and fed
     to `Sdf.Evaluate(x, y, z, distances)` — the SoA batch entry — so the round trip that

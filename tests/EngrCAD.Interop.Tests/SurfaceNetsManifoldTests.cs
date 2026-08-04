@@ -33,7 +33,10 @@ public class SurfaceNetsManifoldTests
         var mesh = SurfaceNets.Polygonize(ReportedLattice(), 88);
 
         Assert.True(mesh.IsClosed);
-        Assert.Equal(99722, mesh.VertexCount);
+        // 99 722 before an inside component was given one vertex per SHEET it bounds: 24 of
+        // its vertices were shared by two sheets and became 48. The FACE count is untouched,
+        // which is the shape of that fix — a pinch is a point, so opening it moves no material.
+        Assert.Equal(99746, mesh.VertexCount);
         Assert.Equal(99846, mesh.FaceCount);
     }
 
