@@ -2751,9 +2751,29 @@ honest no) is recorded in design.md §6b with the comparison committed as
   end face (extrude-until-curved-face, what real CAD does with a trimmed end cap) needs
   kernel work: split the prism's side walls against the target and cap with the
   target's own surface patch.
-- [ ] **Packing follow-ups**: rotation (90° first, then free), true-outline nesting
-  (the silhouette regions are already computed — only their AABBs are used), and
-  multi-plate overflow instead of the loud refusal.
+- [ ] **Packing follow-ups** — 90° rotation ✅ and true-outline nesting ✅ landed
+  (`PackOptions.Rotation`/`Nesting`, both opt-in and bit-identical by default; the
+  outline path grows each silhouette by half the gap through `Region2dOffset` and
+  searches a conservative raster bottom-left-first; free rotation refused by name, with
+  the reason, in design.md §6b). What remains:
+  - **Multi-plate overflow** instead of the loud refusal — `Pack` returns one
+    `PackLayout`, so this is an API shape question first (a `PackLayout` list, or a
+    plate index on each placement) and only then a loop.
+  - **The search order is the ceiling on outline nesting, not the geometry.**
+    Bottom-left-first structurally prefers "beside" to "inside" whenever there is room
+    beside, so a roomy plate reproduces row packing (measured: six L brackets on a
+    140-wide plate came out 78.97 deep against the shelf packer's 77.00, purely
+    quantization; the same six on an 86-wide plate go 132.0 → 108.9). A candidate score
+    that reads the resulting layout DEPTH, or true no-fit-polygon candidate positions,
+    would nest on a roomy plate too — the raster and the clearance oracle are already
+    there, so this is a scoring change rather than new geometry.
+  - **The raster cannot take a zero-slack fit** (four 40 × 10 bars spanning exactly 50
+    on a 50 mm plate): a mask's width always rounds up to a whole cell, so no
+    resolution reaches it. Pinned by test from both sides; an exact slide-left/slide-
+    down refinement after the raster finds a cell would close it.
+  - **Free rotation** proper — a no-fit polygon per part pair per angle, or a
+    deterministic optimiser over the angle with a stated stopping rule (`DesignStudy`'s
+    Hooke–Jeeves is the precedent for the stopping rule bounding the ANSWER).
 - [ ] **Exporter breadth** — 3MF/AMF/OFF ✅ and DXF/SVG v1 ✅ landed (`ThreeMfWriter`/
   `AmfWriter`/`OffWriter` + `--export`/MCP wiring; `DxfDocument`/`SvgDrawing` with
   build123d's edge-classification line types) and **VTK/VTU** ✅ (`VtuWriter` +

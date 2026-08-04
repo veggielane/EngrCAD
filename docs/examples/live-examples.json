@@ -440,6 +440,11 @@
       "live": true
     },
     {
+      "id": "packing-nested",
+      "page": "examples/packing.md",
+      "live": true
+    },
+    {
       "id": "packing-plate",
       "page": "examples/packing.md",
       "live": true
