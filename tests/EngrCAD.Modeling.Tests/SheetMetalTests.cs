@@ -1262,9 +1262,12 @@ public class SheetMetalTests
     [Fact]
     public void AHemIsRefusedRatherThanApproximated()
     {
+        // A hem is TWO bends, so a single 180-degree fold stays refused — and the refusal
+        // now names the call that does build one, rather than the version that did not.
         var body = SheetMetalBody.Base(Plate(), Spec());
-        Assert.Throws<ArgumentOutOfRangeException>(
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
             () => body.WithFlange(SheetFlangeTarget.BaseEdge(1), 20, angleDegrees: 180));
+        Assert.Contains(nameof(SheetMetalBody.WithHem), exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

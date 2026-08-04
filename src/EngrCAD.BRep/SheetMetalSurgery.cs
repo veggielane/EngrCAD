@@ -107,14 +107,22 @@ public readonly record struct SheetBendSection(
 /// the rims are split only at the ends that are inset, and each end is closed by whichever
 /// of the two rules applies to it.</para>
 ///
+/// <para><b>A CLOSED CORNER is one operation over two flanges</b>, not two that happen to
+/// meet — see <see cref="AddCornerFlanges"/>, whose miter is the exact bicylinder ellipse
+/// rather than an intersection. Declaring the pair is what lets both walls be located
+/// before either is edited; a second flange added afterwards on a neighbouring edge finds
+/// a wall that is no longer four-sided, and is refused here naming the corner call.</para>
+///
+/// <para><b>What is not surgery at all</b>: a bend RELIEF notches the blank the sheet is
+/// extruded from, so a relieved flange arrives here as an ordinary flange flush against
+/// the notch's own wall (<c>SheetMetalBody.BaseOutline</c>); and a HEM, a JOG and a CURL
+/// are two or more ordinary flanges, so they reach this file as the bends they are.</para>
+///
 /// <para><b>What is still refused by name</b> rather than approximated: bends along
-/// non-straight edges (a curved bend line sweeps a developable band, not a cylinder),
-/// CLOSED CORNERS and miters (two flanges meeting at a corner of the sheet — caught here
-/// as a wall that is no longer four-sided), jogs, hems (a fold back through 180 degrees),
-/// louvres, and any flange whose bend would interact with another feature. Bend RELIEFS
-/// are not surgery at all: a relief notches the blank the sheet is extruded from, so a
-/// relieved flange arrives here as an ordinary flange flush against the notch's own wall
-/// (see <c>SheetMetalBody.BaseOutline</c> in EngrCAD.Modeling).</para>
+/// non-straight edges (folding along a curve is not an isometry of the sheet — the band's
+/// Gaussian curvature stops being zero — so it is forming rather than bending and has no
+/// flat blank behind it), a 180-degree fold (a hem is two bends, not one), and any flange
+/// whose bend would interact with a feature other than a declared corner.</para>
 /// </summary>
 public static class SheetMetalSurgery
 {
@@ -429,8 +437,10 @@ public static class SheetMetalSurgery
         if (!(section.AngleRadians > Weld) || section.AngleRadians >= Math.PI - Weld)
             throw new ArgumentOutOfRangeException(nameof(section),
                 $"The bend angle is {section.AngleRadians * 180 / Math.PI:g6} degrees; it must lie strictly " +
-                "between 0 and 180. A 180-degree fold is a HEM, which v1 does not model (the flange would " +
-                "lie back against the sheet, and those two faces would be coincident boolean input).");
+                "between 0 and 180. A 180-degree fold is a HEM, and a hem is TWO bends rather than one: at " +
+                "exactly 180 the outside setback (R + T)*tan(angle/2) diverges, and a return leg lying flat " +
+                "against the sheet is coincident boundary. Use SheetMetalBody.WithHem, which states the open " +
+                "gap and derives the intermediate leg from it.");
         if (!(wallLength > Weld))
             throw new ArgumentOutOfRangeException(nameof(wallLength),
                 $"The straight wall past the bend measures {wallLength:g6}. A flange's length is measured " +

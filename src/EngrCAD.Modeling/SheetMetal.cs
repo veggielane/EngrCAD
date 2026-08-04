@@ -76,7 +76,10 @@ public sealed record SheetMetalSpec(double Thickness, double BendRadius, double 
     {
         if (!(angleRadians > 0) || angleRadians >= Math.PI)
             throw new ArgumentOutOfRangeException(nameof(angleRadians),
-                $"A bend angle must lie strictly between 0 and 180 degrees; got {angleRadians * 180 / Math.PI:g6}.");
+                $"A bend angle must lie strictly between 0 and 180 degrees; got {angleRadians * 180 / Math.PI:g6}. " +
+                $"At exactly 180 the outside setback (R + T)*tan(angle/2) diverges, which is why a HEM is two " +
+                $"bends rather than one: use {nameof(SheetMetalBody)}.{nameof(SheetMetalBody.WithHem)}, and a " +
+                $"total turn past 180 is {nameof(SheetMetalBody)}.{nameof(SheetMetalBody.WithCurl)}.");
         if (!(insideRadius > 0))
             throw new ArgumentOutOfRangeException(nameof(insideRadius), "The inside bend radius must be positive.");
         if (!(thickness > 0))
@@ -222,7 +225,7 @@ public readonly record struct SheetFlangeTarget(int ParentFlange, int EdgeIndex)
     public static SheetFlangeTarget BaseEdge(int segmentIndex) => new(-1, segmentIndex);
 
     /// <summary>The tip edge of flange <paramref name="flangeIndex"/> — the only edge of a
-    /// flange v1 grows from (its two SIDE edges would put two bends in one corner).</summary>
+    /// flange grows from (its two SIDE edges would put two bends in one corner).</summary>
     public static SheetFlangeTarget FlangeTip(int flangeIndex) => new(flangeIndex, FlangeTipEdge);
 
     /// <summary>Index of a flange rectangle's tip edge in its own counter-clockwise
@@ -409,10 +412,21 @@ public readonly record struct SheetFlangeSite(
 /// <para>The body is immutable: <see cref="WithFlange(EdgeFlange)"/> returns a new one, so
 /// a <c>FeatureHistory</c> can hold a chain of them and regenerate.</para>
 ///
-/// <para><b>v1 scope</b>, refused by name rather than approximated: flanges only on
-/// STRAIGHT base-sketch segments and on flange TIPS; no closed corners, miters, bend
-/// reliefs, jogs, hems, louvres or multi-body sheets; holes belong to the base sketch and
-/// carry through to the flat pattern unchanged, but a flange carries none.</para>
+/// <para><b>The flange frame</b>, which everything quoted "on a flange" means: local
+/// <c>x</c> runs along the bend line from the flange's own start and local <c>y</c> out
+/// from the bend's tangent line, so the wall occupies <c>[0, Width] × [0, WallLength]</c>.
+/// The SAME coordinates are placed rigidly twice — by <c>Node.Flat</c> into the blank and
+/// by <c>Node</c>'s 3D frame onto the folded wall — which is what lets one declaration
+/// (a <see cref="EdgeFlange.Cutouts">cutout</see>) reach both views.</para>
+///
+/// <para><b>Refused by name</b> rather than approximated: bends along non-straight edges
+/// (folding along a curve is not an isometry of the sheet, so no flat blank produces it);
+/// a cutout crossing a bend line (its flat shape is that band's DEVELOPMENT rather than
+/// the flange's rigid frame); a relief on a flange's TIP (a relief notches its parent's
+/// OUTLINE, and a flange's wall is still built as a plain rectangle rather than from a
+/// sketch — its holes are declarable, its outline is not); louvres (an interior bend line
+/// plus a lance, so not an edge flange at all); two flanges sharing a stretch of edge; and
+/// flanges on a flange's SIDE edges.</para>
 /// </summary>
 public sealed class SheetMetalBody
 {
@@ -1202,7 +1216,7 @@ public sealed class SheetMetalBody
                 throw new NotSupportedException(
                     $"Flange {index} asks for a bend relief on {flange.Target}. A relief notches the parent's " +
                     "own OUTLINE, and a flange's wall is built as a plain rectangle rather than from a sketch, " +
-                    "so v2 cuts reliefs only on the base flange's edges. Grow the relieved flange from the " +
+                    "so reliefs are cut only on the base flange's edges. Grow the relieved flange from the " +
                     "base, or leave the relief off and let the corner tear.");
             if (!inset[0] && !inset[1])
                 throw new ArgumentException(
@@ -1291,9 +1305,10 @@ public sealed class SheetMetalBody
 
             if (target.EdgeIndex != SheetFlangeTarget.FlangeTipEdge)
                 throw new NotSupportedException(
-                    $"Flange {index} grows from edge {target.EdgeIndex} of flange {parent.Index}. v1 grows a " +
-                    "flange only from another flange's TIP (edge 2): edge 0 is the bend line it already hangs " +
-                    "from, and edges 1 and 3 are its sides, where two bends would meet in a corner.");
+                    $"Flange {index} grows from edge {target.EdgeIndex} of flange {parent.Index}. A flange grows " +
+                    "only from another flange's TIP (edge 2): edge 0 is the bend line it already hangs from, " +
+                    "and edges 1 and 3 are its sides, where two bends would meet in a corner. A corner on the " +
+                    $"BASE flange's edges is buildable — declare it with {nameof(WithCorner)}.");
             // The flange's rectangle, counter-clockwise: (0,0) (W,0) (W,wall) (0,wall).
             return (new Vector2d(parent.Width, parent.WallLength), new Vector2d(0, parent.WallLength));
         }
