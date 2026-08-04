@@ -211,6 +211,19 @@ internal static class ShapeCompiler
                         "a non-uniform scale or shear does not commute with a wall thickness"));
                 break;
 
+            case DirectEditShape edit:
+                // Mirrored similarities included: an offset distance and a topological
+                // deletion are both preserved by every isometry, and a move reduces to the
+                // dot product v.n, which an orthogonal map preserves.
+                ClassifyBrep(edit.Child, m, entries);
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "face offset/move/delete on the lowered solid (DirectEdit); the corner and heal " +
+                        "constraints validate at lowering")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear does not commute with a face edit"));
+                break;
+
             case RoundEdgesShape roundEdges:
                 // Mirrored similarities included: the operation is the morphological
                 // opening (K erode B_r) dilate B_r, and a reflection maps a ball to the
@@ -342,7 +355,7 @@ internal static class ShapeCompiler
                 break;
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
                 or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape
-                or SheetMetalShape:
+                or SheetMetalShape or DirectEditShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "tessellated B-Rep wrapped in a mesh SDF"));
                 break;
@@ -789,6 +802,29 @@ internal static class ShapeCompiler
                     LowerBrep(roundEdges.Child, m), roundEdges.Radius * radiusScale);
             }
 
+            case DirectEditShape edit:
+            {
+                // Mirrored placements included. An offset DISTANCE only needs the uniform
+                // scale (every isometry preserves distance), and a move's TRANSLATION takes
+                // its full linear image — which is right for a reflection too, because the
+                // operation reduces to the dot product v.n and an orthogonal map preserves
+                // dot products. A deletion is purely topological and needs nothing.
+                DecomposeSimilarity(m, shape, out _, out _, out double editScale);
+                var solid = LowerBrep(edit.Child, m);
+                var selected = new HashSet<BrepFace>(edit.Selector(solid));
+                if (selected.Count == 0)
+                    throw new InvalidOperationException(
+                        $"{edit.Describe()}: the face selector matched nothing on the lowered solid.");
+                return edit.Kind switch
+                {
+                    DirectEditKind.Offset =>
+                        DirectEdit.OffsetFaces(solid, edit.Amount.X * editScale, selected.Contains),
+                    DirectEditKind.Move =>
+                        DirectEdit.MoveFaces(solid, m.TransformVector(edit.Amount), selected.Contains),
+                    _ => DirectEdit.DeleteFaces(solid, selected.Contains),
+                };
+            }
+
             case DrillShape drill:
             {
                 // Lower the BODY ONCE. The expansion is `((child − tool₀) − tool₁) …`, so
@@ -1030,7 +1066,7 @@ internal static class ShapeCompiler
 
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
                 or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape
-                or SheetMetalShape:
+                or SheetMetalShape or DirectEditShape:
             case SourceShape { Geometry: BrepSolid }:
                 return BridgeToSdf(shape, m, quality);
 

@@ -311,6 +311,43 @@ internal sealed class BrepShellShape(
         openings is null ? $"Shell(t={thickness:g4}, sealed)" : $"Shell(t={thickness:g4}, openings)";
 }
 
+/// <summary>What a <see cref="DirectEditShape"/> does to the faces it names.</summary>
+internal enum DirectEditKind
+{
+    /// <summary>Push each named face along its own outward normal.</summary>
+    Offset,
+
+    /// <summary>Translate each named (planar) face.</summary>
+    Move,
+
+    /// <summary>Remove the named faces and heal the wound.</summary>
+    Delete,
+}
+
+/// <summary>
+/// Direct editing (<see cref="DirectEdit"/>): change the child's B-Rep by acting on faces
+/// selected on the LOWERED solid, the way a body with no construction history has to be
+/// edited. <see cref="Amount"/> carries the offset distance for
+/// <see cref="DirectEditKind.Offset"/> and the translation for
+/// <see cref="DirectEditKind.Move"/>; a deletion needs neither.
+/// </summary>
+internal sealed class DirectEditShape(
+    Shape child, DirectEditKind kind, Vector3d amount,
+    Func<BrepSolid, IEnumerable<BrepFace>> selector) : Shape
+{
+    public Shape Child => child;
+    public DirectEditKind Kind => kind;
+    public Vector3d Amount => amount;
+    public Func<BrepSolid, IEnumerable<BrepFace>> Selector => selector;
+
+    internal override string Describe() => kind switch
+    {
+        DirectEditKind.Offset => $"OffsetFaces(d={amount.X:g4})",
+        DirectEditKind.Move => $"MoveFaces({amount.X:g4}, {amount.Y:g4}, {amount.Z:g4})",
+        _ => "DeleteFaces",
+    };
+}
+
 /// <summary>
 /// Whole-solid rounding (<see cref="Filleting.FilletAllEdges"/>): the exact
 /// morphological opening (K ⊖ B_r) ⊕ B_r of the child's B-Rep — every convex edge

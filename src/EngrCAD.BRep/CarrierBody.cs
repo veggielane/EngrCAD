@@ -136,10 +136,20 @@ internal sealed class CarrierBody
         };
     }
 
-    public BrepSolid Offset(double distance)
+    public BrepSolid Offset(double distance) => Offset(_ => distance);
+
+    /// <summary>
+    /// Offsetting with a per-face distance — the curved twin of
+    /// <see cref="Shelling.Offset(BrepSolid, Func{BrepFace, double})"/>. A face whose law
+    /// returns zero keeps its carrier VERBATIM (<see cref="SurfaceOffset.TryOffset"/> returns
+    /// the very same object), so a selective offset re-solves only the corners it disturbs and
+    /// leaves every other surface the input's own.
+    /// </summary>
+    public BrepSolid Offset(Func<BrepFace, double> distance)
     {
         var offsets = new double[Faces.Length];
-        Array.Fill(offsets, distance);
+        for (int f = 0; f < offsets.Length; f++)
+            offsets[f] = distance(Faces[f]);
         return Rebuild(Lift(offsets, "offset"), "offset");
     }
 

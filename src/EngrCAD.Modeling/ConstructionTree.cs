@@ -261,6 +261,9 @@ public static class ConstructionTree
             case RoundEdgesShape roundEdges:
                 AddShape(node, roundEdges.Child, ref next);
                 break;
+            case DirectEditShape edit:
+                AddShape(node, edit.Child, ref next);
+                break;
             case DrillShape drill:
                 AddShape(node, drill.Child, ref next);
                 break;

@@ -548,6 +548,11 @@ operations. Depends only on `EngrCAD.Core`.
   openingSelector?)` asks the selector once per non-opening face (a thick base under thin
   walls) — nothing new geometrically, since each inner corner was already the intersection
   of its three offset planes and unequal offsets just move that intersection.
+  **Per-face OFFSET distance** is the matching overload, `Shelling.Offset(solid,
+  Func<BrepFace, double> distance)`, and it is the whole of face-level direct editing (see
+  `DirectEdit` below): a face whose law returns zero keeps its carrier verbatim, so pushing
+  ONE face is this law returning zero everywhere else. The uniform overload delegates to it
+  with a constant law, producing the identical array, so polyhedral output is unchanged.
   **Curved faces work too, and are equally exact** (a separate code path, `CarrierBody`, so
   polyhedral output stays bit for bit what it was — the switch is a property of the INPUT, not
   of the request): `SurfaceOffset` keeps every carrier in its own family and `SurfaceCorner`
@@ -578,9 +583,57 @@ operations. Depends only on `EngrCAD.Core`.
   solid. **Not** checked: an offset large enough to make distant surfaces pass through
   each other with no local symptom — the same contract OCCT offers and `OffsetCurve3d`
   already documents for curves.
+- **`DirectEdit`** — editing a solid by acting on its FACES rather than on a parameter, which
+  is what makes an imported STEP or IGES body editable: a body with no construction history
+  has no parameter to change. Three operations, all exact and all built on `Shelling`'s
+  per-face offset law rather than beside it:
+  - **`DirectEdit.OffsetFaces(solid, distance, selector)`** pushes the named faces along
+    their own outward normals and re-solves every corner the move disturbs; unnamed faces
+    keep their carriers verbatim. All-planar solids take the polyhedral three-plane path,
+    anything curved the `CarrierBody` path, so a bore wall, a cylinder's lateral face and a
+    cone's slant all work. The identity worth stating: where every face adjoining the moved
+    one is PARALLEL to its normal (a box's top against its four sides) the boundary slides
+    without changing shape and the volume changes by exactly `area × distance`; where a
+    neighbour is oblique the boundary grows as it slides and the change is the frustum
+    integral (measured 140.78 against the naive 127.28 on a right-triangular prism — 10.6%,
+    not round-off). Sign convention: positive grows the SOLID, so a positive offset on a
+    bore wall NARROWS the bore, the normal there pointing into the void.
+  - **`DirectEdit.MoveFaces(solid, translation, selector)`** translates planar faces, and is
+    the offset under another name BY DERIVATION: a plane is invariant under translation
+    within itself, so displacing a face by `v` reaches exactly the plane an offset of `v·n̂`
+    reaches. Implemented as that reduction rather than beside it, which makes two
+    consequences facts rather than arrangements — a face moved parallel to itself does not
+    move at all, and several faces moved by one vector each take their own projection. A
+    CURVED face is refused by name: a translation moves the carrier's own axis, while
+    `CarrierBody`'s rim reconstruction builds each new edge concentric with the original,
+    which is exactly right for an offset and false for a move.
+  - **`DirectEdit.DeleteFaces(solid, selector)`** removes a feature and heals the wound —
+    a boss, a pad, a pocket liner, a counterbore's step. The rule is a CONDITION rather than
+    a list of shapes: call an edge *wound* when one of its two faces goes and the other
+    stays; the deletion heals by DROPPING loops exactly when every wound edge lies on a
+    complete interior loop of a kept PLANAR face. **The planar clause is the correctness
+    condition, not a convenience** — a plane is bounded by its outer loop alone so an
+    interior loop really is a hole, whereas on a cylinder or an extruded band a second loop
+    is routinely the far END of the band, and dropping one there leaves an open tube that
+    satisfies BOTH `Validate()` and Euler–Poincaré, so nothing downstream would catch it.
+    Refused by name: a wound only PARTLY bounding a neighbour's loop (healing that needs the
+    neighbours EXTENDED until they meet, a different operation which can have no answer at
+    all — a box's sides extended past its deleted top never meet), a wound consuming an
+    outer loop, a non-planar neighbour, an empty selection and a whole-solid selection.
+    Geometry is shared and topology rebuilt, so the input is untouched and every survivor
+    keeps its own surface object — which is what lets a deletion RESTORE the body a feature
+    was added to rather than merely resemble it (verified bit for bit, and on boolean output
+    against the closed-form volume).
+  Provenance inherits at every site (a tag naming the plate still names the plate after the
+  boss on it has gone). One measured property worth keeping: **a re-solved corner reproduces
+  every nonzero coordinate bit for bit and can return −0.0 where the original held +0.0**,
+  because the three-plane Cramer solve divides by a determinant of −1. It compares equal to
+  0.0 by every value test and differs only in the sign bit, so it is invisible everywhere
+  except to a bit-level fixture placed at the origin; pinned by test so it cannot rot.
 - **`SurfaceOffset` / `SurfaceCorner` / `CarrierBody`** — the curved-corner re-intersection
   machinery three operations were blocked on (curved shelling, curved draft, variable-radius
-  fillets), built once rather than three times.
+  fillets), built once rather than three times — and now a fourth, `DirectEdit`, which needed
+  no new machinery at all beyond a selective law over `CarrierBody.Rebuild`.
   - **`SurfaceOffset.TryOffset(surface, distance)`** lifts a carrier along its own normal and
     stays in the SAME family: a plane offsets to a plane, a cylinder to a cylinder, a sphere
     to a sphere, and a revolve to the revolve of its OFFSET GENERATOR — which for a straight
