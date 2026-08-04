@@ -19,49 +19,10 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 `RemesherPro` scheduling (`RemeshScheduling.Queue`, `FastSplitPasses`), face-aligned
 (RZN-flow) reprojection, `RegionRemesher`, `Shape.Remeshed`. Remaining:
 
-- ~~**The remesher's longest edge converges far more slowly than its distribution.**~~
-  ✅ **done** — `RemeshOptions.PreventLongEdgeFlips`, and **the filed diagnosis was wrong**.
-  It is not "a collapse creates a fresh edge of up to twice the target which the next pass
-  has to find and split", and no within-pass re-visit queue was needed (there is no cascade
-  to guard against: one split-only round over a converged mesh clears every out-of-band edge
-  and a second round finds nothing). The cause is the **flip stage**, established by
-  subtraction — switch flips off and nothing else and the same run ends at *exactly* 1.33 L
-  with nothing out of band, because the sweep already splits everything too long, while
-  switching the smoothing and projection stages off instead leaves the maximum at 2.07 L.
-  The flip predicate is pure valence arithmetic that never looks at a length, so on an
-  elongated quad it swaps the short diagonal for the long one. Measured (target 2.0, 14
-  passes) baseline → guarded: cylinder max 2.01 → 1.46 L / in band 94.6% → 99.6% / 24 → 18 ms;
-  box 2.22 → 1.32 L / 95.1% → 99.8% / worst angle 5.57° → 28.93°; sphere 1.83 → 1.31 L /
-  96.4% → 99.9°%. Two residuals:
-  - [ ] **Should `PreventLongEdgeFlips` be the DEFAULT?** It improves the in-band share, the
-    maximum, the shortest edge and the run time together on a cylinder, a box and a UV
-    sphere, which is not the "different answer, not the same one faster" that made
-    `Scheduling` opt-in. It was left off only so this change moved no committed output
-    (0 of 107 docs PNGs). The one genuinely mixed measure is the **cylinder's worst triangle
-    angle**, 0.89° → 0.58°, since a refused flip is a valence left irregular — worth
-    understanding before flipping the default, because the same measure improves several
-    fold on the box and the sphere. Flipping it would move `Shape.Remeshed` output and the
-    `remesh-plate` render.
-  - [ ] **The remesher has no shape-quality measure of its own.** Everything it reports and
-    everything the tests assert is edge LENGTH (the `[0.66 L, 1.33 L]` band), which says
-    nothing about slivers: the box fixture above sits at 95.1% in band with a worst triangle
-    angle of 5.57°, and the strict form of the flip guard reached 99.7% in band at **0.02°**.
-    A minimum-angle or radius-ratio figure on `RemeshResult` would have made that visible
-    without a bespoke test helper (`TetQuality` is the precedent, one project over).
-- ~~**Face-aligned projection accumulates over the whole mesh even under queue
-  scheduling**~~ ✅ **done** — the accumulation now skips every face with no vertex in the
-  active set, which is sound because a face contributes only to its own vertices. Measured
-  (`UvSphere(1, 48, 32)`, target 0.08), queue scheduling whole-mesh → restricted: 124 → 123 ms
-  at 12 passes, 322 → 285 at 40, **623 → 302 at 100** (2.06×, and 3.07× against the plain
-  sweep). The shape matters more than the ratio: the whole-mesh figure keeps growing with the
-  pass count while the restricted one nearly flattens, so a converged mesh finally costs
-  almost nothing per extra pass. Bit-identical, because the walk keeps its **ascending face
-  scan** and skips only the projection query — no sort needed, where gathering the incident
-  faces into a list would have needed one (built, measured no faster, dropped). Residual:
-  - [ ] **Sweep scheduling still walks every face**, deliberately: with every vertex active
-    the restriction could only add a membership test per face. If a future caller wants
-    face-aligned projection over a large mesh with an explicit small `FixedVertices` set, the
-    same skip would apply — but nothing asks for it today.
+- [ ] **Sweep scheduling still walks every face**, deliberately: with every vertex active
+  the restriction could only add a membership test per face. If a future caller wants
+  face-aligned projection over a large mesh with an explicit small `FixedVertices` set, the
+  same skip would apply — but nothing asks for it today.
 - [ ] **`Part`-level display remesh** — `Shape.Remeshed` is a graph node, so a remesh is a
   modelling decision baked into the design. A viewer-only "give this part uniform triangles
   for display/FEA export" switch on `Part` (a post-tessellation pass inside `GetMesh`) is a
@@ -70,51 +31,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 - [ ] Mutable in-place variants of fill/extrude once callers want them.
 
 ## Implicit engine (EngrCAD.Implicit)
-
-- ~~**The bézier kernel's Newton stage is fixed at 8 iterations for every lane.**~~
-  ✅/❌ **half landed, half measured and declined** — and the entry's premise was wrong in a
-  useful way. It assumed "a convergence exit would change results ... so it needs the golden
-  hashes re-derived deliberately". An **exact fixed-point exit does not**: g and g′ are
-  functions of `refined` alone, so an iteration reproducing it bit for bit makes every later
-  one recompute the same value and take the same branch. Spelled `next == refined` rather
-  than as a tolerance (a tolerant stop *would* move results), it is provably identity, so
-  the golden churn the item was weighing does not exist. Every golden hash is unchanged, and
-  the batch-vs-scalar bit-identity test now independently verifies the argument, the two
-  paths running different iteration counts and still agreeing to the bit.
-  - **Landed on the scalar path**, where each solve exits as soon as its own parameter stops
-    moving: exact counts say **50.0%** of Newton iterations on an all-bézier outline and
-    **35.1%** on an engraving-shaped one are redundant. End to end that is only 1.09× and
-    1.01–1.03×, because Newton is under half of a kernel that is itself behind the
-    bounding-box reject — so the item's closing hint was right about the reject, just not
-    about the correctness cost.
-  - **Declined on the vector path.** A block exits only when its SLOWEST lane does, and ~30%
-    of solves never reach an exact fixed point within the eight steps, so the max over four
-    lanes is ~7.5 of 8 — about 6%, bought with three extra vector ops and a branch per
-    iteration. Measured **0.99–1.03×**: nothing, one case a slight loss.
-  - **The general lesson, which Item "arc certainty band" reached independently**: block
-    granularity destroys per-lane savings, so an early exit that pays in scalar code usually
-    does not vectorize. Worth reaching for before writing the next masked early-out.
-  - Measurement note worth keeping: the first A/B used a MEAN over two passes and the same
-    reject-dominated fixture measured **1.59× then 0.77×** on identical code — a 2× swing
-    *within one sitting*. A minimum over four passes is the right estimator for a
-    deterministic workload that scheduling noise can only slow down, and it collapsed that
-    column to a stable 1.01×.
-- ~~**The lane-wise arc kernel gives a whole block back to the scalar path when any one
-  lane is inside the wedge certainty band.**~~ ❌ **measured and declined** —
-  `SketchRegionBenchmark.ArcCertaintyBandCost` holds the measurement so nobody redoes it.
-  **The scenario this entry named as the reason to build it is the scenario per-lane
-  blending cannot help**: sampling *along* a boundary makes every lane uncertain for the arc
-  being traced, so there is nothing left to keep vectorized and blending recovers exactly
-  zero. Nor is it a cliff, because the fallback is per SEGMENT — only the traced arc
-  degrades while the rest of the sketch vectorizes as usual, measured `batch/scalar`
-  2.48× → **1.45×**, not → 1. Blending only pays on a block with SOME uncertain lanes, which
-  took deliberate construction to produce (sample stride aligned to the register width,
-  four arcs' boundaries visited in rotation: 1.05×) and which a scan line structurally
-  cannot generate, its consecutive samples being collinear and so meeting one boundary
-  rather than four. Detail worth keeping: the band covers the LINE through the centre, not
-  the forward ray (`c₀ = f × o` vanishes both ways), so a horizontal scan line at a rounded
-  rectangle's corner-centre height lands in two arcs' bands at once — that is the realistic
-  version, it is what the 1.45× row measures, and blending buys nothing in it either.
 
 ## Interop / meshing (EngrCAD.Interop)
 
@@ -180,25 +96,14 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     face count, the round-trip type comparison and `Validate()` are the three things
     that stop it, and none of them is optional.
 
-- ~~**A grid quad's diagonal is chosen by CORNER ORDER, not geometry.**~~ ✅ **done** —
-  `PolygonFan` is now the one rule (shorter 3D diagonal for quads, corner-0 fan for
-  n-gons) and every consumer goes through it: `Triangulated`, `SignedVolume` via
-  `FaceFanStart`, `MeshMassProperties`, `MeshConnectedComponents`, `RenderMesh`, and the
-  STL/3MF/AMF writers. The mirrored thread now measures identically to its twin
-  (`ThreadShapeTests` tightened from a 2.5% band to 1%, plus an exact 9-digit equality).
-  Two findings came out of it: the tie guard has to be RELATIVE, because a UV-sphere
-  quad's diagonals are mathematically equal and an exact comparison gave 408 of 960
-  splits to round-off; and the win is *consistency* rather than universally less error —
-  on a saddle cell the two triangulations bracket the surface with equal magnitude.
-  18 of 87 docs PNGs move (SDF/Surface Nets, threads, lofts). Residual:
-  - [ ] **The repair/import fans are deliberately untouched** (`MeshRepair`,
-    `MeshSoupOps`, `StlReader`): they decompose soup that is not a mesh yet, where the
-    fan is a documented fallback for input earcut declined. Worth revisiting only if a
-    dirty-import case is ever traced to a fan diagonal.
-  - [ ] **A quad is still fanned, not optimally triangulated.** For n > 4 the corner-0 fan
-    remains, and on a non-convex n-gon that is simply wrong geometry — nothing in the
-    kernel produces one today (planar faces earcut before they reach here), which is why
-    it was left alone, but it is where the next defect of this family would live.
+- [ ] **The repair/import fans are deliberately untouched** (`MeshRepair`,
+  `MeshSoupOps`, `StlReader`): they decompose soup that is not a mesh yet, where the
+  fan is a documented fallback for input earcut declined. Worth revisiting only if a
+  dirty-import case is ever traced to a fan diagonal.
+- [ ] **A quad is still fanned, not optimally triangulated.** For n > 4 the corner-0 fan
+  remains, and on a non-convex n-gon that is simply wrong geometry — nothing in the
+  kernel produces one today (planar faces earcut before they reach here), which is why
+  it was left alone, but it is where the next defect of this family would live.
 - [ ] **`SdfProjectionTarget` stalls on a CSG difference's fictitious faces.** Its
   guarantee is one-sided (a 1-Lipschitz lower bound puts the surface at least |d| away, so
   a step can never cross it) but |d| need not decrease: inside material a subtracted tool
@@ -222,78 +127,38 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   to no child, so those keep the iterated gradient step — and the API must then report
   WHICH answer the caller got, since an exact closest point and a converged-ish one are
   different contracts and must not share a return type silently.
-- ~~**Surface Nets mesh ASSEMBLY is now the dominant cost, not sampling.**~~ ✅ **done, but
-  not the way this entry proposed.** The grid does NOT give twins for free: a dual edge is
-  a grid FACE and matching its up-to-four claimants needs a face table the streaming
-  window cannot hold. What worked was making the GENERIC builder fast — twin resolution as
-  a counting sort over each edge's lower endpoint instead of a `Dictionary<(int,int),int>`,
-  plus flat index buffers instead of one `int[4]` per quad — which serves every caller and
-  leaves one implementation rather than two and a cross-check. Assembly 3.3–3.7×, whole
-  polygonization 1.2–1.5×, allocation at res 256 145 → 103 MB, output bit-identical.
-  Residual:
-  - [ ] **The grid WALK is now the cost** (~175 ms of a 213 ms res-384 polygonize; assembly
-    is 15–18%). The named candidates are the per-cell `int[12]` crossing map (one heap
-    allocation per mixed cell — the same defect the quad arrays had), the crossing
-    interpolation, and the three quad passes re-reading `values` through `Corner()`.
-    Re-measure before choosing: that is what this entry's own history argues for.
-- ~~**Surface Nets' manifold contract was false in general.**~~ ✅ **done.**
-  `Sphere(16).Lattice(Gyroid(12, 1.2))` at resolution 88 threw `Directed edge 4954 → 4967
-  appears twice` from `HalfEdgeMesh.Build`. The gap: an *ambiguous* grid face (inside
-  corners exactly a diagonal pair) has all four edges crossing, so it carries two quad
-  edges between the same two cells, and when BOTH cells join that pair into one component
-  the two quads share a directed edge. Fixed by splitting such a component by the outside
-  blob each crossing reaches, tested once per interior face by the cell on its + side; the
-  split provably always exists. Only the broken configuration changes, so the golden
-  fingerprints and all 97 docs PNGs are untouched. Reproduced on three gyroid variants and,
-  tellingly, on a plain `Sphere(10).Shell(0.6)` at resolution 44 — a one-cell-thick wall,
-  not a lattice. Residuals:
-  - ~~**A saddle cell whose inside is connected but whose OUTSIDE splits in two has two
-    surface components and still gets ONE shared vertex.**~~ ✅ **done** — and the entry was
-    wrong twice. It said "Manifold, so not this bug": it is NOT manifold, it is a PINCH
-    vertex, and once `HalfEdgeMesh.NonManifoldVertices()` existed to count them it measured
-    **984** on `Sphere(10).Shell(0.6)` at resolution 44 and up to **3 066** on
-    `Box(10) & Gyroid(8, 0.2)`. And the rule it proposed — one vertex per (inside blob,
-    outside blob) interface — is NOT the surface-component count, which is the finding:
-    on the four-isolated-corners cube (inside `{0,3,5,6}`) every one of the twelve crossings
-    is its own (inside, outside) pair, so that rule would return twelve vertices where the
-    surface is four triangles. The correct refinement is by the cube's own FACE adjacency
-    (two crossings on a common face are the two ends of one arc), restricted to one inside
-    component; the interface rule agrees with it only when no face is ambiguous. The 204/1/2
-    figures the entry quoted belonged to the interface rule, not to this one: the face rule
-    leaves ALL THREE golden fingerprints untouched and moves 2 of 135 docs PNGs, both gyroid
-    figures that carry the defect, by 339 and 315 pixels of 1.79 million (0.019%) — the dark
-    specks the pinch points rendered as along a hole's rim. Residual below.
-  - [ ] **The ambiguous face's split is applied by ONE of the two cells, and that PINCHES the
-    other** — the residual left after the sheet refinement above, and now the only source of
-    pinch vertices measured. The + side owns the test because the sliding window cannot
-    promise a cell the slab beyond its + neighbour; manifoldness needs only one side to
-    separate, but the minus-side cell then keeps one vertex against its neighbour's two and
-    its link falls into fans. Measured after the sheet fix: `Sphere(10).Shell(0.6)` 984 →
-    **240** at resolution 44, `Box(10) & Gyroid(8, 0.2)` 2 768 → **642** at 56, and
-    `Sphere(16).Lattice(Gyroid(6, 1.5))` 1 728 → 1 686 at 44 — the one family the sheet fix
-    barely helps, because essentially all of its pinches are this. Pinned as values in
-    `SurfaceNetsPinchTests.TheAmbiguousFaceResidualIsMeasured`.
-    **Two closures were BUILT and both measured worse, so neither should be redone as
-    written.** (a) Resolve the ambiguous face by the **asymptotic decider** — the sign of the
-    bilinear interpolant at the face's saddle, which reduces to comparing `a·c` against `b·d`
-    over the corners in cyclic order and which both cells read off the same four doubles, so
-    it is face-local and shared by construction. (b) Keep the incumbent resolution but **cut**
-    an ambiguous face's pairing wherever the rest of the cube already links its two arcs.
-    Both drove the pinch count to **zero** on every fixture; both also produced OPEN meshes
-    and `Vertex N lies on more than one boundary edge fan` across the same family, because a
-    cell's grouping must match what its NEIGHBOURS do and a face-local pairing does not make
-    two different cube interiors agree about which crossings end up on one vertex. What is
-    left to try is the shape neither of those has: make the resolution a function of the
-    MINUS-side cell alone (which the + cell can already read — `previousFarJoins` for x, a
-    direct neighbour flood for y and z), so both cells decide the same way, and pair
-    accordingly; the theorem the incumbent split already relies on (a cell cannot join both
-    an ambiguous face's inside pair and its outside pair) then says the minus cell's two arcs
-    stay apart, which is what rules out the duplicate directed edge. The + cell may still
-    merge them, so it also needs its cycle cut at that face — that half is unverified.
-  - ~~**A non-manifold interior VERTEX is neither checked nor proven absent.**~~ ✅ **done**
-    — `NonManifoldVertices()` names them and `Validate()` refuses them; `Build` deliberately
-    does not, since a pinch is sometimes the correct answer (the difference of two tangent
-    equal-radius cylinders).
+- [ ] **The grid WALK is now the cost** (~175 ms of a 213 ms res-384 polygonize; assembly
+  is 15–18%). The named candidates are the per-cell `int[12]` crossing map (one heap
+  allocation per mixed cell — the same defect the quad arrays had), the crossing
+  interpolation, and the three quad passes re-reading `values` through `Corner()`.
+  Re-measure before choosing: that is what this entry's own history argues for.
+- [ ] **The ambiguous face's split is applied by ONE of the two cells, and that PINCHES the
+  other** — the residual left after the sheet refinement above, and now the only source of
+  pinch vertices measured. The + side owns the test because the sliding window cannot
+  promise a cell the slab beyond its + neighbour; manifoldness needs only one side to
+  separate, but the minus-side cell then keeps one vertex against its neighbour's two and
+  its link falls into fans. Measured after the sheet fix: `Sphere(10).Shell(0.6)` 984 →
+  **240** at resolution 44, `Box(10) & Gyroid(8, 0.2)` 2 768 → **642** at 56, and
+  `Sphere(16).Lattice(Gyroid(6, 1.5))` 1 728 → 1 686 at 44 — the one family the sheet fix
+  barely helps, because essentially all of its pinches are this. Pinned as values in
+  `SurfaceNetsPinchTests.TheAmbiguousFaceResidualIsMeasured`.
+  **Two closures were BUILT and both measured worse, so neither should be redone as
+  written.** (a) Resolve the ambiguous face by the **asymptotic decider** — the sign of the
+  bilinear interpolant at the face's saddle, which reduces to comparing `a·c` against `b·d`
+  over the corners in cyclic order and which both cells read off the same four doubles, so
+  it is face-local and shared by construction. (b) Keep the incumbent resolution but **cut**
+  an ambiguous face's pairing wherever the rest of the cube already links its two arcs.
+  Both drove the pinch count to **zero** on every fixture; both also produced OPEN meshes
+  and `Vertex N lies on more than one boundary edge fan` across the same family, because a
+  cell's grouping must match what its NEIGHBOURS do and a face-local pairing does not make
+  two different cube interiors agree about which crossings end up on one vertex. What is
+  left to try is the shape neither of those has: make the resolution a function of the
+  MINUS-side cell alone (which the + cell can already read — `previousFarJoins` for x, a
+  direct neighbour flood for y and z), so both cells decide the same way, and pair
+  accordingly; the theorem the incumbent split already relies on (a cell cannot join both
+  an ambiguous face's inside pair and its outside pair) then says the minus cell's two arcs
+  stay apart, which is what rules out the duplicate directed edge. The + cell may still
+  merge them, so it also needs its cycle cut at that face — that half is unverified.
 - [ ] **`MeshSdf` batch queries: two levers measured, both declined — don't redo either.**
   74–85% of a mesh narrow band's wall clock is inside `Bvh.Nearest`, so the headroom is
   real, but *seeding* the branch and bound measured 1.12–1.20× (`MeshSdfBatchTests`) and a
@@ -305,78 +170,10 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   contract a way to say "these points form a compact block", which the 1.45× measured on a
   2³ block would then be reachable through.
 - [ ] **Trimmed-band gaps left by the strip path** (`TrimmedFaceTessellator`).
-  - ~~A **rung sampled at more than two points** (a curved cross edge)~~ and ~~a band
-    whose two chains **meet at a point** (a rung of zero steps)~~ ✅ **both done** — not
-    by two special cases but by replacing the rung-counting split with the same monotone
-    **stack sweep** the slab path uses, which is correct on any monotone polygon and
-    handles a tied run of end vertices and a single apex as its ordinary start/finish
-    cases. The tie-breaking is the load-bearing detail: the extremes are the LAST of the
-    tied minimum run and the FIRST of the tied maximum run, so a whole tied run lands on
-    ONE chain — split across both, the merge interleaves the sides at equal keys and the
-    sweep is asked to triangulate collinear points. The old zip stays as a fallback, and
-    every band in the docs tessellates bit-identically either way (all 52 rendered PNGs
-    unchanged). **Neither shape is reachable from the `Shape` API yet**: the
-    constructions that would produce one — `Sphere(10) − Box(20,20,40).Translate((10,10,0))`
-    (a spherical band between two meridian cuts) and `Cone(8,0,12) − Box(...)` (a cone
-    fragment through the apex) — are refused earlier by the exact B-Rep boolean with
-    "produced an unclosed solid", and a sweep of eighteen further candidates (filleted
-    rounded rectangles and slots, chamfered arcs, tilted cylinder cuts, drilled cones and
-    tori, cut lofts, sweeps and vases) reached neither. Coverage is `TrimmedBandGapTests`,
-    on hand-built faces.
-  - ~~**Bands with interior hole loops** still ear-clip (`TriangulateBandWithHoles`)~~
-    ✅ **done** — and it *was* visible: the cross-drilled bore wall in
-    `docs/examples/images/section-oblique.png` rendered as a crumpled fan. This entry
-    called it "the same defect waiting", which was right, but the mechanism was worse than
-    predicted: the ear clipper is **structurally forced** into a fan there, because both
-    ring loops pull back to a bit-identical v so `IsEar` rejects every corner along both
-    chains. `ZipSlabs`/`SweepMonotone` now decompose the unrolled band into u-monotone
-    slabs; the ear clipper stays as the fallback. Bore wall at 128 spc: 12 164 triangles /
-    worst dot 0.0198 → 416 / 0.99981, and the volume converges quadratically instead of
-    stalling.
   - **Tier 4 `TriangulateRegion` still ear-clips**, so a non-wrapping region with an
     exactly uv-collinear boundary run would hit the identical forced fan. Nothing in the
     suite or the docs exercises it, so the slab sweep was deliberately not widened to it —
     but the mechanism is now understood, and this is where it would resurface.
-- ~~**Trimmed-face refusals are now loud — find out what they refuse.**~~ ✅ **answered**
-  — **neither is reachable from the `Shape` API today**, and `TrimmedFaceRefusalTests`
-  locks that verdict along with the constructions tried and what stops each one earlier.
-  A latitude cut DOES give a sphere a pole-bounded cap with a single winding loop, but
-  drilling that cap off-axis does not put a hole in it: the boolean re-splits so the
-  bore's rim lands on the two-ring band below, which the slab sweep already handles —
-  which is why the pole-bounded-with-holes tier has never been needed. Cutting the cap
-  lower, or the same on a cone or a torus, fails earlier in the boolean ("produced an
-  unclosed solid"). |winding| > 1 needs a curve wrapping a periodic surface twice, which
-  only a helical intersection produces, and those are refused before tessellation
-  (`Cylinder − ExternalThread` throws `ShapeConversionException`; a threaded pocket in a
-  sphere throws `BrepBooleanException`). Both refusals stay as backstops and are now
-  exercised directly on hand-built faces, so the messages cannot rot.
-- ~~**A per-face triangle-quality assertion for the whole tessellator.**~~ ✅ **done** —
-  `TessellationCorpusQualityTests` + the shared `TessellationQuality` audit, over 21
-  constructions at three densities. It caught three real defects on its first run, and
-  the two structural ones are fixed (see the Interop README): a reversed face's polygons
-  were re-wound with `Reverse()`, which MOVES the downstream fan diagonal from a–c to
-  b–d — 5 544 of 30 912 facets of an M8 threaded hole faced inward (worst −0.163) while
-  the identical unsubtracted rod was clean; and the two-ring periodic band used a merge
-  walk where the monotone stack sweep was needed. Remaining findings are the two items
-  below.
-- ~~**Refinement quality upgrade — interior rows in the base triangulation.**~~
-  ✅ **done, the second candidate fix (rows), and the evidence was right** — the base
-  triangulation now carries the surface's curvature itself (`RowedStrip`/
-  `RowedPeriodicBand`/`RowedPoleFan` in `TrimmedFaceTessellator`: the natural grid's own
-  sample rows threaded between scallops with anchors on existing boundary vertices,
-  full-period rows plus a closure duplicate for winding bands, seam chords pre-split
-  with bit-identical twins, pole fans kept within ~1.5 steps of the pole; `Refine`'s
-  step metric became per-axis max-norm so the grid's own cell diagonal stops counting as
-  oversized, and pole-fan edges are refinement-exempt since the pole's u is arbitrary).
-  Measured (i9-9900K win-x64): the drilled sphere `Sphere(10) − Cylinder(3, 40)` went
-  **43 948 facets / 12 folds / worst −0.2022 → 3 244 / 0 / 0.9994** at 32/24, no longer
-  refuses at 128/96, and its volume error falls at ratios 4.35 / 5.08 per doubling — it
-  is now the corpus's 22nd member with an analytic (napkin-ring) volume row.
-  `Box(20,20,20) − Sphere(12)` went **101 246 / 266 folds / −0.2426 → 4 608 / 0 /
-  0.7024** at 48/24 and tessellates at 96/48 where it used to refuse. Refine is
-  DEMOTED, not removed: with rows in place it is measured idle on 16 of 19 corpus
-  members' trimmed faces and still fixes the residual coarse columns (base 3 folds →
-  0 on Box − Sphere). Residuals filed below.
 - [ ] **Trimmed-face residuals after the interior-rows upgrade** (all bounded, none a
   fold-or-refusal class):
   - `Box(20,20,20) − Sphere(12)` stays out of the corpus — **but the reason recorded here
@@ -436,19 +233,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   - `TriangulateBandWithHoles`/`ZipSlabs` has no interior rows — irrelevant today
     because every reachable band-with-holes lives on a cylinder or extrusion (ruled in
     v, chords exact), but a revolved band with holes would want the same treatment.
-  - ~~**A wrapping band whose boundary carries a coarse INTRUDING bump folds, and worse
-    with density.**~~ ✅ **the folds are fixed, and the recorded diagnosis was wrong.**
-    The entry blamed the periodic-band tier pairing its chains by u and falling to the
-    inverting merge walk. Measured on that exact solid: **the merge walk is reached zero
-    times at any density**, both chains ARE u-monotone, and interior rows engage normally
-    — so the tier named was never involved. Every fold came from **refinement**: driving
-    the same faces with `refine: false` leaves the base fold-free at 16/32/48/64/96/128/192
-    alike, while refinement inflated the two tube halves ×4.1 at 192 segments and inverted
-    53 facets. `Refine` now refuses a split that would turn an agreeing facet into an
-    opposing one, and folds are 0 at every one of those densities (was
-    2 / 0 / 0 / 1 / 1 / 14 / 53). **The same guard cleared a defect nobody had filed**:
-    the drilled sphere, a corpus member audited only to 96/48, carried 127 folds at 192/96
-    (worst −0.9367) on its pole-bounded face and now carries none.
   - **Refinement still makes a coarse-rim face WORSE, just no longer inside out.** Beside
     a marching-tracer rim — 15–17 samples baked in at boolean time, whatever the grid
     density — worst facet-vs-surface agreement at 192/96 is ~0.009 refined against ~0.18
@@ -463,15 +247,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     follow the tessellation density instead of its own arc-length step.
   ~~Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
   inscribed-ngon volume by ~5e-5~~ ✅ **fixed and verified** — see below.
-- ~~**A bore drilled into an extruded SIDE face misses the inscribed-ngon volume by
-  ~5e-5.**~~ ✅ **done** — closed by the bounded conic-clipping tier (`TryPatchQuadric`),
-  and re-verified here: `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`
-  asserts the volume as an IDENTITY (`< 1e-12` against the inscribed-ngon value at 128
-  segments) and records the four densities as **7.1e-14 / 6.8e-14 / 4.3e-14 / −5.3e-14**
-  at 32/64/128/256, where the tracer-polyline rim used to give a non-converging,
-  sign-flipping −7.4e-4 / −5.3e-5 / +4.7e-5 / +6.5e-5. Two entries said this was still
-  open; both were stale.
-
 ## Core (EngrCAD.Core)
 
 - [ ] **Space-filling curves: the two consumers still open** (the generator and the 2D
@@ -737,32 +512,14 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     derivative. A jet comparison of bounded order is not sound in general; the honest
     v2 is probably to compare a small parametric offset off the node and refuse when
     even that ties.
-  - ~~**`CurvedRegion2dOffset.Stroke`**~~ ✅ **done** — the open-path stroke of a curved
-    chain. The filed framing was right that the primitives existed and slightly wrong about
-    where the work was: the both-side join bookkeeping ported verbatim from the polygonal
-    twin (the existing `AddCornerJoin` took the two outward normals already, and a stroke
-    just calls it twice with them negated), and the real content was the arc SLAB — the
-    annular sector between r ± w/2, whose area `sweep·r·w` makes every test an equality
-    because the squares cancel, plus its `w/2 ≥ r` degeneration to a pie sector. **One
-    contract deliberately differs from the polygonal twin**: a chain that returns to its
-    start is stroked as a CIRCUIT (closing joint gets its joins, no caps), because a chain of
-    EDGES makes closure structural where a list of POINTS can only spell it by repeating the
-    first — read at the same weld tier the chain's own continuity check uses. It is invisible
-    under round joins + round caps and is what stops a butt-capped circuit carrying a notch:
-    measured, a 10×10 square at width 2 with miter joins comes back 79 through the points
-    spelling against 80 through the edge one. The oracle worth keeping is not an area formula
-    — stroking a simple closed loop by w is the same SET as `Grow(R, w/2) \ Shrink(R, w/2)`,
-    which `Stroke` and `Offset` reach by different primitives. Against the polygonal twin on
-    a quarter arc (r 8, w 3): flattening to 4/8/16/32 chords approaches the exact answer
-    strictly from below and is still 1e-3 short at 32 — a floor, not a tolerance.
-    - [ ] Residual, filed rather than done: a `Sketch`-level wrapper (`Sketch.StrokeExact`,
-      beside the existing `OffsetExact`) so a designer reaches it without dropping to Core.
-      That is Modeling work, not Core.
-    - [ ] Residual: the POLYGONAL `Region2dOffset.Stroke` still cannot recognize a circuit
-      (its input genuinely cannot express one unambiguously), so a butt-capped closed
-      polyline keeps the notch measured above. Left alone deliberately — it is pinned
-      bit-for-bit by `Region2dGoldenTests` and the fix belongs with an explicit `closed:`
-      flag, not with a first-point-equals-last-point guess.
+  - [ ] Residual, filed rather than done: a `Sketch`-level wrapper (`Sketch.StrokeExact`,
+    beside the existing `OffsetExact`) so a designer reaches it without dropping to Core.
+    That is Modeling work, not Core.
+  - [ ] Residual: the POLYGONAL `Region2dOffset.Stroke` still cannot recognize a circuit
+    (its input genuinely cannot express one unambiguously), so a butt-capped closed
+    polyline keeps the notch measured above. Left alone deliberately — it is pinned
+    bit-for-bit by `Region2dGoldenTests` and the fix belongs with an explicit `closed:`
+    flag, not with a first-point-equals-last-point guess.
   - [ ] **Curved `Shape.Section`/`Silhouette`.** A section of a B-Rep could return a
     `CurvedRegion2d` for the analytic pairs (`PlanarSection` already gets exact circles
     and lines from `SurfaceIntersection`) instead of flattening them; the silhouette
@@ -797,48 +554,16 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     bézier's or an ellipse's nearest-point is itself a solve, so the residual would need
     its own foot parameter as a VARIABLE — which is the standard treatment and is real
     work rather than a reuse. Filed with the bézier tangency it shares a mechanism with.
-- ~~**A lane-wise `SketchRegion` kernel for elliptical arcs.**~~ ✅ **done** —
-  `EllipseData`/`EllipseRefine`/`EllipseMinimum` in `SketchRegion.cs`. Measured
-  **5.4–6.5×** on the batch entry over two elliptical profiles (one-process A/B over the
-  new internal `ellipseKernel` seam). The interesting part is the split: the scalar column,
-  which contains no SIMD, carries **4.2–5.6×** of it purely from baking the 65 scan points
-  and hoisting the Newton step's cosine/sine pair, while SIMD adds only **1.18–1.24×** on
-  top — the scan vectorizes, the refinement cannot, and once the scan is baked the
-  refinement is most of what is left. It cannot, because `Vector.Cos`/`Vector.Sin` are not
-  bit-identical to the scalar ones (measured: 11 858 / 19 172 of 200 000 differ, one ulp).
-  - [ ] **The refinement is still scalar per lane, and only a bit-exact vector
-    cosine/sine would change that.** Not worth writing one: a correctly-rounded vector
-    `sin`/`cos` is a substantial numerics project, and the measurement above says the
-    ceiling it would buy is the ~1.2× the vectorized scan already demonstrates, on the one
-    segment kind that is rarest in real sketches. Filed so the next reader does not
-    re-derive the arithmetic — the barrier is exactness, not effort.
-- ~~**Adopt biarc fits somewhere**~~ ✅ **two of the three doors done at `ffbade2`** —
-  `SurfaceIntersection.FitAnalytic(curves, tolerance)` (opt-in post-pass: a tracer polyline
-  becomes an arc chain only when the measured deviation clears the caller's tolerance, and
-  `AnalyticFit` reports `Fitted` + the deviation either way) and `StepWriter`'s
-  `options.ArcFitTolerance`. The filed policy question — *who owns the tolerance* — is
-  settled the same way at both doors: the CALLER does, nothing fits implicitly, and the cost
-  is always a return value.
-  - [ ] What remains of the item is the third candidate, **lighter B-Rep seam edges**, which
-    is a different question rather than a third application: a seam edge is shared geometry
-    that must WELD, so replacing it with a fit moves both adjacent faces' boundaries and the
-    tolerance stops being the caller's to choose.
-- ~~**`ExtrudedSurface`/`RevolvedSurface` inverse evaluation refines from a single best
-  seed**~~ ✅ **done at `8dc573d`** — `SweptSurface.SolveGeneratorParameter`'s rule was
-  extracted as `SeedSelection.MarkCandidates` (BRep, internal) and all THREE swept surfaces
-  plus the generic 17×17 base grid now refine from every local minimum and its two
-  neighbours. The overrides still defer to the base on failure, so "the override is never
-  worse than the base" holds by construction.
-- ~~**`Curve3d.ArcLength`/`ParameterAtLength`**~~ ✅ **done at `c28ec5f`** — virtual
-  `ArcLength(from, to, relativeTolerance)` with exact closed-form overrides on the conics,
-  the helix and both wrappers, a bracketed-Newton `ParameterAtLength`, and a caching
-  `ArcLengthTable3d` beside `ArcLengthTable2d`.
-- ~~**2D curve ↔ `Sketch` bridge**~~ ✅ **done at `ddd9f06`** — `SketchSegment.ToCurve2d` /
-  `Sketch.ToCurves` out, `Sketch.FromCurves` back in (refusing what a sketch cannot hold,
-  by name, and handing the result to the ordinary constructor so closure/winding/degeneracy
-  stay validated in ONE place), and `Curve2d.ToCurve3d` / `Profile.FromCurves` into
-  topology. Written up in design.md §5, "Where the 2D curve family meets the sketch and the
-  profile".
+- [ ] **The refinement is still scalar per lane, and only a bit-exact vector
+  cosine/sine would change that.** Not worth writing one: a correctly-rounded vector
+  `sin`/`cos` is a substantial numerics project, and the measurement above says the
+  ceiling it would buy is the ~1.2× the vectorized scan already demonstrates, on the one
+  segment kind that is rarest in real sketches. Filed so the next reader does not
+  re-derive the arithmetic — the barrier is exactness, not effort.
+- [ ] What remains of the item is the third candidate, **lighter B-Rep seam edges**, which
+  is a different question rather than a third application: a seam edge is shared geometry
+  that must WELD, so replacing it with a fit moves both adjacent faces' boundaries and the
+  tolerance stops being the caller's to choose.
 - [ ] **Drill follow-ups** (drill-tip angles ✅ landed — `HoleSpec.WithTipAngle`, exact
   as an identity, depth measured to the shoulder; **cross-PLANE hole validation** ✅
   landed — bounding-cylinder separation plus a separating axis, since collinear tools
@@ -880,134 +605,70 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   and curved shelling and draft ride it. What is left here is the OTHER half — clipping
   the two trims against each other on a curved carrier, a 2D arrangement in the shared
   surface's parameter space rather than a corner solve.
-- ~~**Trimmed cylindrical tessellation with WRAPPING loops**~~ ✅ **done** — and the
-  standing diagnosis was wrong in an instructive way. The refusal blamed a missing
-  capability ("the sub-bands need trimmed cylindrical tessellation with wrapping loops");
-  the trimmed path had that capability all along and the split was fine. What was broken
-  was `BRepTessellator`'s ROUTING: any two-loop closed-edge cylindrical face went to the
-  index-pairing RING path, whose correctness condition — the two polylines sample the
-  same azimuths in the same order — two independently traced cuts do not meet.
-  `IsRingPairedBand` now checks that condition, cross-drills and tilted-plane cuts of a
-  plain cylinder work, and the corpus gained `cross-drilled cylinder band`.
-  Residual (pre-existing, now measured): a traced rim's sample count comes from the
-  tracer's ARC-LENGTH step, so a *small* band gets few samples per turn — a Ø3 drill
-  through a Ø10 cylinder reads facet-vs-surface agreement 0.974 / 0.949 / 0.565 at
-  32/96/192 (fold-free, volume converging) against 0.858 / 0.9995 / 0.9998 for a Ø10
-  drill through a Ø26 one. Same fixed-sampling floor recorded under the whole-solid
-  fillet booleans; a density-aware tracer step would close both.
-- ~~**The tracer reports NOTHING for a conic partially crossing a bounded extrusion's
-  edge**~~ ✅ **done** — a bore whose rim runs off the side wall it pierces. `TryPatchQuadric`
-  now CLIPS the conic to the runs the patch carries (`ClipConicToPatch`): each patch
-  coordinate is a harmonic `c + a·cos θ + b·sin θ` of the conic's own angle, so each of the
-  four edges is one `acos`, and membership is decided at the midpoint of each interval
-  between consecutive roots. A conic wholly inside is returned as ITSELF by reference, so
-  every previously-accepted input is bit-identical; a run straddling the seam comes back as
-  ONE `CurveSegment` past the domain end. **The endpoints weld because the cut angles are
-  closed form** — measured `|z − top| = 0` exactly and 0–4.4e-16 (0–2 ulps) from the top
-  plane's own `±√(r² − d²)` — and every sample stays inside the extrusion's `[0, 1]²`
-  (escape 0.000), which is the geometric `Promote` guard. A Ø6 bore through a sketch
-  extrusion's walls and out of its top went from REFUSED at every density ("unclosed solid:
-  6 of 20 edges used by 1 face") to +1.2252 / +0.3065 / +0.0766 / +0.0192 at 32/64/128/256,
-  ratio exactly 4.00, one-signed — and matches the SAME plate built as a `Shape.Box` (whose
-  walls are unbounded planes) to 1e-11 at every density. A TANGENT conic is kept CLOSED by a
-  derived asymmetry rather than an epsilon (dropping a short run loses a `scale·δ` chord,
-  keeping it costs only `scale·(1 − cos(δ/2))`), and that guard needs a FAMILY to show it
-  firing: 62 of 480 tangency configurations pinhole without it, 0 of 480 with it. Corpus
-  member `side-wall breakout`. Two residuals below.
-  - [ ] **The tracer's fixed-sampling floor did NOT reproduce here, and the entry's premise
-    was wrong about it.** The item was filed expecting the recorded signature (a
-    non-converging error whose sign flips). Measured, the case the tracer CAN reach — a
-    blind bore whose rim runs off one wall — converges quadratically through the tracer too
-    (+0.4050 / +0.0997 / +0.0250 / +0.0063, ratios 4.06 / 3.98 / 4.00), because
-    `SnapTracerEnds` and `SampleEdge`'s baked-carrier refinement already remove the floor
-    once a usable branch exists. What the tracer could not do was produce a usable branch at
-    all when BOTH walls are crossed, so the failure being fixed is a REFUSAL, not a floor.
-    Worth knowing before the next entry predicts a floor: the clipped route's absolute error
-    on that blind case is ~13% LARGER than the tracer's at every density (+0.4573 vs +0.4050
-    at 32) while converging at the same rate — the analytic arc is sampled on the
-    `segmentsPerCircle` angular grid and the traced rim's arc-length step happened to be
-    slightly finer. Nothing to fix; recorded so the number is not mistaken for a regression.
-  - ~~**A drill tool's flat POLE CAP breaking out of a face still refuses.**~~ ✅ **done** —
-    and **the filed diagnosis named the wrong stage**, which is the finding. It blamed the
-    missing planar-carrier recognizer for a coaxial annulus; the cause was
-    `BrepBoolean.ProbePoint`'s POLE path, which read the loop's AVERAGE v where it must read
-    the loop's CLOSEST APPROACH to the pole. The two agree exactly on an uncut cap (its rim
-    sits at one v) and part company the moment another solid cuts it, which is what a blind
-    drill's flat bottom breaking out of a face IS — measured, the average put the probe 0.106
-    ABOVE the plate's own top face, so the surviving fragment was classified away and the
-    boolean cracked along its whole rim. Sweeping the breakout depth on a Ø6 blind hole in a
-    40×30×10 plate (axis height z0, top face at 10) fixes z0 = 10.5 / 9.5 / 9 and regresses
-    none; design.md §5 carries the reasoning and why `ContainsTwoSided` is NOT the fix.
-    Residuals below.
-    - ~~**The annulus recognizer is BLOCKED by a `SampleEdge` density rule.**~~ ✅ **done** —
-      both halves landed TOGETHER, which the entry called for and which the measurement then
-      justified. `SurfaceIntersection` recognizes a coaxial DISK as the annulus-restricted
-      plane it is (`TryRevolvedDisk`/`TryPlanarDisk`; parallel planes refused BY NAME so the
-      axis-perpendicular arm and the coplanar-fusion tier keep every case they owned), and
-      `BRepTessellator.SampleEdge` gives a straight edge the angular density of any face
-      whose azimuth it crosses. **The gate IS the correctness condition rather than a proxy
-      for it**: the count is the azimuth swept about the face's own axis, so an iso-parameter
-      straight edge — a ruling, a seam, a helical generator, i.e. every straight edge on an
-      angular face that existed before — measures zero and stays at two samples, with no
-      separate iso-parameter test to keep in step. Across the eleven-row breakout sweep:
-      baseline refuses z0 = 10; the recognizer alone fixes 10 and breaks 11.5 and 10.5;
-      **the density rule alone is bit-identical to baseline on all eleven rows** (with the
-      tracer route the chord is polyline-backed, so the straight-edge branch is never reached
-      for it), and both together pass every row. That last row is what makes "land them
-      together" a measurement rather than a preference. The wide verification pass the entry
-      predicted came to ONE moved docs PNG (`holes-breakout`: 14 px of 1 792 000, thirteen of
-      them ±1 on the bore's dark interior) and no corpus movement at all. design.md §5.
-    - [ ] **The drilled breakout is structurally clean but below the corpus AGREEMENT
-      floor, and the comparison says which face is at fault.** It is not a `Corpus` member
-      for that reason, and is locked instead by
-      `DrilledBreakout_IsCleanButBelowTheAgreementFloor` (which asserts BOTH sides, so a
-      fix that lifts it fails the test naming the promotion) plus an `Analytic` entry, so
-      its volume convergence IS gated. Measured: no folds and no degenerate slivers at any
-      density, every planar family exact, and the bore wall's worst facet-vs-surface
-      agreement **0.107 / 0.694 / 0.840** at 16/8, 48/24, 96/48 against floors of 0.383 /
-      0.924 / 0.981 — where the corpus member `side-wall breakout`, the SAME cut made by a
-      `Shape.Cylinder`, reads **0.9992 / 0.9999 / 0.99998**. The two differ only in the
-      tool, so it is the drill's `RevolvedSurface` bore wall and not the breakout; a plain
-      drilled-THROUGH hole is a corpus member and passes, so a drill's revolve band is fine
-      in general and the junction where the bore's rim meets the face it breaks out of is
-      what degrades it. That is the recorded traced-rim density residual (a traced rim keeps
-      whatever sample count the tracer's arc-length step gave it however fine the grid
-      around it becomes) in a new location. **The entry's guess about the cause is now
-      FALSIFIED, and that is the useful part**: it read *"it is likely the SAME `SampleEdge`
-      density work as the annulus-recognizer item above"*, and that work has landed with all
-      three numbers **unchanged**. The chord the density rule feeds is on the flat CAP, while
-      the wall's boundary is two traced polylines and two rim arcs — nothing straight — so
-      the rule structurally cannot reach it. What did move is the disc fragment, strictly
-      for the better (141 → 102 facets at 64 segments and 3 305 → 426 at 256, at exactly the
-      same area), which isolates the residual to the wall alone with nothing left in front
-      of it.
-    - [ ] **The coaxial-disk recognizer put z0 = 11.5 onto the family's residual route, and
-      the trade is worth revisiting once the wall is fixed.** That row's chord used to arrive
-      as a traced polyline and its bore WALL took a coarse route with it — 222 facets at 64
-      segments where 10.5 and 9 take 2 094 and 2 046 — which measured BETTER on volume
-      (2.5e-2 against 8.0e-2 at 64 segments) and on agreement (0.99997 against 0.98054 at
-      96/48) than the route its neighbours are on. Both readings now sit beside 10.5's own
-      (0.97901), the degenerate slivers at 16/8 went 2 → 0, and the error stays one-signed
-      and converging (ratios 6.91 / 4.08 / 2.96), so nothing regressed below a gate. But a
-      wall measuring **94.3078 against an exact 94.2478** is not inscribed, and neither is
-      10.5's (126.3274 vs 126.3013) nor 9's — so the bulge is the FAMILY's rather than this
-      change's, and fixing the wall should be expected to reclaim z0 = 11.5's old numbers
-      rather than merely restore its old route.
-    - [ ] **A GRAZING breakout still refuses, in both routes.** At a half-chord of 0.245 and
-      0.077 (Ø6 bore, z0 = 7.01 and 7.001) the drilled hole fails with *"Open splitting
-      curves must start and end outside the face"* naming the top face, and at 0.077 the
-      `Shape.Cylinder` route fails too (*"4 of 29 edges used by 1 face"*) — so this one is
-      NOT about pole caps and is the pre-existing near-tangency limit showing through.
-      Reproduce with the sweep in `SideWallBreakoutBooleanTests` extended past its last row.
-    - [ ] **`FaceSplitter.SplitByCurve` declines to split a bare pole cap by a chord.** Built
-      as a would-be unit fixture for the probe rule and measured instead: an axis-touching
-      revolve's flat cap, cut by the exact chord terminating ON its rim, comes back as ONE
-      fragment — the rim edge IS split, no interior edge is made and no second face traced —
-      at every offset (0.5 … 2.5) and azimuth (8 values) tried, and for a 25-point polyline
-      exactly as for a `Line3d`, so it is not the density rule above. Inside the boolean the
-      same cap does split (the drilled cases above), so the difference is in how `SplitAll`
-      reaches it. Worth a look, because it means the probe rule has no face-level fixture and
-      is pinned only end to end.
+- [ ] **The tracer's fixed-sampling floor did NOT reproduce here, and the entry's premise
+  was wrong about it.** The item was filed expecting the recorded signature (a
+  non-converging error whose sign flips). Measured, the case the tracer CAN reach — a
+  blind bore whose rim runs off one wall — converges quadratically through the tracer too
+  (+0.4050 / +0.0997 / +0.0250 / +0.0063, ratios 4.06 / 3.98 / 4.00), because
+  `SnapTracerEnds` and `SampleEdge`'s baked-carrier refinement already remove the floor
+  once a usable branch exists. What the tracer could not do was produce a usable branch at
+  all when BOTH walls are crossed, so the failure being fixed is a REFUSAL, not a floor.
+  Worth knowing before the next entry predicts a floor: the clipped route's absolute error
+  on that blind case is ~13% LARGER than the tracer's at every density (+0.4573 vs +0.4050
+  at 32) while converging at the same rate — the analytic arc is sampled on the
+  `segmentsPerCircle` angular grid and the traced rim's arc-length step happened to be
+  slightly finer. Nothing to fix; recorded so the number is not mistaken for a regression.
+- [ ] **The drilled breakout is structurally clean but below the corpus AGREEMENT
+  floor, and the comparison says which face is at fault.** It is not a `Corpus` member
+  for that reason, and is locked instead by
+  `DrilledBreakout_IsCleanButBelowTheAgreementFloor` (which asserts BOTH sides, so a
+  fix that lifts it fails the test naming the promotion) plus an `Analytic` entry, so
+  its volume convergence IS gated. Measured: no folds and no degenerate slivers at any
+  density, every planar family exact, and the bore wall's worst facet-vs-surface
+  agreement **0.107 / 0.694 / 0.840** at 16/8, 48/24, 96/48 against floors of 0.383 /
+  0.924 / 0.981 — where the corpus member `side-wall breakout`, the SAME cut made by a
+  `Shape.Cylinder`, reads **0.9992 / 0.9999 / 0.99998**. The two differ only in the
+  tool, so it is the drill's `RevolvedSurface` bore wall and not the breakout; a plain
+  drilled-THROUGH hole is a corpus member and passes, so a drill's revolve band is fine
+  in general and the junction where the bore's rim meets the face it breaks out of is
+  what degrades it. That is the recorded traced-rim density residual (a traced rim keeps
+  whatever sample count the tracer's arc-length step gave it however fine the grid
+  around it becomes) in a new location. **The entry's guess about the cause is now
+  FALSIFIED, and that is the useful part**: it read *"it is likely the SAME `SampleEdge`
+  density work as the annulus-recognizer item above"*, and that work has landed with all
+  three numbers **unchanged**. The chord the density rule feeds is on the flat CAP, while
+  the wall's boundary is two traced polylines and two rim arcs — nothing straight — so
+  the rule structurally cannot reach it. What did move is the disc fragment, strictly
+  for the better (141 → 102 facets at 64 segments and 3 305 → 426 at 256, at exactly the
+  same area), which isolates the residual to the wall alone with nothing left in front
+  of it.
+- [ ] **The coaxial-disk recognizer put z0 = 11.5 onto the family's residual route, and
+  the trade is worth revisiting once the wall is fixed.** That row's chord used to arrive
+  as a traced polyline and its bore WALL took a coarse route with it — 222 facets at 64
+  segments where 10.5 and 9 take 2 094 and 2 046 — which measured BETTER on volume
+  (2.5e-2 against 8.0e-2 at 64 segments) and on agreement (0.99997 against 0.98054 at
+  96/48) than the route its neighbours are on. Both readings now sit beside 10.5's own
+  (0.97901), the degenerate slivers at 16/8 went 2 → 0, and the error stays one-signed
+  and converging (ratios 6.91 / 4.08 / 2.96), so nothing regressed below a gate. But a
+  wall measuring **94.3078 against an exact 94.2478** is not inscribed, and neither is
+  10.5's (126.3274 vs 126.3013) nor 9's — so the bulge is the FAMILY's rather than this
+  change's, and fixing the wall should be expected to reclaim z0 = 11.5's old numbers
+  rather than merely restore its old route.
+- [ ] **A GRAZING breakout still refuses, in both routes.** At a half-chord of 0.245 and
+  0.077 (Ø6 bore, z0 = 7.01 and 7.001) the drilled hole fails with *"Open splitting
+  curves must start and end outside the face"* naming the top face, and at 0.077 the
+  `Shape.Cylinder` route fails too (*"4 of 29 edges used by 1 face"*) — so this one is
+  NOT about pole caps and is the pre-existing near-tangency limit showing through.
+  Reproduce with the sweep in `SideWallBreakoutBooleanTests` extended past its last row.
+- [ ] **`FaceSplitter.SplitByCurve` declines to split a bare pole cap by a chord.** Built
+  as a would-be unit fixture for the probe rule and measured instead: an axis-touching
+  revolve's flat cap, cut by the exact chord terminating ON its rim, comes back as ONE
+  fragment — the rim edge IS split, no interior edge is made and no second face traced —
+  at every offset (0.5 … 2.5) and azimuth (8 values) tried, and for a 25-point polyline
+  exactly as for a `Line3d`, so it is not the density rule above. Inside the boolean the
+  same cap does split (the drilled cases above), so the difference is in how `SplitAll`
+  reaches it. Worth a look, because it means the probe rule has no face-level fixture and
+  is pinned only end to end.
 
 ## Deformation / analysis follow-ups
 
@@ -1016,21 +677,15 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
 `LaplacianMeshDeformer`, `MeshLocalParam`, `MeshIsoCurves`, `DijkstraGraphDistance`,
 `MeshIcp`). Residuals:
 
-- ~~**AMD/RCM fill-reducing ordering for `SparseCholesky`**~~ ✅ **done** — AMD landed as
-  `SparseOrdering.Amd` (opt-in; a permutation changes the summation order, so it is not
-  bit-identical to the natural path every upstream number was measured on). 4.6–13.4× on
-  factor time, 3.5–8.3× on fill, never a loss; table in the Core README. RCM was not
-  implemented and should not be: AMD dominates it on every pattern here, and a second
-  ordering is a second thing to keep honest. Residuals worth knowing:
-  - [ ] **A supernodal/left-looking numeric factorization** is the next lever, not a
-    better ordering. AMD takes 3D 40³ (64k unknowns) from 125 s to 26 s, which is a real
-    4.8× and still unusable — the fill is 20.6M entries and the up-looking scalar loop
-    touches them one at a time. BLAS-3 dense blocks over the supernodes are the standard
-    answer and the only thing that closes that gap.
-  - [ ] **Nothing consumes `SparseOrdering.Amd` yet.** `LaplacianMeshSmoother`/
-    `LaplacianMeshDeformer`/`MeshIcp` still factor natural, deliberately: their committed
-    outputs are pinned bit-for-bit and switching would move them. Whoever wires FEA
-    assembly should pass `Amd` from the start and pin its own baselines.
+- [ ] **A supernodal/left-looking numeric factorization** is the next lever, not a
+  better ordering. AMD takes 3D 40³ (64k unknowns) from 125 s to 26 s, which is a real
+  4.8× and still unusable — the fill is 20.6M entries and the up-looking scalar loop
+  touches them one at a time. BLAS-3 dense blocks over the supernodes are the standard
+  answer and the only thing that closes that gap.
+- [ ] **Nothing consumes `SparseOrdering.Amd` yet.** `LaplacianMeshSmoother`/
+  `LaplacianMeshDeformer`/`MeshIcp` still factor natural, deliberately: their committed
+  outputs are pinned bit-for-bit and switching would move them. Whoever wires FEA
+  assembly should pass `Amd` from the start and pin its own baselines.
 - [ ] **Shape-level exposure of smoothing/deformation** — the tools are kernel-only
   (`EngrCAD.Mesh`); a `Shape.Smoothed(...)` graph node (mesh-Native, implicit-Bridged
   via `MeshSdf`, B-Rep-Impossible — the `Remeshed` precedent) plus docs-site example
@@ -2031,13 +1686,6 @@ export — is recorded in CLAUDE.md):
   `ZLibStream`): color-PNG luminance mapping (deliberately not invented silently —
   decide a documented rule first); Adam7 interlaced PNGs; chunk CRC verification
   (currently structural failures only).
-- ~~`minkowski()`~~ — resolved as documentation: `docs/examples/implicit.md` maps the
-  OpenSCAD recipes onto `Offset` (≡ sphere-Minkowski, exact as a field),
-  opening/closing compositions, and the exact B-Rep routes (`RoundEdges`/`Fillet`),
-  with convex⊕convex available via `Hull` over translated copies. General
-  polyhedron⊕polyhedron is **not planned** (convex decomposition + pairwise sums +
-  union — combinatorially explosive, and its engineering uses are better served by
-  `Offset` on the exact field).
 - [ ] `BrepSolid` one-call transform story (`TransformedCurve` exists; add
   `TransformedSurface` or per-type transforms; `HalfEdgeMesh.Transformed(m)` ✅ landed
   with winding flip)

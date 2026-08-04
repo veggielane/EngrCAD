@@ -3,7 +3,14 @@
 **Detailed design rationale lives in [design.md](design.md)** (architecture, conventions,
 algorithm choices, numerical lessons, roadmap); each `src/*` project also has a
 `README.md` describing its contents. **[todo.md](todo.md)** is the idea backlog
-(open work only — completed items are removed as they land; largely harvested from a
+(open work only. **DELETE a completed item; do NOT strike it through.** The file had
+drifted to 16% struck-through entries carrying their own commentary, which is a second
+copy of what the commit message, CLAUDE.md and design.md already say — and it is the
+copy nobody updates. Where a finished item leaves a genuine finding, such as a measured
+DECLINE that should stop someone redoing the work, that finding belongs in CLAUDE.md's
+lesson bullets or in design.md, and the todo entry still goes. The one thing to check
+before deleting is NESTED CHILDREN: a finished parent often carries sub-items that are
+still open, and those are promoted, not removed. Largely harvested from a
 survey of geometry3Sharp at `C:\Users\chris\projects\git\geometry3Sharp` — study the
 referenced g3 classes before implementing an item).
 
