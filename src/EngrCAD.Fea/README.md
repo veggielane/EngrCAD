@@ -64,6 +64,8 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `SnCurve` / `FatigueMaterials` | The Basquin S-N line (endurance limit DERIVED from its own knee) and a transcribed, verify-against-datasheet catalogue |
 | `FatigueAnalysis` / `FatigueOptions` / `MeanStressCorrection` | Two load cases → per-node alternating/mean via signed von Mises, Goodman/Gerber corrected |
 | `FatigueResults` | Per-node safety factor and log10 life, published and sampled like every other result |
+| `Rainflow` / `RainflowCycle` / `RainflowFatigueOptions` | ASTM E1049 cycle counting over a stress history, and how its open end is read |
+| `RainflowFatigueResults` | Per-node Miner damage per pass, log10 repetitions and the spectrum LOAD FACTOR |
 | `TopologyOptimizer` / `TopologyOptions` / `TopologyFilter` | SIMP compliance minimisation: **where should the material go**, by optimality criteria over one density per element |
 | `TopologyResult` / `TopologyIteration` / `TopologyStop` | The density field, the per-iteration history, the discreteness measure, and the threshold-plus-polygonisation route to a shape |
 | `DensityFilter` | Internal: the radius neighbourhood both filters share, volume-weighted so it generalises the published uniform-grid form rather than replacing it |
@@ -2498,18 +2500,70 @@ prescription, under which every count closes) with the residual halves paired in
 cycles. The modes agree on damage for constant amplitude; the cycle structure differs.
 
 `RainflowFatigueResults` publishes **damage per pass of the history** (the quantity that
-composes — k passes accumulate k·damage) and life as **log10(repetitions)** under the
-static path's spellings (NaN = infinite, one-repetition floor covers static failure);
-`CyclesAt(node)` recomputes one node's counted cycles for verification. Verified: the
-ASTM worked example cycle for cycle; the total-variation identity
-`sum(2·count·range) = sum|Δ|` over the turning points, exact on a pseudo-random history
-(the identity that catches a dropped or double-counted range on inputs nobody
-hand-checked); and a constant-amplitude history — internally-built transient states
-alternating between the SolveAll pair — degenerating to the static-pair answer with the
-counted amplitude and mean BIT-equal and damage exactly `count/life`. A
-variable-amplitude SAFETY FACTOR is deliberately absent: the factor to a damage target
-under a power-law line needs an iteration and a stated target life, filed rather than
-approximated.
+composes — k passes accumulate k·damage), life as **log10(repetitions)** under the
+static path's spellings (NaN = infinite, one-repetition floor covers static failure), and
+the spectrum's **load factor** (below); `CyclesAt(node)` recomputes one node's counted
+cycles for verification. Verified: the ASTM worked example cycle for cycle; the
+total-variation identity `sum(2·count·range) = sum|Δ|` over the turning points, exact on a
+pseudo-random history (the identity that catches a dropped or double-counted range on
+inputs nobody hand-checked); and a constant-amplitude history — internally-built transient
+states alternating between the SolveAll pair — degenerating to the static-pair answer with
+the counted amplitude and mean BIT-equal and damage exactly `count/life`.
+
+## The spectrum safety factor, and where its closed form stops
+
+`FatigueAnalysis.LoadFactor(cycles, curve, correction, designRepetitions)` — published per
+node as `RainflowFatigueResults.SafetyFactor` — is the **multiplier on the whole load
+history at which the counted spectrum reaches its damage target**, the same claim the
+static pair's radial factor makes and verified the same way (scale the loads, re-solve,
+re-count, and the damage lands ON the target). `RainflowFatigueOptions.DesignRepetitions`
+picks the target exactly as `FatigueOptions.DesignLife` does: null measures against
+INFINITE life, a stated R against a Miner damage of `1/R`.
+
+**The closed form exists in one region and the boundary is the point.** Damage is a sum of
+power-law terms, so if every cycle's equivalent amplitude were LINEAR in the multiplier the
+sum would scale as `k^(-1/b)` and the answer would be exactly `(R·D)^b` for the unit-load
+damage D. Two ordinary things break that: the endurance KNEE, which makes cycles join the
+sum as k grows (the coefficient is piecewise, and a closed form off the unit-load damage
+overstates — measured 4.5%); and a tensile mean under a correction, which makes the
+equivalent amplitude `k·a/(1 - k·m/S_ut)` — not a power of k at all, and divergent at
+`k = S_ut/m`, a hard static-failure ceiling (understates — measured 12.9%). So there is ONE
+bracketed solve for every case rather than a closed form with conditions, and the closed
+form is kept as the TEST ORACLE where it is exact: on a knee-less curve it agrees with the
+solve **bit for bit**, on a steel spectrum above its knee to two ulp.
+
+The **infinite-life** target is the exception that is closed form throughout, because
+"where does damage first appear" is per-cycle rather than accumulated: each cycle reaches
+the endurance limit at its own static radial factor, so the spectrum reaches it at the
+smallest of them — literally `FatigueAnalysis.SafetyFactor` per cycle, the same helper the
+static pair's field is built from, which is why a one-cycle spectrum answers bit-identically
+and why the default target costs one more pass over cycles that already exist.
+
+Three refusals and one named boundary. A curve with **no endurance limit** has no infinite
+life to measure against, so `DesignRepetitions` is required there and its absence refused by
+name (verbatim the static path's rule); a repetition count below one is refused at the
+`init`; and a node whose history never MOVES carries no counted cycle, so it reads NaN
+however large its steady stress — rainflow measures cycles, and a steady load is a
+static-strength question the static pair answers instead. The endurance knee also puts a
+genuine STEP in the damage function (a crossing cycle goes from nothing to `count/10^6`), so
+`D(k) = target` has no solution when the target lands inside one; the factor reported is then
+the crossing itself, and the step is the flat-line model's artefact rather than the solve's
+(Miner–Haibach is filed).
+
+Verified beyond the apply-it oracle: a ONE-cycle spectrum reaches a damage of `1/R` exactly
+when that cycle's life is R, which is the static radial factor against the curve's strength
+at R — a closed form for EVERY mean and both corrections, including the region where the
+general spectrum has none, and two entirely different constructions (a bisection over a Miner
+sum against a line intersection) agree to 1e-9 across means of -100…400 MPa; a
+constant-amplitude history's factor is the static pair's, BIT-equal against infinite life and
+to 1e-9 against a stated target; the infinite-life factor is bracketed from both sides
+(damage exactly 0 a nanometre under it, `count/10^6` a nanometre over); and the factor is
+exactly inverse in the load scale (a history scaled by 1.01 reports 1/1.01).
+
+Cost follows the target, measured on a 135-node mesh with 241 stored states and up to 93
+counted cycles per node (win-x64, Release): **3.5 ms** against infinite life, **18.2 ms
+(5.2x)** against a stated one — the counting is the shared floor under both
+(`FeaBenchmark.WhatTheSpectrumSafetyFactorCosts`).
 
 ## Refused by name, not approximated
 

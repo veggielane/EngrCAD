@@ -1690,11 +1690,84 @@ IEEE addition is commutative, so `0.5·(a + b)` cannot differ), making the damag
 exactly `count/life` as an identity rather than a tolerance. The second oracle with
 teeth is the total-variation identity `sum(2·count·range) = sum|Δ|` over the turning
 points, exact on a pseudo-random history — it holds for ANY input, so it catches a
-dropped or double-counted range on histories nobody hand-checked. What is deliberately
-absent is a variable-amplitude SAFETY factor: scaling the loads scales every cycle at
-once, so the factor to a damage target under a power-law line is an iteration against a
-stated target life — a different quantity from the static radial factor, filed rather
-than approximated.
+dropped or double-counted range on histories nobody hand-checked.
+
+### The spectrum safety factor, and the closed form's exact boundary
+
+The filed entry called the variable-amplitude factor "an iteration against a stated target
+life", which is right about the mechanism and wrong about the shape: there are TWO targets,
+and only one of them iterates. `FatigueAnalysis.LoadFactor` answers both, published per node
+as `RainflowFatigueResults.SafetyFactor`, and `RainflowFatigueOptions.DesignRepetitions`
+picks between them exactly as `FatigueOptions.DesignLife` does one layer up — null measures
+against INFINITE life, a stated R against a Miner damage of `1/R`.
+
+**Whether a closed form exists is a property of the spectrum, and stating the boundary is
+most of the design.** Damage is a sum of power-law terms, `2·n·(sigma_ar/sigma'_f)^(-1/b)`,
+so IF every cycle's equivalent amplitude were linear in the multiplier the whole sum would
+scale as `k^(-1/b)` and the factor to a damage target would be exactly `(R·D)^b` for the
+unit-load damage D — one line. Two entirely ordinary things break the linearity. The
+endurance KNEE makes cycles JOIN the sum as the multiplier grows, so the coefficient is
+piecewise and a closed form read off the unit-load damage overstates the factor; and a
+tensile mean under Goodman or Gerber makes the equivalent amplitude
+`k·a/(1 - k·m/S_ut)`, which is not a power of k at all and diverges at `k = S_ut/m` — a hard
+static-failure ceiling the factor can never reach, and which the bracket meets naturally
+because the damage there is `+infinity`.
+
+So the implementation is ONE bracketed solve for every case rather than a closed form with
+conditions, and **the closed form is kept where it is worth more — as the test oracle.** On
+a knee-less curve with no mean correction engaged it agrees with the solve BIT FOR BIT
+(1.0329781076872908 both ways); on a steel spectrum entirely above its knee, to two ulp; and
+on the two spectra that break it, it misses by a measured 4.5% (knee) and 12.9% (mean) while
+the solve lands on the target. A closed form used as the implementation would have made
+those tests tautologies.
+
+**The infinite-life target IS closed form throughout, and the reason is that it is not an
+accumulation.** "The multiplier at which damage first appears" is per-cycle: each counted
+cycle reaches the endurance limit at its own static radial factor, and the spectrum reaches
+it at the smallest of them. That is literally `FatigueAnalysis.SafetyFactor` evaluated per
+cycle against the endurance limit — the same private helper the static pair's field is built
+from, so there is one rule rather than a second formula free to drift, and a ONE-cycle
+spectrum answers bit-identically to the static pair by construction. It also prices the two
+targets apart: the default costs one more pass over cycles the counting has already
+produced (3.5 ms on a 135-node, 241-state run), a stated target about sixty damage
+evaluations per node (18.2 ms, 5.2x — `FeaBenchmark.WhatTheSpectrumSafetyFactorCosts`).
+
+**The verification with the most teeth is neither of those.** A spectrum of ONE cycle counted
+once reaches a damage of `1/R` exactly when that cycle's life is R, i.e. when its equivalent
+amplitude equals the curve's strength at R — which is precisely the static radial factor
+against that strength, and the algebra reduces term for term to `n = 1/(a/S + m/S_ut)` for
+Goodman and to the same positive root for Gerber. So a bisection over a Miner sum and a line
+intersection must agree, for every mean and both corrections, INCLUDING the tensile-mean
+region where the general spectrum has no closed form at all: measured ≤ 1e-9 relative across
+means of -100…400 MPa, both above and below a factor of 1. Beside it, the apply-it oracle
+runs through the solver (re-solve the whole history with every load case scaled by the
+measured factor, re-count, re-accumulate: the critical node's damage lands on 1.0000e-4
+against a 1e-4 target and its factor reads 1.0 to 1e-9), the infinite-life factor is
+bracketed from BOTH sides (damage exactly 0 a nanometre under it, `count/10^6` a nanometre
+over), and the factor is exactly inverse in the load scale.
+
+**Two boundaries are named rather than smoothed.** The endurance knee puts a genuine STEP in
+the damage function — a crossing cycle goes from contributing nothing to contributing
+`count/10^6` — so `D(k) = target` has no solution when the target lands inside a step; what
+is reported is then the crossing itself (the smallest multiplier at which the target is
+reached), and the step belongs to the flat-line S-N model rather than to this solve, with
+Miner–Haibach filed as the standard remedy. And a node whose history never MOVES carries no
+counted cycle at all, so it reads NaN however large its steady stress: rainflow measures
+cycles, and a steady load is a static-strength question — the static pair answers it, since
+two identical cases still carry a mean and report the `S_ut/sigma_m` margin. The refusals
+transfer verbatim from the static path: a curve with no endurance limit has no infinite life
+to measure against, so `DesignRepetitions` is required there and named in the refusal.
+
+**That second NaN has two causes and only one of them is honest**, which is the recorded
+pure-shear blind spot arriving through the spectrum rather than a new one: negating a pure
+shear tensor is a rotation of it, so both halves of a reversed shear cycle read the SAME
+signed von Mises and the series is constant — indistinguishable, at this layer, from a node
+that genuinely never moves. The factor therefore inherits the scalar equivalence's blind spot
+exactly as the damage field already does; it neither adds one nor repairs one, and the
+statement a NaN makes is "this history carries no cycle IN THE SCALAR EQUIVALENT". Worth
+stating explicitly because the factor's NaN reads stronger than the damage field's zero — an
+absent mechanism rather than an unconsumed life — while both are the same claim and both are
+wrong in the same case.
 
 ### Refused by name
 

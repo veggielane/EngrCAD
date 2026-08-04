@@ -1324,17 +1324,27 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
     `Factorize`, so a "refactorize with the same pattern" entry point is a real and bounded
     saving, and `Analyze`'s own table says the numeric pass is where the time is.
 
-- [ ] **Variable-amplitude SAFETY factor over rainflow damage.** The rainflow path
-  (landed: `Rainflow.Count` + `FatigueAnalysis.Evaluate(TransientResults, ...)`)
-  publishes damage and life-in-repetitions but deliberately no safety factor: scaling
-  the loads scales every counted cycle at once, and under a power-law S-N line the
-  damage of a scaled history is not a simple power of the factor once mean corrections
-  and the endurance cutoff engage — cycles cross the endurance limit as the factor
-  grows, so the factor to a damage target is a bracketed 1-D root find (each probe
-  re-scales the counted cycles, no re-solve needed since the stress history is linear
-  in the load) against a REQUIRED target life in repetitions. The static pair's
-  verify-by-applying oracle carries over: scale the history by the found factor and the
-  damage must land ON the target.
+- [ ] **Miner–Haibach: the sloped line past the endurance knee.** The flat S-N line beyond
+  the knee makes a cycle's damage contribution JUMP from exactly nothing to `count/10⁶` as
+  it crosses, which is a genuine step in `D(k)` — so `D(k) = target` has no solution when
+  the target lands inside one, and the spectrum load factor
+  (`FatigueAnalysis.LoadFactor`, landed) reports the crossing itself and says so. That
+  step is the model's artefact, not the solve's, and the standard variable-amplitude
+  remedy is the **Haibach modification**: continue the line past the knee at a shallower
+  slope (classically `2b − 1`, i.e. `(2b−1)` in the same Basquin exponent), because under
+  a spectrum the small cycles below the limit DO accumulate damage once larger ones have
+  started cracks — which is exactly why the flat line is a constant-amplitude idea. It is
+  a change to `SnCurve` (`LifeAt`/`StressAt` beyond the knee) rather than to the fatigue
+  arithmetic, so the whole rainflow and static machinery inherits it; the design questions
+  are whether it is a `SnCurve` MODE (a derived curve like `WithFactors`, keeping the
+  transcribed row pristine) and what it does to the infinite-life safety factor, which
+  under a sloped line no longer exists as such — the honest answer is probably that the
+  Haibach form REQUIRES `DesignRepetitions` for the same reason aluminium does, which
+  would make the refusal one rule instead of two. The oracle carries over unchanged (scale
+  the history by the factor, the damage lands on the target) and the step's disappearance
+  is itself assertable: `D(k)` becomes continuous, so the two-sided bracket the
+  infinite-life factor is pinned with would read a *small* damage rather than exactly
+  zero.
 - [ ] **Log-scale colour mapping residuals** (the LEGEND half ✅ landed: `FieldLegend`
   reads the `log10(…)` units declaration — `TryLogUnits`/`TickMarks` — and prints
   anti-logged decade ticks, end ticks stating the true range, title in the base units
