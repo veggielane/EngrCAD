@@ -400,6 +400,11 @@ public static class SheetMetalSurgery
             axisSpan[0] - Math.Min(axisStart, axisEnd),
             Math.Max(axisStart, axisEnd) - axisSpan[1],
         ];
+        // A BACKSTOP rather than a live guard, and it is worth saying which: an end past the
+        // weld tier necessarily has a stub, because this stub and Locate's flush test are
+        // the same length measured against the same tier. It stays because this method
+        // takes its span as arguments rather than deriving it — the span's own positivity
+        // is asked of AddEdgeFlange, not restated here.
         for (int k = 0; k < 2; k++)
         {
             if (!flush[k] && stub[k] <= Weld)
@@ -408,8 +413,6 @@ public static class SheetMetalSurgery
                     $"{stub[k]:g6} of an edge {Math.Abs(axisEnd - axisStart):g6} long. Make the flange flush " +
                     "with that end of its edge, or move it further in.");
         }
-        if (axisSpan[1] - axisSpan[0] <= Weld)
-            throw new NotSupportedException("The flange's span along the bend line must be positive.");
 
         // Cut in the EDGE's own parameter order, so each later parameter still lies inside
         // whatever the previous cut left. Every parameter is expressed on the SAME base
