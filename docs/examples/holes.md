@@ -94,7 +94,7 @@ hardest member of the family rather than the easiest: the flat end is then cut a
 diameter, straight through the one point of that face where its own parameterization — an
 azimuth about the pole — does not exist.
 
-```csharp
+```csharp run:holes-diametral
 var level = SketchPlane.At((0, -15, 10), Vector3d.UnitX, Vector3d.UnitZ);   // axis ON the top face
 
 var halved = Shape.Extrude(Sketch.Rectangle(40, 30), 10)
