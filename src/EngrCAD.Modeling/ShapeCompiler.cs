@@ -644,7 +644,10 @@ internal static class ShapeCompiler
                 Decompose(m, shape, out _, out _, out double sheetScale); // rigid + uniform only
                 var body = sheet.Body;
                 var effective = m * body.Plane.ToMatrix();
-                var (baseOuter, baseHoles) = body.BaseSketch.ToProfiles();
+                // BaseOutline, not BaseSketch: a bend relief is a NOTCH in the blank rather
+                // than a cut in the folded body, so the sheet is extruded from the outline
+                // the reliefs left. With none declared the two are the same object.
+                var (baseOuter, baseHoles) = body.BaseOutline.ToProfiles();
                 var flat = SolidFactory.Extrude(
                     TransformProfile(baseOuter, effective),
                     effective.TransformVector((0, 0, body.Spec.Thickness)),
