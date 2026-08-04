@@ -63,7 +63,7 @@ scene.Add(part);
 Yellow is material worth keeping, dark blue is material worth removing. The load path is a
 tapered arm running from the deep root to the loaded corner — deep where the bending moment is
 largest and slender where it is not — with the boundary between keep and remove sharp rather
-than smeared: this run comes out at a **discreteness of 0.118**, so the penalisation has very
+than smeared: this run comes out at a **discreteness of 0.117**, so the penalisation has very
 nearly decided.
 
 Note that this is the field on the design space's SKIN. That is the honest thing to show,
@@ -194,7 +194,7 @@ scene.Add(new Part("structure", solid));
 
 ![The structure extracted at a density threshold of 0.5](images/fea-topology-extracted.png)
 
-At a threshold of 0.5 this comes out as **0.3511** of the design space against the **0.35** that
+At a threshold of 0.5 this comes out as **0.3452** of the design space against the **0.35** that
 was asked for — the gap is small here precisely because the field is nearly discrete, and on a
 grey design it would not be. That is the number to read before believing a threshold, and it is
 why `ExtractedVolumeFraction` exists as a measurement rather than the 0.5 being assumed to be
