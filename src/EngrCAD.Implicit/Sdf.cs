@@ -122,6 +122,66 @@ public abstract class Sdf
             distances[i] = Evaluate(new Vector3d(x[i], y[i], z[i]));
     }
 
+    /// <summary>
+    /// An upper bound on this field's Lipschitz constant over <paramref name="region"/>:
+    /// the largest amount the reported value can change per unit of movement, anywhere in
+    /// that region. <b>1 by default</b>, which is the whole engine's standing contract —
+    /// every primitive here is an exact distance and every operator built before the domain
+    /// operators either combines values (min/max/smooth-min, a convex combination of the
+    /// operands' gradients) or moves points by an isometry.
+    /// <para>
+    /// It exists because the domain operators break that contract on purpose. A twist, a
+    /// bend and a taper compress or stretch space, so the composed field's value changes
+    /// faster than the point moves, and every consumer that reasons "a value of |d| proves
+    /// there is no surface within |d|" — <c>SurfaceNets</c>' block cull, the narrow-band
+    /// octree, the projection target's step — would then be unsound in the one direction
+    /// that matters: it would silently drop geometry. Reporting the bound lets each of them
+    /// widen by exactly the right factor.
+    /// </para>
+    /// <para>
+    /// <b>Why the bound takes a region</b> rather than being a plain number: for a twist the
+    /// local factor grows with the query point's distance from the axis, so no finite
+    /// constant is valid over all of space. A consumer knows the region it is about to
+    /// sample, asks once, and gets a number valid everywhere inside it. An unbounded region
+    /// legitimately yields <see cref="double.PositiveInfinity"/>, and a consumer must treat
+    /// that as "cull nothing" rather than as an error.
+    /// </para>
+    /// <para>
+    /// <b>Overriding is mandatory for any node that wraps a child</b>, even when the node
+    /// itself is 1-Lipschitz: a wrapper that inherits the default silently claims 1 for a
+    /// twisted subtree. The bound is verified numerically over the whole node catalogue by
+    /// <c>LipschitzBoundTests</c>, which measures secants and asserts the reported bound
+    /// covers them.
+    /// </para>
+    /// </summary>
+    public virtual double LipschitzBound(in Aabb region) => 1;
+
+    /// <summary>
+    /// The compilation seam: emit this node's value as a LINQ expression over the builder's
+    /// current coordinates, so <see cref="Compile"/> can flatten the whole AST into one
+    /// delegate. The default returns a call back into this node's own
+    /// <see cref="Evaluate(in Vector3d)"/>, which is exact but does not flatten — that is the
+    /// right answer for a node whose evaluation is a loop, a table lookup or a search
+    /// (a sampled grid, a thread, a planar region, a mesh field).
+    /// <para>
+    /// An override must mirror this node's scalar <see cref="Evaluate(in Vector3d)"/> term
+    /// for term in the same association order, exactly as an
+    /// <see cref="EvaluateBatch"/> override must — and for the same reason. That the override
+    /// lives beside the scalar form rather than in a switch inside the compiler is the point:
+    /// two copies of a formula in different files drift, and this one is required to be
+    /// bit-identical.
+    /// </para>
+    /// <para>
+    /// <b>Internal on purpose.</b> A node defined outside this assembly — <c>MeshSdf</c> is
+    /// the live example — cannot override it and takes the fallback, which is right rather
+    /// than merely convenient: a BVH nearest-triangle search is not an arithmetic expression,
+    /// so there is nothing to flatten, and a public seam would advertise otherwise while
+    /// widening the API surface to the whole builder vocabulary.
+    /// </para>
+    /// </summary>
+    internal virtual System.Linq.Expressions.Expression BuildExpression(SdfExpression builder) =>
+        builder.Fallback(this);
+
     /// <summary>Outward surface normal by central differences.</summary>
     public Vector3d Normal(in Vector3d point, double epsilon = 1e-6)
     {
@@ -267,6 +327,271 @@ public abstract class Sdf
 
     /// <summary>Torus about the Z axis: ring of radius <paramref name="majorRadius"/> in the XY plane.</summary>
     public static Sdf Torus(double majorRadius, double minorRadius) => new TorusSdf(majorRadius, minorRadius);
+
+    /// <summary>
+    /// Box centred at the origin with the given full side lengths, its edges and corners
+    /// rounded by <paramref name="radius"/>. <b>Exact distance</b> — it is the box of
+    /// half-extents (size/2 − radius) offset outward by the radius, which is the definition
+    /// of the rounding, so no approximation enters.
+    /// </summary>
+    public static Sdf RoundedBox(double sizeX, double sizeY, double sizeZ, double radius)
+    {
+        if (radius < 0)
+            throw new ArgumentOutOfRangeException(nameof(radius), "Corner radius must be non-negative.");
+        var half = new Vector3d(sizeX / 2 - radius, sizeY / 2 - radius, sizeZ / 2 - radius);
+        if (half.X < 0 || half.Y < 0 || half.Z < 0)
+            throw new ArgumentOutOfRangeException(nameof(radius),
+                $"Corner radius {radius} exceeds half the smallest side of the " +
+                $"{sizeX} x {sizeY} x {sizeZ} box.");
+        return new RoundedBoxSdf(half, radius);
+    }
+
+    /// <summary>
+    /// Axis-aligned ellipsoid with the given semi-axes. <b>A bound, not an exact distance</b>
+    /// — a point's distance to an ellipsoid is a quartic root with no closed form, so this is
+    /// Quilez's scaled-implicit approximation, whose relative error grows with eccentricity
+    /// (measured: see <see cref="EllipsoidSdf"/> and the implicit engine's README for the
+    /// numbers, and note the value is <em>not</em> a one-sided bound). The sign is exact
+    /// everywhere, and equal semi-axes reduce the expression algebraically to the sphere's
+    /// exact distance.
+    /// </summary>
+    public static Sdf Ellipsoid(double semiAxisX, double semiAxisY, double semiAxisZ)
+    {
+        if (semiAxisX <= 0 || semiAxisY <= 0 || semiAxisZ <= 0)
+            throw new ArgumentOutOfRangeException(nameof(semiAxisX), "Semi-axes must be positive.");
+        return new EllipsoidSdf(new Vector3d(semiAxisX, semiAxisY, semiAxisZ));
+    }
+
+    /// <summary>
+    /// Square-based pyramid along +Z: the base is <paramref name="baseSize"/> square in the
+    /// z = 0 plane, the apex sits at (0, 0, <paramref name="height"/>). Exact distance
+    /// (Quilez's <c>sdPyramid</c>, converted to Z-up and scaled off the unit form).
+    /// </summary>
+    public static Sdf Pyramid(double baseSize, double height)
+    {
+        if (baseSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(baseSize));
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+        return new PyramidSdf(baseSize, height);
+    }
+
+    /// <summary>
+    /// The convex hull of two spheres — a capsule whose two ends may differ in radius, so
+    /// the side is a cone tangent to both caps. Along Z: radius
+    /// <paramref name="bottomRadius"/> at z = 0 and <paramref name="topRadius"/> at
+    /// z = <paramref name="height"/>. <b>Exact distance</b> (Quilez's <c>sdRoundCone</c>).
+    /// </summary>
+    public static Sdf RoundCone(double bottomRadius, double topRadius, double height)
+    {
+        if (bottomRadius <= 0 || topRadius <= 0)
+            throw new ArgumentOutOfRangeException(nameof(bottomRadius), "Radii must be positive.");
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+        if (Math.Abs(bottomRadius - topRadius) >= height)
+            throw new ArgumentOutOfRangeException(nameof(height),
+                $"One sphere contains the other: |{bottomRadius} - {topRadius}| must be less than the " +
+                $"centre separation {height}.");
+        return new RoundConeSdf(bottomRadius, topRadius, height);
+    }
+
+    /// <summary>
+    /// A chain link: a torus of major radius <paramref name="majorRadius"/> and minor radius
+    /// <paramref name="minorRadius"/> about the Z axis, pulled apart along Y so its two
+    /// straight runs are <paramref name="halfLength"/> long either side of the origin.
+    /// <b>Exact distance</b> (Quilez's <c>sdLink</c>): the elongation splits the torus's own
+    /// exact field along one axis, which is an isometry-per-piece and so loses nothing.
+    /// </summary>
+    public static Sdf Link(double majorRadius, double minorRadius, double halfLength)
+    {
+        if (majorRadius <= 0 || minorRadius <= 0)
+            throw new ArgumentOutOfRangeException(nameof(majorRadius), "Radii must be positive.");
+        if (halfLength < 0)
+            throw new ArgumentOutOfRangeException(nameof(halfLength), "Half-length must be non-negative.");
+        return new LinkSdf(majorRadius, minorRadius, halfLength);
+    }
+
+    /// <summary>
+    /// Regular <paramref name="sides"/>-gon prism along Z, centred at the origin: the
+    /// polygon has circumradius <paramref name="circumradius"/> with a vertex on +X, and the
+    /// prism spans z ∈ [−height/2, +height/2]. <b>Exact distance</b> — the 2D section
+    /// distance is exact (nearest point over the polygon's own edges, sign by half-plane
+    /// membership) and the axial combination is the cylinder's, which is exact for any
+    /// convex section. <c>sides: 3</c> and <c>sides: 6</c> are the triangular and hexagonal
+    /// prisms.
+    /// </summary>
+    public static Sdf Prism(int sides, double circumradius, double height)
+    {
+        if (sides < 3)
+            throw new ArgumentOutOfRangeException(nameof(sides), "A prism needs at least three sides.");
+        if (circumradius <= 0)
+            throw new ArgumentOutOfRangeException(nameof(circumradius));
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+        var polygon = new Vector2d[sides];
+        for (int i = 0; i < sides; i++)
+        {
+            double a = 2 * Math.PI * i / sides;
+            polygon[i] = new Vector2d(circumradius * Math.Cos(a), circumradius * Math.Sin(a));
+        }
+        return new ConvexPrismSdf(polygon, height / 2, PrismAxis.Z);
+    }
+
+    /// <summary>
+    /// Rectangular wedge along +Z, centred at the origin — the field twin of
+    /// <c>Shape.Wedge</c> and of OCCT's <c>BRepPrimAPI_MakeWedge</c>, with the same
+    /// parameters: the base at z = −sizeZ/2 is <paramref name="sizeX"/> ×
+    /// <paramref name="sizeY"/>, and the top at z = +sizeZ/2 keeps the same y but is
+    /// <paramref name="topX"/> wide, centred at x = <paramref name="topOffsetX"/>.
+    /// <b>Exact distance</b>: the XZ section is a convex trapezoid whose 2D distance is
+    /// exact, swept along Y.
+    /// </summary>
+    public static Sdf Wedge(double sizeX, double sizeY, double sizeZ, double topX = 0, double topOffsetX = 0)
+    {
+        if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeX), "Wedge sides must be positive.");
+        if (topX < 0)
+            throw new ArgumentOutOfRangeException(nameof(topX), "The top width cannot be negative.");
+        double hx = sizeX / 2, hz = sizeZ / 2;
+        double t0 = topOffsetX - topX / 2, t1 = topOffsetX + topX / 2;
+        // Section in the XZ plane, counter-clockwise in (x, z).
+        Vector2d[] section = topX > 0
+            ? [new(-hx, -hz), new(hx, -hz), new(t1, hz), new(t0, hz)]
+            : [new(-hx, -hz), new(hx, -hz), new(t1, hz)];
+        return new ConvexPrismSdf(section, sizeY / 2, PrismAxis.Y);
+    }
+
+    /// <summary>
+    /// The convex solid bounded by the given half-spaces (each solid where
+    /// <c>dot(normal, p) ≤ offset</c>) — the general plane-bounded convex primitive, and the
+    /// escape hatch for shapes with no factory.
+    /// <para>
+    /// Fidelity is the max-of-half-spaces field: <b>exact inside</b> (the distance to the
+    /// nearest face plane IS the distance to the boundary for a convex body) and a
+    /// <b>lower bound outside</b>, which understates near an edge or a corner because the
+    /// nearest feature is then an edge rather than a face. That is exactly the engine's
+    /// standing contract — correct sign everywhere, magnitude never nearer than the truth —
+    /// so it meshes, culls and offsets soundly.
+    /// </para>
+    /// <para>
+    /// Unlike <c>Sdf.Intersection</c> over the same half-spaces, this reports <b>finite
+    /// bounds</b>: the vertices are enumerated from every triple of planes and kept when they
+    /// satisfy all the others, so a polygonizer can size its own region. A set of planes that
+    /// does not enclose a bounded region is refused by name.
+    /// </para>
+    /// </summary>
+    public static Sdf ConvexPolyhedron(IReadOnlyList<(Vector3d Normal, double Offset)> halfSpaces) =>
+        ConvexPolyhedronSdf.Create(halfSpaces);
+
+    // ---- domain operations ----
+
+    /// <summary>
+    /// Repeats this solid on an infinite lattice with the given per-axis
+    /// <paramref name="spacing"/>; an axis whose spacing is 0 is not repeated. The domain map
+    /// is a translation per cell, so it is an <b>isometry and distances stay exact</b> —
+    /// unlike the twist/bend/taper family below.
+    /// <para>
+    /// The child's bounds must fit within one cell along every repeated axis, and that is
+    /// enforced rather than assumed: outside that condition a query point can be inside an
+    /// instance the evaluation never looks at, and the <em>sign</em> would be wrong. Within
+    /// it, this node evaluates the child once per neighbouring cell along each repeated axis
+    /// (two per axis, so two, four or eight evaluations) and takes the minimum — the single
+    /// nearest-cell form every shader-toy implementation uses is <em>discontinuous</em> at a
+    /// cell boundary for a child that is not symmetric about its cell centre, which would
+    /// make the field non-Lipschitz and the polygonizer's cull unsound.
+    /// </para>
+    /// <para>Bounds are infinite along every repeated axis.</para>
+    /// </summary>
+    public Sdf Repeat(in Vector3d spacing) => RepeatSdf.Create(this, spacing, null);
+
+    /// <summary>
+    /// Repeats this solid a bounded number of times: <paramref name="counts"/> instances
+    /// along each axis, the first at the child's own position and the rest at successive
+    /// multiples of <paramref name="spacing"/> along +axis (the linear-pattern convention).
+    /// A count of 1 (or less) leaves that axis alone. Bounds are finite, so a limited
+    /// repetition polygonizes directly. See <see cref="Repeat(in Vector3d)"/> for the
+    /// fidelity contract and the fits-in-a-cell precondition — both are identical here.
+    /// </summary>
+    public Sdf Repeat(in Vector3d spacing, in Vector3i counts) => RepeatSdf.Create(this, spacing, counts);
+
+    /// <summary>
+    /// Twists this solid about the Z axis: the slice at height z is rotated by
+    /// <paramref name="radiansPerUnit"/> · z.
+    /// <para>
+    /// <b>Distance fidelity: a bound, and the field is not 1-Lipschitz.</b> The domain map is
+    /// a rotation whose angle depends on z, which is not an isometry — it shears space — so
+    /// the value <em>over-estimates</em> the true distance by up to the factor
+    /// <see cref="LipschitzBound"/> reports, and that factor grows with the query point's
+    /// distance from the axis. The sign stays exact everywhere. Every consumer that reasons
+    /// from |d| asks for the bound, so meshing stays sound; do not sphere-trace this field or
+    /// offset it by more than the surface neighbourhood without dividing by the bound
+    /// yourself.
+    /// </para>
+    /// <para>Deliberately scalar-only in the batch path: the map needs
+    /// <see cref="Math.Sin"/>/<see cref="Math.Cos"/> and no vector transcendental reproduces
+    /// them bit for bit — the same verdict that keeps the gyroid scalar. The child below it
+    /// still vectorizes, which is where the time goes.</para>
+    /// </summary>
+    public Sdf Twist(double radiansPerUnit) => new TwistSdf(this, radiansPerUnit);
+
+    /// <summary>
+    /// Bends this solid about the Z axis: the slice at x is rotated in the XY plane by
+    /// <paramref name="curvature"/> · x, so a bar along +X curves into an arc of radius
+    /// 1/<paramref name="curvature"/> while its Z extent is untouched — the sheet-metal
+    /// gesture, in field form.
+    /// <para>Same fidelity contract as <see cref="Twist"/>: a bound rather than a distance,
+    /// a reported Lipschitz factor above 1, an exact sign, and a scalar-only batch path.</para>
+    /// </summary>
+    public Sdf Bend(double curvature) => new BendSdf(this, curvature);
+
+    /// <summary>
+    /// Tapers this solid along Z: its cross-section is scaled by
+    /// <paramref name="bottomScale"/> at the bottom of the child's own bounds and by
+    /// <paramref name="topScale"/> at the top, interpolated linearly between and <b>held
+    /// constant beyond</b> — which is what keeps the scale strictly positive everywhere and
+    /// so keeps the domain map finite at every query point rather than only inside the model.
+    /// <para>Same fidelity contract as <see cref="Twist"/> (a bound, a reported Lipschitz
+    /// factor, an exact sign), except that the map is division-only, so the batch path
+    /// vectorizes. Requires a child with a finite Z extent.</para>
+    /// </summary>
+    public Sdf Taper(double bottomScale, double topScale) => new TaperSdf(this, bottomScale, topScale);
+
+    /// <summary>
+    /// Stretches this solid by splitting it at the origin and pulling the halves
+    /// <paramref name="amounts"/> apart along each axis — the standard way to turn a sphere
+    /// into a capsule or a rounded box without a second primitive.
+    /// <para>The domain map <c>p − clamp(p, −h, h)</c> is 1-Lipschitz per component, so the
+    /// field <b>keeps the child's own fidelity and its Lipschitz bound</b>; there is no
+    /// widening here. It stretches the child <em>about the origin</em>, so a child that does
+    /// not straddle the origin leaves the middle stretch hollow — that is the operation, not
+    /// a defect.</para>
+    /// <para>Fidelity, stated exactly because the two halves differ: <b>outside the solid the
+    /// value is the child's own distance to the stretched body</b> (an elongated sphere is
+    /// bit-identical to <see cref="RoundedBox"/> there), while <b>inside the stretched core
+    /// it is a strict lower bound</b> — every coordinate clamps, so the map lands on the
+    /// origin and reports the child's centre value however deep the elongated body is. Exact
+    /// sign, magnitude never nearer than the truth: the engine's contract.</para>
+    /// </summary>
+    public Sdf Elongate(in Vector3d amounts) => new ElongateSdf(this, amounts);
+
+    /// <summary>
+    /// Adds a sinusoidal ripple of the given <paramref name="amplitude"/> and per-axis
+    /// <paramref name="frequency"/> (radians per unit) to this field — the classic
+    /// surface-displacement modifier, for knurling and texture.
+    /// <para>
+    /// <b>This is the one operator here that is not a distance at all.</b> It adds a value
+    /// rather than moving a point, so the solid it defines is exactly <c>{d + ripple &lt; 0}</c>
+    /// — the sign is exact <em>for that solid</em> by definition — while the magnitude is
+    /// only a bound and the Lipschitz constant rises by <c>amplitude · |frequency|</c>.
+    /// Bounds grow by the amplitude, which is right wherever the child's magnitude is a true
+    /// distance; a child whose field under-reports far from its surface (a CSG difference
+    /// near the subtracted tool's fictitious faces) can have the ripple raise material
+    /// outside those bounds, so displace close to the geometry you mean.
+    /// </para>
+    /// <para>Scalar-only in the batch path (<see cref="Math.Sin"/>), like the gyroid; the
+    /// child underneath still vectorizes.</para>
+    /// </summary>
+    public Sdf Displace(double amplitude, in Vector3d frequency) => new DisplaceSdf(this, amplitude, frequency);
 
     public static Sdf Capsule(in Vector3d a, in Vector3d b, double radius) => new CapsuleSdf(a, b, radius);
 
@@ -506,4 +831,31 @@ public abstract class Sdf
         ArgumentNullException.ThrowIfNull(b);
         return blendDistance <= 0 ? a.Union(b) : new FalloffBlendSdf(a, b, blendDistance, kernel);
     }
+
+    // ---- compilation ----
+
+    /// <summary>
+    /// Compiles this AST to a single flat delegate (LINQ expression tree → IL → JIT) and
+    /// returns a node that evaluates it, so a deep CSG tree costs one call instead of one
+    /// virtual dispatch per node per query. Composes like any other node: the result is an
+    /// <see cref="Sdf"/> with the same <see cref="Bounds"/> and the same
+    /// <see cref="LipschitzBound"/>.
+    /// <para>
+    /// <b>Bit-for-bit identical to the scalar path</b>, by construction rather than by
+    /// testing: the emitted expression is the node's own scalar expression, term for term,
+    /// calling the same <see cref="Math"/> methods in the same association order. A node the
+    /// compiler does not know how to inline (a sampled grid, a thread, a planar region, a
+    /// mesh field from another assembly) is emitted as a call to its own
+    /// <see cref="Evaluate(in Vector3d)"/>, so compilation always succeeds and is always
+    /// exact — it simply stops paying off for that subtree.
+    /// </para>
+    /// <para>
+    /// <b>Read <c>SdfCompiler</c>'s remarks before reaching for this.</b> Measured, it buys
+    /// 1.02× on a lone sphere and 2.67× on a 24-node union chain — the win tracks how much of
+    /// the cost is dispatch — and it <em>loses to the SIMD batch path by 1.2–3.4×</em>, which
+    /// is what every bulk consumer already uses. It is for callers genuinely stuck with
+    /// per-point queries, not a faster way to sample a grid.
+    /// </para>
+    /// </summary>
+    public Sdf Compile() => SdfCompiler.Compile(this);
 }

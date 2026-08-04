@@ -17,10 +17,26 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
   SIMD seam, chunked identically, so they agree bit for bit.
 - **SIMD batch evaluation** (`BatchEvaluation.cs`) — the batch entry point is the
   throughput path, and it is vectorized; see [Batch evaluation](#batch-evaluation-simd).
-- **Primitives** (exact distances, Quilez forms): sphere, box, cylinder, cone
-  (`Sdf.Cone(r1, r2, height)` capped frustum; a zero radius gives a pointed apex),
-  torus, capsule, half-space, and a gyroid lattice (approximate distance, unbounded —
-  intersect with a finite solid).
+- **`Sdf.LipschitzBound(region)`** — how fast this field's value can change per unit of
+  movement, anywhere in a stated region. 1 by default, which is the whole engine's standing
+  contract; the domain operators below break it on purpose and report by how much. See
+  [The Lipschitz bound](#the-lipschitz-bound-and-why-it-exists).
+- **Primitives**: sphere, box, cylinder, cone (`Sdf.Cone(r1, r2, height)` capped frustum;
+  a zero radius gives a pointed apex), torus, capsule, half-space, **rounded box**,
+  **round cone** (the hull of two spheres), **link**, **regular n-gon prism**
+  (`Sdf.Prism(sides, r, h)` — `3` and `6` are the triangular and hexagonal prisms),
+  **wedge** (the field twin of `Shape.Wedge`) and **pyramid**, all exact distances; plus
+  **`Sdf.Ellipsoid`** (a bound — see [The ellipsoid](#the-ellipsoid-the-one-primitive-with-no-closed-form)),
+  **`Sdf.ConvexPolyhedron(halfSpaces)`** (exact inside, a lower bound outside, with FINITE
+  bounds by vertex enumeration where `Sdf.Intersection` over the same half-spaces reports
+  infinity), and a gyroid lattice (approximate distance, unbounded — intersect with a finite
+  solid).
+- **Domain operations** (`DomainOperators.cs`): `Repeat(spacing)` / `Repeat(spacing, counts)`,
+  `Twist`, `Bend`, `Taper`, `Elongate`, `Displace` — see
+  [Domain operations](#domain-operations).
+- **`Sdf.Compile()`** — the AST flattened to one delegate via expression trees, bit-for-bit
+  identical to the scalar path. Measured, and mostly a decline: see
+  [Compiling an AST](#compiling-an-ast).
 - **`Sdf.Thread`** (`ThreadSdf.cs`) — helical thread solid about +Z (straight-flanked
   trapezoidal form; the ISO 60° V-profile is the intended special case): the 2D profile
   repeated along the helical coordinate w = z − pitch·θ/2π. **Sign is exact** (wrapped
@@ -94,6 +110,171 @@ a known scale should pass one relative to it, since a central difference's round
 is ~eps·|d|/h. `SurfaceNets` passes 1e-4 of its grid cell, which keeps that floor under
 1e-9 at every resolution while staying far too small to straddle any feature the grid
 resolves.
+
+## Domain operations
+
+A domain operation moves the QUERY POINT rather than combining two values, which is what
+makes it cheap: a lattice of ten thousand instances costs one primitive evaluation per
+neighbouring cell. The file divides cleanly in two, and the division is the design.
+
+**Isometries — the distance stays a distance.** `Translate`, `Rotate`, `Mirror` and
+`Repeat` move points without changing lengths, so composing a field with them changes
+nothing about what the value means. `Elongate` joins them: its map is 1-Lipschitz per
+component, exact outside the stretched body (an elongated sphere is bit-identical to
+`RoundedBox`) and a strict lower bound inside the clamped core.
+
+**Non-isometries — the value stops being a distance.** `Twist`, `Bend` and `Taper` shear
+or stretch space, so the composed value changes faster than the query point moves. What
+survives is the **sign**, exactly (the solid is exactly the pre-image of the child); what
+does not is the magnitude, which becomes an over-estimate by at most the factor
+`LipschitzBound` reports. `Displace` is a fourth case and the odd one: it adds a value
+rather than moving a point, so it is not a distance at all — the solid is exactly
+`{d + ripple < 0}` by definition, and the Lipschitz constant rises by `amplitude · |frequency|`.
+
+**Repetition visits two cells per repeated axis, and that is not a refinement — it is the
+correctness condition.** The single nearest-cell form every shader implementation uses is
+*discontinuous* at a cell boundary for a child that is not symmetric about its cell centre,
+because the map jumps by a whole spacing there; a discontinuous field is Lipschitz at no
+constant, so the polygonizer's cull could not be widened to cover it and it would report
+surface where there is none. Visiting both neighbours makes the field continuous AND makes
+the sign exact, given one enforced precondition: the child's bounds must fit inside one
+cell. Outside that, a query point can lie inside an instance the evaluation never looks at
+— which is a wrong SIGN, the one thing this engine cannot absorb — so it is refused by name
+with the span it measured, rather than left as a caveat. The identity that verifies it:
+a lattice must equal an explicit `Sdf.Union` of translated copies **bit for bit**, since
+both spell `child(p − spacing·n)`.
+
+**One derivation covers all three non-isometries.** Each of their Jacobians reduces, after
+an orthogonal change of basis (free — singular values are invariant under one), to a 2×2 of
+the form `[[g, w], [0, 1]]` beside an untouched unit direction. `DomainMath.ShearedScaleNorm`
+is that matrix's spectral norm in closed form, and the three supply their own `(g, w)`:
+
+| operator | g | w | note |
+|---|---|---|---|
+| twist | 1 | `rate · r` | reduces to the tidy `(k + √(k²+4))/2` |
+| bend | `1 − k·y` | `k·x` | the Jacobian is this matrix transposed; a matrix and its transpose share singular values |
+| taper | `1/f` | `r·f′/f²` | beside a second `1/f` direction |
+
+The function increases in both arguments, so substituting each one's largest magnitude over
+a region bounds the norm over that whole region.
+
+## The Lipschitz bound, and why it exists
+
+`Sdf.LipschitzBound(region)` reports an upper bound on how fast the value can change per
+unit of movement. It is **1 for everything that existed before the domain operators** —
+every primitive here is an exact distance, and every operator either combines values (min,
+max and the polynomial smooth min, whose gradient is a *convex combination* `h·∇a + (1−h)·∇b`
+of its operands') or moves points by an isometry.
+
+It exists because three consumers all reason from |d| in the same way — *a value of |d|
+proves there is no surface within |d| of here* — and that is false by exactly this factor
+for a twisted, bent or tapered field:
+
+- `SurfaceNets`' block cull skips a block when `|d(centre)| > L·R`;
+- the narrow-band octree skips a node when `|d(centre)| − L·R > bandWidth`;
+- `SdfProjectionTarget` steps by `|d| / L`, which is what keeps its one-sidedness guarantee
+  (the surface is at least `|d|/L` away in every direction, so a step of that length cannot
+  overshoot however wrong the gradient direction is).
+
+Unwidened, each of them would drop geometry **silently**, which is why the bound is asked
+for rather than assumed. It takes a REGION rather than being a plain number because a
+twist's local factor grows with distance from the axis, so no finite constant is valid over
+all of space; a consumer knows the region it is about to sample and asks once. An infinite
+bound (an unbounded field under such an operator) means "cull nothing", which is always
+correct.
+
+**Overriding it is mandatory for any node that wraps a child**, even one that is itself
+1-Lipschitz — a wrapper that inherits the default silently claims 1 for a twisted subtree.
+`LipschitzBoundTests` measures secants over the whole catalogue with a twist deliberately
+buried inside every wrapper, and includes a wrapper that forgets to propagate, asserted to
+be caught: a guard that has not been shown to fire is not a guard.
+
+**One pre-existing gap this surfaced.** A **sampled grid is measurably steeper than what
+went into it, by up to √3**: each first difference of the trilinear interpolant spans one
+cell so each partial inherits the source's bound, but all three can reach it at once. That
+is attained rather than merely permitted — baking `max(x, y, z)`, a 1-Lipschitz field, onto
+the unit cell gives the interpolant `1 − (1−x)(1−y)(1−z)`, whose gradient at the corner is
+exactly (1, 1, 1). So `Sdf.Sampled` had been breaking the assumption the cull rests on.
+Nothing in the repository reached the combination (no production path and no rendered
+example bakes a grid and then polygonizes it), which is why it had never surfaced;
+`SampledGridSdf` now reports `√3 ×` its source's bound.
+
+## The ellipsoid: the one primitive with no closed form
+
+A point's distance to an ellipsoid is the root of a degree-6 polynomial, so every practical
+ellipsoid field is an approximation. `Sdf.Ellipsoid` uses the standard scaled-implicit form
+`k0(k0−1)/k1`. Rather than repeat the folklore that "the error grows with eccentricity",
+here is the measurement against an exact oracle — the Lagrange-multiplier condition
+`Σ p_i²r_i²/(r_i²+λ)² = 1`, one scalar equation, strictly decreasing, bisected to machine
+precision — as reported distance over true distance:
+
+| aspect ratio | 1 | 1.11 | 1.25 | 1.67 | 3 | 4 | 10 |
+|---|---|---|---|---|---|---|---|
+| **outside** | 1.000 | 0.996 | 0.983 | 0.916 | 0.675 | 0.544 | 0.238 |
+| **inside** | 1.000 | 1.017 | 1.081 | 1.369 | 2.076 | 2.673 | 6.585 |
+
+So outside the solid it is a genuine **lower bound** — never nearer than the truth, the
+engine's standing contract — and equal semi-axes reduce it algebraically to the sphere's
+exact distance. Inside it **over-reports depth**, which is harmless for meshing and for the
+cull (both argue from the Lipschitz bound rather than from one-sidedness) and is why the
+projection target divides its step. The sign is exact everywhere, and there is one genuine
+singularity: at the exact centre the limit is direction-dependent over the semi-axes, and
+the value returned there is `−min(semi-axis)`, the true distance.
+
+Its Lipschitz bound is `2 + (rmax/rmin)²`, derived (two substitutions —
+`|∇k1| ≤ k1/rmin²` because every term carries a `1/r_i²`, and `k1 ≥ k0/rmax`) rather than
+fitted, and valid for `k0 ≥ ½`. The slack is stated because it is large: the measured
+supremum runs 0.26–0.55 of it.
+
+**The measurement itself carried a lesson.** The first oracle was a dense scan over the
+ellipsoid's own parameterization, and its resolution error swamps the quantity being
+measured near the surface — it reported an 86% "error" for a **sphere**, where the formula
+is exact. An oracle whose error is comparable to the effect is not an oracle.
+
+**The pyramid's published closed form did not survive the same treatment.** Quilez's
+`sdPyramid` computes the distance to the pyramid's LATERAL surface and uses the base plane
+only for the sign, so wherever the base FACE is nearest it reports the lateral distance:
+measured on a 10-wide, 12-tall pyramid, **5.831 against a true 3.0** directly below the base
+centre. Both errors are OVER-estimates, the one direction this engine cannot absorb. So
+`Sdf.Pyramid` takes the distance over its own six boundary triangles through Core's
+`Distance3d.ClosestPointOnTriangle` — six Voronoi-region tests where a closed form would
+cost one, and the price of a field that means what the rest of the engine assumes.
+
+## Compiling an AST
+
+`Sdf.Compile()` flattens the whole tree into one delegate (LINQ expression tree → IL → JIT),
+removing a virtual dispatch per node per query. It is **bit-for-bit identical to the scalar
+path by construction rather than by testing**: each node emits its OWN expression, term for
+term, calling the same `Math` methods in the same association order. That the emitter is a
+virtual on the node rather than a type switch inside the compiler is the load-bearing
+decision — a switch would be a second copy of every formula, free to drift from the one it
+claims to mirror. A node with no expression form (a sampled grid, a thread, a planar region,
+a `MeshSdf` from another assembly) emits a call back into its own `Evaluate`, so compilation
+always succeeds and is always exact; it simply stops paying for that subtree.
+
+Measured (win-x64 i9-9900K, Release, best of five passes after a wall-clock warm-up budget;
+`SdfCompilerTests.Measure_ScalarVersusCompiledVersusBatch` is the harness):
+
+| case | scalar walk | compiled | batch (SIMD) | compiled/scalar | batch/compiled |
+|---|---|---|---|---|---|
+| single sphere | 434.0 | 444.5 | **519.2** Mpts/s | 1.02× | 1.17× |
+| bracket CSG tree | 10.8 | 13.3 | **45.2** | 1.23× | 3.40× |
+| deep union chain (24) | 4.8 | 12.8 | **28.0** | 2.67× | 2.20× |
+
+**Two conclusions, and the second decides how to use it.** Compilation pays in proportion to
+how much of the cost is *dispatch* rather than arithmetic — 1.02× on a lone sphere (one call
+to remove, five flops behind it), 2.67× on a chain of 24 unions — so the win is on tree
+DEPTH. But it **loses to the SIMD batch path in every case**, and the batch path is what
+every bulk consumer here already uses. So this is for callers genuinely stuck with per-point
+queries (a marching solver, an interactive probe, a scattered query loop) and is not a faster
+way to sample a grid. Compiling to a *vector* kernel would beat both and is a different
+project: every node's expression would have to be written against `Vector<double>`, and the
+nodes that are deliberately scalar would still be scalar inside it.
+
+Note the asymmetry with vectorization: the gyroid **does** compile, because an expression
+tree calls `Math.Sin` itself and so is bit-identical, where a SIMD kernel would have to
+substitute a vector sine and could not be. Compilation and vectorization are not the same
+trade.
 
 ## Batch evaluation (SIMD)
 

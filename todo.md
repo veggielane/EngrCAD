@@ -32,55 +32,94 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Implicit engine (EngrCAD.Implicit)
 
+- [ ] **The ellipsoid's Lipschitz bound `2 + (rmax/rmin)²` is sound but loose, and the
+  looseness is paid by the polygonizer.** The derivation bounds two factors independently
+  (`|∇k1| ≤ k1/rmin²` because every term carries a `1/r_i²`, and `k1 ≥ k0/rmax`), and they
+  are worst-case simultaneously only at points that do not exist: measured, the true
+  supremum runs **0.26–0.55 of the bound** over aspect ratios 1 to 10 (1.00 against 3, 1.26
+  against 3.56, 41.4 against 102). The cost is a cull shell that many times too thick around
+  every ellipsoid, including a near-spherical one, which reports 3 where the truth is 1.
+  - The obvious tightening is to keep the `|k0 − 1|/k0` factor rather than bounding it by 1
+    — it vanishes ON the surface (where the true gradient is exactly 1, provable in two
+    lines) and only approaches 1 far away, where the true gradient tends to 1 for a
+    different reason. A bound that is a function of the region's own `k0` range would
+    capture both ends.
+  - **Do not tune this by fitting the measurements**: a Lipschitz bound that is too small
+    drops geometry silently, which is the whole reason the mechanism exists.
+    `PrimitiveDistanceTests.Ellipsoid_ReportedLipschitzBound_CoversTheMeasuredSecants`
+    prints `measured/reported` per row, so progress is visible.
+- [ ] **`Sdf.ConvexPolyhedron` is exact inside and a lower bound outside; the machinery for
+  making it exact everywhere is already there.** Outside, `max` over the face half-spaces
+  understates wherever the nearest feature is an edge or a vertex. `Sdf.Pyramid` shows the
+  exact route — the minimum over the boundary TRIANGLES through
+  `Distance3d.ClosestPointOnTriangle` — and this node already enumerates its vertices (for
+  `Bounds`), so the missing step is only grouping them per plane, ordering each group by
+  angle in its plane, and fan-triangulating. Weigh it: the query then costs O(triangles)
+  Voronoi-region tests (12 for a cube) against one dot product per plane today, so it may
+  want to be a constructor option rather than a replacement — in which case both behaviours
+  need naming, since "two estimators answering one question must both be nameable".
+- [ ] **A vector-kernel compiler is the version of `Sdf.Compile()` that would actually
+  beat the batch path**, and the measurements say why the scalar one does not: compiled
+  loses to SIMD by 1.2–3.4× in every case. Every node would need its expression written
+  against `Vector<double>` instead of `double` — which is mechanical for the ones that
+  already have both a scalar `Evaluate` and an `ISdfKernel`, since the pairing already
+  exists and is already held bit-equal. Two things to settle before starting: the nodes that
+  are deliberately scalar (gyroid, twist, bend, displace — no bit-identical vector
+  transcendental) would have to fall back **per node inside a vector expression**, which is
+  a masking/blending question rather than a compilation one; and the recorded rule that
+  "block granularity destroys per-lane savings" applies to that fallback too, so measure a
+  mixed tree before assuming the win survives one scalar node in it.
+- [ ] **`Displace`'s bounds are `child.Bounds.Expanded(amplitude)`, which is right only
+  where the child's magnitude is a true distance.** A child that under-reports far from its
+  surface — a CSG difference near the subtracted tool's fictitious faces is the standing
+  example — can have the ripple raise material outside those bounds, and the polygonizer
+  would then cut it off at the region boundary. Today this is documented on the API rather
+  than detected. A sound bound needs an upper estimate of the distance from a level set to
+  the surface, which the engine's lower-bound contract deliberately does not provide; the
+  honest alternatives are to refuse a child whose field is not exact (there is no way to ask
+  it), or to expand by `amplitude × LipschitzBound` and state the residual case. Worth
+  deciding rather than leaving to a surprise.
+
 ## Interop / meshing (EngrCAD.Interop)
 
-- ~~**Surface Nets rounds every sharp feature.**~~ ✅ **done** — dual contouring with
-  Hermite data (`SurfaceQef`, `SurfaceNetsOptions.SharpFeatures`, ON by default). A box is
-  now reproduced EXACTLY (every vertex reads exactly zero from its own field, volume exactly
-  the box's, at every resolution and any placement; 4.4e-12 rotated off every axis), and
-  smooth fields improve an order of magnitude in volume error because the rank-1 quadric
-  projects the averaged point onto the field's own tangent plane. 15 of 151 docs PNGs moved,
-  every one SDF-routed and none B-Rep-only; the goldens were split into a TOPOLOGY hash
-  asserted for both placement rules and POSITION hashes per rule. Cost 1.6–2.1×, falling
-  with resolution. Findings recorded in design.md §6 and the Interop README; residuals:
-  - [ ] **A smooth surface's simplification criterion is loose, and the CLAMP is what
-    bounds it.** Two adjacent nearly-tangent planes have a tiny QEF residual whatever the
-    merged point does along their near-intersection, so on a curved surface the adaptive
-    tolerance under-penalises: measured, a sphere at resolution 64 merges vertices at a
-    tolerance of 0.001 cells that cost 0.018% of volume, and what actually bounds the
-    damage is the cluster's own bounding box rather than the stated tolerance. Fine for the
-    flat-region case the feature exists for (there the residual really is zero), but the
-    tolerance does not mean what it says on curvature. The standard fix is a second term —
-    the classic being to add the boundary-preservation quadrics QEM decimation uses, or to
-    bound the merged point's distance from the surface directly with one field evaluation
-    per accepted cluster, which is cheap and would make the tolerance a true error bound.
-  - [ ] **The adaptive pass is not the only simplifier in the repo, and the comparison is
-    unmeasured.** `MeshDecimator` is QEM decimation with the same quadric shape, and the
-    honest question is whether "uniform polygonize + decimate" reaches the same face count
-    at the same error more cheaply than the octree clustering — plus whether `MeshDecimator`
-    should be SEEDED with the field's quadrics instead of its own face planes, which it
-    cannot currently be (its `Quadric` is private and its `TryOptimize` is a Cramer solve
-    that returns false on the rank-deficient systems dual contouring lives in, where this
-    one regularises toward a mass point). Note the two are NOT interchangeable in kind: this
-    one is exact for planar regions and the collapse is provably lossless there, and it
-    keeps quads.
-  - [ ] **The adaptive path gives up the streaming memory bound.** The uniform walk's peak
-    sample memory is O(cross-section) because the grid streams in x-slabs; the clustering
-    retains a `SurfaceQef` (14 doubles) and a cell index per vertex for the whole mesh, so
-    it is O(surface) rather than O(cross-section). Same asymptotic order, worse constant,
-    and it is only paid when `SimplifyTolerance` is set — but it means the adaptive path
-    cannot reach the 1024³ grids the uniform one can.
-  - [ ] **The repair loop is global per level.** A cluster implicated in a manifoldness
-    violation is reverted and the whole face buffer rebuilt, up to eight rounds before the
-    level is abandoned wholesale. It has never needed more than a round on any fixture
-    tried, so this is a cost note rather than a correctness one — an incremental check
-    (only the faces touching the reverted cluster) would remove the rebuild.
-  - [ ] **The Newton step that projects a Hermite point onto the surface uses |grad| = 1
-    where the field is a lower bound.** `Sdf.Normals` reports the true |grad| and the
-    polygonizer divides by it, so this is already exact for hard CSG — but inside a smooth
-    blend the field's own value is not the distance to its surface, so the step lands near
-    rather than on. It has no sharp feature to resolve there, which is why it is a note and
-    not a defect, and the bound is one cell either way.
+- [ ] **A smooth surface's simplification criterion is loose, and the CLAMP is what
+  bounds it.** Two adjacent nearly-tangent planes have a tiny QEF residual whatever the
+  merged point does along their near-intersection, so on a curved surface the adaptive
+  tolerance under-penalises: measured, a sphere at resolution 64 merges vertices at a
+  tolerance of 0.001 cells that cost 0.018% of volume, and what actually bounds the
+  damage is the cluster's own bounding box rather than the stated tolerance. Fine for the
+  flat-region case the feature exists for (there the residual really is zero), but the
+  tolerance does not mean what it says on curvature. The standard fix is a second term —
+  the classic being to add the boundary-preservation quadrics QEM decimation uses, or to
+  bound the merged point's distance from the surface directly with one field evaluation
+  per accepted cluster, which is cheap and would make the tolerance a true error bound.
+- [ ] **The adaptive pass is not the only simplifier in the repo, and the comparison is
+  unmeasured.** `MeshDecimator` is QEM decimation with the same quadric shape, and the
+  honest question is whether "uniform polygonize + decimate" reaches the same face count
+  at the same error more cheaply than the octree clustering — plus whether `MeshDecimator`
+  should be SEEDED with the field's quadrics instead of its own face planes, which it
+  cannot currently be (its `Quadric` is private and its `TryOptimize` is a Cramer solve
+  that returns false on the rank-deficient systems dual contouring lives in, where this
+  one regularises toward a mass point). Note the two are NOT interchangeable in kind: this
+  one is exact for planar regions and the collapse is provably lossless there, and it
+  keeps quads.
+- [ ] **The adaptive path gives up the streaming memory bound.** The uniform walk's peak
+  sample memory is O(cross-section) because the grid streams in x-slabs; the clustering
+  retains a `SurfaceQef` (14 doubles) and a cell index per vertex for the whole mesh, so
+  it is O(surface) rather than O(cross-section). Same asymptotic order, worse constant,
+  and it is only paid when `SimplifyTolerance` is set — but it means the adaptive path
+  cannot reach the 1024³ grids the uniform one can.
+- [ ] **The repair loop is global per level.** A cluster implicated in a manifoldness
+  violation is reverted and the whole face buffer rebuilt, up to eight rounds before the
+  level is abandoned wholesale. It has never needed more than a round on any fixture
+  tried, so this is a cost note rather than a correctness one — an incremental check
+  (only the faces touching the reverted cluster) would remove the rebuild.
+- [ ] **The Newton step that projects a Hermite point onto the surface uses |grad| = 1
+  where the field is a lower bound.** `Sdf.Normals` reports the true |grad| and the
+  polygonizer divides by it, so this is already exact for hard CSG — but inside a smooth
+  blend the field's own value is not the distance to its surface, so the step lands near
+  rather than on. It has no sharp feature to resolve there, which is why it is a note and
+  not a defect, and the bound is one cell either way.
 
 - [ ] **STL → STEP: mesh → B-Rep RECONSTRUCTION — the one edge of the conversion triangle
   that is missing, and the only one that is not a discretisation** (requested 2026-08-03,

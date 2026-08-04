@@ -109,14 +109,39 @@ internal abstract class SampledGridSdf : Sdf
 {
     private protected readonly GridFrame Frame;
     private readonly Aabb _region;
+    private readonly double _sourceBound;
 
-    private protected SampledGridSdf(in GridFrame frame)
+    private protected SampledGridSdf(in GridFrame frame, double sourceBound)
     {
         Frame = frame;
         _region = frame.Region;
+        _sourceBound = sourceBound;
     }
 
     public sealed override Aabb Bounds => _region;
+
+    /// <summary>
+    /// <b>√3 times the baked field's own bound</b> — a sampled grid is measurably steeper
+    /// than what went into it, which is worth stating plainly because the rest of the engine
+    /// had been assuming otherwise.
+    /// <para>
+    /// Each first difference of the interpolant along an axis spans one cell of the source,
+    /// so each partial derivative inherits the source's bound; but the three can reach it at
+    /// once, and then the gradient magnitude is √3 times it. That is attained rather than
+    /// merely permitted: baking <c>max(x, y, z)</c> — a 1-Lipschitz field — onto the unit
+    /// cell gives the interpolant <c>1 − (1−x)(1−y)(1−z)</c>, whose gradient at the origin
+    /// corner is exactly (1, 1, 1).
+    /// </para>
+    /// <para>
+    /// So a sampled grid genuinely breaks the 1-Lipschitz assumption <c>SurfaceCull</c> and
+    /// the narrow-band octree rest on, by up to √3 — enough to matter, since a block's
+    /// half-diagonal is many cells and the cull's cushion is one. Nothing in the repository
+    /// reached that combination (no production path and no rendered example bakes a grid and
+    /// then polygonizes it), which is why it had never surfaced; reporting the honest bound
+    /// closes it rather than leaving it to be discovered.
+    /// </para>
+    /// </summary>
+    public sealed override double LipschitzBound(in Aabb region) => Math.Sqrt(3) * _sourceBound;
 
     private protected abstract double Sample(int i, int j, int k);
 
@@ -166,10 +191,12 @@ internal sealed class GridSdf : SampledGridSdf
 {
     private readonly double[] _values; // x-fastest: [(k * Ny + j) * Nx + i]
 
-    private GridSdf(in GridFrame frame, double[] values) : base(frame) => _values = values;
+    private GridSdf(in GridFrame frame, double[] values, double sourceBound)
+        : base(frame, sourceBound) => _values = values;
 
     public static GridSdf Bake(Sdf source, in Aabb region, double cellSize)
     {
+        double sourceBound = source.LipschitzBound(region);
         var frameLocal = new GridFrame(region, cellSize);
         frameLocal.RequireDenseAddressable();
         var values = new double[frameLocal.Nx * frameLocal.Ny * frameLocal.Nz];
@@ -195,7 +222,7 @@ internal sealed class GridSdf : SampledGridSdf
                 ArrayPool<Vector3d>.Shared.Return(rented);
             }
         });
-        return new GridSdf(frameLocal, values);
+        return new GridSdf(frameLocal, values, sourceBound);
     }
 
     private protected override double Sample(int i, int j, int k) =>
@@ -264,7 +291,7 @@ internal sealed class LazyGridSdf : SampledGridSdf
     /// bit-for-bit equal.
     /// </param>
     public LazyGridSdf(Sdf source, in Aabb region, double cellSize, int flatBlockLimit = FlatBlockLimit)
-        : base(new GridFrame(region, cellSize))
+        : base(new GridFrame(region, cellSize), source.LipschitzBound(region))
     {
         _source = source;
         _nbx = (Frame.Nx + BlockSize - 1) / BlockSize;
