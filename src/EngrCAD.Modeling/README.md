@@ -375,11 +375,44 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   SHELF packer (deepest-first, then width, then input index — no randomness), gap
   honored between parts and to the plate edges, placements returned in input order with
   each part's measured footprint; `PackLayout.Apply`/`Packing.Arrange` return the
-  translated shapes (XY only — how a part sits in z is the model's business). Footprints
+  posed shapes (XY only — how a part sits in z is the model's business). Footprints
   are `Shape.Silhouette` bounds, so an overhang wider than the base gets its room. A
-  layout that does not fit refuses loudly naming the first part that ran out of plate;
-  no rotation or concavity nesting in v1 (stated, not implied). Docs:
-  `docs/examples/packing.md` (packed-plate render + one-STL export).
+  layout that does not fit refuses loudly naming the first part that ran out of plate.
+  **`PackOptions` opens rotation and outline nesting, both OPT-IN** — its default value
+  is the v1 contract and a default pack reproduces the committed v1 placements bit for
+  bit:
+  - `Rotation = Quarter` lets the packer turn a part about z. A quarter turn is an
+    EXACT sign swap (`(x, y) → (−y, x)`), never a `cos`, so a turned part's measured
+    bounds are its transposed footprint to the last bit. For box nesting a quarter turn
+    only transposes the footprint, so the four poses collapse to two and the choice is
+    not per-part (a shelf is as deep as its deepest member): the packer runs the whole
+    plate under both global preferences (landscape/portrait) and keeps the shallower,
+    tie-breaking on used width then on the landscape preference.
+    **`Rotation = Free` is refused by name** — a continuous orientation has no finite
+    candidate set, so it could be neither searched exhaustively nor tie-broken
+    deterministically.
+  - `Nesting = Outline` keeps parts apart by their true silhouettes. Each outline is
+    grown by HALF the gap through `Region2dOffset` — two grown outlines being disjoint
+    IS "these parts are at least `gap` apart", one existing operation rather than a new
+    distance predicate — and the grown outlines are searched bottom-left-first on a
+    raster of `PackOptions.Resolution` cells (default `min(width, depth) / 256`). The
+    rasterization is CONSERVATIVE, so a coarse grid can only refuse a legal placement,
+    never accept an illegal one; a through hole is a hole in the silhouette, so small
+    parts nest INSIDE a ring.
+  - Reported per layout: `PackedArea` (outline area, measured the same way whichever
+    nesting ran, so the two are comparable), `FootprintArea`, `UsedWidth`/`UsedDepth`
+    and `Utilisation`; `PlacedOutline(i)` hands back the placed 2D geometry.
+  - Measured (win-x64), six L brackets on a 96 × 260 plate at gap 3 — depth used and
+    utilisation: none/box **249.0, 24%**; none/outline 154.2, 39%; quarter/box 144.0,
+    41%; quarter/outline **120.5, 49%**. A ring with three discs goes 80 → 64 with
+    every disc inside the bore. Costs 68 / 83 / 233 / 435 ms for 4 / 8 / 16 / 24 parts.
+  - Two limits, stated: placements are QUANTIZED to the raster, so a fit with no slack
+    at all is refused where the box packer takes it; and bottom-left-first nests only
+    when the plate is TIGHT (with room to spare the lowest free spot is beside the
+    previous part rather than inside its concavity, so a roomy plate reproduces row
+    packing).
+
+  Docs: `docs/examples/packing.md` (packed-plate render, nested render, one-STL export).
 
 ### Space-filling infill (`SpaceFillingInfill.cs`)
 

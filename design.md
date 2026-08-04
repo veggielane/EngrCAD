@@ -4851,6 +4851,93 @@ sign set by where the cutoff happens to land. **An integral over a facet-classif
 region converges like its boundary, not like its area** — so a closed form for such a
 region is a sanity band, not a tolerance.
 
+### Build-plate packing: rotation and outline nesting (`Packing.cs`)
+
+v1 was a shelf packer over `Shape.Silhouette` BOUNDS. The two follow-ups the backlog
+named — 90-degree rotation and nesting to the true outline — are both about giving the
+packer more freedom, and the design question in each is *what the freedom is allowed to
+cost*: `PackOptions`' default value is the v1 contract, and a default pack reproduces
+the committed v1 placements bit for bit (asserted against hex fingerprints taken before
+the change, the rule every optional feature here follows — `ShadingStyle.Lit = 0`,
+`PreventLongEdgeFlips`, AMD ordering).
+
+**A quarter turn is exact, and that is why it is the only rotation offered.**
+`(x, y) → (−y, x)` is a sign swap, so a turned outline, its bounds and the matrix
+`Apply` hands the `Shape` graph all agree to the last bit — the glTF Y-up-root rule
+(`cos(-pi/2)` is 6.1e-17 and geometry should not carry that). `PackRotation.Free` is
+**refused by name**: a continuous orientation has no finite candidate set, so the
+search could be neither exhaustive nor deterministically tie-broken, and it wants a
+no-fit polygon per part pair per angle or an optimiser with a stated stopping rule.
+Sampling a handful of angles and calling it free rotation would be a search that is not
+the one it claims to be.
+
+**For box nesting a quarter turn is not a per-part decision.** It only TRANSPOSES the
+footprint, so the four poses collapse to two — and which of the two is better depends on
+the other parts, because a shelf is as deep as its deepest member. The classical rule
+("orient everything landscape, so every row is as shallow as it can be") is right most
+of the time and measurably wrong sometimes: 40 x 10 bars on a 50-wide plate fit side by
+side upright and one-per-row landscape. So the packer runs the WHOLE plate under both
+global preferences and keeps the shallower, tie-breaking on used width then on the
+landscape preference — two packs, both cheap, and the rule is stated rather than
+heuristic. It is still a heuristic in the large: a mixed-orientation assignment neither
+preference reaches can exist, and the refusal says so rather than pretending.
+
+**Outline nesting needed no new predicate, which is what made it tractable.** Each
+silhouette is grown by HALF the gap through `Region2dOffset` — dilation by a disk — so
+"two grown outlines are disjoint" IS "these two parts are at least `gap` apart",
+symmetric and with nothing to keep in step. The grow is the expensive step (measured
+9–200 ms on real silhouettes, against 0.7–2.4 ms for ONE exact region intersection), and
+dilation COMMUTES with a rotation, so it runs once per part and the four poses are exact
+turns of its result.
+
+**The search is a conservative raster, and the cost measurement is what chose it.** An
+exact overlap test through `Region2dBoolean.Intersection` costs 0.7–2.4 ms on the
+regions these silhouettes produce (131–292 vertices after growing), so any search
+visiting thousands of candidate positions is out of the question by three orders of
+magnitude. Instead each grown outline is rasterized ONCE per pose into a bitmask and the
+plate carries an occupancy mask, so a candidate placement is a shifted word-wise AND —
+tens of nanoseconds, early-exiting on the first collision. Rasterization is
+**conservative**: a cell is set if the grown outline touches it at all, so an empty AND
+proves the regions are disjoint at any cell size and a coarse grid can only refuse a
+legal placement, never accept an illegal one (the cross-plane hole validation's
+sound-in-the-accept-direction rule). Interior cells are filled by even-odd parity at
+cell CENTRES and boundary cells by walking each segment at half-cell steps; **the
+soundness argument fixes the block size and it is 2x2, not 3x3** — a boundary point is
+within a quarter cell of some sample, so it lies in `[s ± h/2]` on each axis, an
+interval of width `h` spanning at most two cells. The obvious 3x3 block is sound too and
+dilates every mask by a whole cell on each side, which measurably costs about one cell
+of clearance per part — exactly what a tight fit runs out of.
+
+**Three things the measurements said, all worth keeping.**
+
+*Bottom-left-first nests only when the plate is tight.* With room to spare the lowest
+free position is BESIDE the previous part rather than inside its concavity, so a roomy
+plate reproduces row packing and outline nesting buys only its own quantization loss —
+measured, six L brackets on a 140-wide plate came out 78.97 deep against the shelf
+packer's 77.00. The same six on an 86-wide plate go 132.0 (box + quarter) to 108.9. So
+the feature's own fixtures are tight plates, which is also when packing is worth doing.
+
+*A finer raster is not monotonically better.* It refuses fewer placements, but it also
+changes which placement the greedy search meets first: cell sizes 4 / 2 / 1 / 0.5 / 0.25
+give depths 120.0 / 106.0 / 112.0 / 109.5 / 108.2 on one fixture. It is a cost/quality
+knob, not a convergence parameter, and the docs say so.
+
+*The quantization has a stated failure and it is a refusal.* Four 40 x 10 bars turned
+upright span exactly 50 on a 50 mm plate — zero slack — and the raster cannot land them
+however fine it is, because a mask's width always rounds up to a whole cell. Pinned by a
+test asserting the box packer takes it and outline nesting refuses, rather than left to
+be discovered.
+
+**The oracle is an exact clearance check, not a picture.** Every placed outline is grown
+by half the gap through the same `Region2dOffset` and every pair intersected through
+`Region2dBoolean`; a non-empty intersection is a clearance violation. That is the
+strong form (it would catch a part inside another's hole that is too close to the bore
+wall, which a bounds test cannot see), and it is measured through the region machinery
+rather than by inspecting a render. Beside it, `PackedArea`/`FootprintArea`/`UsedDepth`/
+`Utilisation` are reported so two settings are comparable on one number that means
+something — and the fixture is asserted to HAVE room to win (`PackedArea < 0.6 x
+FootprintArea`) before the comparison is believed.
+
 ### The tamper mesh: the deliverable is a guarantee, not a pattern
 
 `TamperMesh` draws the conductive serpentine an enclosure wall carries for anti-drill tamper
