@@ -464,9 +464,13 @@ public static class Packing
         // The raster's own origin is the plate's legal corner (the plate shrunk by half the
         // gap), so cell (0, 0) IS the tightest legal placement and the margin costs no
         // quantization of its own.
+        // Two spare columns and rows: a stamp's own width rounds up to a whole cell and then
+        // carries one more for its far edge, so a placement the exact bounds test allows can
+        // reach one cell past the plate's last cell. Without the slack `Overlaps` would refuse
+        // it for running off the mask — conservative, and needlessly so at the far edge.
         double half = gap / 2;
-        int plateCellsX = (int)Math.Ceiling((plateWidth - gap) / cell) + 1;
-        int plateCellsY = (int)Math.Ceiling((plateDepth - gap) / cell) + 1;
+        int plateCellsX = (int)Math.Ceiling((plateWidth - gap) / cell) + 2;
+        int plateCellsY = (int)Math.Ceiling((plateDepth - gap) / cell) + 2;
         if (plateCellsX > MaxCells || plateCellsY > MaxCells)
             throw new ArgumentOutOfRangeException(
                 nameof(options),
