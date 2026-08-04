@@ -192,12 +192,10 @@ public static class PlanarSection
                 continue;
 
             var loop = new List<Vector2d>(3);
-            var solid = new List<Vector3d>(3);
             foreach (var vertex in face.Vertices())
             {
                 var flat = Flat(plane, vertex.Position);
                 loop.Add(flat);
-                solid.Add(vertex.Position);
                 minX = Math.Min(minX, flat.X);
                 minY = Math.Min(minY, flat.Y);
                 maxX = Math.Max(maxX, flat.X);
@@ -223,6 +221,11 @@ public static class PlanarSection
                 projected.Add(loop);
                 continue;
             }
+            // The 3D positions are only read on this rare branch, so they are gathered here
+            // rather than beside the projection — the silhouette walks every face of the
+            // mesh and a per-face list would be an allocation on the hot path for a case
+            // that essentially never fires.
+            var solid = face.Vertices().Select(v => v.Position).ToArray();
             int apex = PolygonFan.Apex(solid);
             for (int t = 0; t + 2 < loop.Count; t++)
             {

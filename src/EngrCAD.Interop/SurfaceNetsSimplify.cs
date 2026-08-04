@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using EngrCAD.Core;
 using EngrCAD.Mesh;
 
@@ -200,7 +201,7 @@ internal static class SurfaceNetsSimplify
             }
         }
 
-        return Emit(label, place, quadCorners, positions, n);
+        return Emit(label, place, quadCorners, n);
     }
 
     /// <summary>
@@ -242,9 +243,12 @@ internal static class SurfaceNetsSimplify
             {
                 if (starts.Count <= 1)
                     return true;
+                // The ORIGINAL positions, deliberately: the only question asked of this
+                // mesh is combinatorial (which vertex links are single cycles), so the
+                // coordinates are irrelevant and re-mapping them here would be work the
+                // check cannot use.
                 var mesh = HalfEdgeMesh.Build(
-                    positions, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(corners),
-                    System.Runtime.InteropServices.CollectionsMarshal.AsSpan(starts));
+                    positions, CollectionsMarshal.AsSpan(corners), CollectionsMarshal.AsSpan(starts));
                 foreach (int v in mesh.NonManifoldVertices())
                     offenders.Add(v);
                 if (offenders.Count == 0)
@@ -315,8 +319,7 @@ internal static class SurfaceNetsSimplify
         return (corners, starts);
     }
 
-    private static HalfEdgeMesh Emit(
-        int[] label, Vector3d[] place, int[] quadCorners, List<Vector3d> positions, int n)
+    private static HalfEdgeMesh Emit(int[] label, Vector3d[] place, int[] quadCorners, int n)
     {
         var offenders = new HashSet<int>();
         var (corners, starts) = MapFaces(label, quadCorners, offenders);
@@ -339,10 +342,8 @@ internal static class SurfaceNetsSimplify
         }
         for (int c = 0; c < corners.Count; c++)
             corners[c] = remap[corners[c]];
-        _ = positions;
         return HalfEdgeMesh.Build(
-            kept, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(corners),
-            System.Runtime.InteropServices.CollectionsMarshal.AsSpan(starts));
+            kept, CollectionsMarshal.AsSpan(corners), CollectionsMarshal.AsSpan(starts));
     }
 
     /// <summary>Undirected vertex adjacency of the quad mesh, in CSR form.</summary>
