@@ -167,20 +167,21 @@ cheap: the field is evaluated at a moved query point, so a lattice of ten thousa
 instances costs one primitive.
 
 ```csharp render:sdf-domain-ops
-var bar = Sdf.Box(10, 10, 40);
+var bar = Sdf.Box(11, 11, 40);
 
-var scene = new Scene(new MeshQuality { SdfResolution = 130 });
-scene.Add(new Part("twist", Shape.From(bar.Twist(radiansPerUnit: 0.05)), Palette.Teal,
-    Matrix4d.CreateTranslation((-45, 0, 22))));
-scene.Add(new Part("taper", Shape.From(bar.Taper(bottomScale: 1.0, topScale: 0.25)), Palette.Brass,
-    Matrix4d.CreateTranslation((-15, 0, 22))));
-scene.Add(new Part("bend", Shape.From(Sdf.Box(46, 10, 6).Bend(curvature: 0.045)), Palette.Coral,
-    Matrix4d.CreateTranslation((20, 0, 22))));
-scene.Add(new Part("elongate", Shape.From(Sdf.Sphere(7).Elongate((0, 0, 14))), Palette.Slate,
-    Matrix4d.CreateTranslation((55, 0, 22))));
+// The default view looks down −X, so the parts read left to right in decreasing x.
+var scene = new Scene(new MeshQuality { SdfResolution = 140 });
+scene.Add(new Part("twist", Shape.From(bar.Twist(radiansPerUnit: 0.055)), Palette.Teal,
+    Matrix4d.CreateTranslation((54, 0, 22))));
+scene.Add(new Part("taper", Shape.From(bar.Taper(bottomScale: 1.0, topScale: 0.3)), Palette.Brass,
+    Matrix4d.CreateTranslation((18, 0, 22))));
+scene.Add(new Part("bend", Shape.From(Sdf.Box(40, 11, 7).Bend(curvature: 0.028)), Palette.Coral,
+    Matrix4d.CreateTranslation((-18, 0, 22))));
+scene.Add(new Part("elongate", Shape.From(Sdf.Sphere(7).Elongate((0, 0, 13))), Palette.Slate,
+    Matrix4d.CreateTranslation((-54, 0, 22))));
 ```
 
-![A twisted bar, a tapered bar, a bent bar and an elongated sphere](images/sdf-domain-ops.png)
+![A twisted bar, a tapered bar, a bent bar and an elongated sphere, side by side](images/sdf-domain-ops.png)
 
 `Displace(amplitude, frequency)` adds a sinusoidal ripple — knurling, texture, a
 grip surface:

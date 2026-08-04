@@ -555,6 +555,26 @@
       "live": true
     },
     {
+      "id": "sdf-displace",
+      "page": "examples/implicit.md",
+      "live": true
+    },
+    {
+      "id": "sdf-domain-ops",
+      "page": "examples/implicit.md",
+      "live": true
+    },
+    {
+      "id": "sdf-primitives",
+      "page": "examples/implicit.md",
+      "live": true
+    },
+    {
+      "id": "sdf-repeat",
+      "page": "examples/implicit.md",
+      "live": true
+    },
+    {
       "id": "section-cutaway",
       "page": "examples/viewer.md",
       "live": true
