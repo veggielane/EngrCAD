@@ -740,6 +740,61 @@ var result = DesignStudy.Minimize(
 
 Docs: [`examples/design-studies.md`](../../docs/examples/design-studies.md).
 
+### Configurations / family tables (`Configurations.cs`)
+
+**One `FeatureHistory`, N named parameter sets.** A `Configuration` is a name plus a
+`[Param]` value dictionary in exactly the `FeatureHistory.SaveParameters` JSON —
+`{ "featureName": { "Param": value } }` — so a configuration is another consumer of the one
+seam a saved parameter file, an MCP `set_param`, `DocumentEdits.SetParameter`, the
+properties-panel editors and `StudyResult.Edits` already speak, never a second way to write
+a value. `Part.Configurations` is non-null exactly when the part has a history.
+
+```csharp
+var family = bracket.Configurations!;
+foreach (double size in new[] { 4.0, 6.0, 8.0, 10.0, 12.0 })
+    family.Add($"M{size:0}", (holes, nameof(BoltHoles.Size), size));   // typed: refuses by name
+family.Activate("M8");            // LoadParameters + ONE Part.Regenerate
+family.Capture("as tuned");       // the current values, through SaveParameters
+```
+
+- **A set may be PARTIAL.** An M4…M12 family states only the bolt size; the plate thickness
+  stays whatever the model says. `Capture(name)` snapshots everything, `Capture(name,
+  features)` narrows, `Add(name, json)` takes raw JSON.
+- **Values only — no suppression, no feature list.** That is what makes a switch exact: the
+  feature *instances* never change, so the prefix cache re-runs precisely the tail a forward
+  edit would (the part above the change reports `Cached`), and `Apply` being a pure function
+  of its parameters is what makes switching away and back reproduce the geometry **vertex for
+  vertex**. Note the bit-identity is NOT the cache handing back the old body — the cache holds
+  one entry per feature *index*, overwritten each regeneration, so the feature that moved
+  re-runs; purity is what pins the result. Per-configuration suppression is filed rather than
+  smuggled into the `SaveParameters` vocabulary.
+- **Activating does not write back.** Editing a parameter while "M6" is active leaves the
+  model MODIFIED against it (`ActiveIsModified` — an exact comparison, since both sides come
+  from one serializer), and `Capture` is the deliberate act of storing values.
+- **One regeneration per switch**, however many parameters a set states — composing it out of
+  per-feature edits would rebuild once per feature, the measurement that already keeps
+  `StudyResult.Edits` writing through this seam internally.
+  `DocumentEdits.SetConfiguration`/`AddConfiguration`/`RemoveConfiguration` are the undoable
+  wrappers; undo restores the model's *live* values (the `MeshChange` complete-journal rule),
+  not the previously active configuration's stored ones, which differ exactly when someone
+  had edited without capturing.
+- **Staleness is reported, never dropped and never thrown** (the `HistoryLoadResult`
+  convention): `Validate()` is the pre-flight, `Activate` surfaces `LoadParameters`' own
+  warnings. The typed `Add` overload refuses instead, because its caller holds the feature
+  object and has made a mistake rather than read a stale file.
+- **The active configuration is document state** and round-trips; the load restores the NAME
+  **without re-applying** (the history already carries those values, and re-applying would
+  snap a document saved *modified* back onto the configuration and lose the edit).
+  Write-only-when-stated, so a document using none is byte-identical to what it always was.
+- **`Bom.ByConfiguration(part, scene|tab|assembly)`** is the family table: one BOM per
+  configuration, an ANALYSIS that restores the part. What differs between rows is not the
+  configured part (a BOM groups by part *reference*) but what the model puts around it — the
+  hardware a `ComponentFeature` places, an occurrence a suppression drops. Read mass off
+  `ConfigurationBom.TotalMassGrams`, measured while that configuration was active;
+  `BomLine.UnitMassGrams` is a lazy projection over the part's *current* geometry.
+
+Docs: [`examples/configurations.md`](../../docs/examples/configurations.md).
+
 ## The construction tree: how a part was built
 
 `part.ConstructionTree()` answers "how was this made?" as a row tree any viewer (or

@@ -143,6 +143,7 @@ document.addEventListener('click', function (event) {
             { label: 'Sheet metal', slug: 'examples/sheet-metal' },
             { label: 'Frames & weldments', slug: 'examples/frames' },
             { label: 'Parametric features', slug: 'examples/features' },
+            { label: 'Configurations (family tables)', slug: 'examples/configurations' },
             { label: 'Geometry inputs for features', slug: 'examples/geometry-inputs' },
             { label: 'Selecting faces & edges', slug: 'examples/selection' },
           ],

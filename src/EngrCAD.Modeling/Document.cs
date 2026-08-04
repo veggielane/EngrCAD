@@ -63,6 +63,16 @@ public sealed class Part
     public FeatureHistory? History { get; }
 
     /// <summary>
+    /// This part's named parameter sets and which one is active — <b>one
+    /// <see cref="History"/>, N configurations</b> (an M4…M12 family of one bracket).
+    /// Non-null exactly when the part HAS a history: a configuration is a set of
+    /// <c>[Param]</c> values, so a part built directly from geometry has nothing to
+    /// configure. Empty until something is added, and a document that adds nothing saves
+    /// byte-identically to one that never heard of configurations.
+    /// </summary>
+    public ConfigurationSet? Configurations { get; }
+
+    /// <summary>
     /// The catalogue item this part IS, when it came from one
     /// (<see cref="HardwareComponent.ToPart"/>); null for designed parts. Two things
     /// read it: a <see cref="Bom">bill of materials</see> (a hardware line carries the
@@ -183,7 +193,11 @@ public sealed class Part
 
     /// <summary>Already-regenerated body plus its history (<see cref="FeatureHistory.ToPart"/>).</summary>
     internal Part(string name, Shape body, FeatureHistory history, PartColor? color, Matrix4d? transform)
-        : this(name, (object)body, color, transform) => History = history;
+        : this(name, (object)body, color, transform)
+    {
+        History = history;
+        Configurations = new ConfigurationSet(this);
+    }
 
     private static Shape RegeneratedBody(FeatureHistory history)
     {
