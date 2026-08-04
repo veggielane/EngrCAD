@@ -44,13 +44,28 @@ public static partial class Shelling
     /// outward normal (positive grows the solid, negative shrinks it). Corners are mitred:
     /// each vertex becomes the intersection of its three offset planes.
     /// </summary>
-    public static BrepSolid Offset(BrepSolid solid, double distance)
+    public static BrepSolid Offset(BrepSolid solid, double distance) => Offset(solid, _ => distance);
+
+    /// <summary>
+    /// Offsetting with a PER-FACE distance: <paramref name="distance"/> is asked once per
+    /// face, so a face may move by its own amount or (returning zero) not at all.
+    ///
+    /// <para>Nothing new is needed geometrically — each corner was already the meeting point
+    /// of its faces' offset carriers, and unequal offsets only move that meeting point — which
+    /// is the same reason the per-face wall thickness on <see cref="Shell(BrepSolid,
+    /// Func{BrepFace, double}, Func{BrepFace, bool})"/> is exact, and indeed why shelling can
+    /// already hold its openings still at zero. It is what <see cref="DirectEdit.OffsetFaces"/>
+    /// is built from: pushing ONE face is this law returning zero everywhere else.</para>
+    /// </summary>
+    public static BrepSolid Offset(BrepSolid solid, Func<BrepFace, double> distance)
     {
+        ArgumentNullException.ThrowIfNull(distance);
         if (CarrierBody.IsCurved(solid))
             return CarrierBody.Recognize(solid).Offset(distance);
         var polyhedron = Polyhedron.Recognize(solid);
         var offsets = new double[polyhedron.Faces.Length];
-        Array.Fill(offsets, distance);
+        for (int f = 0; f < offsets.Length; f++)
+            offsets[f] = distance(polyhedron.Faces[f]);
         var positions = polyhedron.OffsetVertices(offsets);
         polyhedron.ValidateOffset(positions, "offset");
 
