@@ -169,6 +169,7 @@ document.addEventListener('click', function (event) {
             { label: 'Buckling & frequency response', slug: 'examples/fea-buckling' },
             { label: 'Transient dynamics', slug: 'examples/fea-transient' },
             { label: 'Fatigue', slug: 'examples/fea-fatigue' },
+            { label: 'Topology optimisation', slug: 'examples/fea-topology' },
             { label: 'Results & fields', slug: 'examples/fields' },
           ],
         },

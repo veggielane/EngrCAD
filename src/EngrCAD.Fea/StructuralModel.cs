@@ -251,6 +251,19 @@ public sealed class StructuralModel
     /// <summary>Human-readable list of the conditions applied, in order — what a report prints.</summary>
     public IReadOnlyList<string> Conditions => _conditions;
 
+    /// <summary>
+    /// Whether a VOLUME load has been applied (<see cref="Gravity"/> or
+    /// <see cref="BodyForce"/>) — the flag <see cref="TopologyOptimizer"/> refuses on.
+    ///
+    /// <para>A flag rather than a scan of <see cref="Conditions"/>, whose entries are prose
+    /// for a human: matching a message string would be a second spelling of a fact the
+    /// applying method already knows, and would break the first time a message is reworded.
+    /// It is INTERNAL because it answers exactly one caller's question — "is this load a
+    /// function of how much material there is" — and states nothing a general consumer of a
+    /// model should act on.</para>
+    /// </summary>
+    internal bool HasVolumeLoad { get; private set; }
+
     /// <summary>The material of one element, by its region id.</summary>
     public Material MaterialOf(int element) =>
         _materials.TryGetValue(Mesh.RegionOf(element), out var m) ? m : DefaultMaterial;
@@ -573,6 +586,7 @@ public sealed class StructuralModel
             mass += density * Mesh.ElementVolume(e);
         }
 
+        HasVolumeLoad = true;
         _conditions.Add($"gravity {acceleration} on mass {mass:G6}");
         return this;
     }
@@ -606,6 +620,7 @@ public sealed class StructuralModel
                 _force[nodes[i]] += loads[i];
         }
 
+        HasVolumeLoad = true;
         _conditions.Add($"body force over {Mesh.ElementCount} elements");
         return this;
     }
@@ -628,6 +643,7 @@ public sealed class StructuralModel
     {
         Array.Clear(_force);
         _deltaT = null;
+        HasVolumeLoad = false;
         _conditions.Add("loads cleared");
         return this;
     }

@@ -47,8 +47,18 @@ internal static class FeaAssembly
         return reduced;
     }
 
-    /// <summary>The FULL stiffness matrix over every degree of freedom (symmetric upper).</summary>
-    public static PackedSparseMatrix Stiffness(StructuralModel model, in TetQuadrature rule)
+    /// <summary>
+    /// The FULL stiffness matrix over every degree of freedom (symmetric upper).
+    ///
+    /// <para><paramref name="scale"/> multiplies each element's stiffness — the SIMP
+    /// interpolation <c>rho^p</c> and nothing else uses it. Passing null skips the multiply
+    /// entirely rather than multiplying by 1.0, so every incumbent caller assembles the same
+    /// bits it always did; a scale of exactly 1 everywhere would also be bit-identical (a
+    /// finite double times 1.0 is itself), but "no scale" and "a scale that happens to be
+    /// one" are different statements and only the first is free.</para>
+    /// </summary>
+    public static PackedSparseMatrix Stiffness(
+        StructuralModel model, in TetQuadrature rule, IReadOnlyList<double>? scale = null)
     {
         var mesh = model.Mesh;
         int perElement = mesh.NodesPerElement;
@@ -68,6 +78,12 @@ internal static class FeaAssembly
                     dofs[3 * i + a] = 3 * nodes[i] + a;
             }
             TetElement.Stiffness(mesh.Order, positions, model.ElasticityOf(e), rule, ke);
+            if (scale is not null)
+            {
+                double s = scale[e];
+                for (int k = 0; k < ke.Length; k++)
+                    ke[k] *= s;
+            }
 
             for (int i = 0; i < elementDofs; i++)
             {
