@@ -6,9 +6,11 @@ namespace EngrCAD.Implicit.Tests;
 
 /// <summary>
 /// The strut lattices. Their claim is stronger than the TPMS family's — the field is an
-/// EXACT distance, not a lower bound — so the test is an EQUALITY rather than a band: the
-/// field is compared bit for bit against a brute-force minimum over an explicit block of
-/// capsules, which is what proves the folded three-wide neighbourhood is complete.
+/// EXACT distance, not a lower bound — so the central test compares it against a
+/// brute-force minimum over an explicit block of capsules, which is what proves the folded
+/// three-wide neighbourhood is complete. That comparison lands at round-off rather than bit
+/// for bit, for a reason recorded on the test itself, and it comes with a companion showing
+/// it can see a missing neighbour.
 /// </summary>
 public class StrutLatticeTests(ITestOutputHelper output)
 {
