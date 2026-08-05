@@ -514,6 +514,73 @@ public sealed class Sketch
         double chordTolerance = DefaultChordTolerance) =>
         CurvedRegion2dOffset.Offset(ToCurvedRegions(chordTolerance), delta, join, miterLimit);
 
+    /// <summary>
+    /// This sketch's OUTLINE stroked to the given width — the ribbon a pen of that width
+    /// leaves following the boundary, with arcs kept: round joins are exact sectors and an
+    /// arc's band is the exact annular sector between radii r ± width/2, so the result IS the
+    /// outline's Minkowski sum with a disc rather than the inscribed-arc approximation
+    /// <see cref="Stroke"/> produces.
+    ///
+    /// <para>A sketch is a CLOSED loop, so this is always the circuit reading: the closing
+    /// joint gets its corner fill and no caps are added. To stroke an OPEN path, use the
+    /// static <see cref="StrokeExact(IEnumerable{Curve2d}, double, StrokeCap, OffsetJoin, double)"/>
+    /// overload, which takes the curve chain directly.</para>
+    ///
+    /// <para>Holes are ignored: a hole's outline is its own path and stroking it would union
+    /// two ribbons whose overlap is not what either caller meant. Stroke the hole sketch
+    /// separately if that is what you want.</para>
+    /// </summary>
+    /// <param name="width">Full ribbon width (&gt; 0).</param>
+    /// <param name="join">Corner style at the outline's joints.</param>
+    /// <param name="miterLimit">See <see cref="Region2dOffset.DefaultMiterLimit"/>.</param>
+    /// <param name="chordTolerance">Flattening for the one segment kind the exact tier does
+    /// not carry — an elliptical arc; see <see cref="ToCurvedRegions(double)"/>.</param>
+    public IReadOnlyList<CurvedRegion2d> StrokeExact(
+        double width, OffsetJoin join = OffsetJoin.Round,
+        double miterLimit = Region2dOffset.DefaultMiterLimit,
+        double chordTolerance = DefaultChordTolerance) =>
+        CurvedRegion2dOffset.Stroke(
+            CurvedLoop(Segments, chordTolerance), width, StrokeCap.Round, join, miterLimit);
+
+    /// <summary>
+    /// An OPEN path of exact 2D curves stroked to the given width — a toolpath's swept
+    /// footprint, a slot from its centre line, an SVG stroke whose path carries <c>A</c>
+    /// commands. The exact counterpart of <see cref="Region2dOffset.Stroke"/>, reached from
+    /// the modelling vocabulary rather than by dropping into Core.
+    ///
+    /// <para>A path that returns to its own start is stroked as a CIRCUIT — the closing joint
+    /// gets its fill and no caps — which a chain of CURVES can say structurally where a list
+    /// of points cannot.</para>
+    /// </summary>
+    /// <param name="path">The chain, in order; each curve's end must be the next one's start.
+    /// Anything the exact tier does not carry (an elliptical arc) is refused rather than
+    /// flattened, because a stroke's whole claim is that its width is exact.</param>
+    /// <param name="width">Full stroke width (&gt; 0).</param>
+    /// <param name="cap">End treatment; ignored on a circuit.</param>
+    /// <param name="join">Corner style at interior joints.</param>
+    /// <param name="miterLimit">See <see cref="Region2dOffset.DefaultMiterLimit"/>.</param>
+    public static IReadOnlyList<CurvedRegion2d> StrokeExact(
+        IEnumerable<Curve2d> path, double width, StrokeCap cap = StrokeCap.Round,
+        OffsetJoin join = OffsetJoin.Round,
+        double miterLimit = Region2dOffset.DefaultMiterLimit)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        var edges = new List<CurvedEdge2d>();
+        int index = 0;
+        foreach (var curve in path)
+        {
+            if (!curve.TryToCurvedEdges(edges))
+            {
+                throw new ArgumentException(
+                    $"Curve {index} ({curve.GetType().Name}) is not one the exact stroke carries. "
+                    + "The tier is lines, circular arcs and cubic Beziers; flatten the path and use "
+                    + "Region2dOffset.Stroke, which states the chord tolerance it spends.", nameof(path));
+            }
+            index++;
+        }
+        return CurvedRegion2dOffset.Stroke(edges, width, cap, join, miterLimit);
+    }
+
     private static Sketch Requires(Sketch other) =>
         other ?? throw new ArgumentNullException(nameof(other));
 
