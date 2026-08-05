@@ -42,6 +42,28 @@ public class BatchEvaluationTests
             ("halfspace", half),
             ("gyroid", Sdf.Gyroid(5, 1)),
 
+            // The lattice families. Both are deliberately scalar in the batch path — the TPMS
+            // for the transcendental reason the gyroid records, the strut lattices because
+            // their fold and prune are data-dependent branches — so what these entries pin is
+            // that the DEFAULT seam still reproduces the scalar path exactly through every
+            // operator above them.
+            ("tpms-schwarz-p", Sdf.TpmsSheet(TpmsKind.SchwarzP, 5, 1)),
+            ("tpms-schwarz-d", Sdf.TpmsSheet(TpmsKind.SchwarzD, 5, 1)),
+            ("tpms-neovius", Sdf.TpmsSheet(TpmsKind.Neovius, 5, 0.6)),
+            ("tpms-iwp", Sdf.TpmsSheet(TpmsKind.IwP, 5, 0.6)),
+            ("tpms-lidinoid", Sdf.TpmsSheet(TpmsKind.Lidinoid, 5, 0.4)),
+            ("tpms-fischer-koch-s", Sdf.TpmsSheet(TpmsKind.FischerKochS, 5, 0.4)),
+            ("tpms-split-p", Sdf.TpmsSheet(TpmsKind.SplitP, 5, 0.4)),
+            ("tpms-solid-gyroid", Sdf.TpmsSolid(TpmsKind.Gyroid, 5)),
+            ("tpms-solid-iwp", Sdf.TpmsSolid(TpmsKind.IwP, 5, 0.4)),
+            ("tpms-compiled", Sdf.TpmsSheet(TpmsKind.Lidinoid, 5, 0.4).Compile()),
+            ("strut-simple-cubic", Sdf.StrutLattice(StrutLatticeKind.SimpleCubic, 5, 1.2)),
+            ("strut-bcc", Sdf.StrutLattice(StrutLatticeKind.BodyCentredCubic, 5, 1.2)),
+            ("strut-fcc", Sdf.StrutLattice(StrutLatticeKind.FaceCentredCubic, 5, 1)),
+            ("strut-octet", Sdf.StrutLattice(StrutLatticeKind.Octet, 5, 0.8)),
+            ("strut-diamond", Sdf.StrutLattice(StrutLatticeKind.Diamond, 5, 0.8)),
+            ("strut-kelvin", Sdf.StrutLattice(StrutLatticeKind.Kelvin, 5, 0.8)),
+
             ("union", sphere | box),
             ("intersection", sphere & box),
             ("difference", box - cylinder),

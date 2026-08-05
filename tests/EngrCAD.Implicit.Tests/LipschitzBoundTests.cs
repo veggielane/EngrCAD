@@ -58,6 +58,10 @@ public class LipschitzBoundTests(ITestOutputHelper output)
             ("wedge", Sdf.Wedge(10, 8, 9, 3, 1)),
             ("half-space", Sdf.HalfSpace((1, 2, 3), 2)),
             ("gyroid", Sdf.Gyroid(5, 1)),
+            ("tpms-neovius", Sdf.TpmsSheet(TpmsKind.Neovius, 5, 0.6)),
+            ("tpms-solid-lidinoid", Sdf.TpmsSolid(TpmsKind.Lidinoid, 5, 0.2)),
+            ("strut-octet", Sdf.StrutLattice(StrutLatticeKind.Octet, 5, 0.8)),
+            ("strut-diamond", Sdf.StrutLattice(StrutLatticeKind.Diamond, 5, 0.8)),
 
             // Every wrapper, over the twisted core: each must propagate.
             ("union", core | plain),
@@ -158,6 +162,10 @@ public class LipschitzBoundTests(ITestOutputHelper output)
     [InlineData("wedge")]
     [InlineData("half-space")]
     [InlineData("gyroid")]
+    [InlineData("tpms-neovius")]
+    [InlineData("tpms-solid-lidinoid")]
+    [InlineData("strut-octet")]
+    [InlineData("strut-diamond")]
     public void ExactFields_ReportExactlyOne(string name)
     {
         double bound = Field(name).LipschitzBound(new Aabb((-16, -16, -16), (16, 16, 16)));

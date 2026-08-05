@@ -600,10 +600,92 @@ public abstract class Sdf
         new HalfSpaceSdf(normal.Normalized(), offset);
 
     /// <summary>
-    /// Gyroid lattice sheet (triply periodic minimal surface) with the given cell size and
-    /// sheet thickness. Approximate distance, unbounded — intersect with a finite solid.
+    /// Gyroid lattice sheet with the given cell size and sheet thickness — the
+    /// <see cref="TpmsKind.Gyroid"/> member of <see cref="TpmsSheet"/>, kept as a name because
+    /// it is the one every additive-manufacturing model reaches for. Unbounded; intersect with
+    /// a finite solid.
     /// </summary>
-    public static Sdf Gyroid(double cellSize, double thickness) => new GyroidSdf(cellSize, thickness);
+    public static Sdf Gyroid(double cellSize, double thickness) =>
+        TpmsSheet(TpmsKind.Gyroid, cellSize, thickness);
+
+    /// <summary>
+    /// A triply periodic minimal surface <b>thickened into a sheet</b> of the given nominal
+    /// thickness — the wall an infill or a heat exchanger is made of. Unbounded; intersect
+    /// with a finite solid.
+    /// <para>
+    /// <b>Fidelity: a lower bound, not an exact distance</b>, and unlike everything else in
+    /// this engine that is structural rather than incidental. The surface is a level set
+    /// <c>F = 0</c> of a trigonometric polynomial whose gradient magnitude varies over space,
+    /// so the field divides |F| by the GLOBAL maximum of |grad F| — which makes it
+    /// 1-Lipschitz and therefore a genuine lower bound on the distance, the contract meshing
+    /// and culling need, with the sign exact everywhere.
+    /// </para>
+    /// <para>
+    /// <b>The consequence to plan around is that the wall comes out THICKER than
+    /// <paramref name="thickness"/></b>, by the factor by which the local gradient falls short
+    /// of that global maximum. Measured on the surface (median / worst): gyroid 1.15 / 1.22,
+    /// Schwarz D 1.19 / 1.22, Schwarz P 1.36 / 1.73, I-WP 1.22 / 1.59, Fischer–Koch S
+    /// 1.41 / 2.02, Split P 1.59 / 2.83, Neovius 2.69 / 6.99, Lidinoid 2.18 / 56.9. So
+    /// <paramref name="thickness"/> is a guaranteed MINIMUM wall — which is the useful
+    /// direction for a printable part and the wrong one for a mass estimate. When what you
+    /// mean is how much material there is, ask for it directly:
+    /// <see cref="Tpms.SheetForVolumeFraction"/> solves the thickness and reports the fraction
+    /// it achieved.
+    /// </para>
+    /// </summary>
+    public static Sdf TpmsSheet(TpmsKind kind, double cellSize, double thickness)
+    {
+        if (!(cellSize > 0))
+            throw new ArgumentOutOfRangeException(nameof(cellSize), cellSize, "The cell size must be positive.");
+        if (thickness < 0)
+            throw new ArgumentOutOfRangeException(nameof(thickness), thickness, "The thickness must be non-negative.");
+        return new TpmsSheetSdf(TpmsSurface.For(kind), cellSize, thickness);
+    }
+
+    /// <summary>
+    /// A triply periodic minimal surface as a <b>solid (network)</b>: the material on one side
+    /// of the level set <c>F = level</c>, which is a genuinely different solid from the sheet
+    /// of the same surface — one of the two interpenetrating labyrinths rather than the wall
+    /// between them. Unbounded; intersect with a finite solid.
+    /// <para>
+    /// Level 0 is the surface itself, and it splits space exactly evenly for every kind whose
+    /// polynomial has an antisymmetry — Schwarz P, Schwarz D, the gyroid, Neovius and
+    /// Fischer–Koch S — and measurably does not for the other three (I-WP 46.9%, Lidinoid
+    /// 38.5%, Split P 51.0%). Use <see cref="Tpms.SolidForVolumeFraction"/> to state the
+    /// fraction instead of the level.
+    /// </para>
+    /// <para>Same fidelity contract as <see cref="TpmsSheet"/>: 1-Lipschitz, a lower bound on
+    /// the distance, exact sign.</para>
+    /// </summary>
+    public static Sdf TpmsSolid(TpmsKind kind, double cellSize, double level = 0)
+    {
+        if (!(cellSize > 0))
+            throw new ArgumentOutOfRangeException(nameof(cellSize), cellSize, "The cell size must be positive.");
+        return new TpmsSolidSdf(TpmsSurface.For(kind), cellSize, level);
+    }
+
+    /// <summary>
+    /// A strut (beam) lattice: a periodic frame of round beams of the given diameter on the
+    /// given cell. Unbounded; intersect with a finite solid.
+    /// <para>
+    /// <b>Exact distance</b>, and that is the contrast with <see cref="TpmsSheet"/> worth
+    /// knowing: a strut is a capsule, whose distance is exact, and the exact distance to a
+    /// union is the minimum over its members — so <paramref name="strutDiameter"/> means
+    /// exactly what it says, <see cref="LipschitzBound"/> stays 1, and nothing comes out
+    /// thicker than you asked for.
+    /// </para>
+    /// <para><see cref="StrutLattices.ForVolumeFraction"/> solves the diameter for a target
+    /// volume fraction, and <see cref="StrutLattices.UnitCell"/> reports the struts.</para>
+    /// </summary>
+    public static Sdf StrutLattice(StrutLatticeKind kind, double cellSize, double strutDiameter)
+    {
+        if (!(cellSize > 0))
+            throw new ArgumentOutOfRangeException(nameof(cellSize), cellSize, "The cell size must be positive.");
+        if (!(strutDiameter > 0))
+            throw new ArgumentOutOfRangeException(
+                nameof(strutDiameter), strutDiameter, "The strut diameter must be positive.");
+        return new StrutLatticeSdf(StrutCells.For(kind, cellSize), cellSize, strutDiameter / 2);
+    }
 
     /// <summary>The 2D region extruded along +Z from z = 0 to z = <paramref name="height"/>;
     /// exact wherever the region's distance is exact.</summary>
