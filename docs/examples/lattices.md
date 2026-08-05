@@ -29,9 +29,9 @@ fields back into the modeling vocabulary — see
 
 ## Triply periodic minimal surfaces
 
-Eight of them, each the zero level set `F(p) = 0` of a trigonometric polynomial — the
-standard *nodal approximation*, not the exact minimal surface, which is what every
-implicit lattice in additive manufacturing is built from:
+Eight of them, each the zero level set `F(p) = 0` of a trigonometric polynomial. That
+polynomial is the standard *nodal approximation* rather than the exact minimal surface —
+and it is what every implicit lattice in additive manufacturing is built from:
 
 `TpmsKind.SchwarzP`, `SchwarzD`, `Gyroid`, `Neovius`, `IwP`, `Lidinoid`,
 `FischerKochS`, `SplitP`.

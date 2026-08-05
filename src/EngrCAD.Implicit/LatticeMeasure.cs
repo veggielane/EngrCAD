@@ -96,7 +96,11 @@ internal sealed class QuantileTable
     private static readonly ConcurrentDictionary<(object Owner, int Resolution), QuantileTable> Cache = new();
 
     /// <summary>The table for one field at one resolution, built once. Keyed on the owner
-    /// object, so each surface or strut cell has its own and nothing has to name itself.</summary>
+    /// object, so each surface or strut cell has its own and nothing has to name itself.
+    /// <para>Two threads racing the same key can both run the factory — <c>GetOrAdd</c>'s
+    /// documented behaviour — and that is harmless here rather than merely tolerated: the
+    /// sample is a deterministic function of the field, so the loser's table is identical to
+    /// the winner's and is simply dropped (the <c>LazyGridSdf</c> convention).</para></summary>
     public static QuantileTable For(object owner, int resolution, Func<int, double[]> sample) =>
         Cache.GetOrAdd((owner, resolution), key => Build(sample(key.Resolution)));
 
