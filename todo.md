@@ -641,16 +641,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     bézier's or an ellipse's nearest-point is itself a solve, so the residual would need
     its own foot parameter as a VARIABLE — which is the standard treatment and is real
     work rather than a reuse. Filed with the bézier tangency it shares a mechanism with.
-- [ ] **The refinement is still scalar per lane, and only a bit-exact vector
-  cosine/sine would change that.** Not worth writing one: a correctly-rounded vector
-  `sin`/`cos` is a substantial numerics project, and the measurement above says the
-  ceiling it would buy is the ~1.2× the vectorized scan already demonstrates, on the one
-  segment kind that is rarest in real sketches. Filed so the next reader does not
-  re-derive the arithmetic — the barrier is exactness, not effort.
-- [ ] What remains of the item is the third candidate, **lighter B-Rep seam edges**, which
-  is a different question rather than a third application: a seam edge is shared geometry
-  that must WELD, so replacing it with a fit moves both adjacent faces' boundaries and the
-  tolerance stops being the caller's to choose.
 - [ ] **Drill follow-ups** (drill-tip angles ✅ landed — `HoleSpec.WithTipAngle`, exact
   as an identity, depth measured to the shoulder; **cross-PLANE hole validation** ✅
   landed — bounding-cylinder separation plus a separating axis, since collinear tools
@@ -658,16 +648,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   remaining: hole tables, and thread cosmetics/annotation. Not covered by the
   interference test: `ThreadedHole`'s thread void (its tap-drill pilot goes through
   `Drill` and is), and tools from separate `Shape` branches later unioned.
-- [ ] **Ambient occlusion is now the largest single cost of opening a window** (~7–8 s
-  of an ~11 s demo launch before lazy tabs; two thread parts alone are 5.7 s and
-  already saturate every core, so parallelism has no more to give). The next lever is
-  showing the scene flat-lit immediately and streaming occlusion in as bakes finish —
-  *not* making the bake less honest.
-- [ ] **Do NOT "optimize" `BrepQueries.Bounds`** — it is deliberately conservative-over
-  for trimmed fragments (the sphere-piercing fix depends on that), and profiling proved
-  it is not a bottleneck: on the worst engraving case only 113 of 894 face pairs survive
-  it, and all 113 intersections resolve analytically in ~1 ms. Recorded so nobody
-  "fixes" it later.
 - [ ] **Boolean/splitting edge cases** (all LOUD rather than silent. The **bounded
   conic-clipping tier** ✅ landed — `TryPatchQuadric` gives a bounded planar carrier the
   same exact curves the main switch gives a real `PlaneSurface`, which took a bore in an

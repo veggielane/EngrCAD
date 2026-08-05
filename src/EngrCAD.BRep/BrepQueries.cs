@@ -202,6 +202,22 @@ public static class BrepQueries
         return bounds;
     }
 
+    /// <summary>
+    /// The face's bounding box, deliberately CONSERVATIVE-OVER for a trimmed fragment.
+    /// </summary>
+    /// <remarks>
+    /// <b>Do not "optimize" this to a tighter box.</b> The over-estimate is load bearing:
+    /// the sphere-piercing boolean fix depends on a trimmed fragment reporting bounds that
+    /// cover geometry its own loops do not reach, and tightening it would make the boolean
+    /// face-pair prefilter skip real intersections — silently, which is the failure mode
+    /// this whole area is written to avoid.
+    /// <para>
+    /// It is also not a bottleneck, which was PROFILED rather than assumed: on the worst
+    /// engraving case only 113 of 894 face pairs survive the prefilter, and all 113 of
+    /// those intersections then resolve analytically in about a millisecond. The cost is
+    /// in the intersections, not in deciding which pairs to attempt.
+    /// </para>
+    /// </remarks>
     public static Aabb Bounds(this BrepFace face)
     {
         var bounds = Aabb.Empty;
