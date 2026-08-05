@@ -2,4 +2,10 @@
   <PropertyGroup>
     <Description>Foundation math and spatial acceleration for EngrCAD: tolerance policy, vectors, matrices, quaternions, AABB/ray, BVH and octree.</Description>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- CurvedRegion2dBoolean.UseParityIndex is an A/B seam: the cell-classification index
+         has to be MEASURED against the walk it replaces, on a fixture that carries the
+         cells-times-edges product, and asserted result-identical - not assumed. -->
+    <InternalsVisibleTo Include="EngrCAD.Core.Tests" />
+  </ItemGroup>
 </Project>

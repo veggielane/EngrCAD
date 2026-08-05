@@ -186,13 +186,22 @@ public sealed class CurvedRegion2d
     }
 
     /// <summary>Even–odd parity of a +x ray against every loop, ignoring the boundary case.</summary>
+    /// <remarks>
+    /// The walk is written out rather than routed through <see cref="AllLoops"/> because that
+    /// is a <c>yield</c> iterator and this is the innermost loop of every boolean's cell
+    /// classification — one allocation per region per cell. Same terms, same order, same
+    /// answer bit for bit.
+    /// </remarks>
     public bool ParityInside(in Vector2d point)
     {
         int crossings = 0;
-        foreach (var loop in AllLoops())
+        for (int i = 0; i < Outer.Count; i++)
+            crossings += Outer[i].RayCrossings(point);
+        for (int h = 0; h < Holes.Count; h++)
         {
-            foreach (var edge in loop)
-                crossings += edge.RayCrossings(point);
+            var hole = Holes[h];
+            for (int i = 0; i < hole.Count; i++)
+                crossings += hole[i].RayCrossings(point);
         }
         return (crossings & 1) != 0;
     }

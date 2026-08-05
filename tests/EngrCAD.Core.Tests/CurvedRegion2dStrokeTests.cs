@@ -212,6 +212,115 @@ public class CurvedRegion2dStrokeTests
     }
 
     /// <summary>
+    /// The polygonal twin closes the notch when it is TOLD the path is a circuit. It is a
+    /// flag rather than a first-point-equals-last-point guess because a list of POINTS cannot
+    /// express closure: repeating the first point is the only spelling available and it is
+    /// ambiguous with a path that genuinely returns to where it started and stops. Both
+    /// spellings agree once the flag is set.
+    /// </summary>
+    [Fact]
+    public void ThePolygonalTwinClosesTheNotchWhenToldItIsACircuit()
+    {
+        const double side = 10, width = 2;
+        Vector2d[] corners =
+            [new(0, 0), new(side, 0), new(side, side), new(0, side)];
+        Vector2d[] repeated = [.. corners, new Vector2d(0, 0)];
+
+        double open = Region2dOffset
+            .Stroke(repeated, width, StrokeCap.Butt, OffsetJoin.Miter).Sum(r => r.Area);
+        double circuit = Region2dOffset
+            .Stroke(corners, width, StrokeCap.Butt, OffsetJoin.Miter, closed: true).Sum(r => r.Area);
+        double circuitRepeated = Region2dOffset
+            .Stroke(repeated, width, StrokeCap.Butt, OffsetJoin.Miter, closed: true).Sum(r => r.Area);
+
+        Assert.Equal(79, open, 1e-9);
+        Assert.Equal(80, circuit, 1e-9);
+        Assert.Equal(circuit, circuitRepeated, 1e-9);
+
+        // ...and it now agrees with the curved twin, whose chain-of-edges input made closure
+        // structural all along.
+        var square = new[]
+        {
+            CurvedEdge2d.Line((0, 0), (side, 0)),
+            CurvedEdge2d.Line((side, 0), (side, side)),
+            CurvedEdge2d.Line((side, side), (0, side)),
+            CurvedEdge2d.Line((0, side), (0, 0)),
+        };
+        Assert.Equal(
+            CurvedRegion2dOffset.Stroke(square, width, StrokeCap.Butt, OffsetJoin.Miter).Sum(r => r.Area),
+            circuit, 1e-9);
+    }
+
+    /// <summary>
+    /// A circuit takes no caps, which is what the flag buys under a ROUND cap: an open stroke
+    /// of the same points puts a half-disc at each end of the repeated start point, and a
+    /// circuit does not.
+    /// </summary>
+    [Fact]
+    public void ACircuitTakesNoCaps()
+    {
+        Vector2d[] corners = [new(0, 0), new(10, 0), new(10, 10), new(0, 10)];
+        double circuit = Region2dOffset.Stroke(corners, 2, StrokeCap.Round, closed: true).Sum(r => r.Area);
+        double butt = Region2dOffset.Stroke(corners, 2, StrokeCap.Butt, closed: true).Sum(r => r.Area);
+        // Round joins are the only difference between the two on a circuit, and the caps are
+        // absent from both — so the cap style cannot move the answer at all.
+        Assert.Equal(butt, circuit, 1e-12);
+    }
+
+    /// <summary>Nothing that already worked moves: the default is <c>closed: false</c>, and
+    /// an open stroke is bit-for-bit what it always was.</summary>
+    [Fact]
+    public void TheDefaultStaysTheOpenStroke()
+    {
+        Vector2d[] path = [new(0, 0), new(10, 0), new(10, 6)];
+        var byDefault = Region2dOffset.Stroke(path, 2, StrokeCap.Round, OffsetJoin.Round);
+        var stated = Region2dOffset.Stroke(
+            path, 2, StrokeCap.Round, OffsetJoin.Round,
+            Region2dOffset.DefaultMiterLimit, Region2dOffset.DefaultArcTolerance, closed: false);
+        Assert.Equal(byDefault.Count, stated.Count);
+        for (int i = 0; i < byDefault.Count; i++)
+        {
+            Assert.Equal(
+                BitConverter.DoubleToInt64Bits(byDefault[i].Area),
+                BitConverter.DoubleToInt64Bits(stated[i].Area));
+        }
+    }
+
+    /// <summary>
+    /// Every CLOCKWISE joint of a stroked path keeps its outer corner fill. Negating both of
+    /// a joint's normals does NOT flip the turn — <c>Cross(-a, -b) == Cross(a, b)</c> exactly
+    /// — so offering only <c>(l0, l1)</c> and <c>(-l0, -l1)</c> refuses both wedges at a right
+    /// turn and the outer one is the genuine gap. The deficit is exactly one miter corner per
+    /// clockwise joint, which is what this measures: a right turn and a left turn of the same
+    /// angle must stroke to the same area.
+    /// </summary>
+    [Fact]
+    public void ClockwiseJointsKeepTheirOuterFill()
+    {
+        const double width = 2;
+        var left = new[]
+        {
+            CurvedEdge2d.Line((0, 0), (10, 0)),
+            CurvedEdge2d.Line((10, 0), (10, 10)),
+        };
+        var right = new[]
+        {
+            CurvedEdge2d.Line((0, 0), (10, 0)),
+            CurvedEdge2d.Line((10, 0), (10, -10)),
+        };
+        double leftArea = CurvedRegion2dOffset
+            .Stroke(left, width, StrokeCap.Butt, OffsetJoin.Miter).Sum(r => r.Area);
+        double rightArea = CurvedRegion2dOffset
+            .Stroke(right, width, StrokeCap.Butt, OffsetJoin.Miter).Sum(r => r.Area);
+
+        // At a right angle the inner overlap square and the outer miter square are congruent
+        // (both (w/2)²), so a correctly mitered elbow measures exactly the two slabs' area:
+        // 2·L·w. Miss the outer fill and it reads (w/2)² short.
+        Assert.Equal(2 * 10 * width, leftArea, 1e-9);
+        Assert.Equal(leftArea, rightArea, 1e-9);
+    }
+
+    /// <summary>
     /// With round joins and round caps the two readings of a circuit agree as SETS — a full
     /// disc at the closing vertex contains the join wedge — so the contract difference above
     /// is invisible in exactly the configuration where it does not matter. Asserted by
