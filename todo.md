@@ -32,6 +32,43 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Implicit engine (EngrCAD.Implicit)
 
+- [ ] **The strut lattices do not vectorize, and unlike the TPMS family the reason is not a
+  transcendental.** Their batch path is the default scalar loop, so a lattice costs 132–429
+  ns a sample where the arithmetic itself is a handful of clamp-and-project segment
+  distances that would lane out cleanly. What blocks it is that the *candidate list* is
+  data-dependent: the fold picks a sub-cell per point and the list length varies, so a
+  register's four lanes can want four different lists. Two shapes are worth pricing before
+  building either — pad every sub-cell's list to the longest one in the lattice and evaluate
+  the union (wasted work, no branching, and the recorded "block granularity destroys
+  per-lane savings" rule says that may still win), or gather per lane. The bar is the usual
+  one: bit-identical to the scalar path, joined to `BatchEvaluationTests`' catalogue.
+- [ ] **Two TPMS gradient constants are measured suprema rather than derivations**
+  (Fischer–Koch S 2.443972637293, Split P 3.620073899187; the stored values round up at the
+  sixth figure). The five with closed forms are exact and Lidinoid's lands on 3√3/2 to twelve
+  digits, so these two are the outliers. A derivation would remove the "rounded up" caveat
+  and, more usefully, would say whether the supremum is attained on a curve rather than at
+  isolated points — Fischer–Koch S's maximum sits at (x, y, z) with z = π/4 exactly and
+  x − y = 3π/2, which looks like a one-parameter family reachable in closed form.
+  **Do not tighten by fitting**: a constant below the true supremum stops the field being
+  1-Lipschitz, which drops geometry silently.
+- [ ] **A TPMS sheet's thickness is a MINIMUM wall, and for Neovius and Lidinoid the excess
+  is large enough to be a usability problem** (measured median factors 2.69 and 2.18, worst
+  6.99 and 56.9). The cause is structural — the field divides by the GLOBAL `max |grad F|`
+  to stay 1-Lipschitz, while the gradient on the level set is smaller — so the only lever is
+  to normalise by the SURFACE maximum instead and report a `LipschitzBound` above 1 for the
+  difference. That is sound (every consumer already divides by the bound) and it is a real
+  trade: the thickness would mean what it says near the surface, and the field would stop
+  being a lower bound on the distance away from it, which is a contract other code reads.
+  Weigh it as an OPTION with both spellings nameable rather than a silent change, and note
+  that volume fraction already gives an honest answer for the case that motivates it.
+- [ ] **Graded and conformal lattices** — a cell size, thickness or volume fraction that
+  VARIES over space, which is most of what a real lattice-design tool is for (stiffness
+  where the stress is, porosity where the flow is). The field side is a small change for the
+  TPMS family (make ω and the level functions of the point) and a real one for the struts
+  (the fold stops being a fold). The hard part is neither: a graded field is **no longer
+  periodic**, so the volume-fraction estimator's "sample one cell" premise goes, the strut
+  neighbourhood argument goes with it, and the Lipschitz bound picks up the grading's own
+  gradient. Scope it by deciding what stays exact before writing any of it.
 - [ ] **The ellipsoid's Lipschitz bound `2 + (rmax/rmin)²` is sound but loose, and the
   looseness is paid by the polygonizer.** The derivation bounds two factors independently
   (`|∇k1| ≤ k1/rmin²` because every term carries a `1/r_i²`, and `k1 ≥ k0/rmax`), and they

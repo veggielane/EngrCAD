@@ -29,8 +29,12 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
   **`Sdf.Ellipsoid`** (a bound — see [The ellipsoid](#the-ellipsoid-the-one-primitive-with-no-closed-form)),
   **`Sdf.ConvexPolyhedron(halfSpaces)`** (exact inside, a lower bound outside, with FINITE
   bounds by vertex enumeration where `Sdf.Intersection` over the same half-spaces reports
-  infinity), and a gyroid lattice (approximate distance, unbounded — intersect with a finite
-  solid).
+  infinity).
+- **Lattices** (`Tpms.cs`, `StrutLattice.cs`): eight triply periodic minimal surfaces as
+  sheets or networks (`Sdf.TpmsSheet` / `Sdf.TpmsSolid`, `Sdf.Gyroid` still naming the
+  one everybody reaches for) and six strut lattices (`Sdf.StrutLattice`). Both unbounded —
+  intersect with a finite solid. **Two families, two distance contracts, and the difference
+  is the point**: see [Lattices](#lattices-two-families-two-contracts).
 - **Domain operations** (`DomainOperators.cs`): `Repeat(spacing)` / `Repeat(spacing, counts)`,
   `Twist`, `Bend`, `Taper`, `Elongate`, `Displace` — see
   [Domain operations](#domain-operations).
@@ -199,6 +203,121 @@ Nothing in the repository reached the combination (no production path and no ren
 example bakes a grid and then polygonizes it), which is why it had never surfaced;
 `SampledGridSdf` now reports `√3 ×` its source's bound.
 
+## Lattices: two families, two contracts
+
+|  | what it is | distance | what the parameter means |
+|---|---|---|---|
+| `Sdf.TpmsSheet` / `Sdf.TpmsSolid` | a level set of a trigonometric polynomial | a **lower bound** (1-Lipschitz, exact sign) | the thickness is a guaranteed **minimum** wall |
+| `Sdf.StrutLattice` | a periodic union of capsules | **exact** | the diameter is the diameter |
+
+**The TPMS family is not a distance field and the constant it divides by is what makes it
+one.** Each surface is `F(p) = 0` for a trigonometric polynomial — the standard nodal
+approximation — whose gradient magnitude varies over space, so `|F|` says nothing about
+how far the surface is until it is divided by `max |grad F|`. Dividing by the *global*
+maximum makes the field 1-Lipschitz, and a 1-Lipschitz function vanishing on the surface
+is a lower bound on the distance (`|g(p)| = |g(p) − g(nearest)| ≤ |p − nearest|`) — the
+engine's standing contract. Dividing by anything smaller breaks it, and breaks it in the
+direction that drops geometry silently.
+
+So every constant is derived where a derivation exists and measured in every case:
+
+| surface | max \|grad F\| | how |
+|---|---|---|
+| Schwarz P | √3 | `grad F = −(sin x, sin y, sin z)`; attained at (π/2, π/2, π/2), **on the surface** |
+| Schwarz D | √3 | after the product-to-sum collapse `F = sin x·cos(y−z) + cos x·sin(y+z)`, the Gram quadratic maxes at 3 |
+| gyroid | √3 | at `x = t, y = z = −t` two components are identically 1 and the third is cos 2t |
+| Neovius | 7 | `dF/dx = −sin x (3 + 4 cos y cos z)`; the other partials vanish at (π/2, 0, 0) |
+| I-WP | 3√3 | `dF/dz = 4 sin z (1 − cos z)` at x = y = 0, maximized at cos z = −½ |
+| Lidinoid | 3√3 / 2 | no derivation; the dense scan lands on it to twelve digits |
+| Fischer–Koch S | 2.44398 | measured supremum (2.443972637293), rounded up at the sixth figure |
+| Split P | 3.62008 | measured supremum (3.620073899187), likewise |
+
+`TpmsTests.GradientBound_IsSoundAndTight` re-measures each over a dense grid on one cell
+plus a hill climb and asserts the field's own slope is **at most 1 and at least 0.99** —
+sound *and* tight, because a bound that is merely large costs wall thickness in direct
+proportion. Note the measurement takes the gradient by central differences rather than the
+largest secant over a fixed set of chord directions: 26 directions leave up to 20° to the
+true gradient, so such a probe caps out near 0.94 and could never show a constant tight.
+
+**What the constant costs is wall thickness, and it is the first thing a user notices.**
+The sheet `|F| ≤ bound·ω·t/2` has local half-thickness `(bound / |grad F|)·t/2`, so the
+requested thickness is a **minimum** and the excess is exactly how far the local gradient
+falls short of the global maximum. Measured on the level set (median / worst): gyroid
+1.15 / 1.22, Schwarz D 1.19 / 1.22, I-WP 1.22 / 1.59, Schwarz P 1.36 / 1.73, Fischer–Koch
+S 1.41 / 2.02, Split P 1.59 / 2.83, Neovius 2.69 / 6.99, Lidinoid 2.18 / 56.9 (its level
+set passes through a near-critical point where `|grad F|` falls to 0.046). Which is why
+**volume fraction, not thickness, is the parameter offered as the engineering one** —
+`Tpms.SheetForVolumeFraction` / `SolidForVolumeFraction` / `StrutLattices.ForVolumeFraction`
+solve for it and report what they *achieved* (the `BiArcFit.MaxDeviation` convention).
+
+**Level 0 splits space evenly for five of the eight and measurably not for the rest** —
+Schwarz P, Schwarz D, the gyroid, Neovius and Fischer–Koch S have an antisymmetry, while
+Split P measures 0.510, I-WP 0.469 and Lidinoid 0.385. Verified two ways: by counting
+samples, and by polygonizing the network in a block of whole cells and integrating its
+mesh volume, which lands on 0.5000.
+
+**A sheet and a network are different solids**, and the structural statement is about the
+VOID: a sheet is the wall between the two labyrinths so its complement falls into two
+disconnected pieces, while a network *is* one labyrinth so its complement is a single
+piece. Counted by a six-connected flood fill over a sampled block.
+
+### Strut lattices are exact, and `Repeat` cannot build one
+
+A strut is a capsule, whose distance is exact, and the exact distance to a union is the
+minimum over its members — so a strut lattice is an exact distance field, `LipschitzBound`
+stays 1, and nothing comes out thicker than asked.
+
+`Sdf.Repeat` looks like the way to tile a unit cell and **refuses, correctly**. A
+lattice's struts span the whole cell — that is what joins them into a lattice — so a
+capsule's bounds overhang by the strut radius on every side, and `Repeat`'s
+two-cells-per-axis window is sound only while the child fits inside one cell. Shortening
+the axes so the solids fit would make consecutive copies meet at a single tangent point
+instead of joining: a pinched lattice rather than a lattice.
+
+So the node folds the query point itself (an isometry, since the set is lattice-invariant)
+and visits a three-wide neighbourhood — sound because a copy at index 2 or beyond is at
+least a whole cell away, while the nearest strut the window *does* visit is nearer than
+that (measured per kind, with the sampling grid's own resolution added back so the bound
+is certified rather than sampled). The end-to-end check is stronger: the field is compared
+against a brute-force minimum over an explicit 5×5×5 block of capsules, to round-off — not
+bit for bit, because the fold is an isometry mathematically and not arithmetically
+(`(p − shift) − a` and `p − (a + shift)` are the same real number and different doubles) —
+with a companion asserting that comparison can see a missing neighbour.
+
+**The query cost is decided at construction.** Scanning all 27 copies per query measured
+0.9–4.7 µs a sample, which makes a lattice unusable rather than merely slow. Two cheaper
+strategies lost: a running-minimum prune over the struts' own boxes is barely better than
+none (every *cell's* box is the whole cell, since its struts span it), and a BVH over the
+block wins on the big sets and loses on the small ones (0.90 against 0.44 µs for simple
+cubic), so it is not a uniform answer. What is uniform is to prune **once**: the cell is
+divided into 4³ sub-cells, each keeping the struts that can be nearest to a point inside
+it. That selection is exact rather than heuristic — the distance to a segment is convex,
+so its maximum over a box is at a corner, and the smallest such maximum bounds how far a
+point in the sub-cell can be from the whole block. Measured (win-x64, best of five after a
+wall-clock warm-up):
+
+| kind | struts/cell | before | after |
+|---|---|---|---|
+| simple cubic | 3 | 933 | **132** ns/pt |
+| BCC | 4 | 1056 | **230** |
+| FCC | 6 | 1150 | **189** |
+| octet | 18 | 2385 | **429** |
+| diamond | 16 | 989 | **335** |
+| Kelvin | 24 | 1103 | **380** |
+
+For scale, a gyroid sheet is 75 ns/pt and Split P 146, so the two families now cost the
+same order. Two representation notes ride along: a face diagonal is two
+corner-to-face-centre struts end to end, so representing it as ONE segment is the same set
+of material for half the segment distances (which is why the octet reports two strut
+lengths); and the FCC cell carries only the three LOW faces' diagonals, since every face
+is the low face of exactly one cell.
+
+**The half-open fold is load-bearing for the generated Kelvin cell.** A symmetric round
+leaves a midpoint at +cell/2 where it is and one at −cell/2 where it is, so two spellings
+of the same lattice point survive deduplication and the cell came back with 36 struts
+where the bitruncated cubic honeycomb has 24. Flooring the shifted coordinate collapses
+the pair.
+
 ## The ellipsoid: the one primitive with no closed form
 
 A point's distance to an ellipsoid is the root of a degree-6 polynomial, so every practical
@@ -271,10 +390,14 @@ way to sample a grid. Compiling to a *vector* kernel would beat both and is a di
 project: every node's expression would have to be written against `Vector<double>`, and the
 nodes that are deliberately scalar would still be scalar inside it.
 
-Note the asymmetry with vectorization: the gyroid **does** compile, because an expression
+Note the asymmetry with vectorization: every TPMS **does** compile, because an expression
 tree calls `Math.Sin` itself and so is bit-identical, where a SIMD kernel would have to
 substitute a vector sine and could not be. Compilation and vectorization are not the same
-trade.
+trade. For the TPMS family that identity is by construction rather than by testing in a
+second sense too: one term table per surface is the single source of the scalar evaluator
+AND the emitted expression, so there are eight formulas rather than sixteen copies free to
+drift — which is also what let the gyroid move out of `Primitives.cs` with its field
+bit-for-bit unchanged (asserted against a transcription of the closed form it used to be).
 
 ## Batch evaluation (SIMD)
 
@@ -314,15 +437,18 @@ length around the register and chunk boundaries. The suite also passes with
 `DOTNET_EnableHWIntrinsic=0`, which drives every kernel down its scalar tail loop — the
 no-SIMD fallback is exercised, not assumed.
 
-**What is vectorized**: every primitive except the gyroid (sphere, box, cylinder, cone,
+**What is vectorized**: every primitive except the lattices (sphere, box, cylinder, cone,
 torus, capsule, half-space), every set operator and smooth blend, offset/shell, and the
 translate/rotate/mirror/scale transforms, plus the n-ary union/intersection/smooth-union
-and the Wyvill falloff blend. **Deliberately not vectorized**: the gyroid and the
-exponential falloff (they need `Math.Sin`/`Math.Exp`, and no vector transcendental
-reproduces those bit for bit — a silently divergent fast path is worse than none), and
+and the Wyvill falloff blend. **Deliberately not vectorized**: every TPMS (including the
+gyroid) and the exponential falloff (they need `Math.Sin`/`Math.Exp`, and no vector
+transcendental reproduces those bit for bit — a silently divergent fast path is worse than
+none), the **strut lattices** (their fold and per-sub-cell candidate list are
+data-dependent branches, so the vector form is its own piece of work — filed), and
 `ThreadSdf` / the sampled grids / planar-region extrusions (branchy or gather-bound).
 They still batch through the default `EvaluateBatch` loop and still benefit from
-vectorized operands around them.
+vectorized operands around them, and they are bit-identical to the scalar path by
+construction, since not overriding the seam IS the scalar path.
 
 The 2D side of the planar-region nodes *is* vectorized, one layer up: `SketchRegion`
 (EngrCAD.Modeling) implements the `IPlanarRegion` batch seam with lane-wise kernels for

@@ -376,7 +376,7 @@
     },
     {
       "id": "lattice",
-      "page": "examples/implicit.md",
+      "page": "examples/lattices.md",
       "live": true
     },
     {
@@ -461,7 +461,7 @@
     },
     {
       "id": "offset",
-      "page": "examples/implicit.md",
+      "page": "examples/offset.md",
       "live": true
     },
     {
@@ -566,22 +566,22 @@
     },
     {
       "id": "sdf-displace",
-      "page": "examples/implicit.md",
+      "page": "examples/sdf-vocabulary.md",
       "live": true
     },
     {
       "id": "sdf-domain-ops",
-      "page": "examples/implicit.md",
+      "page": "examples/sdf-vocabulary.md",
       "live": true
     },
     {
       "id": "sdf-primitives",
-      "page": "examples/implicit.md",
+      "page": "examples/sdf-vocabulary.md",
       "live": true
     },
     {
       "id": "sdf-repeat",
-      "page": "examples/implicit.md",
+      "page": "examples/sdf-vocabulary.md",
       "live": true
     },
     {
@@ -661,7 +661,7 @@
     },
     {
       "id": "shell",
-      "page": "examples/implicit.md",
+      "page": "examples/shell.md",
       "live": true
     },
     {
@@ -716,7 +716,7 @@
     },
     {
       "id": "smooth-blend",
-      "page": "examples/implicit.md",
+      "page": "examples/blends.md",
       "live": true
     },
     {
@@ -727,6 +727,11 @@
     {
       "id": "stroke-toolpath",
       "page": "examples/2d-views.md",
+      "live": true
+    },
+    {
+      "id": "strut-lattices",
+      "page": "examples/lattices.md",
       "live": true
     },
     {
@@ -779,6 +784,16 @@
     {
       "id": "three-reps",
       "page": "examples/representations.md",
+      "live": true
+    },
+    {
+      "id": "tpms-family",
+      "page": "examples/lattices.md",
+      "live": true
+    },
+    {
+      "id": "tpms-sheet-vs-network",
+      "page": "examples/lattices.md",
       "live": true
     },
     {

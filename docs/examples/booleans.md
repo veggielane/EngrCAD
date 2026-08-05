@@ -40,7 +40,7 @@ scene.Add(new Part("machined block", block, Palette.Sky,
 In the B-Rep lowering the result is **topologically sealed** — it passes `Validate()`
 and Euler–Poincaré with the correct genus, so downstream operations (tessellation,
 STEP export, further booleans) get a watertight solid. For soft, blended joins use
-[smooth booleans](implicit.md) instead.
+[smooth booleans](blends.md) instead.
 
 ## Cuts that break out of more than one face
 
