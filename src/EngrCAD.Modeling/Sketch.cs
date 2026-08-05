@@ -438,13 +438,14 @@ public sealed class Sketch
     /// The sketch as <see cref="CurvedRegion2d"/>s — the currency of the EXACT 2D booleans
     /// and offset, and the way to keep a sketch's arcs through a boolean.
     ///
-    /// <para><b>Fidelity contract.</b> Lines and circular arcs cross UNCHANGED: a bore stays
-    /// a circle, a slot end stays a semicircle, and a boolean of two such sketches has an
-    /// exact closed-form area. Béziers are the one thing still flattened, at
-    /// <paramref name="chordTolerance"/>, and deliberately so — the curved arrangement's
-    /// tangential tie-break is complete for lines and circles and would need an unbounded
-    /// jet for a third shape (see <c>CurvedArrangement2d</c>). A sketch with no Béziers goes
-    /// through this door losslessly; one with Béziers is exact except along them.</para>
+    /// <para><b>Fidelity contract.</b> Lines, circular arcs AND Béziers cross UNCHANGED: a
+    /// bore stays a circle, a slot end stays a semicircle, a glyph outline stays its own
+    /// curve, and a boolean of two such sketches has an exact closed-form area. What is still
+    /// flattened, at <paramref name="chordTolerance"/>, is the ELLIPTICAL arc — the curved
+    /// arrangement's tangential tie-break is complete for lines, circles and cubics because
+    /// Bézout bounds their contact, and an ellipse is a rational curve outside that argument
+    /// (see <c>CurvedArrangement2d</c> and <c>CurveJet2d</c>). A sketch with no elliptical
+    /// arcs goes through this door losslessly; one with them is exact except along them.</para>
     ///
     /// <para>Nesting is re-derived by <see cref="CurvedRegion2d.FromLoops"/>, so hole loops
     /// are detected rather than declared, exactly as in <see cref="ToRegions(double)"/>.</para>
@@ -526,8 +527,9 @@ public sealed class Sketch
             into.Add(CurvedLoop(hole.Segments, chordTolerance));
     }
 
-    /// <summary>One sketch loop as arrangement edges: lines and arcs verbatim, anything else
-    /// (a Bézier) flattened to inscribed chords at <paramref name="chordTolerance"/>.</summary>
+    /// <summary>One sketch loop as arrangement edges: lines, arcs and Béziers verbatim,
+    /// anything else (an elliptical arc) flattened to inscribed chords at
+    /// <paramref name="chordTolerance"/>.</summary>
     private static IReadOnlyList<CurvedEdge2d> CurvedLoop(
         IReadOnlyList<SketchSegment> segments, double chordTolerance)
     {
@@ -535,11 +537,8 @@ public sealed class Sketch
         var scratch = new List<Vector2d>();
         foreach (var segment in segments)
         {
-            if (segment.ToCurve2d().TryToCurvedEdge(out var edge))
-            {
-                edges.Add(edge);
+            if (segment.ToCurve2d().TryToCurvedEdges(edges))
                 continue;
-            }
             scratch.Clear();
             segment.Flatten(chordTolerance, scratch);   // start inclusive, end EXCLUSIVE
             scratch.Add(segment.End);

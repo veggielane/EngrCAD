@@ -54,10 +54,12 @@ public abstract class Curve2d
     /// <remarks>
     /// <para>The default REFUSES rather than sampling, which is the same rule
     /// <see cref="ToCurve3d"/> expresses by being abstract: nothing in this family may
-    /// silently approximate. Only <see cref="Line2d"/> and <see cref="Arc2d"/> override,
-    /// because lines and circles are exactly the tier the curved arrangement can decide
-    /// soundly (see <c>CurvedArrangement2d</c> for why the tangential tie-break is complete
-    /// for them and not for Béziers). Callers that must handle everything flatten the
+    /// silently approximate. <see cref="Line2d"/>, <see cref="Arc2d"/> and
+    /// <see cref="BezierCurve2d"/> override, because lines, circles and CUBICS are exactly
+    /// the tier the curved arrangement can decide soundly (see <c>CurvedArrangement2d</c>
+    /// and <c>CurveJet2d</c> for why the tangential tie-break is complete for them and not
+    /// for a rational curve). What still refuses is <see cref="Ellipse2d"/> and any
+    /// RATIONAL <see cref="NurbsCurve2d"/>; callers that must handle everything flatten the
     /// refusals at a stated chord tolerance and say so — <c>Sketch.ToCurvedRegions</c>
     /// does.</para>
     /// </remarks>
@@ -67,12 +69,32 @@ public abstract class Curve2d
         return false;
     }
 
+    /// <summary>
+    /// This curve as one or MORE arrangement edges. A curve that is a single line, arc or
+    /// cubic answers with one (through <see cref="TryToCurvedEdge"/>); a spline answers with
+    /// its Bézier pieces, since the arrangement's vocabulary has no multi-span shape and
+    /// splitting at the knots is exact rather than a fit.
+    /// </summary>
+    /// <returns>False when nothing in this curve is representable, leaving
+    /// <paramref name="into"/> untouched.</returns>
+    public virtual bool TryToCurvedEdges(List<CurvedEdge2d> into)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        if (!TryToCurvedEdge(out var edge))
+            return false;
+        into.Add(edge);
+        return true;
+    }
+
     /// <summary>The inverse of <see cref="TryToCurvedEdge"/>: an arrangement edge back in
     /// the exact 2D curve vocabulary, so a curved boolean's output can become a
     /// <c>Profile</c> or a <c>Sketch</c> with its arcs intact.</summary>
-    public static Curve2d FromCurvedEdge(in CurvedEdge2d edge) => edge.IsArc
-        ? new Arc2d(edge.Center, edge.Radius, edge.StartAngle, edge.SweepAngle)
-        : new Line2d(edge.Start, edge.End);
+    public static Curve2d FromCurvedEdge(in CurvedEdge2d edge) => edge.Kind switch
+    {
+        CurvedEdgeKind.Arc => new Arc2d(edge.Center, edge.Radius, edge.StartAngle, edge.SweepAngle),
+        CurvedEdgeKind.Bezier => new BezierCurve2d(edge.Start, edge.Control1, edge.Control2, edge.End),
+        _ => new Line2d(edge.Start, edge.End),
+    };
 
     /// <summary>Lifts a sketch-plane point onto a placement frame.</summary>
     private protected static Vector3d Lift(in Frame3d plane, in Vector2d point) =>
@@ -707,6 +729,57 @@ public sealed class BezierCurve2d : Curve2d
         return new NurbsCurve(degree, points, null, knots);
     }
 
+    /// <summary>
+    /// A Bézier as an arrangement edge. Degree 1 is a LINE, degree 2 elevates to the cubic it
+    /// exactly is, degree 3 crosses verbatim; degree 4 and above refuses, because the curved
+    /// arrangement's completeness argument is Bézout's bound on the contact of two implicit
+    /// CUBICS and a quartic would raise it (see <c>CurveJet2d</c>).
+    ///
+    /// <para>A cubic whose control points are EXACTLY collinear and in order is demoted to a
+    /// line. Not an optimization: a straight cubic and a line have the same point set, so
+    /// leaving it a cubic would put two edges of different KINDS on one carrier, which the
+    /// arrangement's dedupe (a kind comparison, then a carrier comparison) cannot see —
+    /// leaving two coincident edges and a zero-area sliver cell. Collinearity is the exact
+    /// <see cref="Predicates2d.Orient2dSign"/>, so the demotion is never a judgement call, and
+    /// the in-order test is what stops a cubic that doubles back along its own chord (whose
+    /// point set is a sub-segment travelled three times) from being called a segment.</para>
+    /// </summary>
+    public override bool TryToCurvedEdge(out CurvedEdge2d edge)
+    {
+        edge = default;
+        switch (Degree)
+        {
+            case 1:
+                edge = CurvedEdge2d.Line(_controlPoints[0], _controlPoints[1]);
+                return true;
+            case 2:
+                edge = CurvedEdge2d.FromQuadratic(_controlPoints[0], _controlPoints[1], _controlPoints[2]);
+                break;
+            case 3:
+                edge = CurvedEdge2d.Bezier(
+                    _controlPoints[0], _controlPoints[1], _controlPoints[2], _controlPoints[3]);
+                break;
+            default:
+                return false;
+        }
+
+        var (p0, p1, p2, p3) = edge.ControlPoints;
+        if (Predicates2d.Orient2dSign(p0, p3, p1) == 0 && Predicates2d.Orient2dSign(p0, p3, p2) == 0)
+        {
+            var chord = p3 - p0;
+            double squared = chord.LengthSquared;
+            // Exact-zero guard: a closed cubic has no chord to project onto and is left alone.
+            if (squared > 0)
+            {
+                double s1 = (p1 - p0).Dot(chord) / squared;
+                double s2 = (p2 - p0).Dot(chord) / squared;
+                if (s1 >= 0 && s1 <= 1 && s2 >= 0 && s2 <= 1 && s1 <= s2)
+                    edge = CurvedEdge2d.Line(p0, p3);
+            }
+        }
+        return true;
+    }
+
     /// <summary>Control points of the derivative curve: n·(P_{i+1} − P_i).</summary>
     private static Vector2d[] Hodograph(Vector2d[] points)
     {
@@ -832,6 +905,68 @@ public sealed class NurbsCurve2d : Curve2d
     public override Interval Domain => new(Knots[Degree], Knots[ControlPoints.Count]);
 
     public override bool IsClosed => PointAt(Domain.Start).AreEqual(PointAt(Domain.End), Tolerance.Default);
+
+    /// <summary>
+    /// A non-rational spline of degree ≤ 3 as its Bézier pieces — one arrangement edge per
+    /// non-empty knot span, EXACTLY.
+    ///
+    /// <para><b>Why Hermite data rather than knot insertion.</b> On one span the curve IS a
+    /// polynomial of degree p ≤ 3, and a cubic is determined completely by its two endpoints
+    /// and two end derivatives — so reading those four numbers off the spline reproduces the
+    /// span's polynomial with nothing computed and nothing fitted. A degree-2 or degree-1
+    /// span is the same statement (the unique cubic through its Hermite data IS that
+    /// quadratic or line), so one rule covers the whole family and the repeated-knot
+    /// bookkeeping of a decomposition never has to be written.</para>
+    ///
+    /// <para>RATIONAL splines refuse: a rational curve of degree p is not a polynomial, so
+    /// Hermite data does not determine it, and its implicit degree is higher than the
+    /// arrangement's Bézout argument allows. The one rational curve the tier does carry is a
+    /// circle, and that arrives as an <see cref="Arc2d"/> rather than as a spline.</para>
+    /// </summary>
+    public override bool TryToCurvedEdges(List<CurvedEdge2d> into)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        if (Degree > 3)
+            return false;
+        foreach (double weight in Weights)
+        {
+            // Exact comparison: a weight is either 1 (polynomial) or it is not.
+            if (weight != 1)
+                return false;
+        }
+
+        int before = into.Count;
+        double previous = Domain.Start;
+        for (int i = Degree; i < ControlPoints.Count; i++)
+        {
+            double next = Knots[i + 1];
+            if (next <= previous || next > Domain.End)
+                continue;
+            AddSpan(previous, next, into);
+            previous = next;
+        }
+        if (previous < Domain.End)
+            AddSpan(previous, Domain.End, into);
+        return into.Count > before;
+
+        void AddSpan(double from, double to, List<CurvedEdge2d> edges)
+        {
+            double span = (to - from) / 3;
+            var start = PointAt(from);
+            var end = PointAt(to);
+            var edge = CurvedEdge2d.Bezier(
+                start,
+                start + DerivativeAt(from) * span,
+                end - DerivativeAt(to) * span,
+                end);
+            // A straight span demotes exactly as BezierCurve2d's does, and for the same
+            // reason — two edges of different KINDS on one carrier are invisible to the
+            // arrangement's dedupe.
+            if (Curve2d.FromCurvedEdge(edge) is BezierCurve2d bezier && bezier.TryToCurvedEdge(out var simplified))
+                edge = simplified;
+            edges.Add(edge);
+        }
+    }
 
     public override Vector2d PointAt(double t)
     {

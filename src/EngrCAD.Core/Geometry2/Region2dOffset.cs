@@ -140,17 +140,37 @@ public static class Region2dOffset
     /// width/2, short of it only by the inscribed-arc sagitta.</para>
     /// </summary>
     /// <param name="path">The polyline's points, in order (at least two distinct;
-    /// exact consecutive duplicates are dropped). NOT closed implicitly — repeat the
-    /// first point to stroke a closed circuit.</param>
+    /// exact consecutive duplicates are dropped). NOT closed implicitly — see
+    /// <paramref name="closed"/>.</param>
     /// <param name="width">Full stroke width (&gt; 0).</param>
-    /// <param name="cap">End treatment — see <see cref="StrokeCap"/>.</param>
+    /// <param name="cap">End treatment — see <see cref="StrokeCap"/>. Ignored when
+    /// <paramref name="closed"/> is set: a circuit has no ends.</param>
     /// <param name="join">Corner style at interior vertices.</param>
     /// <param name="miterLimit">See <see cref="Offset(Region2d, double, OffsetJoin, double, double)"/>.</param>
     /// <param name="arcTolerance">See <see cref="Offset(Region2d, double, OffsetJoin, double, double)"/>.</param>
+    /// <param name="closed">
+    /// Stroke the path as a CIRCUIT: the last point joins back to the first, that closing
+    /// joint gets its corner fill like any other, and no caps are added.
+    ///
+    /// <para><b>Why this is a flag and not a guess.</b> A list of POINTS cannot express
+    /// closure — repeating the first point at the end is the only spelling available, and it
+    /// is ambiguous with a path that genuinely returns to where it started and stops there.
+    /// So the caller states it. It is the same contract
+    /// <c>CurvedRegion2dOffset.Stroke</c> gets for free, where a chain of EDGES makes closure
+    /// structural; the difference is MEASURED rather than asserted: a 10×10 square at width 2
+    /// with <see cref="OffsetJoin.Miter"/> joins comes back at 79 through the repeated-point
+    /// spelling and 80 here, short by exactly the 1×1 outer corner square at the repeated
+    /// start point. Under round joins with round caps the two readings agree as SETS (a full
+    /// disc at the closing vertex contains the join wedge), which is why the gap went unseen
+    /// for so long.</para>
+    ///
+    /// <para>A trailing point exactly equal to the first is dropped, so both spellings of a
+    /// circuit produce the same answer once the flag is set.</para>
+    /// </param>
     public static IReadOnlyList<Region2d> Stroke(
         IReadOnlyList<Vector2d> path, double width, StrokeCap cap = StrokeCap.Round,
         OffsetJoin join = OffsetJoin.Round, double miterLimit = DefaultMiterLimit,
-        double arcTolerance = DefaultArcTolerance)
+        double arcTolerance = DefaultArcTolerance, bool closed = false)
     {
         ArgumentNullException.ThrowIfNull(path);
         if (!(width > 0) || !double.IsFinite(width))
@@ -168,32 +188,44 @@ public static class Region2dOffset
                 continue;
             points.Add(point);
         }
+        // A circuit spelled by repeating the first point carries that repeat as a
+        // NON-consecutive duplicate, so the compaction above cannot see it; dropping it here
+        // makes both spellings of a circuit produce the same answer.
+        if (closed && points.Count > 1 && points[^1] == points[0])
+            points.RemoveAt(points.Count - 1);
         if (points.Count < 2)
             throw new ArgumentException("A stroked path needs at least two distinct points.", nameof(path));
+        if (closed && points.Count < 3)
+            throw new ArgumentException("A stroked circuit needs at least three distinct points.", nameof(path));
 
         double half = width / 2;
         int n = points.Count;
-        var directions = new Vector2d[n - 1];
-        for (int i = 0; i < n - 1; i++)
-            directions[i] = (points[i + 1] - points[i]).Normalized();
+        int segments = closed ? n : n - 1;
+        var directions = new Vector2d[segments];
+        for (int i = 0; i < segments; i++)
+            directions[i] = (points[(i + 1) % n] - points[i]).Normalized();
 
         var primitives = new List<Region2d>();
 
         // Slabs: the full-width rectangle per segment.
-        for (int i = 0; i < n - 1; i++)
+        for (int i = 0; i < segments; i++)
         {
             var shift = directions[i].Perpendicular * half;
-            primitives.Add(new Region2d(
-                [points[i] + shift, points[i + 1] + shift, points[i + 1] - shift, points[i] - shift]));
+            var a = points[i];
+            var b = points[(i + 1) % n];
+            primitives.Add(new Region2d([a + shift, b + shift, b - shift, a - shift]));
         }
 
         // Interior joins: offer the corner fill on BOTH sides. The turn's outer side
         // has the genuine gap; the inner side's wedge lies inside its own slabs (so
         // the union is unchanged), and an exact reversal fills both half-discs —
         // exactly the round nose a doubled-back path needs.
-        for (int i = 1; i < n - 1; i++)
+        // A circuit's closing joint (at points[0], between the last segment and the first) is
+        // an ordinary interior corner and gets its fill like any other — which is the whole
+        // difference the `closed` flag buys.
+        for (int i = closed ? 0 : 1; i < (closed ? n : n - 1); i++)
         {
-            var left0 = directions[i - 1].Perpendicular;
+            var left0 = directions[(i - 1 + segments) % segments].Perpendicular;
             var left1 = directions[i].Perpendicular;
             // Each side is offered in BOTH orders, because `AddCornerJoin`'s gate admits a
             // pair only when its sweep is counter-clockwise — so which ORDER spells a
@@ -213,8 +245,8 @@ public static class Region2dOffset
             AddCornerJoin(points[i], -left1, -left0, half, join, miterLimit, arcTolerance, primitives);
         }
 
-        // Caps.
-        if (cap != StrokeCap.Butt)
+        // Caps — a circuit has no ends, so it gets none.
+        if (!closed && cap != StrokeCap.Butt)
         {
             AddCap(points[0], -directions[0], half, cap, arcTolerance, primitives);
             AddCap(points[^1], directions[^1], half, cap, arcTolerance, primitives);

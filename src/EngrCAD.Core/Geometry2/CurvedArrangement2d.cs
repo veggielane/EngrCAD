@@ -1,10 +1,10 @@
 namespace EngrCAD.Core.Geometry2;
 
 /// <summary>
-/// Planar arrangement whose edges are CURVES — straight segments and circular arcs
-/// (<see cref="CurvedEdge2d"/>). Inserted edges split existing ones (and are themselves
-/// split) at every contact, so the resulting graph has no two edges that cross away from a
-/// shared vertex; bounded cells are extracted with <see cref="ExtractCells"/>.
+/// Planar arrangement whose edges are CURVES — straight segments, circular arcs and cubic
+/// Béziers (<see cref="CurvedEdge2d"/>). Inserted edges split existing ones (and are
+/// themselves split) at every contact, so the resulting graph has no two edges that cross
+/// away from a shared vertex; bounded cells are extracted with <see cref="ExtractCells"/>.
 ///
 /// <para><b>Why a parallel type and not an extension of <see cref="Arrangement2d"/>.</b>
 /// The straight arrangement is boolean-critical: <c>Region2dBoolean</c>, <c>Region2dOffset</c>,
@@ -24,16 +24,17 @@ namespace EngrCAD.Core.Geometry2;
 /// so its threshold is a LENGTH, and that length is <see cref="VertexSnapTolerance"/>: no
 /// second epsilon exists in this type or in <see cref="CurveIntersection2d"/>.</para>
 ///
-/// <para><b>The tangential case is decidable, and that is why the tier stops at arcs.</b>
-/// The cell walk orders edges at a node by their departure TANGENT, with the departure
-/// CURVATURE as the tie-break. For lines and circles, agreeing in both at a point means
-/// having the same carrier — a line and a circle never osculate, and two circles that
-/// osculate are one circle — so the tie-break is complete and the walk never guesses. A
-/// third shape (a Bézier, a general NURBS) breaks that: two distinct curves can agree to
-/// second order and separate only in the third derivative, so the rule would need a jet of
-/// unbounded order. Béziers are therefore flattened before they reach here, and the
-/// comparator REFUSES rather than guessing if it is ever handed a second-order tie between
-/// different carriers.</para>
+/// <para><b>The tangential case is decidable, and that is why the tier stops where it does.</b>
+/// The cell walk orders edges at a node by their departure TANGENT, tie-broken by the
+/// departure GRAPH JET — the coefficients a₂, a₃, … of y = f(x) in the branch's own tangent
+/// frame, of which a₂ = κ/2 is the first. For lines and circles a₂ alone settles it (a line
+/// and a circle never osculate, and two circles that osculate are one circle), and for
+/// CUBICS the jet is still complete but needs more of it: Bézout bounds the contact of two
+/// distinct algebraic curves of implicit degree ≤ 3 at order 9, so agreement through a₉
+/// means one carrier rather than two. <see cref="CurveJet2d"/> carries that argument and the
+/// arithmetic. What is genuinely outside the tier is anything RATIONAL other than a circle —
+/// an ellipse, a general NURBS — and the comparator REFUSES by name rather than guessing if
+/// one ever reaches it.</para>
 /// </summary>
 public sealed class CurvedArrangement2d
 {
@@ -128,6 +129,14 @@ public sealed class CurvedArrangement2d
     public void Insert(CurvedEdge2d edge)
     {
         if (edge.IsArc && Math.Abs(edge.SweepAngle) > Math.PI)
+        {
+            Insert(edge.Sub(0, 0.5));
+            Insert(edge.Sub(0.5, 1));
+            return;
+        }
+        // A Bézier loop closes on itself for the same reason a full circle does, and the fan
+        // order and the cell walk both assume an edge meets each of its endpoints once.
+        if (edge.IsBezier && edge.Start.DistanceTo(edge.End) <= VertexSnapTolerance)
         {
             Insert(edge.Sub(0, 0.5));
             Insert(edge.Sub(0.5, 1));
@@ -369,6 +378,11 @@ public sealed class CurvedArrangement2d
             if (!CurveIntersection2d.SameCarrier(geometry, piece, VertexSnapTolerance))
                 continue;
             if (geometry.IsArc && Math.Sign(geometry.SweepAngle) != Math.Sign(piece.SweepAngle))
+                continue;
+            // A cubic's two directions of travel share a carrier, so the departure tangent is
+            // what separates them — the arc's sweep-sign test, for a shape whose orientation
+            // lives in its control polygon rather than in a signed angle.
+            if (geometry.IsBezier && geometry.TangentAt(0).Dot(piece.TangentAt(0)) <= 0)
                 continue;
             return eid;
         }
@@ -674,49 +688,85 @@ public sealed class CurvedArrangement2d
         }
     }
 
-    /// <summary>Stable sort of one cyclic run of the fan by ascending departure curvature —
-    /// the larger signed curvature sits further counter-clockwise, from
-    /// p(s) = v + s·d + ½s²κ·n̂.</summary>
+    /// <summary>
+    /// Stable sort of one cyclic run of the fan by ascending departure GRAPH JET — the local
+    /// coefficients of y = f(x) in each branch's own tangent frame, compared
+    /// lexicographically from a₂ up, so the branch that lies further to the LEFT just past
+    /// the node sits further counter-clockwise. The first coefficient is a₂ = κ/2, so this is
+    /// the curvature rule of the lines-and-arcs tier with the higher orders a Bézier needs
+    /// added behind it (see <see cref="CurveJet2d"/> for why a BOUNDED jet decides it).
+    /// </summary>
     private void SortRun(int v, int[] fan, double[] curvatures, int from, int length, int n)
     {
+        var jets = new double[length][];
+        for (int k = 0; k < length; k++)
+        {
+            jets[k] = new double[CurveJet2d.Coefficients];
+            int edge = fan[(from + k) % n];
+            var entry = _edges[edge];
+            CurveJet2d.GraphCoefficients(entry.Geometry, entry.A == v, jets[k]);
+        }
+
         var order = new int[length];
         for (int k = 0; k < length; k++)
             order[k] = k;
-        // Stable by construction: equal curvature falls back to the incoming position, so a
+        // Stable by construction: an all-equal jet falls back to the incoming position, so a
         // near-parallel pair of STRAIGHT edges keeps the exact orientation sign's answer.
         Array.Sort(order, (p, q) =>
         {
-            int byCurvature = curvatures[(from + p) % n].CompareTo(curvatures[(from + q) % n]);
-            return byCurvature != 0 ? byCurvature : p.CompareTo(q);
+            int byJet = CompareJets(jets[p], jets[q]);
+            return byJet != 0 ? byJet : p.CompareTo(q);
         });
 
         var ids = new int[length];
         var values = new double[length];
+        var sortedJets = new double[length][];
         for (int k = 0; k < length; k++)
         {
             ids[k] = fan[(from + order[k]) % n];
             values[k] = curvatures[(from + order[k]) % n];
+            sortedJets[k] = jets[order[k]];
         }
         for (int k = 0; k + 1 < length; k++)
         {
-            // Equal tangent AND equal curvature means the two carriers osculate. For lines
-            // and circles that implies one carrier, which insertion already deduped — so
-            // reaching this state means the input is outside the tier, and the walk refuses
-            // rather than picking one. (Two straight edges tie at curvature 0 legitimately;
-            // they are ordered by the exact sign above and never reach here.)
-            if (values[k] == values[k + 1] && (EdgeAt(ids[k]).IsArc || EdgeAt(ids[k + 1]).IsArc))
+            // Equal tangent AND an equal jet through a₉ means the two carriers OSCULATE to an
+            // order Bézout forbids for distinct carriers of this tier — so they share one,
+            // which insertion already dedupes. Reaching this state therefore means the input
+            // is outside the tier (a rational curve, a higher-degree spline), and the walk
+            // refuses rather than picking one. Two straight edges tie legitimately at an
+            // all-zero jet; they are ordered by the exact orientation sign above and are
+            // exempt here.
+            if (CompareJets(sortedJets[k], sortedJets[k + 1]) != 0)
+                continue;
+            if (!EdgeAt(ids[k]).IsArc && !EdgeAt(ids[k]).IsBezier
+                && !EdgeAt(ids[k + 1]).IsArc && !EdgeAt(ids[k + 1]).IsBezier)
             {
-                throw new InvalidOperationException(
-                    $"Curved arrangement cannot order two edges leaving {_vertices[v]}: they share a "
-                    + "tangent and a curvature but not a carrier (osculating curves are outside the "
-                    + "line/arc tier).");
+                continue;
             }
+            throw new InvalidOperationException(
+                $"Curved arrangement cannot order two edges leaving {_vertices[v]}: they share a "
+                + $"tangent and every graph coefficient through order {CurveJet2d.Order} but not a "
+                + "carrier. Bezout bounds the contact of two distinct lines, circles or cubics at "
+                + "order 9, so this input carries a curve outside the tier.");
         }
         for (int k = 0; k < length; k++)
         {
             fan[(from + k) % n] = ids[k];
             curvatures[(from + k) % n] = values[k];
         }
+    }
+
+    /// <summary>Lexicographic order on two graph jets: the first coefficient that differs
+    /// decides, and the larger one is further counter-clockwise.</summary>
+    private static int CompareJets(double[] first, double[] second)
+    {
+        for (int k = 0; k < first.Length; k++)
+        {
+            int comparison = first[k].CompareTo(second[k]);
+            if (comparison != 0)
+                return comparison;
+        }
+        return 0;
     }
 
     /// <summary>Are two departures parallel to within the uncertainty their own geometry
@@ -738,11 +788,13 @@ public sealed class CurvedArrangement2d
         var entry = _edges[edge];
         if (entry.A == v)
         {
-            curvature = entry.Geometry.SignedCurvature;
+            curvature = entry.Geometry.SignedCurvatureAt(0);
             return entry.Geometry.TangentAt(0);
         }
-        // Travelling backwards negates the signed curvature along with the tangent.
-        curvature = -entry.Geometry.SignedCurvature;
+        // Travelling backwards negates the signed curvature along with the tangent — and
+        // reads it at the FAR end, which is the same number for a line or an arc and a
+        // different one for a cubic.
+        curvature = -entry.Geometry.SignedCurvatureAt(1);
         return -entry.Geometry.TangentAt(1);
     }
 

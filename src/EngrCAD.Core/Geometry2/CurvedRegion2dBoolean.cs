@@ -256,8 +256,13 @@ public static class CurvedRegion2dBoolean
         in CurvedEdge2d first, in CurvedEdge2d second, double tolerance, out CurvedEdge2d fused)
     {
         fused = default;
-        if (first.IsArc != second.IsArc)
+        if (first.Kind != second.Kind)
             return false;
+        // Two consecutive pieces of one cubic are NOT restrictions of one another, so
+        // SameCarrier cannot answer for them; TryFuseCubics carries its own verification and
+        // it is the stronger one (a full control-polygon comparison).
+        if (first.IsBezier)
+            return TryFuseCubics(first, second, tolerance, out fused);
         if (!CurveIntersection2d.SameCarrier(first, second, tolerance))
             return false;
         // Same direction of travel, so a 180-degree reversal (a slit) is never fused away.
@@ -283,6 +288,57 @@ public static class CurvedRegion2dBoolean
     }
 
     /// <summary>
+    /// Fuses two consecutive cubic pieces of ONE cubic back into it.
+    ///
+    /// <para>The split point's parameter on the fused curve is recoverable in closed form:
+    /// a restriction to [0, u] scales the end derivative by u and one to [u, 1] scales it by
+    /// (1 − u), so <c>u = |first′(1)| / (|first′(1)| + |second′(0)|)</c> — no search and no
+    /// second tolerance. Extrapolating <paramref name="first"/> from [0, u] back to [0, 1] is
+    /// then the ordinary Hermite construction, and the candidate is ACCEPTED only if its own
+    /// restriction to [u, 1] reproduces <paramref name="second"/>'s control polygon within
+    /// <paramref name="tolerance"/>. So a fuse can never quietly change the curve: the
+    /// verification is a comparison of POINTS, and a pair that is merely nearly collinear in
+    /// parameter simply fails it and stays two edges.</para>
+    /// </summary>
+    private static bool TryFuseCubics(
+        in CurvedEdge2d first, in CurvedEdge2d second, double tolerance, out CurvedEdge2d fused)
+    {
+        fused = default;
+        double d1 = first.DerivativeAt(1).Length;
+        double d2 = second.DerivativeAt(0).Length;
+        double total = d1 + d2;
+        // Exact-zero guard: a cusp at the joint carries no parameter ratio.
+        if (!(total > 0) || !(d1 > 0) || !(d2 > 0))
+            return false;
+        double u = d1 / total;
+
+        // first = F|[0, u], so F is first re-parameterized by tau -> tau/u: same start, same
+        // start derivative scaled by 1/u, and the far end read off second.
+        var candidate = CurvedEdge2d.Bezier(
+            first.Start,
+            first.Start + first.DerivativeAt(0) / (3 * u),
+            second.End - second.DerivativeAt(1) / (3 * (1 - u)),
+            second.End);
+
+        var (q0, q1, q2, q3) = candidate.Sub(0, u).ControlPoints;
+        var (p0, p1, p2, p3) = first.ControlPoints;
+        if (q0.DistanceTo(p0) > tolerance || q1.DistanceTo(p1) > tolerance
+            || q2.DistanceTo(p2) > tolerance || q3.DistanceTo(p3) > tolerance)
+        {
+            return false;
+        }
+        var (r0, r1, r2, r3) = candidate.Sub(u, 1).ControlPoints;
+        var (s0, s1, s2, s3) = second.ControlPoints;
+        if (r0.DistanceTo(s0) > tolerance || r1.DistanceTo(s1) > tolerance
+            || r2.DistanceTo(s2) > tolerance || r3.DistanceTo(s3) > tolerance)
+        {
+            return false;
+        }
+        fused = candidate;
+        return true;
+    }
+
+    /// <summary>
     /// A point strictly inside a cell: the outer-chain edge midpoint with the greatest
     /// usable push, moved half that push along the inward (left) normal. The push is
     /// <c>min(clearance to any other edge, the edge's own curvature radius)</c> — see the
@@ -303,7 +359,10 @@ public static class CurvedRegion2dBoolean
             double clearance = index.NearestDistance(midpoint, directed >> 1);
             if (double.IsInfinity(clearance))
                 continue;
-            double reach = edge.IsArc ? Math.Min(clearance, edge.Radius) : clearance;
+            // The curvature cap is asked as ONE rule: it is +infinity for a straight edge (so
+            // the push is the straight case's, bit for bit), the arc's own radius, and 1/|κ|
+            // at the midpoint of a cubic.
+            double reach = Math.Min(clearance, edge.CurvatureRadiusAt(0.5));
             double step = 0.5 * reach;
             if (!(step > bestStep))
                 continue;

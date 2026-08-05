@@ -70,6 +70,14 @@ public static class CurvedRegion2dOffset
         // Deliberate exact-zero test: "no offset requested" is a caller contract.
         if (delta == 0 || regions.Count == 0)
             return [.. regions];
+        foreach (var region in regions)
+        {
+            foreach (var loop in region.AllLoops())
+            {
+                foreach (var edge in loop)
+                    RequireOffsettable(edge, nameof(regions));
+            }
+        }
         return delta > 0
             ? Grow(regions, delta, join, miterLimit)
             : Shrink(regions, -delta, join, miterLimit);
@@ -132,6 +140,7 @@ public static class CurvedRegion2dOffset
         var edges = new List<CurvedEdge2d>(path.Count);
         foreach (var edge in path)
         {
+            RequireOffsettable(edge, nameof(path));
             if (edge.Length != 0)
                 edges.Add(edge);
         }
@@ -169,8 +178,21 @@ public static class CurvedRegion2dOffset
             var left0 = incoming.TangentAt(1).Perpendicular;
             var left1 = edges[i].TangentAt(0).Perpendicular;
             var vertex = edges[i].Start;
+            // Each side is offered in BOTH orders, because AddCornerJoin's gate admits a pair
+            // only when its sweep is counter-clockwise — so which ORDER spells a side's
+            // sector depends on which way the path turns. Exactly two of these four survive
+            // the gate (one per side) at any real joint, and the inner one lies inside its
+            // own slabs so the union is unchanged.
+            //
+            // Offering only (left0, left1) and (-left0, -left1) is WRONG, and silently:
+            // Cross(-a, -b) == Cross(a, b) EXACTLY, so negating both normals does not flip
+            // the turn and the two calls always agree. At a left turn both are proper sectors
+            // and the answer is right; at a RIGHT turn both are clockwise and both are
+            // refused, so every right-hand joint loses its outer fill.
             AddCornerJoin(vertex, left0, left1, half, join, miterLimit, primitives);
+            AddCornerJoin(vertex, left1, left0, half, join, miterLimit, primitives);
             AddCornerJoin(vertex, -left0, -left1, half, join, miterLimit, primitives);
+            AddCornerJoin(vertex, -left1, -left0, half, join, miterLimit, primitives);
         }
 
         if (!closed && cap != StrokeCap.Butt)
@@ -180,6 +202,28 @@ public static class CurvedRegion2dOffset
         }
 
         return CurvedRegion2dBoolean.UnionAll(primitives);
+    }
+
+    /// <summary>
+    /// Refuses a cubic BY NAME rather than offsetting it wrongly.
+    ///
+    /// <para>This is a statement about geometry, not a gap in the implementation: the offset
+    /// of a cubic Bézier is not a Bézier of any degree — it is an algebraic curve of degree
+    /// 10 — so there is no exact slab to raise and no honest way for this tier to keep its
+    /// brand. The boolean and the arrangement carry cubics exactly; the OFFSET is where the
+    /// polynomial family stops being closed, and the message says which door to use instead
+    /// rather than leaving the caller to discover a wrong answer.</para>
+    /// </summary>
+    private static void RequireOffsettable(in CurvedEdge2d edge, string parameterName)
+    {
+        if (!edge.IsBezier)
+            return;
+        throw new ArgumentException(
+            "The exact offset carries lines and circular arcs only, and this region contains a "
+            + $"cubic Bézier ({edge}). A cubic's offset is an algebraic curve of degree 10, not a "
+            + "Bézier, so there is no exact primitive to raise for it. Flatten first — "
+            + "CurvedRegion2d.ToRegion(chordTolerance) then Region2dOffset, or Sketch.Offset — "
+            + "which states the chord tolerance it spends.", parameterName);
     }
 
     private static IReadOnlyList<CurvedRegion2d> Grow(
