@@ -19,18 +19,19 @@ namespace EngrCAD.Implicit;
 // to an instance the two-cell window never visits. Shortening the axes to make the SOLIDS
 // fit would make consecutive copies meet at a single tangent point instead of joining, which
 // is a pinched lattice rather than a lattice. So this node folds the query point itself and
-// visits a three-wide neighbourhood, and pays for the wider window with a prune.
+// visits a three-wide neighbourhood, expanded once at construction and indexed.
 //
 // THE SOUNDNESS ARGUMENT. The strut set is invariant under the lattice, so d(p, S) =
 // d(fold(p), S) with fold(p) = p - cell*round(p/cell) an isometry landing in [-cell/2,
 // cell/2]^3. Every strut axis of the unit cell lies within that box too (the unit cells below
 // are built so, with each strut's MIDPOINT folded in), so a copy at lattice index n differs
 // from the folded point by at least (|n_i| - 1)*cell along axis i: any |n_i| >= 2 is at least
-// one full cell away. The cell's own struts are never further than a cell away from a point
-// inside it — measured per kind by StrutLatticeTests.OwnCellCoversTheQueryPoint, and asserted
-// there rather than assumed — so the 27 copies with |n_i| <= 1 contain the nearest one. The
-// end-to-end check is stronger than the argument: the field is compared for EQUALITY against
-// a brute-force minimum over an explicit 5x5x5 block of capsules.
+// one full cell away. The nearest strut the window DOES visit is nearer than that — measured
+// per kind by StrutLatticeTests.TheVisitedNeighbourhoodCoversTheQueryPoint, with the grid's
+// own resolution added back so the bound is certified rather than merely sampled — so the 27
+// copies with |n_i| <= 1 contain the nearest one. The end-to-end check is stronger than the
+// argument: the field is compared against a brute-force minimum over an explicit 5x5x5 block
+// of capsules, with a companion showing that comparison can see a missing neighbour.
 //
 // Deliberately scalar in the batch path for now. A capsule kernel vectorizes well, but the
 // fold and the per-point prune are data-dependent branches, so the vector form is its own
@@ -341,81 +342,147 @@ internal static class StrutCells
 /// </summary>
 internal sealed class StrutLatticeSdf : Sdf
 {
-    /// <summary>The 27 lattice offsets, ordered by how far the copy can be from a folded
-    /// point (the cell itself first): the prune below is a branch and bound, so the order it
-    /// meets candidates in decides how many segment distances it pays for.</summary>
-    private static readonly (int X, int Y, int Z)[] Neighbourhood = BuildNeighbourhood();
+    /// <summary>Sub-cells per axis for the candidate lists. Four is where the measurement puts
+    /// it: the lists are short enough that the scan is a handful of segment distances, and the
+    /// build stays a few milliseconds.</summary>
+    private const int Buckets = 4;
 
-    private readonly (Vector3d A, Vector3d B)[] _struts;
-    private readonly double _cell;
-    private readonly double _radius;
-    private readonly Vector3d _min, _max;
+    private readonly Vector3d[] _a, _b;
+    private readonly int[] _bucketStart;   // Buckets^3 + 1 offsets into _bucketItems
+    private readonly int[] _bucketItems;
+    private readonly double _cell, _radius, _bucketSize;
 
-    public StrutLatticeSdf((Vector3d A, Vector3d B)[] struts, double cell, double radius)
+    /// <summary>
+    /// <b>The query cost is decided here, not in Evaluate.</b> The visited neighbourhood is
+    /// 27 copies of the unit cell — up to 648 segments for Kelvin — and scanning all of them
+    /// per query is what makes a lattice unusable rather than merely slow (measured 4.7
+    /// microseconds a sample, so a single polygonization runs into minutes). Two cheaper
+    /// strategies were measured and both lost: a running-minimum prune over the struts' own
+    /// boxes is barely better than no prune at all (4.1 microseconds), and a BVH over the
+    /// block wins on the big sets and LOSES on the small ones (0.9 against 0.44 for simple
+    /// cubic), so it is not a uniform answer either.
+    /// <para>
+    /// What is uniform is to do the pruning ONCE. The cell is divided into 4^3 sub-cells and
+    /// each keeps the list of struts that can be nearest to a point inside it, so a query is a
+    /// fold, an index and a short scan. The selection is exact rather than heuristic: the
+    /// distance to a segment is a CONVEX function, so its maximum over a box is attained at a
+    /// corner, and <c>U = min over struts of (max over the sub-cell's corners)</c> is an upper
+    /// bound on how far a point in that sub-cell can be from the whole block. Any strut whose
+    /// box is further than U from the sub-cell therefore cannot be nearest to any point in it,
+    /// and is dropped.
+    /// </para>
+    /// </summary>
+    public StrutLatticeSdf((Vector3d A, Vector3d B)[] unitCell, double cell, double radius)
     {
-        _struts = struts;
         _cell = cell;
         _radius = radius;
-        var min = new Vector3d(double.PositiveInfinity, double.PositiveInfinity, double.PositiveInfinity);
-        var max = -min;
-        foreach (var (a, b) in struts)
-        {
-            min = Vector3d.Min(min, Vector3d.Min(a, b));
-            max = Vector3d.Max(max, Vector3d.Max(a, b));
-        }
-        _min = min;
-        _max = max;
-    }
+        _bucketSize = cell / Buckets;
 
-    private static (int, int, int)[] BuildNeighbourhood()
-    {
-        var offsets = new List<(int, int, int)>(27);
-        for (int ring = 0; ring <= 3; ring++)
-            for (int i = -1; i <= 1; i++)
-                for (int j = -1; j <= 1; j++)
-                    for (int k = -1; k <= 1; k++)
-                        if (Math.Abs(i) + Math.Abs(j) + Math.Abs(k) == ring)
-                            offsets.Add((i, j, k));
-        return [.. offsets];
+        _a = new Vector3d[unitCell.Length * 27];
+        _b = new Vector3d[_a.Length];
+        var min = new Vector3d[_a.Length];
+        var max = new Vector3d[_a.Length];
+        int at = 0;
+        for (int i = -1; i <= 1; i++)
+            for (int j = -1; j <= 1; j++)
+                for (int k = -1; k <= 1; k++)
+                {
+                    var shift = new Vector3d(cell * i, cell * j, cell * k);
+                    foreach (var (a, b) in unitCell)
+                    {
+                        _a[at] = a + shift;
+                        _b[at] = b + shift;
+                        min[at] = Vector3d.Min(_a[at], _b[at]);
+                        max[at] = Vector3d.Max(_a[at], _b[at]);
+                        at++;
+                    }
+                }
+
+        // A sub-cell's box is grown by a scale-free sliver, because the fold's own round-off
+        // can leave a query point an ulp outside the cell and the list must still be the right
+        // one for it. Growing a box can only lengthen a list, never shorten it.
+        double slack = 1e-12 * cell;
+        double half = cell / 2;
+        _bucketStart = new int[Buckets * Buckets * Buckets + 1];
+        var items = new List<int>();
+        int bucket = 0;
+        for (int i = 0; i < Buckets; i++)
+            for (int j = 0; j < Buckets; j++)
+                for (int k = 0; k < Buckets; k++)
+                {
+                    var lo = new Vector3d(
+                        -half + i * _bucketSize - slack,
+                        -half + j * _bucketSize - slack,
+                        -half + k * _bucketSize - slack);
+                    var hi = lo + new Vector3d(_bucketSize + 2 * slack, _bucketSize + 2 * slack, _bucketSize + 2 * slack);
+
+                    double reach = double.PositiveInfinity;
+                    for (int s = 0; s < _a.Length; s++)
+                        reach = Math.Min(reach, FurthestCorner(lo, hi, s));
+
+                    _bucketStart[bucket++] = items.Count;
+                    for (int s = 0; s < _a.Length; s++)
+                        if (BoxDistance(lo, hi, min[s], max[s]) <= reach)
+                            items.Add(s);
+                }
+        _bucketStart[bucket] = items.Count;
+        _bucketItems = [.. items];
     }
 
     public override double Evaluate(in Vector3d p)
     {
+        // Fold into the cell — an isometry, since the strut set is invariant under the
+        // lattice, and the step that lets one block of struts answer for all of space.
         double qx = p.X - _cell * Math.Round(p.X / _cell);
         double qy = p.Y - _cell * Math.Round(p.Y / _cell);
         double qz = p.Z - _cell * Math.Round(p.Z / _cell);
+        var q = new Vector3d(qx, qy, qz);
+
+        double half = _cell / 2;
+        int i = Math.Clamp((int)((qx + half) / _bucketSize), 0, Buckets - 1);
+        int j = Math.Clamp((int)((qy + half) / _bucketSize), 0, Buckets - 1);
+        int k = Math.Clamp((int)((qz + half) / _bucketSize), 0, Buckets - 1);
+        int bucket = (i * Buckets + j) * Buckets + k;
 
         double best = double.PositiveInfinity;
-        foreach (var (i, j, k) in Neighbourhood)
-        {
-            var q = new Vector3d(qx - _cell * i, qy - _cell * j, qz - _cell * k);
-            // A copy whose whole axis box is already further than the incumbent cannot hold
-            // the nearest point; ">=" is safe because an equal candidate cannot lower the
-            // minimum.
-            if (BoxDistanceSquared(q) >= best)
-                continue;
-            foreach (var (a, b) in _struts)
-                best = Math.Min(best, SegmentDistanceSquared(q, a, b));
-        }
+        for (int at = _bucketStart[bucket]; at < _bucketStart[bucket + 1]; at++)
+            best = Math.Min(best, SegmentDistanceSquared(q, _bucketItems[at]));
         return Math.Sqrt(best) - _radius;
-    }
-
-    private double BoxDistanceSquared(in Vector3d p)
-    {
-        double dx = Math.Max(Math.Max(_min.X - p.X, p.X - _max.X), 0);
-        double dy = Math.Max(Math.Max(_min.Y - p.Y, p.Y - _max.Y), 0);
-        double dz = Math.Max(Math.Max(_min.Z - p.Z, p.Z - _max.Z), 0);
-        return dx * dx + dy * dy + dz * dz;
     }
 
     /// <summary>The capsule's own kernel without the radius — the same clamp-and-project
     /// <see cref="Sdf.Capsule"/> uses, so the two cannot disagree about where a strut is.</summary>
-    private static double SegmentDistanceSquared(in Vector3d p, in Vector3d a, in Vector3d b)
+    private double SegmentDistanceSquared(in Vector3d p, int item)
     {
-        var pa = p - a;
-        var ba = b - a;
+        var pa = p - _a[item];
+        var ba = _b[item] - _a[item];
         double h = Math.Clamp(pa.Dot(ba) / ba.LengthSquared, 0, 1);
         return (pa - ba * h).LengthSquared;
+    }
+
+    /// <summary>The largest distance from a box to a strut, exactly: the distance to a segment
+    /// is convex, so it is maximized at a corner.</summary>
+    private double FurthestCorner(in Vector3d lo, in Vector3d hi, int item)
+    {
+        double worst = 0;
+        for (int c = 0; c < 8; c++)
+        {
+            var corner = new Vector3d(
+                (c & 1) == 0 ? lo.X : hi.X,
+                (c & 2) == 0 ? lo.Y : hi.Y,
+                (c & 4) == 0 ? lo.Z : hi.Z);
+            worst = Math.Max(worst, SegmentDistanceSquared(corner, item));
+        }
+        return Math.Sqrt(worst);
+    }
+
+    private static double BoxDistance(
+        in Vector3d aLo, in Vector3d aHi, in Vector3d bLo, in Vector3d bHi)
+    {
+        double dx = Math.Max(Math.Max(bLo.X - aHi.X, aLo.X - bHi.X), 0);
+        double dy = Math.Max(Math.Max(bLo.Y - aHi.Y, aLo.Y - bHi.Y), 0);
+        double dz = Math.Max(Math.Max(bLo.Z - aHi.Z, aLo.Z - bHi.Z), 0);
+        return Math.Sqrt(dx * dx + dy * dy + dz * dz);
     }
 
     /// <summary>Infinite, like every lattice here — intersect it with a finite solid.</summary>
