@@ -284,26 +284,40 @@ bit for bit, because the fold is an isometry mathematically and not arithmetical
 (`(p − shift) − a` and `p − (a + shift)` are the same real number and different doubles) —
 with a companion asserting that comparison can see a missing neighbour.
 
-**The query cost is decided at construction.** Scanning all 27 copies per query measured
-0.9–4.7 µs a sample, which makes a lattice unusable rather than merely slow. Two cheaper
-strategies lost: a running-minimum prune over the struts' own boxes is barely better than
-none (every *cell's* box is the whole cell, since its struts span it), and a BVH over the
-block wins on the big sets and loses on the small ones (0.90 against 0.44 µs for simple
-cubic), so it is not a uniform answer. What is uniform is to prune **once**: the cell is
-divided into 4³ sub-cells, each keeping the struts that can be nearest to a point inside
-it. That selection is exact rather than heuristic — the distance to a segment is convex,
-so its maximum over a box is at a corner, and the smallest such maximum bounds how far a
-point in the sub-cell can be from the whole block. Measured (win-x64, best of five after a
-wall-clock warm-up):
+**The query cost is decided at construction, and three per-query strategies were measured
+before that was believed.** All three in one harness, ns per point (win-x64, best of five
+after a wall-clock warm-up budget):
 
-| kind | struts/cell | before | after |
-|---|---|---|---|
-| simple cubic | 3 | 933 | **132** ns/pt |
-| BCC | 4 | 1056 | **230** |
-| FCC | 6 | 1150 | **189** |
-| octet | 18 | 2385 | **429** |
-| diamond | 16 | 989 | **335** |
-| Kelvin | 24 | 1103 | **380** |
+| kind | struts/cell | linear over the block | + per-strut box prune | BVH over the block |
+|---|---|---|---|---|
+| simple cubic | 3 | 440 | 542 | 901 |
+| BCC | 4 | 664 | 864 | 1025 |
+| FCC | 6 | 975 | 1167 | 1125 |
+| octet | 18 | 3808 | 3432 | 2313 |
+| diamond | 16 | 2865 | 3009 | 971 |
+| Kelvin | 24 | 4669 | 4147 | 1100 |
+
+**None of them is uniform.** The box prune is *worse* than no prune on four of the six,
+because it pays a box test per strut to save a segment distance that is only three times
+its cost; and a cell-level prune is nearly vacuous for a structural reason — every cell's
+box IS the whole cell, since its struts span it by construction. The BVH wins where the
+block is large and loses by 2× where it is small.
+
+What is uniform is to prune **once**: the cell is divided into 4³ sub-cells, each keeping
+the struts that can be nearest to a point inside it, so a query is a fold, an index and a
+short scan. The selection is exact rather than heuristic — the distance to a segment is
+convex, so its maximum over a box is at a corner, and the smallest such maximum over the
+struts bounds how far a point in that sub-cell can be from the whole block. Measured
+through the production batch entry, against the BVH through the same entry:
+
+| kind | BVH | sub-cell lists |
+|---|---|---|
+| simple cubic | 933 | **132** ns/pt (7.1×) |
+| BCC | 1056 | **230** (4.6×) |
+| FCC | 1150 | **189** (6.1×) |
+| octet | 2385 | **429** (5.6×) |
+| diamond | 989 | **335** (3.0×) |
+| Kelvin | 1103 | **380** (2.9×) |
 
 For scale, a gyroid sheet is 75 ns/pt and Split P 146, so the two families now cost the
 same order. Two representation notes ride along: a face diagonal is two

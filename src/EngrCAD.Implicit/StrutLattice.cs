@@ -132,8 +132,14 @@ public static class StrutLattices
     /// <c>d(p; cell) = cell * d(p / cell; 1)</c> exactly and one table serves every cell size.
     /// That is what makes the second call free — see <see cref="QuantileTable"/>.
     /// </summary>
-    private static QuantileTable Table(StrutLatticeKind kind, int resolution) =>
-        QuantileTable.For(UnitTables[(int)kind], resolution, res => Sample(kind, res));
+    private static QuantileTable Table(StrutLatticeKind kind, int resolution)
+    {
+        // Named before the cache is indexed: an unknown kind must reach StrutCells' own
+        // refusal rather than an index out of range.
+        if (!Enum.IsDefined(kind))
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown strut lattice.");
+        return QuantileTable.For(UnitTables[(int)kind], resolution, res => Sample(kind, res));
+    }
 
     // One stable key object per kind for the shared cache.
     private static readonly object[] UnitTables =
@@ -211,8 +217,8 @@ internal static class StrutCells
     /// <summary>
     /// The diagonals of the three LOW faces only. Every face of the lattice is the low face
     /// of exactly one cell, so the periodic union is all twelve diagonals of every cell with
-    /// nothing listed twice — the deduplication matters, because each strut costs a segment
-    /// distance in every one of the 27 visited copies.
+    /// nothing listed twice — the deduplication matters, because every strut is expanded into
+    /// 27 copies and carried in the sub-cells' candidate lists.
     /// </summary>
     private static (Vector3d, Vector3d)[] FaceCentredCubic(double h) =>
     [
@@ -229,7 +235,11 @@ internal static class StrutCells
         var edges = new List<(Vector3d, Vector3d)>();
         for (int i = 0; i < faces.Length; i++)
             for (int j = i + 1; j < faces.Length; j++)
-                if (faces[i].Dot(faces[j]) == 0)   // adjacent, i.e. not the antipodal pair
+                // Adjacent, i.e. not the antipodal pair. An EXACT zero on purpose (the
+                // scale-free tier's semantic-test case): the products are of +-h with an
+                // exact 0, so a perpendicular pair reads exactly 0 and an antipodal one
+                // exactly -h^2 — there is no near miss for a tolerance to arbitrate.
+                if (faces[i].Dot(faces[j]) == 0)
                     edges.Add((faces[i], faces[j]));
         return [.. edges];
     }
@@ -283,6 +293,9 @@ internal static class StrutCells
                     }
 
         double edgeLength = q * Math.Sqrt(2);
+        // The weld tier expressed RELATIVELY: these vertices are exactly constructed from the
+        // cell size, so the only question is round-off in the length, and an absolute 1e-9
+        // would mean different things at a micrometre and at a metre.
         double tolerance = 1e-9 * cell;
         var seen = new HashSet<(long, long, long, long, long, long)>();
         var struts = new List<(Vector3d, Vector3d)>();
@@ -308,6 +321,10 @@ internal static class StrutCells
             var dir = (s.B - s.A).Normalized();
             if (dir.X < 0 || (dir.X == 0 && (dir.Y < 0 || (dir.Y == 0 && dir.Z < 0))))
                 dir = -dir;
+            // Quantized three decades COARSER than the weld tier above, deliberately: this is
+            // a bucket key rather than a comparison, and the struts it separates are a
+            // quarter of a cell apart, so a coarse grid cannot collide two distinct ones
+            // while a fine one could split a pair that the length test already called equal.
             long Q(double v) => (long)Math.Round(v / (1e-6 * cell));
             return (Q(mid.X), Q(mid.Y), Q(mid.Z), Q(dir.X * cell), Q(dir.Y * cell), Q(dir.Z * cell));
         }

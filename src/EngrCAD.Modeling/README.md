@@ -47,7 +47,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Draft(angle, neutral, pull, faces?)` | ✅ native (any similarity, MIRRORED included — the pull direction takes its linear image; planar prisms, plus faces of revolution about the pull axis — `Draft.Apply`) | 🔶 bridged | ✅ native |
 | `SheetMetalBody` (base flange + edge flanges) | ✅ native (rigid + uniform scale; bends welded in as topology — `SheetMetalSurgery`) · ❌ sheared (thickness and bend radius are lengths) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `RoundEdges(r)` (whole-solid rounding) | ✅ native (any similarity, MIRRORED included — the opening's structuring element is a BALL, which every reflection maps to itself; convex planar solids — `Filleting.FilletAllEdges`) | 🔶 bridged | ✅ native |
-| `Lattice` (gyroid & co.) | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
+| `Lattice` (eight TPMS as sheet or network, six strut lattices) | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Chamfer` (planar-face rims) | ✅ native (miters; cone bands on circles) | 🔶 bridged | ✅ native |
 | `Fillet` (G1 planar-face rims) | ✅ native (cylinder/torus bands) | 🔶 bridged | ✅ native |
 | `Fillet(radiusAt, faces)` (variable radius) | ✅ native (ruled skins of true circular sections; a varying law across a SHARP corner or along an arc is refused by name) | 🔶 bridged | ✅ native |

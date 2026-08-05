@@ -220,7 +220,7 @@ public class TpmsTests(ITestOutputHelper output)
     public void VolumeFractionSolves_LandOnTheirRequest(TpmsKind kind)
     {
         // The gap between the two grids IS the estimator's honest uncertainty: the parameter
-        // is a quantile of a 64-cubed sample and the fraction is counted on a 101-cubed one,
+        // is a quantile of a 64-cubed sample and the fraction is counted on an 81-cubed one,
         // so agreement to about a percentage point is what a sampled measure of a surface
         // this dense can support, and the achieved value is the one reported to the caller.
         const double Tolerance = 0.02;
