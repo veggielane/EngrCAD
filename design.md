@@ -2758,7 +2758,19 @@ and is filed.
   closed-form phase angles for conic arcs, Newton with exact NURBS derivatives for
   B-spline trims, and revolve trims recovered by bisection on the exact (radius, axial)
   profile residuals — root solving, never distance minimization, which stalls at
-  √ε ≈ 1e-8, past the 1e-9 weld tolerance.
+  √ε ≈ 1e-8, past the 1e-9 weld tolerance. A partial revolve of a SINGLE closed NURBS
+  profile (an elbow with a one-curve tube section) has no segment junctions, so the sweep
+  traces no axis-centred rail arc anywhere and the multi-segment angle recovery finds
+  nothing — this used to come back SILENTLY as a full turn (2π for a 1.2 rad sweep, zero
+  diagnostics), refused by the tessellator's full-domain gate three stages later.
+  `TryAngleFromRotatedCopy` reads the angle in closed form as the azimuthal rotation between
+  corresponding samples of the two congruent boundary curves (the generator and its rotated
+  copy), and the closed-generator diagnostic is exempted there since the face genuinely
+  covers the whole generator. **What remains unreachable is a closed NURBS generator used
+  PARTIALLY under a partial sweep with no rims** — nothing exports one (the boolean would
+  have to split such a face, and those faces refuse tessellation before any boolean sees
+  them), so it is a documented boundary of the `TrimmedFaceRefusalTests` pattern rather than
+  open work.
 - **The exactly-collinear boundary run forces the ear clipper into a fan, and that is
   the normal case rather than a pathology.** A cross-drilled bore wall is a periodic band
   with two hole loops, so it routes to the band-with-holes tier and gets ear-clipped -
@@ -3845,6 +3857,20 @@ partner**. Keeping the stretches that lie outside this face costs nothing (the s
 them by loop parity) and restores the crossing, so the clip removes exactly the over-split it
 exists to remove and nothing else.
 
+The SYMMETRIC rule the boolean rejects is exactly what `BrepBoolean.Section` wants — and that
+is not a contradiction, because a section asks a different question. A section is a WIRE, the
+shared boundary of the two bodies, so a stretch outside either face is not on it; there is no
+splitter to hand a dangling endpoint to, so the tangential-touch failure the asymmetric rule
+exists to avoid cannot arise. `ClipToBothTrims` is therefore `ClipToFace`'s twin over the same
+breakpoints and the same err-toward-INSIDE containment test, keeping `inside(fa) AND
+inside(fb)` where the boolean keeps `inside(fa) AND NOT inside(fb)`. It consumes nothing (the
+inputs are only measured) and its honesty is stated in the API rather than hidden: analytic
+pairs give EXACT endpoints (a plane∩cylinder circle comes back as one closed curve), tracer
+pairs sampling-resolution ones, so a section is a display/query answer, not sealed topology.
+The oracle is a closed form where the curve is analytic — a drilled-through plate sections to
+its two bore-rim circles, each sample on the radius to the weld tier (proving the wire is the
+circle, not a chorded polyline) at the two cap heights, total length the closed-form `2·2πr`.
+
 Two properties keep the two solids welding. The **breakpoints are shared**: one list per face
 pair, the union of both faces' exact `CrossingParameters`, so wherever the pair genuinely
 shares a stretch the two sides cut it at identical parameters. And a **curve that survives
@@ -4162,6 +4188,27 @@ output is untouched) and anything curved takes `CarrierBody`, where a face whose
 returns zero keeps its carrier object VERBATIM. No refusal was restated either — carriers
 with no same-family offset, non-circular curved edges and non-concurrent higher-valence
 vertices all still refuse where they always did.
+
+**Offsetting a CURVED face of BOOLEAN output is Native now, and the fix is one sign in one
+place.** `CarrierBody` used to refuse a reversed face outright, so a curved offset reached a
+primitive and an imported body (faces forward-oriented from the file, the case the feature
+exists for) but not a bore this kernel cut — a difference marks the subtracted tool's walls
+`IsReversed`. The refusal read as though the offset DIRECTION were ambiguous, and it is not:
+an offset moves a face along its OUTWARD normal, and `SurfaceOffset.TryOffset` moves a
+surface along its own normal (∂u × ∂v), which is the outward normal only for a forward face
+— so a reversed face's surface is offset by `−distance`. `CarrierBody.Lift` spells exactly
+that, and the sign lives THERE once because every consumer already states the offset in
+outward terms (a positive `OffsetFaces` grows the solid; a shell's inner layer is a negative
+outward offset). The refusal is gated behind `CarrierBody.Recognize(solid,
+allowReversedFaces)` — the offset path passes `true` while SHELL and DRAFT keep it, because
+their carrier construction and cavity rules (the `Flipped` twin, `Draft.Taper`'s lean read
+off the surface normal) are not yet sense-aware. So forward-face offsets, every shell and
+every draft are bit-identical, and only a reversed face on the offset path takes the new
+branch. Verified in `DirectEditVolumeTests`: a `Cylinder(20,30) − Cylinder(9,40)` housing's
+bore wall pushed +2 shrinks the bore to r7 and −2 grows it to r11, each changing the volume
+by the exact annulus `π(9² − r'²)·30`, Validate-clean at genus 1 and re-tessellating closed.
+The MOVE of a reversed curved face and the SHELL of one stay filed (both want the same
+sense-aware carrier/cavity pass).
 
 **(b) A MOVE of a planar face is an offset, by derivation, so it is implemented as one.**
 A plane is invariant under translation within itself, so the plane reached by displacing a
@@ -4726,6 +4773,18 @@ Design decisions:
   asserting *which* output face carries it, located by `Bounds().Center` (`IsPlanar`'s origin
   is an arbitrary in-plane point and a circular loop's face-frame origin is its seam vertex;
   both read the rim, and both would make the assertion agree with a wrong answer).
+  **Edges inherit face provenance as a DERIVED query, and the open decision was UNION.**
+  `BrepQueries.Provenance(edge)` / `DescendsFrom(edge, tag)` / `solid.EdgesTagged(tag)` report
+  the union of the (up to two) faces an edge borders — "an edge is *of* a step whenever it
+  touches a face of that step." The note left "both? either?" open, and the motivating query
+  settles it as EITHER: "fillet the edges of the boss" wants the boss's BASE rim, where its
+  cylinder meets the plate it stands on, and that rim borders a boss face and a non-boss one —
+  an INTERSECTION would drop precisely the edge a caller most wants to blend. Nothing new is
+  stored (decision (a)'s set-valued tag is walked on demand from `edge.Uses` → `Loop.Face` →
+  `Provenance`), so it stays correct through every rebuild with no second table, and it inherits
+  the same one-sided safety — a step that tagged no face contributes no edge. `EdgeProvenanceTests`
+  measures the decision by tagging two adjacent faces and asserting their shared edge reports BOTH,
+  which an intersection could not.
   **(c) A tag is REFUSED, not sanitized, when the descriptor grammar cannot spell it.** The
   descriptor is the cache key and the serialized form, and it is parsed back through
   `RefLexer.ReadIdentifier` — so a tag containing a space or a comma cannot survive its own

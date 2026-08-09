@@ -1033,19 +1033,6 @@ export — is recorded in CLAUDE.md):
     extended past its deleted top never meet) and the refusal must come BEFORE any coedge
     moves. Note the v1 gate is `IsPlanar` on the loop-dropping face and the general fix
     subsumes it.
-  - [ ] **Offset a CURVED face of BOOLEAN output.** `CarrierBody.Recognize` refuses a
-    reversed face outright ("offsetting needs forward-oriented faces"), and a difference
-    marks the subtracted tool's walls `IsReversed` — so a curved offset reaches a
-    primitive and an IMPORTED body (whose faces arrive forward-oriented, which is the case
-    the feature exists for) but not a bore this kernel cut. Planar faces are unaffected,
-    since the polyhedral tier never asks. The refusal reads as though the direction were
-    ambiguous and it is NOT: `IsPlanar` already applies the reversal and `BrepFace` carries
-    the flag, so the fix is to offset a reversed carrier by −distance and keep the flag.
-    What makes it more than a one-liner is that `CarrierBody` is shared with `Shelling` and
-    `Draft`, so lifting the refusal needs its own verification pass (both offset layers,
-    the rim reconstruction's sense, and the `Flipped` cavity rule) rather than riding on
-    this one. Pinned as a known boundary by `DirectEditScopeTests`, and it was found by a
-    DOCS RENDER rather than by a unit test — the argument for executable examples.
   - [ ] **Move a CURVED face.** Refused today because `CarrierBody.ConcentricRim` rebuilds
     each rim as a circle concentric with the ORIGINAL — exactly right for an offset (which
     leaves the axis alone) and false for a translation, which moves it. The fix is to take
@@ -1107,21 +1094,26 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   - [ ] **Guide curves / spine** constraining the skin between stations — does NOT fall
     out of the cardinal basis (a guide constrains the blend *between* interpolation
     stations, which the collocation solve never sees); needs a constrained surface fit.
-- [ ] Boolean extras: *section* (curve-only result), fuzzy tolerance, modification
-  history. Assessed (task #11): **section** is the cheap one — `BrepBoolean` already
-  runs per-face-pair `SurfaceIntersection` behind the bounds prefilter, so a
-  `Section(a, b)` is that loop with the curves clipped to both faces' trims
-  (`FaceGeometry.Contains` at `ExactSampleParameters`) instead of being fed to the
-  splitter; the honest hard part is clipping ANALYTIC curves to a trim boundary
-  exactly (a tracer polyline clips at vertices, a circle needs its crossing phases
-  solved) — without that the section's endpoints are sampling-resolution, which is
-  fine for display and wrong for downstream modelling, so the API should say which it
-  returns. **Fuzzy tolerance** is NOT a parameter to add but a rewrite of every
-  coincidence decision in the splitter (OCCT threads it through BOPAlgo wholesale);
-  the existing near-tangency rejections are the honest substitute. **Modification
-  history** (which output face came from which input) is cheap to RECORD in
-  `BrepBoolean` (fragments know their host face) and belongs with the topological
-  naming item below — record at the boolean, resolve at the Shape layer.
+- [ ] Boolean extras: fuzzy tolerance, modification history (*section* ✅ landed).
+  **`BrepBoolean.Section(a, b)`** (OCCT `BRepAlgoAPI_Section`) ✅ landed: the same
+  per-face-pair `SurfaceIntersection` loop, but each curve is clipped to the region
+  inside BOTH trims (`ClipToBothTrims`, the symmetric twin of the boolean's asymmetric
+  `ClipToFace`, over the same `ClipBreakpoints`/`InsideForClip`) and RETURNED rather than
+  fed to the splitter — a curve-only result that consumes nothing. The honest-endpoint
+  caveat is stated in the API rather than hidden: analytic pairs (plane∩cylinder circle,
+  plane∩plane line) give EXACT endpoints, tracer pairs give sampling-resolution ones, so
+  it is a display/query answer, not sealed topology. Oracle (`BrepSectionTests`): a
+  drilled-through plate's section is TWO circles, each sampled point on the radius-5 circle
+  to the weld tier (proving it is the analytic circle, not a chorded polyline) at z = 0 and
+  10, total length the closed-form 2·2π·5, disjoint solids section to nothing, and the
+  inputs are not consumed. **Filed follow-up**: a `Shape.Section3d(other)` (curve-only) at
+  the Modeling layer, and coincident/coplanar faces (a shared AREA, needing the
+  coplanar-fusion rim machinery). **Fuzzy tolerance** is NOT a parameter to add but a
+  rewrite of every coincidence decision in the splitter (OCCT threads it through BOPAlgo
+  wholesale); the existing near-tangency rejections are the honest substitute.
+  **Modification history** (which output face came from which input) is cheap to RECORD in
+  `BrepBoolean` (fragments know their host face) and belongs with the topological naming
+  item below — record at the boolean, resolve at the Shape layer.
 - [ ] **Fillet follow-ups** (sharp-corner miters, edge sets, chamfer angles and
   whole-solid `FilletAllEdges` ✅ landed) — all of these are refused loudly today, so
   they are additions, not bug fixes:
@@ -1172,24 +1164,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     scalar overloads' shape: hand the edge selector to
     `Filleting.FilletEdges(solid, edges, law)` (which now resolves rims AND runs) —
     a few lines in `Shape.cs`/`RimShape`, out of the B-Rep agent's fence.
-- [ ] **`StepReader`: trim closed NON-circular generators** — circles ✅ landed (meridian
-  arcs trim a closed circular revolve generator; congruent translated end arcs trim a
-  closed circular extrusion generator; both closed form, so `FilletAllEdges` output now
-  round-trips manifold with zero diagnostics). **The recorded residual was wrong in both
-  halves, verified by construction**: a partial revolve of a SINGLE closed NURBS profile
-  (an elbow with a one-curve tube section) IS exportable — it builds, tessellates and
-  writes — and what it hit was not "the honest non-manifold diagnostic" but a SILENT
-  full turn: a one-curve profile has no segment junctions, so the sweep traces no
-  axis-centered rail arc anywhere, the angle recovery found nothing, and a 1.2 rad elbow
-  came back at 2π with zero diagnostics (the tessellator's full-domain gate then refused
-  it three stages later). ✅ Landed: `TryAngleFromRotatedCopy` reads the angle in closed
-  form as the azimuthal rotation between corresponding samples of the generator and its
-  rotated boundary copy (congruence checked in (radius, axial) profile coordinates), and
-  the closed-generator diagnostic is exempted for this case since the face genuinely
-  covers the whole generator. What REMAINS unreachable is a closed NURBS generator used
-  PARTIALLY under a partial sweep with no rims — that would need the projection-style
-  trim the old entry described, and nothing exports one (the boolean would have to split
-  such a face, and those faces refuse tessellation before any boolean sees them).
 - [ ] **Traced-curve residuals after the band-crossing fix** (`SnapTracerEnds` ✅ landed —
   a traced polyline is extended onto the EXACT solution of E(t) = S(u, v) once, on the
   curve object both faces share, and `SplitByCurve`'s interior probe ✅ now takes an exact
@@ -1265,6 +1239,13 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     leave a solid that validates and is wrong.
   - [ ] **Global self-intersection detection** — deliberately unchecked, as in OCCT and
     `OffsetCurve3d`.
+  - [ ] **A REVERSED curved face (boolean output).** Curved OFFSET now accepts a reversed
+    face (`CarrierBody.Recognize(solid, allowReversedFaces: true)`, `Lift` offsets it by
+    `−distance`), but SHELL keeps the refusal because its cavity twin (`Flipped`) hard-codes
+    `IsReversed = true` for the inner face — right for a forward parent, and it needs to be
+    `!parent.IsReversed` for a reversed one. Making shell sense-aware is the same
+    verification pass DRAFT's `Taper` (which reads the lean off the surface normal, not the
+    outward one) also wants; neither is exercised by a `Shape`-level construction today.
   The `Shape` route exposes one thickness; per-face thickness and per-face draft angles
   stay kernel-level escape hatches (`Shape.From(...)`) until a selector-to-value
   vocabulary exists at the Shape level.
@@ -1407,11 +1388,14 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   rebuild is where two of the six live and neither `Draft.cs` nor `Shelling.cs` mentions
   provenance at all; and `Shelling`'s `Dictionary<BrepFace,int>` was never needed, since
   every one of these sites already iterates its parent array positionally and the index map
-  would have been a second spelling of the loop counter.) What remains:
-  - [ ] **EDGE provenance.** Only faces carry tags today. An edge could report the tags of
-    its two faces, which is enough for "fillet the edges of the boss" without a new store —
-    but the sense in which an edge *belongs* to a step when its two faces disagree wants a
-    decision (both? either?) before it is API.
+  would have been a second spelling of the loop counter. **EDGE provenance ✅ landed** as a
+  DERIVED query — `BrepQueries.Provenance(edge)` / `DescendsFrom(edge, tag)` /
+  `solid.EdgesTagged(tag)`, the UNION of the edge's two faces' tags (an edge is "of" a step
+  whenever it touches a face of that step). The decision the note left open was settled as
+  union by the motivating query: "the edges of the boss" wants the boss's BASE rim, which
+  borders a boss face and a non-boss one, and an intersection would drop exactly it. No new
+  store (walked on demand from `edge.Uses` → `Loop.Face` → `Provenance`), the same one-sided
+  safety inherited (a step that tagged no face contributes no edge).) What remains:
   - [ ] **A tag cannot be attached to an existing `Part`'s geometry after the fact**, only
     written into the graph. A UI that lets a user click a face and name it would need a
     tag-by-selection form, which is a different (and much weaker) guarantee — the tag would

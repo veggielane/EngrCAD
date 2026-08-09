@@ -269,6 +269,66 @@ public static class BrepQueries
     public static IEnumerable<BrepEdge> ConvexEdges(this BrepSolid solid) =>
         solid.Edges.Where(e => solid.IsConvex(e));
 
+    /// <summary>
+    /// The construction-step tags this edge BORDERS — the UNION of the
+    /// <see cref="BrepFace.Provenance"/> of the (up to two) faces meeting along it. The
+    /// edge form of face provenance, so "fillet the edges of the boss" is one query
+    /// (<see cref="EdgesTagged"/>).
+    ///
+    /// <para><b>Union is the decision the face-provenance note left open</b>, and the
+    /// motivating query settles it: "the edges of the boss" wants the boss's BASE rim —
+    /// where the boss's cylinder meets the plate it stands on — and that edge borders a
+    /// boss face and a non-boss one. An INTERSECTION (an edge is "of" a step only when
+    /// BOTH its faces are) would drop exactly that rim, the one a caller most wants to
+    /// blend. So an edge belongs to a step whenever it touches a face of that step.</para>
+    ///
+    /// <para>Derived on demand from the faces, never stored: like face provenance it stays
+    /// correct through every rebuild with no second table to keep in step, and it inherits
+    /// the same ONE-SIDED safety — a step that tagged no face contributes no edge, so a
+    /// query returns fewer edges than the author expected but never an edge from somewhere
+    /// else. Coedges whose loop or face is not yet wired (an edge built but not yet placed
+    /// in a solid) contribute nothing.</para>
+    /// </summary>
+    public static IReadOnlyList<string> Provenance(this BrepEdge edge)
+    {
+        ArgumentNullException.ThrowIfNull(edge);
+        List<string>? tags = null;
+        foreach (var use in edge.Uses)
+        {
+            var face = use.Loop?.Face;
+            if (face is null)
+                continue;
+            foreach (var tag in face.Provenance)
+            {
+                tags ??= [];
+                if (!tags.Contains(tag, StringComparer.Ordinal))
+                    tags.Add(tag);
+            }
+        }
+        return (IReadOnlyList<string>?)tags ?? [];
+    }
+
+    /// <summary>Whether this edge borders a face descending from the construction step
+    /// tagged <paramref name="tag"/> (see <see cref="Provenance(BrepEdge)"/>).</summary>
+    public static bool DescendsFrom(this BrepEdge edge, string tag)
+    {
+        ArgumentNullException.ThrowIfNull(edge);
+        ArgumentNullException.ThrowIfNull(tag);
+        return edge.Provenance().Contains(tag, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// The solid's edges that border a face tagged <paramref name="tag"/> — the edge form
+    /// of the face selector, so a rim feature can address "the edges of the boss" by the
+    /// step that made it rather than by geometry. Empty when nothing carries the tag.
+    /// </summary>
+    public static IEnumerable<BrepEdge> EdgesTagged(this BrepSolid solid, string tag)
+    {
+        ArgumentNullException.ThrowIfNull(solid);
+        ArgumentNullException.ThrowIfNull(tag);
+        return solid.Edges.Where(e => e.DescendsFrom(tag));
+    }
+
     /// <summary>The faces sharing an edge (2 on a manifold interior edge; possibly one
     /// face twice for seam edges).</summary>
     public static IReadOnlyList<BrepFace> FacesOf(this BrepSolid solid, BrepEdge edge)

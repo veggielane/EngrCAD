@@ -13,17 +13,26 @@ namespace EngrCAD.Modeling.Tests;
 public class DirectEditScopeTests
 {
     [Fact]
-    public void OffsettingACurvedFaceOfBOOLEANOutput_IsRefusedByName()
+    public void OffsettingACurvedFaceOfBooleanOutput_Works()
     {
-        // A difference marks the subtracted tool's walls IsReversed, and CarrierBody refuses
-        // a reversed face outright. So the curved path reaches a primitive and an imported
-        // body (whose faces come from the file forward-oriented) but NOT a bore this kernel
-        // cut. Filed in todo.md; the refusal is loud, so nothing is silently wrong.
+        // A difference marks the subtracted tool's walls IsReversed. CarrierBody now offsets a
+        // reversed carrier by -distance (its OUTWARD normal is the negative of its surface's),
+        // so the bore a boolean cut can be pushed like any other face — the input direct editing
+        // exists for, boolean output having no history. A -3 offset moves the bore wall along its
+        // outward normal (which points into the void), enlarging the Ø18 bore to Ø24.
         var housing = Shape.Cylinder(20, 30) - Shape.Cylinder(9, 40);
         var edited = housing.OffsetFaces(-3, FaceSetRef.Cylindrical(9));
 
-        var error = Assert.Throws<NotSupportedException>(() => edited.ToBrep());
-        Assert.Contains("forward-oriented faces", error.Message);
+        var solid = edited.ToBrep();
+        solid.Validate();
+
+        // The bore wall is still a reversed cylinder, now at radius 12, and the outer wall
+        // (r20) did not move. Cylindrical faces are located by their radius, not by a stored
+        // plane origin, so the Bounds().Center trap does not apply here.
+        Assert.Contains(solid.Faces, f =>
+            f.IsReversed && f.IsCylindrical(out _, out _, out double r) && Math.Abs(r - 12) < 1e-6);
+        Assert.Contains(solid.Faces, f =>
+            f.IsCylindrical(out _, out _, out double r) && Math.Abs(r - 20) < 1e-6);
     }
 
     [Fact]

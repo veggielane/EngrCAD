@@ -695,6 +695,18 @@ logging complements them, never replaces them.
   subtracted faces, topological seam sealing via `TopologyEditor.SealSeams`). See
   design.md §5. Transversal and coplanar-PLANAR cases are handled; inputs are consumed;
   output passes `Validate()` with correct genus and exact volumes.
+  - **`BrepBoolean.Section(a, b)`** (OCCT `BRepAlgoAPI_Section`) — the curve-only result: the
+    curves where a face of one solid crosses a face of the other, clipped to the region
+    inside BOTH trims (`ClipToBothTrims`, the symmetric twin of the boolean's asymmetric
+    `ClipToFace`, over the same breakpoints and containment tests) and RETURNED as a list of
+    `Curve3d` rather than fed to the splitter. The inputs are NOT consumed — it evaluates and
+    mutates nothing. **Endpoint fidelity is a property of each pair, stated in the API**:
+    analytic pairs (a plane∩cylinder circle, a plane∩plane line) give EXACT endpoints (a full
+    circle comes back as one closed curve), while a transcendental pair's tracer polyline has
+    sampling-resolution endpoints — so it is a display/query answer, not sealed topology, the
+    deliberate difference from the boolean operations that DO seal. Coincident (coplanar) faces
+    are not sectioned (a shared area, not a curve). A drilled-through plate sections to its two
+    exact bore-rim circles (`BrepSectionTests`).
   - **Coincident (flush) planar surface** (`CoplanarFaces.cs`) — flush embossing, stacked
     plates, blocks butted together, a pocket floor flush with the host's own face. The
     model is the mesh boolean's, translated: the shared region's rim is imprinted by the

@@ -39,6 +39,75 @@ public static class BrepBoolean
     public static BrepSolid Difference(BrepSolid a, BrepSolid b, Microsoft.Extensions.Logging.ILogger? logger = null) =>
         Execute(a, b, "Difference", keepAOutside: true, keepBOutside: false, reverseB: true, difference: true, logger);
 
+    /// <summary>
+    /// The SECTION wire of two solids (OCCT's <c>BRepAlgoAPI_Section</c>): the curves where a
+    /// face of <paramref name="a"/> and a face of <paramref name="b"/> cross, each clipped to
+    /// the region inside BOTH faces' trims — i.e. surface(a) ∩ surface(b) ∩ trim(a) ∩ trim(b).
+    /// A curve-only result rather than a solid, for drawing where two bodies meet or measuring
+    /// the shared boundary. The inputs are NOT consumed (unlike the boolean operations); this
+    /// evaluates geometry and mutates nothing.
+    ///
+    /// <para><b>Endpoint fidelity is the honest caveat, and it is a property of each PAIR, not
+    /// of the call.</b> Where the two surfaces meet in a curve this kernel has analytically —
+    /// a plane∩cylinder circle, a plane∩plane line — the returned curve and its endpoints are
+    /// EXACT (a full circle comes back as one closed curve). Where they meet in a
+    /// transcendental curve the marching tracer produced a chordal polyline, so those endpoints
+    /// are sampling-resolution: right for display, a length or a bounding box, wrong as sealed
+    /// modelling geometry to build an edge on. So this is a DISPLAY / QUERY answer — nothing
+    /// here is welded, sealed or validated, which is the deliberate difference from the boolean
+    /// operations that DO seal their output.</para>
+    ///
+    /// <para>Coincident (coplanar-overlapping) faces are NOT sectioned: their shared region is
+    /// an AREA rather than a curve, and recovering its rim is the coplanar-fusion machinery the
+    /// booleans use — filed rather than approximated here. Two surfaces that share a whole
+    /// carrier therefore contribute nothing.</para>
+    /// </summary>
+    public static IReadOnlyList<Curve3d> Section(BrepSolid a, BrepSolid b)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentNullException.ThrowIfNull(b);
+
+        // The search region is the union of the two solids' face boxes, generously expanded —
+        // the section lies on faces of both, so their combined extent bounds it. Computed from
+        // face bounds (which sample curved surface domains) so nothing is tessellated.
+        var bounds = Aabb.Empty;
+        var boundsA = a.Faces.ToDictionary(f => f, f => f.Bounds());
+        var boundsB = b.Faces.ToDictionary(f => f, f => f.Bounds());
+        foreach (var box in boundsA.Values) bounds = bounds.Union(box);
+        foreach (var box in boundsB.Values) bounds = bounds.Union(box);
+        var region = bounds.Expanded(bounds.Size[bounds.LongestAxis] * 0.1 + 0.1);
+        double step = region.Size[region.LongestAxis] / 150.0;
+
+        // Prefilter boxes carry the inverse-evaluation slack the boolean uses; a too-small
+        // value could only skip a genuinely-touching pair, never invent a curve.
+        var probeA = boundsA.ToDictionary(kv => kv.Key, kv => kv.Value.Expanded(1e-6));
+        var probeB = boundsB.ToDictionary(kv => kv.Key, kv => kv.Value.Expanded(1e-6));
+
+        var section = new List<Curve3d>();
+        foreach (var fa in a.Faces)
+        {
+            foreach (var fb in b.Faces)
+            {
+                if (!probeA[fa].Intersects(probeB[fb]))
+                    continue;
+                foreach (var raw in SurfaceIntersection.Intersect(fa.Surface, fb.Surface, region))
+                {
+                    var curve = SnapTracerEnds(raw, fa, fb, step);
+                    var breaks = ClipBreakpoints(curve, fa, fb);
+                    foreach (var piece in ClipToBothTrims(curve, fa, fb, breaks))
+                    {
+                        // Identical carriers on repeated geometry produce one curve per pair;
+                        // dedupe by exact endpoints/midpoint so a patterned scene's section
+                        // does not carry a wire twice.
+                        if (!section.Any(existing => SameCurve(existing, piece)))
+                            section.Add(piece);
+                    }
+                }
+            }
+        }
+        return section;
+    }
+
     private static BrepSolid Execute(
         BrepSolid a, BrepSolid b, string operation, bool keepAOutside, bool keepBOutside, bool reverseB,
         bool difference, Microsoft.Extensions.Logging.ILogger? logger = null)
@@ -691,6 +760,48 @@ public static class BrepBoolean
         // A closed curve's surviving stretches join across the seam: the piece ending at the
         // domain end continues into the one starting at the domain start, and cutting there
         // would leave two edges where the geometry has one.
+        if (curve.IsClosed && kept.Count > 1 &&
+            kept[0].S0 <= domain.Start + epsilon && kept[^1].S1 >= domain.End - epsilon)
+        {
+            var wrapped = (kept[^1].S0, kept[0].S1 + domain.Length);
+            kept.RemoveAt(kept.Count - 1);
+            kept[0] = wrapped;
+        }
+        return [.. kept.Select(k => (Curve3d)new CurveSegment(curve, k.S0, k.S1))];
+    }
+
+    /// <summary>
+    /// The SYMMETRIC clip <see cref="Section"/> needs: the piece(s) of a face-pair intersection
+    /// curve lying inside BOTH trims. Same interval walk as <see cref="ClipToFace"/> (the same
+    /// breakpoints, the same seam-join for a surviving closed curve), but the keep rule is
+    /// <c>inside(fa) AND inside(fb)</c> rather than the boolean's asymmetric rule — a section
+    /// wire is exactly the shared boundary, so a stretch outside either face is not on it. The
+    /// containment test errs toward INSIDE (<see cref="InsideForClip"/>), which is right here:
+    /// a section curve running ALONG a shared boundary (a bore rim on a cap) is a real section
+    /// curve, and a stretch a tracer polyline cannot project is kept rather than silently lost.
+    /// </summary>
+    private static List<Curve3d> ClipToBothTrims(
+        Curve3d curve, BrepFace fa, BrepFace fb, List<double> breaks)
+    {
+        var domain = curve.Domain;
+        double epsilon = ClipEpsilon(domain);
+
+        var kept = new List<(double S0, double S1)>();
+        for (int i = 0; i + 1 < breaks.Count; i++)
+        {
+            double s0 = breaks[i], s1 = breaks[i + 1];
+            var probe = curve.PointAt(FaceGeometry.InteriorSampleParameter(curve, s0, s1));
+            if (!(InsideForClip(fa, probe) && InsideForClip(fb, probe)))
+                continue;
+            if (kept.Count > 0 && kept[^1].S1 >= s0 - epsilon)
+                kept[^1] = (kept[^1].S0, s1);
+            else
+                kept.Add((s0, s1));
+        }
+        if (kept.Count == 0)
+            return [];
+        if (kept.Count == 1 && kept[0].S0 <= domain.Start + epsilon && kept[0].S1 >= domain.End - epsilon)
+            return [curve];
         if (curve.IsClosed && kept.Count > 1 &&
             kept[0].S0 <= domain.Start + epsilon && kept[^1].S1 >= domain.End - epsilon)
         {

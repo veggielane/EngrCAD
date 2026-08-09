@@ -62,12 +62,16 @@ The sign convention surprises people on a **bore**: a bore wall's outward normal
 *into the void*, so a positive offset adds material there and the hole closes in. A
 negative one widens it.
 
-:::caution[Curved faces of boolean output are refused]
-A difference marks the subtracted tool's walls as reversed, and the curved-offset path
-refuses a reversed face by name. So an offset of a *curved* face reaches a primitive and
-an imported body — whose faces come from the file forward-oriented, which is the case this
-feature exists for — but **not** a bore this kernel cut with a boolean. Planar faces are
-unaffected, and the refusal is loud rather than silent.
+A difference marks the subtracted tool's walls as *reversed*, and an offset moves a face
+along its **outward** normal — which for a reversed face is the negative of its surface's.
+So offsetting a *curved* face of boolean output works: the offset simply pushes the bore
+wall's surface by `−distance` (its outward normal points into the void), which is why a
+positive offset on a bore adds material and a negative one widens it, exactly as above.
+
+:::caution[Moving or shelling a reversed curved face still refuses]
+The **move** and **shell** paths do not yet handle a reversed curved face — a translation
+moves the carrier's own axis (a different rebuild), and a shell's inner cavity face wants
+the opposite sense. Both refuse by name rather than guessing. Offsetting one works.
 :::
 
 ## Moving a face

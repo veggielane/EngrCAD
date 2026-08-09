@@ -394,6 +394,15 @@ operations. Depends only on `EngrCAD.Core`.
   arbitrary in-plane point and a circular loop's face-frame origin is its seam vertex, so
   both read the rim), since an off-by-one in a parent array leaves the count right and the
   meaning wrong.
+  **Edges carry provenance too, as a DERIVED query** — `BrepQueries.Provenance(edge)` /
+  `DescendsFrom(edge, tag)` / `solid.EdgesTagged(tag)` — the **UNION** of the (up to two)
+  faces the edge borders. Union is the decision the note left open, settled by the motivating
+  query: "fillet the edges of the boss" wants the boss's BASE rim, which borders a boss face
+  and a non-boss one, and an INTERSECTION would drop exactly it. Nothing is stored — the
+  union is walked on demand from `edge.Uses` → `Loop.Face` → `Provenance` — so it stays
+  correct through every rebuild with no second table, and it inherits the same one-sided
+  safety (a step that tagged no face contributes no edge). `EdgeProvenanceTests` measures the
+  union decision by tagging two adjacent faces and asserting their shared edge reports BOTH.
 - **`BrepQueries` / `BrepSelection`** — the LINQ selection vocabulary over topology.
   `BrepQueries` classifies and measures: `IsPlanar` (incl. extruded straight lines) /
   `IsCylindrical` (incl. extruded circles and axis-parallel revolved lines) / `IsLinear` /
@@ -667,7 +676,12 @@ operations. Depends only on `EngrCAD.Core`.
     neighbour is oblique the boundary grows as it slides and the change is the frustum
     integral (measured 140.78 against the naive 127.28 on a right-triangular prism — 10.6%,
     not round-off). Sign convention: positive grows the SOLID, so a positive offset on a
-    bore wall NARROWS the bore, the normal there pointing into the void.
+    bore wall NARROWS the bore, the normal there pointing into the void. A CURVED bore a
+    BOOLEAN cut works too: a difference marks the tool's walls `IsReversed`, and `Lift`
+    offsets a reversed face's surface by `−distance` (its outward normal is the negative of
+    the surface's), so the outward sign is honoured once and the caller stays orientation-free
+    (`CarrierBody.Recognize(solid, allowReversedFaces)` gates it; SHELL and DRAFT keep the
+    reversed-face refusal, so their output is bit-identical).
   - **`DirectEdit.MoveFaces(solid, translation, selector)`** translates planar faces, and is
     the offset under another name BY DERIVATION: a plane is invariant under translation
     within itself, so displacing a face by `v` reaches exactly the plane an offset of `v·n̂`

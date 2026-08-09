@@ -58,7 +58,17 @@ internal sealed class CarrierBody
         return false;
     }
 
-    public static CarrierBody Recognize(BrepSolid solid)
+    public static CarrierBody Recognize(BrepSolid solid) => Recognize(solid, allowReversedFaces: false);
+
+    /// <summary>
+    /// The recognized body. <paramref name="allowReversedFaces"/> is the OFFSET path's escape
+    /// hatch: an OFFSET moves a face along its OUTWARD normal, which <see cref="Lift"/> spells
+    /// exactly for a reversed face (a difference marks the subtracted tool's walls
+    /// <see cref="BrepFace.IsReversed"/>), so a bore this kernel cut can be offset. A TAPER
+    /// (<see cref="Draft"/>) and a SHELL do not, because their carrier construction and cavity
+    /// rules are not yet sense-aware, so they keep the refusal by asking with the flag off.
+    /// </summary>
+    public static CarrierBody Recognize(BrepSolid solid, bool allowReversedFaces)
     {
         if (solid.Shells.Count != 1)
             throw new NotSupportedException(
@@ -69,7 +79,7 @@ internal sealed class CarrierBody
         var faceIndex = new Dictionary<BrepFace, int>(faces.Length);
         for (int f = 0; f < faces.Length; f++)
         {
-            if (faces[f].IsReversed)
+            if (faces[f].IsReversed && !allowReversedFaces)
                 throw new NotSupportedException(
                     "Offsetting needs forward-oriented faces; a reversed face's outward normal is the " +
                     "reverse of its surface's, so its offset direction is ambiguous.");
@@ -178,13 +188,25 @@ internal sealed class CarrierBody
         return new BrepSolid([new BrepShell(faces)]);
     }
 
-    /// <summary>Every face's carrier displaced along its own normal by its own distance.</summary>
+    /// <summary>
+    /// Every face's carrier displaced along its own OUTWARD normal by its own distance.
+    ///
+    /// <para><see cref="SurfaceOffset.TryOffset"/> moves a surface along its own normal
+    /// (∂u × ∂v), which is the OUTWARD normal only for a forward face; a reversed face's
+    /// outward normal is the negative of its surface's, so its surface is offset by
+    /// <c>−distance</c>. Every consumer states the offset in OUTWARD terms — a positive
+    /// <c>OffsetFaces</c> grows the solid, a shell's inner layer is a negative outward offset
+    /// — so the sign lives here once and the callers stay orientation-free. The shell and
+    /// draft paths never pass a reversed face (they ask <see cref="Recognize(BrepSolid)"/>
+    /// with the flag off), so their <c>Lift</c> is bit-identical.</para>
+    /// </summary>
     private Surface[] Lift(double[] offsets, string what)
     {
         var carriers = new Surface[Faces.Length];
         for (int f = 0; f < Faces.Length; f++)
         {
-            if (!SurfaceOffset.TryOffset(Faces[f].Surface, offsets[f], out carriers[f], out var reason))
+            double signed = Faces[f].IsReversed ? -offsets[f] : offsets[f];
+            if (!SurfaceOffset.TryOffset(Faces[f].Surface, signed, out carriers[f], out var reason))
                 throw new NotSupportedException(
                     $"The {what} cannot lift a {Faces[f].Surface.GetType().Name} face: {reason}.");
         }
