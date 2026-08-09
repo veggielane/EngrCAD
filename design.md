@@ -936,9 +936,38 @@ temperatures only, with the other four faces adiabatic, which is what the series
 Neutrality and reachability are pinned exactly as §3i's are: a single-region mesh computes the
 two arrays independently through an internal `AveragedFlux(bool)` seam and they agree bit for
 bit at both element orders, and a two-body `TetMesher` mesh has `InterfaceNodeCount == 0` with
-both accessors returning the same bits at every node (`ThermalInterfaceFluxTests`). Left open,
-and genuinely open rather than deferred: whether the thermal side wants a *superconvergent*
-recovery of its own, which is a separate feature with its own convergence table to earn.
+both accessors returning the same bits at every node (`ThermalInterfaceFluxTests`).
+
+### Superconvergent flux recovery, which is the same machinery at three components
+
+The half §3d left open — whether the thermal side wants a *superconvergent* recovery of its own
+— landed, and it is the SAME machinery §3i runs, not a parallel one. `q = -k·grad T` is one
+derivative down from temperature exactly as stress is from displacement, so a flux recovery is a
+smaller version of a stress recovery: three components rather than six, over the same
+`(node, region)` slot table, with the same region rule and the same boundary fill.
+`FluxRecovery.Direct` / `Superconvergent` on `ThermalResults` is the twin of
+`StructuralResults.Recovery`, `Direct` the default for §3i's reasons.
+
+**What made it one machinery rather than two copies is a generic over the value type.**
+`SuperconvergentRecovery.Recover<TValue, TField>` accumulates into a `TValue` (`SymmetricTensor3`
+for stress, `Vector3d` for flux) through an internal `IRecoveryField<TValue>` that provides the
+sampling and the value arithmetic (`Add`, `Scale`, `Zero`, `FromComponents`), and a `struct`
+field constraint monomorphizes it so each instantiation compiles to the same operations in the
+same order. That is what keeps the structural path **bit-identical** — the stress instantiation's
+`field.Add(a, b)` is `a + b` and `field.Scale(a, s)` is `a * s`, so the generic IL is the
+hand-written recovery's IL — which is asserted the way the recovery's own tests already assert
+it (exact recovery to 1e-9, the switch-back bit-for-bit, the convergence rates), all unmoved.
+
+**The convergence table it had to earn.** On the same manufactured conduction solution (a cubic
+temperature, so a quadratic flux, so neither element order reproduces it), the recovered flux
+converges one order faster than the averaged one: measured rates **2.34 (linear) and 2.66
+(quadratic)** against direct evaluation's 1.43 and 2.00, **15.3× / 7.8×** lower nodal error at
+the finest mesh, and an effectivity index approaching 1 (0.979 → 0.998 from below for linear,
+1.035 → 1.020 from above for quadratic). The quadratic 2.66 sits below theory 3 for the same
+reason the structural 2.76 does — the p+1 cap of §3i, whose interior sub-domain study now
+measures the boundary fill as the dominant cause. `ThermalResults.ErrorEstimate` comes with it,
+the ZZ figure with the compliance replaced by the scalar thermal `1/k` (which is `k·|grad T|²`
+by another name), NaN where no patch can be assembled (`ThermalFluxRecoveryTests`).
 
 ### Shared rather than parallel-built
 
@@ -1634,6 +1663,32 @@ share-an-element graph, extrapolating a patch polynomial a short way outside its
 That is sound for the same reason the fit is: the polynomial approximates the stress over a
 neighbourhood rather than only over the convex hull of its samples. Nearest in graph distance
 rather than any patch, because the approximation degrades with distance.
+
+### The p+1 cap, and which of the two causes dominates
+
+The quadratic recovered rate settles near **2.76** against a theory of 3, and there were two
+candidate causes with no measurement separating them: the boundary FILL above, which
+extrapolates a patch polynomial to nodes outside its own elements and is only second-order
+accurate in the extrapolation distance; and the SIMPLEX superconvergence theory itself, which is
+weaker on tetrahedra than on the hexahedra SPR was developed for — a tetrahedron's Gauss points
+are not the tensor-product Barlow points, so the p+1 claim is asymptotic at best. Separating them
+is a measurement, not a redesign: restrict the recovered-error norm to a fixed central sub-domain
+box, away from the fill, and see whether the rate rises toward 3 there.
+
+It does, and the finding is that **the boundary fill is the dominant cause**. On a
+[3, 4, 6]-division quadratic sequence the whole-domain rate is **2.758** (reproducing the
+recorded 2.76) and the central [0.25, 0.75]-box rate is **2.883** — closing about half the
+measured gap to 3 (0.242 → 0.117). That agrees in direction with the earlier experiment that
+excluding boundary patches *entirely* reached 3.08/2.91, essentially theory. The small residual
+below 3 that remains in the interior box is within the noise of a single last-pair rate and of
+the same size as that recorded excluded-boundary energy rate (2.91), so the study does NOT
+establish a separate simplex-theory cap: if the non-Barlow tetrahedral Gauss points cost
+anything, it is within measurement noise of the fill's effect. The same rate deficit lands on
+the thermal flux recovery (§3d), whose quadratic rate is 2.66 — one estimator, one cap, because
+it is one shared machinery: `SuperconvergentRecovery.Recover<TValue, TField>` is monomorphized
+over a `SymmetricTensor3` stress and a `Vector3d` flux, with the structural path kept
+bit-identical. `StressRecoveryTests.TheInteriorSubDomainRateSeparatesTheBoundaryFillFromSimplexTheory`
+pins it.
 
 ### An estimator that cannot estimate must say so, not return zero
 

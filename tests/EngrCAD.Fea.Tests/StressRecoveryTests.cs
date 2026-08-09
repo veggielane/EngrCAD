@@ -457,4 +457,148 @@ public class StressRecoveryTests(ITestOutputHelper output)
         Assert.True(centroid.X > 0.5 * Size.X && centroid.Y > 0.5 * Size.Y,
             $"worst element at {centroid}, expected the high-x, high-y corner");
     }
+
+    /// <summary>
+    /// The p+1 cap, MEASURED. The quadratic recovered rate settles near 2.76 against a theory of
+    /// 3, and there are two candidate causes: the boundary FILL, which extrapolates a patch
+    /// polynomial to nodes outside its own elements (second-order accurate in the extrapolation
+    /// distance, and an O(h) volume fraction — so a half-order signature), or the SIMPLEX
+    /// superconvergence theory itself, which is weaker on tetrahedra than on the hexahedra SPR
+    /// was developed for. This separates them with an interior sub-domain norm: restrict the
+    /// recovered-error norm to a fixed central box, away from the boundary fill, and see whether
+    /// the rate rises toward 3 there.
+    ///
+    /// <para><b>The finding: the boundary fill is the dominant cause.</b> On a [3, 4, 6]-division
+    /// quadratic sequence the whole-domain rate is <b>2.758</b> (reproducing the recorded 2.76),
+    /// and over the central [0.25, 0.75] box it rises to <b>2.883</b> — closing about half the
+    /// measured gap to theory 3 (0.242 → 0.117). That agrees in direction with the recorded
+    /// experiment that excluding boundary patches ENTIRELY reached 3.08/2.91, essentially theory.
+    /// The small residual below 3 in the interior box is within the noise of a single last-pair
+    /// rate and of the same size as that recorded excluded-boundary energy rate (2.91), so this
+    /// study does NOT establish a separate simplex-theory cap: if the tetrahedral Gauss points
+    /// not being tensor-product Barlow points cost anything, it is within measurement noise of
+    /// the fill's effect. Recorded in CLAUDE.md and design.md §3i.</para>
+    /// </summary>
+    [Fact]
+    public void TheInteriorSubDomainRateSeparatesTheBoundaryFillFromSimplexTheory()
+    {
+        int[] divisions = [3, 4, 6];
+        const double frac = 0.25;   // the central [0.25, 0.75] box, well inside the fill layer
+
+        var hs = new List<double>();
+        var whole = new List<double>();
+        var interior = new List<double>();
+        output.WriteLine(
+            "quadratic recovered stress L2 error, whole domain vs central [0.25, 0.75] box "
+            + "(theory 3):");
+        foreach (int d in divisions)
+        {
+            var (w, i, insideElems, totalElems) = RecoveredErrorSplit(d, frac);
+            hs.Add(Size.Z / d);
+            whole.Add(w);
+            interior.Add(i);
+            output.WriteLine(
+                $"  div {d}, h {Size.Z / d:F4}: whole {w:E3}, interior {i:E3} "
+                + $"({insideElems} of {totalElems} interior elements)");
+        }
+
+        double wholeRate = LastPairRate(hs, whole);
+        double interiorRate = LastPairRate(hs, interior);
+        output.WriteLine(
+            $"  whole-domain rate {wholeRate:F3}, interior sub-domain rate {interiorRate:F3} "
+            + "(theory 3)");
+
+        // The interior box is genuinely interior, or the study measures nothing.
+        Assert.True(interior[^1] > 0, "the interior sub-domain is empty");
+
+        // The finding: the interior rate rises materially above the whole-domain rate and toward
+        // theory 3, which is what says the BOUNDARY FILL is the dominant cap. Both halves are
+        // asserted so a regression in either direction fails — the interior rate must be
+        // measurably better than the whole-domain one (the fill contributes) AND near theory
+        // (removing its influence recovers most of the missing order).
+        Assert.True(interiorRate > wholeRate + 0.05,
+            $"interior rate {interiorRate:F3} is not measurably above whole {wholeRate:F3}; the "
+            + "boundary fill would then not be the cap this test records");
+        Assert.True(interiorRate > 2.8,
+            $"interior rate {interiorRate:F3} did not rise toward theory 3");
+    }
+
+    /// <summary>The recovered-stress L2 error over the whole domain and over the central
+    /// <c>[frac, 1-frac]</c> box, at one quadratic refinement level.</summary>
+    private (double Whole, double Interior, int InteriorElements, int TotalElements)
+        RecoveredErrorSplit(int divisions, double frac)
+    {
+        var tets = StructuredTetMesh.Box(
+            Vector3d.Zero, Size, 2 * divisions, 2 * divisions, divisions);
+        var mesh = AnalysisMesh.Quadratic(tets);
+        var model = new StructuralModel(mesh, Steel);
+        foreach (int node in model.NodesOn(Facets.All))
+            model.PrescribeNode(node, Exact(mesh.Position(node)));
+        model.BodyForce(Body);
+        var results = StructuralSolver.Solve(model);
+        results.Recovery = StressRecovery.Superconvergent;
+        var recovered = results.NodalStress.ToArray();
+
+        var rule = TetQuadrature.Degree5;
+        int perElement = mesh.NodesPerElement;
+        double wholeErr = 0, wholeNorm = 0, innerErr = 0, innerNorm = 0;
+        int innerElems = 0;
+
+        var positions = new Vector3d[10];
+        var shape = new double[10];
+        var grad = new Vector3d[10];
+        var exact = new double[6];
+
+        var lo = new Vector3d(frac * Size.X, frac * Size.Y, frac * Size.Z);
+        var hi = new Vector3d((1 - frac) * Size.X, (1 - frac) * Size.Y, (1 - frac) * Size.Z);
+
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            var nodes = mesh.Element(e);
+            for (int i = 0; i < perElement; i++)
+                positions[i] = mesh.Position(nodes[i]);
+            var centroid = (positions[0] + positions[1] + positions[2] + positions[3]) * 0.25;
+            bool inside =
+                centroid.X >= lo.X && centroid.X <= hi.X &&
+                centroid.Y >= lo.Y && centroid.Y <= hi.Y &&
+                centroid.Z >= lo.Z && centroid.Z <= hi.Z;
+            if (inside)
+                innerElems++;
+
+            for (int q = 0; q < rule.Count; q++)
+            {
+                var (r, s, t) = rule.Point(q);
+                if (!TetElement.ShapeGradients(
+                        mesh.Order, positions.AsSpan(0, perElement), r, s, t, grad, out double detJ))
+                    continue;
+                double weight = rule.Weight(q) * detJ;
+                TetElement.ShapeValues(mesh.Order, r, s, t, shape);
+                var at = Vector3d.Zero;
+                for (int i = 0; i < perElement; i++)
+                    at += positions[i] * shape[i];
+                ExactStress(at, exact);
+
+                double d = Distance(recovered, nodes, shape, perElement, exact);
+                double n = 0;
+                for (int c = 0; c < 6; c++)
+                    n += exact[c] * exact[c];
+
+                wholeErr += weight * d;
+                wholeNorm += weight * n;
+                if (inside)
+                {
+                    innerErr += weight * d;
+                    innerNorm += weight * n;
+                }
+            }
+        }
+
+        return (
+            Math.Sqrt(wholeErr / wholeNorm),
+            innerNorm > 0 ? Math.Sqrt(innerErr / innerNorm) : double.NaN,
+            innerElems, mesh.ElementCount);
+    }
+
+    private static double LastPairRate(List<double> h, List<double> e) =>
+        Math.Log(e[^2] / e[^1]) / Math.Log(h[^2] / h[^1]);
 }

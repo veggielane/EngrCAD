@@ -586,35 +586,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   with a genuine singularity — a re-entrant corner, a point load — never reaches it and the
   honest loop caps the passes and REPORTS the figure it stalled at rather than refining
   forever. That is the same shape as the boundary-recovery non-convergence detection.
-- [ ] **FEA: superconvergent recovery on tetrahedra does not reach full p+1, and the cap is
-  unmeasured.** The quadratic recovered rate settles at **2.76** against a theory of 3
-  (linear reaches 2.30 against 2), reported honestly rather than rounded up. Two candidate
-  causes and no measurement separating them: the boundary FILL extrapolates a patch
-  polynomial to nodes outside its own elements, which is second-order accurate in the
-  extrapolation distance and could plausibly cost the difference; and the superconvergence
-  theory itself is weaker on simplices than on hexahedra, where SPR was developed — on a
-  tetrahedral mesh the Gauss points are not the tensor-product Barlow points and the p+1
-  claim is asymptotic at best. Separating them is a measurement, not a redesign: run the
-  same study on a mesh whose boundary is far from the region being measured (an interior
-  sub-domain norm), and if the rate rises to 3 the fill is the cap.
-- [ ] **FEA: does the thermal path want a superconvergent flux recovery of its own?** The
-  per-region `NodalFluxIn` landed (design.md §3d), and it deliberately did NOT bring a
-  recovery with it — the thermal side still averages element values at each node, where the
-  structural side offers `StressRecovery.Superconvergent` beside `Direct`. The patch
-  machinery would transfer almost verbatim: `SuperconvergentRecovery` fits a polynomial per
-  vertex patch over Gauss-point samples of a per-element tensor, and a flux vector is a
-  smaller version of the same fit (3 components rather than 6) over the same slot table, with
-  the same region rule and the same boundary walk. **What it has to EARN is a convergence
-  table, not a port**: the structural claim is 14.4x/11.4x lower nodal error at measured rates
-  2.30 and 2.76 against theory 2 and 3, plus an effectivity index converging on 1 — and the
-  thermal equivalent has to be measured on the manufactured solution `ThermalConvergenceTests`
-  already carries, because the superconvergence theory is about the FIELD's order and a flux
-  is one derivative down from temperature exactly as a stress is from displacement, so the
-  numbers should land but "should" is not a measurement. The by-product would be the thing
-  worth having: a thermal `ErrorEstimate`, i.e. an answer to "is this mesh good enough" that a
-  conduction solve currently never gives. Note the counterweight §3i records applies here too
-  — a recovered field is smooth by construction, so `Direct` stays the default whatever the
-  table says.
 - [ ] **FEA: a bi-material colour plot still shows the blended interface value, because
   `MeshField` has one value per vertex.** `StructuralResults.Fields()`/`SampleOnto` publish
   the node-indexed `NodalStress` and `ThermalResults`' publish `NodalFlux`, so the honest

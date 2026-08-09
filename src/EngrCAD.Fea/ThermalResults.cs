@@ -3,6 +3,24 @@ using EngrCAD.Mesh;
 
 namespace EngrCAD.Fea;
 
+/// <summary>How the discontinuous element heat-flux field is turned into one value per node —
+/// the thermal twin of <see cref="StressRecovery"/>.</summary>
+public enum FluxRecovery
+{
+    /// <summary>Average the element flux values meeting at each node (the default). Simple,
+    /// exact where the flux is constant, and the value a colour map has always shown here. Its
+    /// weakness is where it samples: for a quadratic element the flux is linear and a node is
+    /// the WORST place to read it.</summary>
+    Direct,
+
+    /// <summary>Zienkiewicz-Zhu superconvergent patch recovery of the flux vector: fit a
+    /// polynomial per corner-node patch to the flux at the element's superconvergent points and
+    /// read it at the nodes. Converges one order faster than <see cref="Direct"/>, and is the
+    /// same machinery <see cref="StressRecovery.Superconvergent"/> runs — a smaller fit (3
+    /// components rather than 6) over the same slot table.</summary>
+    Superconvergent,
+}
+
 /// <summary>
 /// The answer to a conduction solve: nodal temperatures, the derived heat-flux field, and
 /// the solve report — plus the same two ways out a structural solve has, a
@@ -32,6 +50,10 @@ public sealed class ThermalResults
     private readonly double[] _temperature;
     private Vector3d[]? _nodalFlux;
     private Vector3d[]? _nodalFluxPerRegion;
+    // The recovered flux and the error estimate — lazy like the averaged caches above, and
+    // unsynchronised for the same reason (a results object belongs to whoever solved for it).
+    private RecoveredField<Vector3d>? _recovered;
+    private ErrorEstimate? _errorEstimate;
 
     // Not thread-safe: the lazy cache below is unsynchronised, so a first read from several
     // threads would recompute rather than corrupt. A results object belongs to whoever
@@ -116,8 +138,30 @@ public sealed class ThermalResults
             field = value;
             _nodalFlux = null;
             _nodalFluxPerRegion = null;
+            // The recovery and the estimate consume the averaged flux (boundary nodes fall
+            // back to it), so a changed averaging staleness them as well — clearing only the
+            // averaged caches would let a later recovered read pair a fresh average with a
+            // recovery computed under the old one.
+            _recovered = null;
+            _errorEstimate = null;
         }
     } = NodalAveraging.VolumeWeighted;
+
+    /// <summary>
+    /// Which recovery <see cref="NodalFlux"/> reports. <see cref="FluxRecovery.Direct"/> is the
+    /// default, so nothing about an existing result moves — every thermal verification figure
+    /// this project quotes was measured through the simple path.
+    ///
+    /// <para><see cref="FluxRecovery.Superconvergent"/> converges one order faster and costs a
+    /// small least-squares solve per corner node — the flux twin of
+    /// <see cref="StructuralResults.Recovery"/>, and NOT the default for the same reason it is
+    /// not there: a recovered field is smooth by construction, so at a genuine discontinuity (a
+    /// material interface, a re-entrant corner) it smooths harder than averaging does.</para>
+    ///
+    /// <para>A plain property: <see cref="NodalFlux"/> and <see cref="NodalFluxIn"/> switch on
+    /// it and cache nothing at their own level, so changing it invalidates nothing.</para>
+    /// </summary>
+    public FluxRecovery FluxRecovery { get; set; } = FluxRecovery.Direct;
 
     /// <summary>The temperature GRADIENT at the centroid of one element.</summary>
     public Vector3d ElementGradient(int element)
@@ -135,32 +179,43 @@ public sealed class ThermalResults
     }
 
     /// <summary>
-    /// Averaged heat flux at every node — what a colour map shows.
+    /// Heat flux at every node, by whichever <see cref="FluxRecovery"/> is selected — what a
+    /// colour map shows.
     ///
     /// <para><b>One value per node, which at a MATERIAL INTERFACE is one value too few</b> —
     /// see the class remarks, <see cref="AnalysisMesh.InterfaceNodeCount"/> for how many nodes
     /// are affected, and <see cref="NodalFluxIn"/> for the per-material value.</para>
     /// </summary>
-    public IReadOnlyList<Vector3d> NodalFlux => NodalFluxByNode;
+    public IReadOnlyList<Vector3d> NodalFlux =>
+        FluxRecovery == FluxRecovery.Direct ? AveragedFluxByNode : RecoveredFlux.Values;
 
-    private Vector3d[] NodalFluxByNode => _nodalFlux ??= ComputeNodalFlux(perRegion: false);
+    private Vector3d[] AveragedFluxByNode => _nodalFlux ??= ComputeNodalFlux(perRegion: false);
 
     /// <summary>
     /// The averaged flux per (node, region) SLOT — the same rule <see cref="Averaging"/>
-    /// states, restricted to one material.
+    /// states, restricted to one material, and the fallback the recovery itself uses where a
+    /// slot is reached by no patch.
     /// <para>Where a slot IS a node (every mesh with one region, and every mesh of disjoint
-    /// bodies) this is <see cref="NodalFluxByNode"/> itself rather than a second array holding
-    /// the same numbers: the two accumulations would be the same additions in the same order,
-    /// so computing it twice would buy nothing but a chance to drift.</para>
+    /// bodies) this is <see cref="AveragedFluxByNode"/> itself rather than a second array
+    /// holding the same numbers: the two accumulations would be the same additions in the same
+    /// order, so computing it twice would buy nothing but a chance to drift.</para>
     /// </summary>
-    private Vector3d[] NodalFluxPerRegion =>
+    private Vector3d[] AveragedFluxPerRegion =>
         Mesh.RegionSlotsAreNodes
-            ? NodalFluxByNode
+            ? AveragedFluxByNode
             : _nodalFluxPerRegion ??= ComputeNodalFlux(perRegion: true);
 
+    /// <summary>The superconvergent recovery — the SAME machinery
+    /// <see cref="StressRecovery.Superconvergent"/> runs, over a 3-component flux through
+    /// <see cref="FluxField"/>, with the averaged flux as its per-slot fallback.</summary>
+    private RecoveredField<Vector3d> RecoveredFlux =>
+        _recovered ??= SuperconvergentRecovery.Recover<Vector3d, FluxField>(
+            new FluxField(this), AveragedFluxPerRegion);
+
     /// <summary>
-    /// The averaged heat flux at one node <b>as seen from one material region</b> — the
-    /// honest value where <see cref="NodalFlux"/> can only report a blend.
+    /// The heat flux at one node <b>as seen from one material region</b> — the honest value
+    /// where <see cref="NodalFlux"/> can only report a blend, by whichever
+    /// <see cref="FluxRecovery"/> is selected.
     ///
     /// <para>Equal to <see cref="NodalFlux"/> at every node touching one region, by identical
     /// arithmetic rather than by tolerance, so switching to this accessor cannot move an
@@ -172,8 +227,26 @@ public sealed class ThermalResults
     public Vector3d NodalFluxIn(int region, int node)
     {
         RequireNode(node);
-        return NodalFluxPerRegion[Mesh.RegionSlot(node, region)];
+        int slot = Mesh.RegionSlot(node, region);
+        return FluxRecovery == FluxRecovery.Direct
+            ? AveragedFluxPerRegion[slot]
+            : RecoveredFlux.SlotValues[slot];
     }
+
+    /// <summary>
+    /// The Zienkiewicz-Zhu error estimate: the energy-norm distance between the element
+    /// heat-flux field and its superconvergent recovery, per element and overall — the answer
+    /// to "is this conduction mesh good enough" a solve otherwise never gives.
+    ///
+    /// <para>Always computed from the RECOVERED flux, whatever <see cref="FluxRecovery"/> is
+    /// set to, because that is what makes it an estimator: the recovered field is a better
+    /// approximation than the finite-element one, so the gap between them estimates the error
+    /// in the finite-element one. The energy inner product of a flux difference is
+    /// <c>|q|²/k</c> — the thermal analogue of the structural compliance norm, and
+    /// <c>k·|grad T|²</c> by another name.</para>
+    /// </summary>
+    public ErrorEstimate ErrorEstimate =>
+        _errorEstimate ??= ComputeThermalErrorEstimate(RecoveredFlux);
 
     /// <summary>
     /// The averaged flux with the material-region rule switched on or off, computed FRESH —
@@ -279,6 +352,152 @@ public sealed class ThermalResults
                 accumulated[v] /= weights[v];
         }
         return accumulated;
+    }
+
+    /// <summary>
+    /// The energy-norm error between the finite-element flux and the recovered flux, per
+    /// element and overall — the flux twin of <c>StructuralResults.ComputeErrorEstimate</c>,
+    /// with the compliance replaced by the scalar thermal one <c>1/k</c>.
+    /// </summary>
+    private ErrorEstimate ComputeThermalErrorEstimate(RecoveredField<Vector3d> recovered)
+    {
+        int perElement = Mesh.NodesPerElement;
+        // The integrand is the SQUARE of a difference between a degree-p field (the recovered
+        // flux, interpolated) and a degree-(p-1) one (the finite-element flux), i.e. degree
+        // 2p; the rule is chosen to be exact for it — the same choice the structural estimate
+        // makes, and NOT the conductivity's 2(p-1), which would under-integrate the estimate
+        // and make it look better than it is.
+        var rule = Mesh.Order == ElementOrder.Linear
+            ? TetQuadrature.Degree3
+            : TetQuadrature.Degree5;
+
+        var perElementError = new double[Mesh.ElementCount];
+        double totalError = 0, totalEnergy = 0;
+
+        Span<Vector3d> positions = stackalloc Vector3d[10];
+        Span<double> temps = stackalloc double[10];
+        Span<double> shape = stackalloc double[10];
+        Span<Vector3d> grad = stackalloc Vector3d[10];
+
+        // Read from the RECOVERY, not from the mesh: a recovery run with regions collapsed has
+        // node-indexed slots whatever the mesh's own slots are.
+        bool perRegion = !recovered.SlotsAreNodes;
+
+        for (int e = 0; e < Mesh.ElementCount; e++)
+        {
+            var nodes = Mesh.Element(e);
+            for (int i = 0; i < perElement; i++)
+            {
+                positions[i] = Mesh.Position(nodes[i]);
+                temps[i] = _temperature[nodes[i]];
+            }
+            double conductivity = Model.MaterialOf(e).ThermalConductivity;
+            // An element reads its OWN material's recovered values, never the node-indexed
+            // blend: at an interface element the blend carries the other material's flux, and
+            // the estimator would book that modelling jump as this element's error.
+            int region = perRegion ? Mesh.RegionOf(e) : 0;
+            double error = 0, energy = 0;
+
+            for (int q = 0; q < rule.Count; q++)
+            {
+                var (r, s, t) = rule.Point(q);
+                if (!TetElement.ShapeGradients(
+                        Mesh.Order, positions[..perElement], r, s, t, grad, out double detJ))
+                    continue;
+                double weight = rule.Weight(q) * detJ;
+                TetElement.ShapeValues(Mesh.Order, r, s, t, shape);
+
+                // The finite-element flux from the element's own shape gradients — the same
+                // arithmetic ThermalElement.GradientAt runs, inlined so detJ is not computed
+                // twice.
+                var gradT = Vector3d.Zero;
+                for (int i = 0; i < perElement; i++)
+                    gradT += grad[i] * temps[i];
+                var fe = gradT * -conductivity;
+
+                // The recovered flux INSIDE the element is its nodal values interpolated by the
+                // element's own shape functions, which is what makes the two fields comparable
+                // pointwise rather than only at the nodes.
+                var smooth = Vector3d.Zero;
+                for (int i = 0; i < perElement; i++)
+                {
+                    var value = perRegion
+                        ? recovered.SlotValues[Mesh.RegionSlot(nodes[i], region)]
+                        : recovered.Values[nodes[i]];
+                    smooth += value * shape[i];
+                }
+
+                var d = smooth - fe;
+                error += weight * d.LengthSquared / conductivity;
+                energy += weight * fe.LengthSquared / conductivity;
+            }
+
+            perElementError[e] = Math.Sqrt(Math.Max(0, error));
+            totalError += error;
+            totalEnergy += energy;
+        }
+
+        double errorNorm = Math.Sqrt(Math.Max(0, totalError));
+        double energyNorm = Math.Sqrt(Math.Max(0, totalEnergy));
+        // The classical ZZ normalisation: the estimated error over the estimated norm of the
+        // EXACT solution, which is the finite-element norm plus the error rather than the
+        // finite-element norm alone. At the coarse end the difference is not small.
+        double denominator = Math.Sqrt(totalEnergy + totalError);
+        double relative = denominator > 0 ? errorNorm / denominator : 0;
+
+        // NOTHING was recovered, so the "error" is the distance from the finite-element field
+        // to itself — the same UNKNOWN case the structural estimate reports as NaN rather than
+        // as arithmetic that calls the mesh perfect on exactly the mesh too coarse to assess.
+        if (recovered.FallbackNodes >= Mesh.NodeCount)
+        {
+            errorNorm = double.NaN;
+            relative = double.NaN;
+            Array.Fill(perElementError, double.NaN);
+        }
+
+        return new ErrorEstimate(
+            perElementError, errorNorm, energyNorm, relative,
+            recovered.FallbackNodes, recovered.RankDeficientPatches);
+    }
+
+    /// <summary>
+    /// The flux field for the recovery: the finite-element heat flux <c>q = -k·grad T</c>,
+    /// evaluated through the element's own shape-function gradients. The 3-component twin of
+    /// <c>SuperconvergentRecovery.StressField</c>.
+    /// </summary>
+    private readonly struct FluxField(ThermalResults results) : IRecoveryField<Vector3d>
+    {
+        public AnalysisMesh Mesh => results.Mesh;
+        public int Components => 3;
+        public int DofsPerNode => 1;
+
+        public void GatherDofs(int element, Span<Vector3d> positions, Span<double> dofs)
+        {
+            var nodes = results.Mesh.Element(element);
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                positions[i] = results.Mesh.Position(nodes[i]);
+                dofs[i] = results._temperature[nodes[i]];
+            }
+        }
+
+        public void SampleAt(
+            int element, ReadOnlySpan<Vector3d> positions, ReadOnlySpan<double> dofs,
+            double r, double s, double t, Span<double> value)
+        {
+            ThermalElement.GradientAt(
+                results.Mesh.Order, positions, dofs, r, s, t, out var gradient);
+            double factor = -results.Model.MaterialOf(element).ThermalConductivity;
+            value[0] = gradient.X * factor;
+            value[1] = gradient.Y * factor;
+            value[2] = gradient.Z * factor;
+        }
+
+        public Vector3d Zero => Vector3d.Zero;
+        public Vector3d FromComponents(ReadOnlySpan<double> value) =>
+            new(value[0], value[1], value[2]);
+        public Vector3d Add(Vector3d a, Vector3d b) => a + b;
+        public Vector3d Scale(Vector3d a, double s) => a * s;
     }
 
     // ---- publishing -----------------------------------------------------------------
