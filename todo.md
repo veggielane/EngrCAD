@@ -269,8 +269,9 @@ Remaining follow-ups:
 
 - [ ] **Topology optimisation follow-ups** (SIMP landed 2026-08-04 — `TopologyOptimizer`,
   design.md §3k, docs `examples/fea-topology.md`; passive regions, several load cases and the
-  largest-connected-component release filter landed 2026-08-09). Each of these is a NAMED
-  absence in the shipped feature rather than a defect, and each was weighed and deferred:
+  largest-connected-component release filter landed 2026-08-09; penalty continuation and
+  symbolic-factorization reuse landed 2026-08-09). Each of these is a NAMED absence in the
+  shipped feature rather than a defect, and each was weighed and deferred:
   - **MMA (Method of Moving Asymptotes)**, the general answer OC is not. Needed the moment
     there are two constraints or a different objective; a substantial dependency-free build
     (a per-variable convex subproblem with asymptotes updated from the iteration history,
@@ -286,18 +287,14 @@ Remaining follow-ups:
     term the self-adjoint shortcut drops, plus a decision about the load interpolation (a
     linear `rho` mass with a `rho^p` stiffness makes low densities artificially efficient,
     which is the classic self-weight parasitic-mass failure).
-  - **Continuation on the penalty** (`p` ramped 1 → 3 over the run). The convex `p = 1`
-    problem has a unique optimum, so starting there and ramping is the standard way to
-    reduce dependence on the starting design. Cheap to add and it changes committed
-    numbers, so it wants its own before/after measurement rather than being switched on.
-  - **Cost.** One factorization per iteration, and no reuse between them: measured 288
-    elements in 0.43 s, 1 152 in 2.5 s and 10 800 in about 50 s at 60 iterations. The
-    standard remedies are a preconditioned CG warm-started from the previous iterate's
-    displacement (the design changes little per step, so the seed is good) and reusing the
-    symbolic factorization, whose sparsity pattern is IDENTICAL every iteration — only the
-    values change. `SparseCholesky.Analyze` already shares the symbolic pass with
-    `Factorize`, so a "refactorize with the same pattern" entry point is a real and bounded
-    saving, and `Analyze`'s own table says the numeric pass is where the time is.
+  - **Cost — the remaining lever.** One factorization per iteration: measured 288 elements in
+    0.43 s, 1 152 in 2.5 s and 10 800 in about 50 s at 60 iterations. Reusing the symbolic
+    factorization across the loop landed (`SparseCholesky.AnalyzePattern` → `SparseCholeskySymbolic`,
+    bit-identical to a fresh `Factorize`, a bounded per-factorization saving — 1.13× at 1 152
+    elements, 1.02× at 10 800, since the numeric pass is the floor). The remaining lever is a
+    preconditioned CG warm-started from the previous iterate's displacement (the design changes
+    little per step, so the seed is good) — a different mechanism that attacks the numeric cost,
+    not the symbolic one.
 
 - [ ] **Log-scale colour mapping residuals** (the LEGEND half ✅ landed: `FieldLegend`
   reads the `log10(…)` units declaration — `TryLogUnits`/`TickMarks` — and prints

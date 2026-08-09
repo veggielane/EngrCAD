@@ -121,6 +121,10 @@ public sealed class SparseCholesky
     /// <summary>Stored entries of L (diagonal included) — the fill diagnostic.</summary>
     public int FactorNonZeroCount => _rowIndex.Length;
 
+    /// <summary>The stored values of L in factored column order — exposed for the bit-identity
+    /// test that pins the symbolic-reuse path against a fresh factorization.</summary>
+    internal ReadOnlySpan<double> FactorValues => _values;
+
     /// <summary>The ordering this factorization was built with.</summary>
     public SparseOrdering Ordering { get; }
 
@@ -200,7 +204,27 @@ public sealed class SparseCholesky
     {
         var (n, colStart, rowIndex, values, permutation, parent, counts, stamp, reach, pathStack) =
             Symbolic(a, ordering, progress);
+        return Numeric(
+            n, colStart, rowIndex, values, permutation, parent, counts, stamp, reach, pathStack,
+            ordering, progress);
+    }
 
+    /// <summary>
+    /// The up-looking NUMERIC pass over an already-analysed pattern: given the permuted
+    /// upper-triangle CSC (<paramref name="colStart"/>/<paramref name="rowIndex"/>/<paramref
+    /// name="values"/>), the elimination tree and the column counts, it produces L. Shared by
+    /// <see cref="Factorize(PackedSparseMatrix, SparseOrdering, ProgressCancel?)"/> and by
+    /// <see cref="SparseCholeskySymbolic.Factorize"/>, so a refactorization reusing a pattern
+    /// runs the SAME arithmetic in the SAME order — which is what makes it bit-identical to a
+    /// fresh factorization of the same matrix. The scratch (<paramref name="stamp"/>,
+    /// <paramref name="reach"/>, <paramref name="pathStack"/>) is the caller's to supply so the
+    /// symbolic-reuse path can hand fresh arrays and stay reentrant.
+    /// </summary>
+    internal static SparseCholesky Numeric(
+        int n, int[] colStart, int[] rowIndex, double[] values, int[]? permutation,
+        int[] parent, int[] counts, int[] stamp, int[] reach, int[] pathStack,
+        SparseOrdering ordering, ProgressCancel? progress)
+    {
         // The numeric pass's exact inner-loop update count, available here because the
         // symbolic pass has just counted every column of L. Accumulated in double because a
         // large factorization's update count overflows int (a 19-million-entry factor's runs
@@ -421,6 +445,54 @@ public sealed class SparseCholesky
         return new SparseFactorAnalysis(n, nonZeros, totalUpdates, critical, longest, ordering);
     }
 
+    /// <summary>
+    /// Analyses a matrix PATTERN once so a family of matrices sharing it can be factorized
+    /// without re-analysing — the answer to the topology-optimisation loop, whose stiffness has
+    /// an identical sparsity pattern every iteration (mesh connectivity and eliminated DOFs are
+    /// fixed) while only the per-element stiffness scales change. The ordering, the elimination
+    /// tree and the column-count symbolic pass run here, ONCE;
+    /// <see cref="SparseCholeskySymbolic.Factorize"/> then runs only the numeric pass — the
+    /// part <see cref="Analyze"/>'s own table says the time is in.
+    ///
+    /// <para>The returned object's <see cref="SparseCholeskySymbolic.Factorize"/> is
+    /// bit-identical to a fresh <see cref="Factorize(PackedSparseMatrix, SparseOrdering,
+    /// ProgressCancel?)"/> of the same matrix — see that method's remarks.</para>
+    /// </summary>
+    /// <param name="a">A matrix with the pattern to reuse; only its pattern is read, not its
+    /// values.</param>
+    /// <param name="ordering">The elimination order the reused factorizations run under.</param>
+    public static SparseCholeskySymbolic AnalyzePattern(
+        PackedSparseMatrix a, SparseOrdering ordering = SparseOrdering.Natural)
+    {
+        var (n, colStart, rowIndex, _, permutation, parent, counts, _, _, _) =
+            Symbolic(a, ordering, null);
+
+        // The value-gather map: for each slot of the permuted upper-triangle CSC (the array
+        // the numeric pass reads its values from) it records which stored entry of the input's
+        // own upper triangle that value came from. It is built by mirroring UpperCsc and
+        // SymmetricPermute in INDEX rather than in value, so a later refactorization can gather
+        // a NEW same-pattern matrix's values into exactly the slots Symbolic would have placed
+        // them — a pure copy of each double, hence bit-identical to a fresh factorization.
+        var upper = a.IsSymmetricUpper ? a : a.ToSymmetricUpper();
+        var (uColStart, uRowIndex, cscToRaw) = UpperCscRawMap(upper);
+        int[] finalToRaw;
+        if (permutation is not null)
+        {
+            var (_, _, cscOfFinal) = SymmetricPermuteMap(n, uColStart, uRowIndex, permutation);
+            finalToRaw = new int[cscOfFinal.Length];
+            for (int i = 0; i < finalToRaw.Length; i++)
+                finalToRaw[i] = cscToRaw[cscOfFinal[i]];
+        }
+        else
+        {
+            finalToRaw = cscToRaw;
+        }
+
+        return new SparseCholeskySymbolic(
+            n, colStart, rowIndex, permutation, parent, counts, finalToRaw,
+            upper.NonZeroCount, ordering);
+    }
+
     /// <summary>Solves A·x = b using the factorization (forward then back substitution).</summary>
     public void Solve(ReadOnlySpan<double> b, Span<double> x)
     {
@@ -608,5 +680,215 @@ public sealed class SparseCholesky
             }
         }
         return (colStart, rowIndex, values);
+    }
+
+    /// <summary>
+    /// The STRUCTURAL twin of <see cref="UpperCsc"/>: the same column starts and row indices,
+    /// plus <c>CscToRaw</c> mapping each CSC slot to the flat index of its value in the input's
+    /// own <see cref="PackedSparseMatrix.StoredValues"/> (which is row-major, so a running
+    /// counter is that index). The map is a pure function of the PATTERN, so gathering another
+    /// same-pattern matrix's values through it reproduces this matrix's CSC values exactly.
+    /// </summary>
+    internal static (int[] ColStart, int[] RowIndex, int[] CscToRaw) UpperCscRawMap(
+        PackedSparseMatrix upper)
+    {
+        int n = upper.Rows;
+        var colCount = new int[n];
+        for (int r = 0; r < n; r++)
+        {
+            foreach (int c in upper.RowColumns(r))
+                colCount[c]++;
+        }
+        var colStart = new int[n + 1];
+        for (int c = 0; c < n; c++)
+            colStart[c + 1] = colStart[c] + colCount[c];
+        var rowIndex = new int[colStart[n]];
+        var cscToRaw = new int[colStart[n]];
+        var cursor = new int[n];
+        colStart.AsSpan(0, n).CopyTo(cursor);
+        int raw = 0;
+        for (int r = 0; r < n; r++)
+        {
+            var cols = upper.RowColumns(r);
+            for (int i = 0; i < cols.Length; i++)
+            {
+                int c = cols[i];
+                rowIndex[cursor[c]] = r;
+                cscToRaw[cursor[c]] = raw;
+                cursor[c]++;
+                raw++;
+            }
+        }
+        return (colStart, rowIndex, cscToRaw);
+    }
+
+    /// <summary>
+    /// The STRUCTURAL twin of <see cref="SymmetricPermute"/>: it produces the same permuted
+    /// pattern (<c>ColStart</c>/<c>RowIndex</c>) but, in place of the permuted values, records
+    /// <c>CscOfFinal</c> — the source CSC slot each final slot came from. Because rows are
+    /// distinct within a column the per-column sort orders slots identically to
+    /// <see cref="SymmetricPermute"/>, so composing this with <see cref="UpperCscRawMap"/>'s
+    /// map gives, for each final slot, the raw source of its value — the whole gather map.
+    /// </summary>
+    internal static (int[] ColStart, int[] RowIndex, int[] CscOfFinal) SymmetricPermuteMap(
+        int n, int[] colStart, int[] rowIndex, int[] permutation)
+    {
+        var inverse = new int[n];
+        for (int k = 0; k < n; k++)
+            inverse[permutation[k]] = k;
+
+        var counts = new int[n];
+        for (int j = 0; j < n; j++)
+        {
+            int jNew = inverse[j];
+            for (int p = colStart[j]; p < colStart[j + 1]; p++)
+            {
+                int iNew = inverse[rowIndex[p]];
+                counts[Math.Max(iNew, jNew)]++;
+            }
+        }
+
+        var newColStart = new int[n + 1];
+        for (int c = 0; c < n; c++)
+            newColStart[c + 1] = newColStart[c] + counts[c];
+        var newRowIndex = new int[newColStart[n]];
+        var cscOfFinal = new int[newColStart[n]];
+
+        var cursor = new int[n];
+        newColStart.AsSpan(0, n).CopyTo(cursor);
+        for (int j = 0; j < n; j++)
+        {
+            int jNew = inverse[j];
+            for (int p = colStart[j]; p < colStart[j + 1]; p++)
+            {
+                int iNew = inverse[rowIndex[p]];
+                int column = Math.Max(iNew, jNew);
+                int slot = cursor[column]++;
+                newRowIndex[slot] = Math.Min(iNew, jNew);
+                cscOfFinal[slot] = p;
+            }
+        }
+        for (int c = 0; c < n; c++)
+        {
+            int from = newColStart[c], to = newColStart[c + 1];
+            newRowIndex.AsSpan(from, to - from).Sort(cscOfFinal.AsSpan(from, to - from));
+        }
+        return (newColStart, newRowIndex, cscOfFinal);
+    }
+}
+
+/// <summary>
+/// A reusable SYMBOLIC factorization: the elimination order, tree and column counts of one
+/// matrix PATTERN, plus the value-gather map that lets any matrix SHARING that pattern be
+/// factorized without re-analysing it. Built by <see cref="SparseCholesky.AnalyzePattern"/>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>The consumer is any loop that solves a family of matrices differing only in their
+/// values</b> — the topology-optimisation loop above all, whose stiffness has an identical
+/// sparsity pattern every iteration while the per-element stiffness scales change.
+/// <see cref="SparseCholesky.AnalyzePattern"/> runs the ordering, the elimination tree and the
+/// column-count pass ONCE, and each <see cref="Factorize"/> then runs only the numeric pass —
+/// the part <see cref="SparseCholesky.Analyze"/>'s own table says the time is in.
+/// </para>
+/// <para>
+/// <b><see cref="Factorize"/> is bit-identical to a fresh
+/// <see cref="SparseCholesky.Factorize(PackedSparseMatrix, SparseOrdering, ProgressCancel?)"/>
+/// of the same matrix, and that is a property of the construction rather than a hope.</b> The
+/// reuse gathers the new matrix's values into exactly the slots the fresh path would place them
+/// (a pure copy of each double — no arithmetic touches a value), then runs the SAME
+/// <see cref="SparseCholesky.Numeric"/> pass — so the floating-point operations and their ORDER
+/// are identical. A test asserts the two agree through <c>DoubleToInt64Bits</c> on a family of
+/// same-pattern matrices under both orderings.
+/// </para>
+/// <para>
+/// <b>The pattern must genuinely match; only the values may differ.</b> A matrix of a different
+/// dimension or with a different number of stored entries is refused by name. The cheap
+/// dimension-and-count guard cannot catch a same-count pattern that has MOVED an entry, so the
+/// caller owns that invariant — which every intended consumer does by construction (the
+/// topology loop rebuilds the same matrix with different values each iteration).
+/// </para>
+/// </remarks>
+public sealed class SparseCholeskySymbolic
+{
+    private readonly int _n;
+    private readonly int[] _colStart;
+    private readonly int[] _rowIndex;
+    private readonly int[]? _permutation;
+    private readonly int[] _parent;
+    private readonly int[] _counts;
+    private readonly int[] _finalToRaw;
+    private readonly int _upperNonZeroCount;
+
+    internal SparseCholeskySymbolic(
+        int n, int[] colStart, int[] rowIndex, int[]? permutation, int[] parent, int[] counts,
+        int[] finalToRaw, int upperNonZeroCount, SparseOrdering ordering)
+    {
+        _n = n;
+        _colStart = colStart;
+        _rowIndex = rowIndex;
+        _permutation = permutation;
+        _parent = parent;
+        _counts = counts;
+        _finalToRaw = finalToRaw;
+        _upperNonZeroCount = upperNonZeroCount;
+        Ordering = ordering;
+    }
+
+    /// <summary>Dimension of the matrices this pattern factorizes.</summary>
+    public int Rows => _n;
+
+    /// <summary>Stored entries L will have (diagonal included) — the same for every matrix
+    /// sharing the pattern, so this is known before the first factorization.</summary>
+    public long FactorNonZeroCount
+    {
+        get
+        {
+            long nnz = _n;
+            foreach (int c in _counts)
+                nnz += c;
+            return nnz;
+        }
+    }
+
+    /// <summary>The elimination order the reused factorizations run under.</summary>
+    public SparseOrdering Ordering { get; }
+
+    /// <summary>
+    /// Factors <paramref name="a"/>, which must share this object's sparsity pattern (only its
+    /// values may differ). Bit-identical to
+    /// <see cref="SparseCholesky.Factorize(PackedSparseMatrix, SparseOrdering, ProgressCancel?)"/>
+    /// of the same matrix under this ordering — see the class remarks. Throws
+    /// <see cref="InvalidOperationException"/> on a nonpositive pivot, exactly as a fresh
+    /// factorization does, and <see cref="ArgumentException"/> if the pattern does not match.
+    /// </summary>
+    /// <param name="a">A matrix sharing this pattern.</param>
+    /// <param name="progress">Optional cancellation and progress, honoured per eliminated column
+    /// exactly as a fresh <see cref="SparseCholesky.Factorize(PackedSparseMatrix,
+    /// SparseOrdering, ProgressCancel?)"/> honours it.</param>
+    public SparseCholesky Factorize(PackedSparseMatrix a, ProgressCancel? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        var upper = a.IsSymmetricUpper ? a : a.ToSymmetricUpper();
+        if (upper.Rows != _n || upper.Columns != _n || upper.NonZeroCount != _upperNonZeroCount)
+            throw new ArgumentException(
+                $"This symbolic factorization was analysed for a {_n}x{_n} matrix with "
+                + $"{_upperNonZeroCount} stored upper entries; the matrix given is "
+                + $"{upper.Rows}x{upper.Columns} with {upper.NonZeroCount} stored. A reused "
+                + "pattern requires an IDENTICAL sparsity pattern — only the values may differ.",
+                nameof(a));
+
+        // Gather the new matrix's values into the permuted CSC slots the numeric pass reads.
+        // A pure copy of each double, in the arrangement Symbolic would have produced.
+        var values = new double[_upperNonZeroCount];
+        var stored = upper.StoredValues;
+        for (int i = 0; i < values.Length; i++)
+            values[i] = stored[_finalToRaw[i]];
+
+        // Fresh scratch each call so the symbolic object stays reentrant; the numeric pass
+        // resets it, so a fresh array and a reused one give identical arithmetic.
+        return SparseCholesky.Numeric(
+            _n, _colStart, _rowIndex, values, _permutation, _parent, _counts,
+            new int[_n], new int[_n], new int[_n], Ordering, progress);
     }
 }

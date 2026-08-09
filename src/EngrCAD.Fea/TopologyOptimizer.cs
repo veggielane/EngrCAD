@@ -47,6 +47,31 @@ public sealed record TopologyOptions
     public double Penalty { get; init; } = 3.0;
 
     /// <summary>
+    /// Ramp the penalty from 1 up to <see cref="Penalty"/> over the run rather than holding it
+    /// at the target from the start — OFF by default, because it CHANGES the answer.
+    ///
+    /// <para>At <c>p = 1</c> the compliance problem is CONVEX (a half-dense element is exactly
+    /// as efficient per unit volume as a solid one, so nothing pushes toward solid-or-void and
+    /// the problem is the variable-thickness-sheet problem), so it has a unique optimum that
+    /// does not depend on the starting design. Starting there and increasing the penalty
+    /// gradually carries that independence into the non-convex regime, which is the standard way
+    /// to reduce how much the answer depends on where the search began — a local minimum
+    /// reached from a good, start-independent state rather than from an arbitrary one.</para>
+    ///
+    /// <para><b>The schedule holds at each penalty level before stepping up</b> (start at 1,
+    /// add <see cref="TopologyOptimizer.PenaltyStep"/> every
+    /// <see cref="TopologyOptimizer.PenaltyHoldIterations"/> iterations up to
+    /// <see cref="Penalty"/>) — the dwell is what makes the convex phase actually settle, and a
+    /// ramp with no dwell was measured to reduce start dependence not at all. The
+    /// change-tolerance convergence stop is deferred until the target penalty is reached, so a
+    /// run cannot stop early at a low penalty. It is off by default because it makes the answer
+    /// — and every committed number — different, so it is a deliberate choice with a measured
+    /// before/after (see the docs), not a silent improvement, and a run that turns it on wants
+    /// <see cref="MaxIterations"/> large enough to reach the target and converge past it.</para>
+    /// </summary>
+    public bool PenaltyContinuation { get; init; }
+
+    /// <summary>
     /// The lower bound on a density, in (0, 1) — a void element keeps <c>rho_min^p</c> of the
     /// solid stiffness so the system stays non-singular. At the default 1e-3 with
     /// <c>p = 3</c> that is 1e-9 of solid, which is small enough to be void and large enough
@@ -191,6 +216,42 @@ public static class TopologyOptimizer
     private const byte PassiveFree = 0;
     private const byte PassiveSolid = 1;
     private const byte PassiveVoid = 2;
+
+    /// <summary>
+    /// The number of iterations a penalty continuation HOLDS at each level before stepping up.
+    /// The convex <c>p = 1</c> problem (and each intermediate level) is given this long to
+    /// settle toward its own optimum before the penalisation is raised, which is what makes the
+    /// continuation actually establish the start-independent convex state rather than merely
+    /// increasing <c>p</c> slowly — a ramp with no dwell does not reduce start dependence at
+    /// all (measured). A stated schedule rather than a second knob.
+    /// </summary>
+    public const int PenaltyHoldIterations = 20;
+
+    /// <summary>The increment a penalty continuation adds at each step, from 1 up to
+    /// <see cref="TopologyOptions.Penalty"/>.</summary>
+    public const double PenaltyStep = 0.5;
+
+    /// <summary>
+    /// The penalty in force at <paramref name="iteration"/> (1-based). Constant at
+    /// <see cref="TopologyOptions.Penalty"/> unless
+    /// <see cref="TopologyOptions.PenaltyContinuation"/> is on, in which case it starts at 1 and
+    /// steps up by <see cref="PenaltyStep"/> every <see cref="PenaltyHoldIterations"/> iterations
+    /// until it reaches the target. Internal so the off-path bit-identity and the schedule
+    /// itself can be asserted directly.
+    /// </summary>
+    internal static double EffectivePenalty(TopologyOptions options, int iteration)
+    {
+        if (!options.PenaltyContinuation)
+            return options.Penalty;
+        double p = 1.0 + PenaltyStep * ((iteration - 1) / PenaltyHoldIterations);
+        return Math.Min(options.Penalty, p);
+    }
+
+    /// <summary>Whether the change-tolerance convergence stop is allowed at
+    /// <paramref name="iteration"/>: always, unless a continuation is still stepping up to the
+    /// target penalty (stopping there would freeze a low-penalty, blurred design).</summary>
+    internal static bool RampComplete(TopologyOptions options, int iteration) =>
+        EffectivePenalty(options, iteration) >= options.Penalty;
 
     /// <summary>
     /// Minimises <c>c = u'Ku</c> subject to a volume fraction, over one density per element.
@@ -345,7 +406,10 @@ public static class TopologyOptimizer
 
             history.Add(new TopologyIteration(iteration, compliance, fraction, change, met));
 
-            if (change < options.ChangeTolerance)
+            // Under a penalty continuation the change-tolerance stop is deferred until the ramp
+            // has reached the target penalty; without continuation RampComplete is always true,
+            // so this is the incumbent condition bit for bit.
+            if (change < options.ChangeTolerance && RampComplete(options, iteration))
             {
                 stop = TopologyStop.Converged;
                 break;
@@ -523,6 +587,12 @@ public static class TopologyOptimizer
         private readonly double[] _scale;
         private readonly double[] _energy;
         private readonly double[] _sensitivity;
+        // The reduced stiffness has an IDENTICAL sparsity pattern every iteration (the mesh
+        // connectivity and the eliminated DOFs are fixed; only the per-element scales change),
+        // so the ordering, elimination tree and column counts are analysed ONCE and every
+        // iteration reuses them — the numeric pass is where the time is. Built on the first
+        // factorization so it needs no separate assembly of the pattern.
+        private SparseCholeskySymbolic? _symbolic;
 
         internal Evaluator(
             IReadOnlyList<TopologyLoadCase> cases, TopologyOptions options, DensityFilter? filter,
@@ -575,15 +645,23 @@ public static class TopologyOptimizer
                 for (int e = 0; e < count; e++)
                     PhysicalDensity[e] = design[e];
 
+            // The penalty in force this iteration — the target unless a continuation ramp is on
+            // (EffectivePenalty is the target constant otherwise, so this is unchanged).
+            double penalty = EffectivePenalty(_options, iteration);
             for (int e = 0; e < count; e++)
-                _scale[e] = Math.Pow(PhysicalDensity[e], _options.Penalty);
+                _scale[e] = Math.Pow(PhysicalDensity[e], penalty);
 
             var full = FeaAssembly.Stiffness(_model, _rule, _scale);
             var reducedMatrix = FeaAssembly.Reduce(full, _reduced, _freeCount);
             SparseCholesky factor;
             try
             {
-                factor = SparseCholesky.Factorize(reducedMatrix, _options.Ordering, _progress);
+                // Analyse the pattern once (its symbolic factorization is shared across every
+                // iteration), then factorize this iteration's values into it. `symbolic.Factorize`
+                // is bit-identical to `SparseCholesky.Factorize` of the same matrix, so this is a
+                // pure speedup that moves no number.
+                _symbolic ??= SparseCholesky.AnalyzePattern(reducedMatrix, _options.Ordering);
+                factor = _symbolic.Factorize(reducedMatrix, _progress);
             }
             catch (InvalidOperationException ex)
             {
@@ -651,8 +729,8 @@ public static class TopologyOptimizer
             // the OC step's B_e non-negative and needs no sign guard.
             for (int e = 0; e < count; e++)
             {
-                _sensitivity[e] = -_options.Penalty
-                    * Math.Pow(PhysicalDensity[e], _options.Penalty - 1) * _energy[e];
+                _sensitivity[e] = -penalty
+                    * Math.Pow(PhysicalDensity[e], penalty - 1) * _energy[e];
             }
 
             switch (_options.Filter)

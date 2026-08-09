@@ -134,7 +134,25 @@ Each engine uses the data structure its mathematics wants:
   iterations (750 ms) against AMD's 221 ms factor plus 5.8 ms per solve, so the direct
   solve wins on the FIRST right-hand side. In 3D the crossover is real but distant (52
   right-hand sides at 13 824 unknowns), because 3D fill grows like n² however it is
-  ordered. Full table in the Core README. (c) **Convergence is a return value**
+  ordered. Full table in the Core README.
+  **A symbolic factorization is REUSABLE, for the loop that solves a family of matrices
+  differing only in their values** — the topology-optimisation loop above all, whose reduced
+  stiffness has an identical sparsity pattern every iteration while the per-element scales
+  change. `SparseCholesky.AnalyzePattern` runs the ordering, elimination tree and column-count
+  pass ONCE into a `SparseCholeskySymbolic`, and each `symbolic.Factorize` then runs only the
+  numeric pass — the part `Analyze`'s table says the time is in. **It is bit-identical to a
+  fresh `Factorize` of the same matrix by construction, not by measurement**: the reuse GATHERS
+  the new matrix's values into exactly the slots `Factorize` would place them, then runs the
+  SAME numeric pass — so the only operation touching a value is a copy, and the arithmetic and
+  its order are identical. The gather map is `UpperCsc` and `SymmetricPermute` mirrored in INDEX
+  rather than in value (row indices are distinct within a column, so the per-column sort orders
+  slots identically whether it carries a value or a source-slot number), which is why a same-
+  pattern matrix's values land where the fresh path would place them with no arithmetic. The
+  saving is real and BOUNDED — the symbolic fraction of a factorization, shrinking as the
+  numeric pass grows: 1.50× on a 2D grid Laplacian down to 1.02× on a 3D FEA stiffness, so it
+  removes the ordering cost and cannot touch the numeric floor. The complementary reuse the
+  todo names — a `PackedSparseMatrix` type carrying its own analysis, or warm-starting CG — is
+  a different mechanism and is filed. (c) **Convergence is a return value**
   (`SparseSolveReport`), and failure is honest: CG breaks out on nonpositive curvature
   instead of dividing by it, Cholesky throws naming the offending pivot column — the
   repo's report-what-happened convention applied to numerics. The library is
@@ -2217,6 +2235,58 @@ signed-tetrahedral volume (which catches a wrong winding or a hole) to float pre
 stage volume deltas add up to the whole iso-to-deliverable difference exactly; and the MBB beam
 is checked by the property it must have — left–right SYMMETRY, which a wrong support breaks by
 3× — plus a fixed-`r_min` refinement study onto the same structure.
+
+### Penalty continuation, and the finding that a ramp with no dwell is not one
+
+`PenaltyContinuation` (opt-in, `TopologyOptions`) starts the penalty at 1 and steps it up to the
+target rather than holding it at the target from the start. The argument is standard: the `p = 1`
+compliance problem is CONVEX (a half-dense element is exactly as efficient per unit volume as a
+solid one, so nothing pushes toward solid-or-void), so it has a unique, start-independent
+optimum, and stepping the penalty up from there carries that independence into the non-convex
+regime — a local minimum reached from a good state rather than an arbitrary one.
+
+**The load-bearing detail is the DWELL, and it was measured rather than assumed.** The first
+schedule was a fast linear ramp — increase `p` a little every iteration — and it reduced start
+dependence NOT AT ALL (measured: on a cantilever the two-start spread was 0.014 with the ramp
+against 0.0025 fixed, i.e. slightly WORSE). The convex phase never settled: spending one
+iteration at `p = 1` and immediately climbing establishes no start-independent state to carry
+forward. The schedule that works HOLDS at each level (`PenaltyHoldIterations = 20`, stepping by
+0.5) so the convex problem — and each intermediate one — actually converges before the penalty
+rises, and the change-tolerance stop is deferred until the target is reached so a run cannot
+freeze at a low, blurred penalty. Same shape as several fixture lessons: the obvious cheap
+version of the idea measures nothing, and the measurement is what says which knob mattered.
+
+The oracle needs a MULTIMODAL fixture, because the claim is empty on one that is not: the MBB
+beam at volume fraction 0.3 and filter radius 5 IS start-dependent, and a top-biased start traps
+a fixed-`p` run at compliance **85.99** while a bottom-biased start reaches **46.63** (two-start
+spread 0.202). Continuation reaches **46.70 / 46.68** from the two starts (spread 0.001, 193×
+less) — escaping the bad basin AND landing on essentially one structure. It is OFF by default
+because it moves every committed number; with it off, `EffectivePenalty` returns the target at
+every iteration, so the run is bit-identical to the incumbent path (asserted through
+`DoubleToInt64Bits` on the density field, and pinned by every existing closed-form test still
+passing).
+
+### Cost, and reusing the symbolic factorization — the numeric pass is the floor
+
+One factorization per iteration is the cost, and the reduced stiffness has an IDENTICAL sparsity
+pattern every iteration: the mesh connectivity and the eliminated DOFs are fixed, and only the
+per-element scales change. So the loop analyses the pattern ONCE (`SparseCholesky.AnalyzePattern`
+→ `SparseCholeskySymbolic`) and every iteration reuses it — the ordering, the elimination tree
+and the column-count symbolic pass are skipped and only the numeric pass runs. It is a pure
+speedup because `symbolic.Factorize` is **bit-identical** to a fresh `Factorize` of the same
+matrix by CONSTRUCTION (see §2 for the value-gather argument), so it moves no number and every
+topology test passes unchanged.
+
+**The saving is real and BOUNDED, and the bound is the point.** `Analyze`'s own table already
+says the numeric pass is where the time is, and the reuse can only remove the symbolic fraction
+around it. Measured per-factorization on the loop's own reduced stiffness (win-x64,
+`TopologyReuseBenchmark`): **1.13×** at 1 152 elements (840 free DOF, where the symbolic pass is
+a meaningful slice of an 8.7 ms factorization) down to **1.02×** at 10 800 elements (6 600 free
+DOF, where the 20 ms analysis is nothing beside a 1.2 s numeric pass). The reuse's factor time
+essentially IS the numeric-pass floor, which is optimal — a factorization cannot beat its own
+arithmetic. The complementary lever the todo names, a preconditioned CG warm-started from the
+previous iterate, is a different mechanism (it attacks the numeric cost, not the symbolic one)
+and is filed.
 
 ## 4. Implicit engine
 

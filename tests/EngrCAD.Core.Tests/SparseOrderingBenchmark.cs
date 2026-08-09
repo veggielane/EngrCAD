@@ -144,4 +144,56 @@ public class SparseOrderingBenchmark(ITestOutputHelper output)
             b[i] = rng.NextDouble() * 2 - 1;
         return b;
     }
+
+    /// <summary>
+    /// What reusing one <see cref="SparseCholeskySymbolic"/> across a family of same-pattern
+    /// matrices saves — the topology-loop shape, where the ordering, elimination tree and
+    /// column counts are identical every iteration and only the values change. Reuse skips the
+    /// symbolic pass and runs only the numeric one, so the saving is the symbolic fraction of a
+    /// factorization: real, bounded, and SHRINKING as the numeric pass grows, exactly as
+    /// <c>Analyze</c>'s own table predicts.
+    /// </summary>
+    [Fact]
+    public void SymbolicReuseSavesTheSymbolicPass()
+    {
+        if (!Enabled)
+            return;
+
+        output.WriteLine($"{"pattern",16} {"n",8} {"analyze ms",11} {"fresh ms",10} {"reuse ms",10} {"per-fact",9}");
+        foreach (var (label, a) in new[]
+        {
+            ("2D 120 dirich", AmdOrderingTests.GridLaplacian2dDirichlet(120)),
+            ("3D 24 dirich", AmdOrderingTests.GridLaplacian3dDirichlet(24)),
+        })
+        {
+            const SparseOrdering ordering = SparseOrdering.Amd;
+            var warm = Stopwatch.StartNew();
+            while (warm.ElapsedMilliseconds < 800)
+            {
+                SparseCholesky.Factorize(a, ordering);
+                SparseCholesky.AnalyzePattern(a, ordering).Factorize(a);
+            }
+
+            double freshMs = double.MaxValue, reuseMs = double.MaxValue, analyzeMs = double.MaxValue;
+            var sw = new Stopwatch();
+            for (int b = 0; b < 5; b++)
+            {
+                sw.Restart();
+                for (int r = 0; r < 4; r++) SparseCholesky.Factorize(a, ordering);
+                freshMs = Math.Min(freshMs, sw.Elapsed.TotalMilliseconds / 4);
+
+                var symbolic = SparseCholesky.AnalyzePattern(a, ordering);
+                sw.Restart();
+                for (int r = 0; r < 4; r++) symbolic.Factorize(a);
+                reuseMs = Math.Min(reuseMs, sw.Elapsed.TotalMilliseconds / 4);
+
+                sw.Restart();
+                for (int r = 0; r < 4; r++) SparseCholesky.AnalyzePattern(a, ordering);
+                analyzeMs = Math.Min(analyzeMs, sw.Elapsed.TotalMilliseconds / 4);
+            }
+            output.WriteLine(
+                $"{label,16} {a.Rows,8:N0} {analyzeMs,11:F2} {freshMs,10:F2} {reuseMs,10:F2} "
+                + $"{freshMs / reuseMs,8:F2}x");
+        }
+    }
 }
