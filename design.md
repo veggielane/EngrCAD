@@ -1474,9 +1474,69 @@ are given the solve model provides only the operator and the initial conditions 
 and `LoadFactor` are refused, since the loads live on the patterns and one law spec is enough.
 The oracle is LINEARITY: a linear system from rest responds to a sum of loads with the sum of the
 responses, so the two-pattern run equals the two single-pattern runs added at every step (7e-14
-relative), a mutation a dropped or mis-scaled pattern could not survive. Base excitation as a
-support-motion HISTORY (a support that moves over time rather than a fixed offset) is the one
-transient excitation still filed.
+relative), a mutation a dropped or mis-scaled pattern could not survive.
+
+### Base excitation: the relative formulation, kept over the absolute one because it is measured
+
+A shaker or seismic input drives the model through its supports, and `TransientSolveOptions.BaseMotion`
+states it as a ground ACCELERATION `a_g(t)` along a direction. There are two ways to realize it,
+and the todo asked which is cleaner:
+
+- **RELATIVE** (kept, public): in relative coordinates `M·u'' + C·u' + K·u = -M·iota_d·a_g(t)`
+  with `iota_d` the rigid translation along the base direction — so it is one more load pattern,
+  `-M·iota_d` scaled by `a_g`, over the supports left fixed. The answer is RELATIVE displacement
+  (`TransientResults.IsRelativeToBase`), the right quantity for stress since a rigid ground
+  motion carries none. It needs no per-step operator change and takes the ACCELERATION a seismic
+  record already is — no integration.
+- **ABSOLUTE** (internal seam `AbsolutePrescribedMotion`): prescribe `iota_d·u_g(t)` at the
+  supports and solve for total motion. It recomputes the `-Aeff·u_c` correction each step (the
+  effective operator depends on the step, so this genuinely re-does work), needs the seismic
+  acceleration DOUBLE-INTEGRATED to a displacement (with the baseline-drift hazard that implies),
+  and gives absolute displacement that is only `relative + iota_d·u_g`.
+
+So the relative form is cleaner on three counts (a load pattern rather than a per-step operator
+touch, the stress-correct quantity, and the no-integration seismic input), and it is kept. **The
+measurement that proves they are the same physics is round-off agreement through the internal
+seam**: for an UNDAMPED body (so `C·iota_d = 0`) under average acceleration, substituting
+`u_absolute = u_relative + iota_d·u_g` into the absolute discrete equation reduces it to the
+relative one exactly, when the relative load uses the same Newmark-consistent ground acceleration
+the absolute run produces — so the two integrations agree to **6.1e-12** relative, which is the
+"if you offer both formulations they agree to round-off" oracle the todo asked for. Two more
+oracles carry it: the transmissibility closed form as an AMPLIFICATION, so the fixture's
+participation factor (its consistent-mass inertial load is NOT its reduced mass) cancels — a
+single-degree-of-freedom oscillator's steady relative response over its static base deflection is
+`1/sqrt((1-r²)² + (2·zeta·r)²)`, measured **1.94403 against 1.94257** (r = 0.7, zeta = 0.05,
+0.075%) and the resonant amplification **9.9938 against 1/(2·zeta) = 10** (0.062%); and a ZERO
+base motion reproduces a plain run bit for bit (0 differing bits across 401 states). The whole
+base moves TOGETHER (independent foundations are a larger construction, stated not detected).
+
+### Adaptive stepping: a small dyadic set, factored per size
+
+The constant step is what lets one factorization serve the run, so the honest adaptive form is
+NOT a continuously varying step (which refactors at every change) but a SMALL DYADIC set,
+`TimeStep / 2^L` for `L` in `0..Levels-1`, with each size factored at most once and cached
+(`SolveAdaptive`). A multi-scale run — a sharp start then a long ring-down — then spends the fine
+step only where the local error demands it while paying for at most `Levels` factorizations. The
+times run on the finest dyadic grid so the coarse and fine steps interleave and still land on the
+endpoint exactly; the step is chosen from a local displacement-error estimate `dt²·|a(n+1) - a(n)|`
+against `Tolerance` (over-tolerance rejects and refines; comfortably under coarsens).
+
+**The oracle is fuzzier than a closed form, so it is pinned in two exact parts and one measured
+one.** Exact: a single-element size-set (`Levels == 1`) reproduces the constant-step `Solve` run
+BIT for bit, which is guaranteed by SHARING the step — the entire per-step body was extracted
+into one `NewmarkStep` that both `Solve` (constant coefficients) and `SolveAdaptive` (per-level
+coefficients) call, so there is no second spelling of the step arithmetic to drift — with the same
+factorization count. Measured: a damped free decay whose amplitude falls ~1000x is matched to the
+uniform-fine reference to **0.008%** while taking **816 steps against the fine grid's 1920 (58%
+fewer)** and factoring **4 matrices** (three sizes plus the initial-acceleration mass solve) where
+a continuously varying step would factor about a thousand — which IS the whole point of caching
+per size. The tuning finding worth keeping: the local-error tolerance is ABSOLUTE, so it must be
+set to the response's own scale, and the multi-scale split needs damping high enough that the
+ring-down genuinely goes quiet (the under-damped fixture oscillates the whole run at the natural
+frequency, so even the small-amplitude tail needs steps per period and the saving is modest;
+zeta = 0.12 makes the tail quiet and the saving dramatic). A prescribed support motion and an
+iterative solve are refused on this path (the first fights per-size caching, the second has no
+factorization to reuse).
 
 ### An unrestrained body is accepted, where the static solver refuses one
 

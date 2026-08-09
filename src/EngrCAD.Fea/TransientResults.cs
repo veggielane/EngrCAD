@@ -200,6 +200,22 @@ public sealed record TransientSolveReport
     /// </summary>
     public required int Factorizations { get; init; }
 
+    /// <summary>
+    /// For an ADAPTIVE run (<see cref="TransientSolver.SolveAdaptive"/>), how many steps were
+    /// actually taken — fewer than the finest uniform grid's when coarse steps carried the
+    /// quiet stretches, which is the efficiency the adaptive path buys. Null for a constant
+    /// run, whose step count is <see cref="Steps"/>.
+    /// </summary>
+    public int? AdaptiveSteps { get; init; }
+
+    /// <summary>
+    /// For an adaptive run, how many steps were taken at each size level (index 0 the coarsest),
+    /// so the split between the impact and the ring-down is visible. Its length is the size-set
+    /// size, and the number of NON-zero entries is how many distinct sizes were factored — the
+    /// factorization count minus any mass factorization. Null for a constant run.
+    /// </summary>
+    public IReadOnlyList<int>? StepsPerLevel { get; init; }
+
     /// <summary>Worst relative linear-system residual over all steps.</summary>
     public required double WorstRelativeResidual { get; init; }
 
@@ -338,6 +354,20 @@ public sealed class TransientResults
 
     /// <summary>What the run did.</summary>
     public TransientSolveReport Report { get; }
+
+    /// <summary>
+    /// True when the run was driven by a <see cref="TransientSolveOptions.BaseMotion"/>, in which
+    /// case every displacement here is RELATIVE to the moving base — the right quantity for
+    /// stress, since a rigid ground motion carries none. The absolute displacement is this plus
+    /// the rigid ground translation <c>iota_d·u_g(t)</c>, which the caller adds if they need
+    /// total motion. False (the default) for an ordinary force-driven run, whose displacement is
+    /// absolute.
+    /// </summary>
+    public bool IsRelativeToBase { get; init; }
+
+    /// <summary>The base motion's direction when <see cref="IsRelativeToBase"/> is true (the
+    /// rigid translation axis the relative displacement is measured against), else null.</summary>
+    public Vector3d? BaseDirection { get; init; }
 
     /// <summary>Every stored state, in time order. The initial condition is always stored,
     /// and so is the final step.</summary>
