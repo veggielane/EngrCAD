@@ -7,8 +7,10 @@ namespace EngrCAD.Modeling.Tests;
 /// <summary>
 /// Heightmap terrain (OpenSCAD's <c>surface()</c>): exact prismatoid volumes for the
 /// solid builder (planar tops triangulate exactly), the <c>.dat</c> text reader, and
-/// the hand-rolled grayscale PNG reader against bytes assembled by the test itself —
-/// every scanline filter exercised, every expectation a value we wrote.
+/// the hand-rolled PNG reader against bytes assembled by the test itself — every scanline
+/// filter exercised, grayscale AND colour (Rec. 709 luminance), and REAL CRC-32s so the
+/// reader's own CRC check is exercised on every fixture and a deliberately corrupted chunk
+/// is caught.
 /// </summary>
 public class HeightmapTests
 {
@@ -193,15 +195,81 @@ public class HeightmapTests
     [Fact]
     public void ReadPng_RejectsWhatItCannotRepresent()
     {
-        var color = Assert.Throws<FormatException>(
-            () => Heightmap.ReadPng(BuildPng(1, 1, 8, colorType: 2, [[1, 2, 3]], [0])));
-        Assert.Contains("grayscale", color.Message);
+        // Palette (color type 3) has no colour-to-height rule without a palette lookup.
+        var palette = Assert.Throws<FormatException>(
+            () => Heightmap.ReadPng(BuildPng(1, 1, 8, colorType: 3, [[7]], [0])));
+        Assert.Contains("Palette", palette.Message);
 
         var depth = Assert.Throws<FormatException>(
             () => Heightmap.ReadPng(BuildPng(2, 1, 4, colorType: 0, [[0x12]], [0])));
         Assert.Contains("bit depth", depth.Message);
 
         Assert.Throws<FormatException>(() => Heightmap.ReadPng([1, 2, 3]));
+    }
+
+    /// <summary>
+    /// A truecolor (RGB) pixel reads its Rec. 709 luminance. The oracle is arithmetic on
+    /// values we chose: a pure grey reads its own value (weights sum to 1), a pure primary
+    /// reads exactly its weight, and a mixed pixel reads the weighted sum — the documented
+    /// rule and nothing inferred.
+    /// </summary>
+    [Fact]
+    public void ReadPng_ColorRgb_UsesRec709Luminance()
+    {
+        // 3 pixels wide: pure white, pure red, a chosen mix (100, 150, 200).
+        byte[][] raw =
+        [
+            [255, 255, 255,   255, 0, 0,   100, 150, 200],
+        ];
+        var png = BuildPng(3, 1, 8, colorType: 2, raw, [0]);
+
+        var heights = Heightmap.ReadPng(png);
+        Assert.Equal(1.0, heights[0, 0], 12);                                    // white
+        Assert.Equal(0.2126, heights[0, 1], 12);                                 // pure red = its weight
+        double mix = (0.2126 * 100 + 0.7152 * 150 + 0.0722 * 200) / 255.0;
+        Assert.Equal(mix, heights[0, 2], 12);
+
+        // A grey pixel (R=G=B) reads its own normalised value, since the weights sum to 1.
+        var grey = Heightmap.ReadPng(BuildPng(1, 1, 8, colorType: 2, [[128, 128, 128]], [0]));
+        Assert.Equal(128 / 255.0, grey[0, 0], 12);
+    }
+
+    /// <summary>Truecolor + alpha (color type 6) reads the same luminance and ignores the
+    /// alpha sample — a fully transparent bright pixel is still bright terrain.</summary>
+    [Fact]
+    public void ReadPng_ColorRgba_IgnoresAlpha()
+    {
+        // (R, G, B, A) — alpha 0 and 255 on two identical colours must give one height.
+        byte[][] raw =
+        [
+            [100, 150, 200, 0,   100, 150, 200, 255],
+        ];
+        var png = BuildPng(2, 1, 8, colorType: 6, raw, [0]);
+
+        var heights = Heightmap.ReadPng(png);
+        double expected = (0.2126 * 100 + 0.7152 * 150 + 0.0722 * 200) / 255.0;
+        Assert.Equal(expected, heights[0, 0], 12);
+        Assert.Equal(expected, heights[0, 1], 12);
+    }
+
+    /// <summary>
+    /// A corrupted CRITICAL chunk is named by its CRC rather than inflated into wrong
+    /// heights. The fixture is a valid PNG with real CRCs whose IHDR payload is then flipped
+    /// — the CRC is checked BEFORE the header is parsed, so the file is refused loudly.
+    /// </summary>
+    [Fact]
+    public void ReadPng_CorruptCriticalChunkCrc_IsNamed()
+    {
+        var png = BuildPng(2, 2, 8, colorType: 0, [[1, 2], [3, 4]], [0, 0]);
+
+        // The IHDR payload starts at offset 16 (8 signature + 4 length + 4 type); flipping a
+        // byte there invalidates the IHDR CRC without changing the chunk structure.
+        Heightmap.ReadPng(png);                            // valid as built
+        png[16] ^= 0xFF;
+
+        var error = Assert.Throws<FormatException>(() => Heightmap.ReadPng(png));
+        Assert.Contains("CRC", error.Message);
+        Assert.Contains("IHDR", error.Message);
     }
 
     [Fact]
@@ -220,12 +288,13 @@ public class HeightmapTests
         Assert.Equal(20.0, mesh.ToIndexed().Positions.Max(p => p.Z), 9);
     }
 
-    // ---- a minimal PNG encoder (test-side, dummy CRCs — the reader does not
-    // verify them; a real file from disk parses identically) -------------------
+    // ---- a minimal PNG encoder (test-side, REAL CRC-32s — the reader verifies
+    // them for critical chunks, and a real file from disk parses identically) --
 
     private static byte[] BuildPng(int width, int height, int bitDepth, int colorType, byte[][] rawRows, byte[] filters)
     {
-        int bpp = (bitDepth / 8) * (colorType == 4 ? 2 : 1);
+        int channels = colorType switch { 2 => 3, 6 => 4, 4 => 2, _ => 1 };
+        int bpp = (bitDepth / 8) * channels;
         int stride = width * bpp;
 
         // Filter each row per the spec (the encoder side of what the reader undoes).
@@ -289,10 +358,16 @@ public class HeightmapTests
         using var body = new MemoryStream();
         payload(body);
         WriteInt(png, (int)body.Length);
+
+        // The CRC is over the type bytes AND the payload, so build that span and hash it.
+        using var crcInput = new MemoryStream();
         foreach (char c in type)
-            png.WriteByte((byte)c);
-        body.WriteTo(png);
-        png.Write([0, 0, 0, 0]);                           // dummy CRC (unverified)
+            crcInput.WriteByte((byte)c);
+        body.WriteTo(crcInput);
+
+        crcInput.Position = 0;
+        crcInput.WriteTo(png);                             // type + payload into the file
+        WriteInt(png, unchecked((int)Crc32(crcInput.ToArray())));
     }
 
     private static void WriteInt(MemoryStream stream, int value)
@@ -301,5 +376,17 @@ public class HeightmapTests
         stream.WriteByte((byte)(value >> 16));
         stream.WriteByte((byte)(value >> 8));
         stream.WriteByte((byte)value);
+    }
+
+    private static uint Crc32(byte[] data)
+    {
+        uint c = 0xFFFFFFFFu;
+        foreach (byte b in data)
+        {
+            c ^= b;
+            for (int k = 0; k < 8; k++)
+                c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+        }
+        return c ^ 0xFFFFFFFFu;
     }
 }

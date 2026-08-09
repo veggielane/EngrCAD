@@ -171,10 +171,13 @@ public static class Heightmap
 
     // ---- grayscale PNG -------------------------------------------------------
 
-    /// <summary>Reads a grayscale PNG (8- or 16-bit, alpha channel ignored) into
-    /// heights normalized to 0..1 (<c>value / (2^depth − 1)</c>), row 0 = the image's
-    /// top row. Color, palette, low-bit-depth and interlaced PNGs are rejected with a
-    /// message naming the limitation.</summary>
+    /// <summary>Reads a PNG (8- or 16-bit, alpha ignored) into heights normalized to 0..1,
+    /// row 0 = the image's top row. A grayscale pixel reads its own value
+    /// (<c>value / (2^depth − 1)</c>); a <b>colour</b> pixel (truecolor RGB/RGBA) reads its
+    /// <b>Rec. 709 relative luminance</b> <c>0.2126·R + 0.7152·G + 0.0722·B</c> normalised the
+    /// same way — a documented rule, not an inferred one. Palette (color type 3),
+    /// low-bit-depth and interlaced PNGs are rejected with a message naming the limitation,
+    /// and a corrupt critical chunk is named by its CRC.</summary>
     public static double[,] ReadPng(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);

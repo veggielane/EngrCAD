@@ -168,6 +168,104 @@ public class TextOnPathTests
         Assert.Equal(Radius(cwBaseline[0]) + 2, Radius(cwBottom[0]), 6);
     }
 
+    // ---- upright mode --------------------------------------------------------
+
+    /// <summary>
+    /// Upright reproduces ordinary layout on a straight horizontal path exactly as the
+    /// rotated form does — on a straight path the two coincide (the tangent IS world +X),
+    /// so this pins that upright is a strict superset of the incumbent behaviour on the
+    /// degenerate case rather than a second layout.
+    /// </summary>
+    [Fact]
+    public void Upright_OnAStraightPath_ReproducesOrdinaryLayout()
+    {
+        var straight = TextOutlines.Sketches("IOI", Font, Size);
+        var onLine = TextOutlines.SketchesOnPath("IOI", Font, Size, Line(100), upright: true);
+
+        Assert.Equal(straight.Count, onLine.Count);
+        for (int i = 0; i < straight.Count; i++)
+        {
+            Assert.Equal(straight[i].Bounds.Min.X, onLine[i].Bounds.Min.X, 9);
+            Assert.Equal(straight[i].Bounds.Max.X, onLine[i].Bounds.Max.X, 9);
+            Assert.Equal(straight[i].Bounds.Min.Y, onLine[i].Bounds.Min.Y, 9);
+            Assert.Equal(straight[i].Bounds.Max.Y, onLine[i].Bounds.Max.Y, 9);
+        }
+    }
+
+    /// <summary>
+    /// The claim with teeth: a glyph laid UPRIGHT on a curve keeps its axis-aligned
+    /// footprint everywhere (the synthetic 'I' bar is 2 wide × 7 tall at this size),
+    /// wherever it sits on the ring — where a rotated glyph's box would grow with the tilt.
+    /// The rigid placement still preserves area, so both forms enclose the upright area.
+    /// </summary>
+    [Fact]
+    public void Upright_KeepsEachGlyphAxisAligned_WhereverItSitsOnTheRing()
+    {
+        var upright = TextOutlines.Sketches("I", Font, Size);
+        double area = upright[0].Area();
+
+        var laid = TextOutlines.SketchesOnPath("IIIIIIII", Font, Size, Circle(20), upright: true);
+        Assert.Equal(8, laid.Count);
+        foreach (var sketch in laid)
+        {
+            Assert.Equal(2.0, sketch.Bounds.Size.X, 9);      // the bar's ink width, un-rotated
+            Assert.Equal(7.0, sketch.Bounds.Size.Y, 9);      // the bar's ink height, un-rotated
+            Assert.Equal(area, sketch.Area(), 12);           // rigid: area is unchanged
+        }
+
+        // And it really is upright rather than rotated: a glyph a quarter of the way round a
+        // CCW circle would tilt ~90° if it followed the tangent, so its ROTATED box would be
+        // ~7 wide. Upright keeps it 2 wide, which is the difference this mode exists for.
+        var rotated = TextOutlines.SketchesOnPath("IIIIIIII", Font, Size, Circle(20));
+        Assert.True(rotated.Max(s => s.Bounds.Size.X) > 5,
+            "the rotated control must tilt some glyph wide, or the comparison proves nothing");
+    }
+
+    /// <summary>Upright still spaces by ARC LENGTH — each glyph's mid-advance BASELINE point
+    /// sits ON the path, so consecutive anchors subtend advance/radius. Unlike the rotated
+    /// form, the box centre is NOT the anchor here: an upright box reaches straight up from
+    /// the baseline, so its centre sits 3.5 above the anchor in WORLD +Y (not radially),
+    /// which is exactly the property that distinguishes upright from tilted.</summary>
+    [Fact]
+    public void Upright_SpacesGlyphsByArcLength_AndAnchorsOnThePath()
+    {
+        const double radius = 20;
+        var sketches = TextOutlines.SketchesOnPath("III", Font, Size, Circle(radius), upright: true);
+
+        Assert.Equal(3, sketches.Count);
+        var a0 = Anchor(sketches[0]);
+        var a1 = Anchor(sketches[1]);
+        var a2 = Anchor(sketches[2]);
+
+        double expected = 4.0 / radius;   // 'I' advances 4 at this size
+        Assert.Equal(expected, Delta(Math.Atan2(a1.Y, a1.X) - Math.Atan2(a0.Y, a0.X)), 6);
+        Assert.Equal(expected, Delta(Math.Atan2(a2.Y, a2.X) - Math.Atan2(a1.Y, a1.X)), 6);
+
+        // Each anchor lies exactly on the circle the text was laid along.
+        foreach (var a in new[] { a0, a1, a2 })
+            Assert.Equal(radius, Math.Sqrt(a.X * a.X + a.Y * a.Y), 6);
+    }
+
+    /// <summary>End to end through the Shape API: upright extrudes to the same volume as
+    /// upright text (a rigid translation preserves the exact section). The run is placed on
+    /// the FLAT TOP of the circle, where upright 7-tall bars spaced 4 apart along a nearly
+    /// horizontal arc stay disjoint — on the steep side they would legitimately overlap
+    /// (they do not rotate away from one another, which is the trade upright makes).</summary>
+    [Fact]
+    public void ShapeTextOnPath_Upright_ExtrudesToTheSameVolumeAsUprightText()
+    {
+        const double radius = 40;
+        double top = 2 * Math.PI * radius / 4;   // a quarter turn = the top of the circle
+        var style = new TextStyle { Align = TextAlign.Center };
+        var shape = Shape.TextOnPath("III", Font, Size, height: 3, Circle(radius), style: style,
+                                     startOffset: top, upright: true);
+
+        shape.ToBrep().Validate();
+        var mesh = shape.ToMesh();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(3 * 14 * 3, mesh.Volume(), 9);   // three 200×700 bars, section 14, height 3
+    }
+
     // ---- refusals ------------------------------------------------------------
 
     [Fact]
@@ -345,6 +443,12 @@ public class TextOnPathTests
     /// box of the rotated outline is still centred on the outline's own centre.</summary>
     private static double Angle(Sketch sketch) =>
         Math.Atan2(sketch.Bounds.Center.Y, sketch.Bounds.Center.X);
+
+    /// <summary>The mid-advance BASELINE anchor of an UPRIGHT glyph: its box centre lies
+    /// 3.5 above the baseline (the synthetic 'I' bar is 7 tall reaching up from y = 0), so
+    /// dropping the centre by 3.5 in world +Y recovers the point that sits on the path.</summary>
+    private static Vector2d Anchor(Sketch sketch) =>
+        new(sketch.Bounds.Center.X, sketch.Bounds.Center.Y - 3.5);
 
     /// <summary>The distance of a glyph's ink centre from the origin.</summary>
     private static double Radius(Sketch sketch) =>
