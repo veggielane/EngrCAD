@@ -718,6 +718,66 @@ public abstract class Sdf
         return new StrutLatticeSdf(StrutCells.For(kind, cellSize), cellSize, strutDiameter / 2);
     }
 
+    // ---- graded lattices ----
+
+    /// <summary>
+    /// A TPMS sheet whose thickness VARIES over space — the lattice-design parameter that makes
+    /// a lattice worth having, stiffness where the stress is. See <see cref="LatticeGrading"/>
+    /// for how a grading states its own Lipschitz constant and why it must.
+    /// <para>
+    /// The structure underneath is the uniform sheet's, unchanged: only the level moves, so the
+    /// polynomial is still periodic, the sign is still exact, and the only thing the grading
+    /// costs is the reported Lipschitz bound, which becomes <c>1 + L/2</c>. Grading the CELL
+    /// SIZE is a different feature and is not offered — the fold a lattice rests on stops being
+    /// a fold.
+    /// </para>
+    /// <para>The wall is still a MINIMUM (see <see cref="TpmsSheet(TpmsKind, double, double)"/>),
+    /// so the excess factor rides along pointwise; <see cref="Tpms.GradedSheetForVolumeFraction"/>
+    /// states the grading as a volume fraction instead.</para>
+    /// </summary>
+    public static Sdf TpmsSheet(TpmsKind kind, double cellSize, LatticeGrading thickness)
+    {
+        ArgumentNullException.ThrowIfNull(thickness);
+        if (!(cellSize > 0))
+            throw new ArgumentOutOfRangeException(nameof(cellSize), cellSize, "The cell size must be positive.");
+        if (thickness.Minimum < 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(thickness), thickness.Minimum, "A graded thickness must stay non-negative.");
+        return new GradedTpmsSheetSdf(TpmsSurface.For(kind), cellSize, thickness);
+    }
+
+    /// <summary>
+    /// A TPMS solid (network) whose LEVEL varies over space — the network twin of
+    /// <see cref="TpmsSheet(TpmsKind, double, LatticeGrading)"/>. The reported Lipschitz bound
+    /// is <c>1 + L/(bound·omega)</c>, the grading's own constant carried through the same
+    /// normalization the polynomial is.
+    /// </summary>
+    public static Sdf TpmsSolid(TpmsKind kind, double cellSize, LatticeGrading level)
+    {
+        ArgumentNullException.ThrowIfNull(level);
+        if (!(cellSize > 0))
+            throw new ArgumentOutOfRangeException(nameof(cellSize), cellSize, "The cell size must be positive.");
+        return new GradedTpmsSolidSdf(TpmsSurface.For(kind), cellSize, level);
+    }
+
+    /// <summary>
+    /// A strut lattice whose beam diameter VARIES over space. The distance to the axes is still
+    /// exact and the visited-neighbourhood argument is unchanged (it is about the axes, which do
+    /// not move), so the only cost is the reported bound, <c>1 + L/2</c>.
+    /// <para>Deliberately scalar in the batch path: the diameter is a delegate call per point,
+    /// which does not vectorize, and the fallback keeps the field exact for free.</para>
+    /// </summary>
+    public static Sdf StrutLattice(StrutLatticeKind kind, double cellSize, LatticeGrading strutDiameter)
+    {
+        ArgumentNullException.ThrowIfNull(strutDiameter);
+        if (!(cellSize > 0))
+            throw new ArgumentOutOfRangeException(nameof(cellSize), cellSize, "The cell size must be positive.");
+        if (!(strutDiameter.Minimum > 0))
+            throw new ArgumentOutOfRangeException(
+                nameof(strutDiameter), strutDiameter.Minimum, "A graded strut diameter must stay positive.");
+        return new StrutLatticeSdf(StrutCells.For(kind, cellSize), cellSize, 0, strutDiameter);
+    }
+
     /// <summary>The 2D region extruded along +Z from z = 0 to z = <paramref name="height"/>;
     /// exact wherever the region's distance is exact.</summary>
     public static Sdf ExtrudedRegion(IPlanarRegion region, double height) => new ExtrudedRegionSdf(region, height);

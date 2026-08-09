@@ -64,6 +64,16 @@ public class BatchEvaluationTests
             ("strut-diamond", Sdf.StrutLattice(StrutLatticeKind.Diamond, 5, 0.8)),
             ("strut-kelvin", Sdf.StrutLattice(StrutLatticeKind.Kelvin, 5, 0.8)),
 
+            // The graded family: the TPMS ones take the scalar loop (no bit-identical vector
+            // sine), the strut one takes it because the diameter is a delegate call per point —
+            // and "does not override the seam" is exactly what makes them bit-identical.
+            ("graded-sheet", Sdf.TpmsSheet(
+                TpmsKind.Gyroid, 5, LatticeGrading.Along((0, 0, 1), -8, 8, 0.4, 1.5))),
+            ("graded-solid", Sdf.TpmsSolid(
+                TpmsKind.SchwarzD, 5, LatticeGrading.Radial((0, 0, 0), 0, 10, -0.5, 0.5))),
+            ("graded-struts", Sdf.StrutLattice(
+                StrutLatticeKind.Octet, 5, LatticeGrading.Along((1, 0, 0), -8, 8, 0.5, 1.6))),
+
             ("union", sphere | box),
             ("intersection", sphere & box),
             ("difference", box - cylinder),
@@ -100,6 +110,10 @@ public class BatchEvaluationTests
             ("convex-polyhedron", Sdf.ConvexPolyhedron(
                 [((1, 0, 0), 4), ((-1, 0, 0), 4), ((0, 1, 0), 4),
                  ((0, -1, 0), 4), ((0, 0, 1), 4), ((0, 0, -1), 4)])),
+            ("convex-polyhedron-bound", Sdf.ConvexPolyhedron(
+                [((1, 0, 0), 4), ((-1, 0, 0), 4), ((0, 1, 0), 4),
+                 ((0, -1, 0), 4), ((0, 0, 1), 4), ((0, 0, -1), 4)],
+                ConvexDistance.HalfSpaceBound)),
 
             ("twist", Sdf.Box(9, 5, 14).Twist(0.25)),
             ("bend", Sdf.Box(24, 6, 4).Bend(0.05)),

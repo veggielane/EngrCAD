@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using EngrCAD.Core;
 
@@ -22,9 +23,10 @@ namespace EngrCAD.Implicit;
 // Sdf.LipschitzBound exists to prevent, and the same one the Sdf.Sampled sqrt(3) defect had
 // been hiding.
 //
-// So every constant below is DERIVED where a derivation exists and MEASURED in every case
-// (TpmsTests.GradientBound_CoversADenseScan re-measures the supremum over the fundamental
-// cell and asserts the stored value covers it). The derivations:
+// So every constant below is DERIVED and MEASURED — the derivation says what the number IS,
+// the measurement says the stored double covers it (TpmsTests re-measures the supremum over
+// the fundamental cell, and TpmsDerivationTests checks each closed form against that scan AND
+// checks the load-bearing step of each derivation rather than only its answer).
 //
 //   Schwarz P   grad F = -(sin x, sin y, sin z), so |grad F| <= sqrt(3), attained at
 //               (pi/2, pi/2, pi/2) — which is ON the surface.
@@ -40,12 +42,48 @@ namespace EngrCAD.Implicit;
 //   I-WP        dF/dz = 2 sin z (2 cos z - cos x - cos y); with x = y = 0 that is
 //               4 sin z (1 - cos z), maximized at cos z = -1/2 giving 3 sqrt(3), and the
 //               other two partials vanish there.
-//   Lidinoid    no derivation attempted; the dense scan lands on 3 sqrt(3) / 2 to twelve
-//               digits, which is what is stored.
-//   Fischer-Koch S, Split P
-//               no closed form found; the stored constant is the measured supremum rounded
-//               UP at the sixth significant figure (a hair loose, which is the safe
-//               direction — see the thickness note below).
+//
+// THE DIAGONAL LEMMA covers the last three, and it is ONE derivation rather than three.
+// Every polynomial here is CYCLIC in (x, y, z), so the diagonal x = y = z = t is invariant
+// under the cycle and the three partials are equal on it — which makes |grad F| there simply
+// |F_diag'(t)| / sqrt(3), a ONE-VARIABLE problem. For the shape both Lidinoid and Split P
+// have, a*sum(sin2x sin z cos y) + b*sum(cos2x cos2y) + e*sum(cos2x), the diagonal restriction
+// is F_diag = (3a/2) sin^2 2t + 3b cos^2 2t + 3e cos 2t, so
+//
+//      F_diag' = 6 sin2t [ (a - 2b) cos2t - e ]   and   |grad F| = 2 sqrt(3) |s| |A c + E|
+//
+// with s = sin2t, c = cos2t, A = a - 2b, E = -e. Maximizing (1 - c^2)(Ac + E)^2 gives
+// 2A c^2 + E c - A = 0, i.e. c* = (-E + sqrt(E^2 + 8A^2)) / (4A).
+//
+//   Lidinoid    a = 1/2, b = -1/2, e = 0, so A = 3/2 and E = 0: c* = 1/sqrt(2), and
+//               2 sqrt(3) * (1/sqrt(2)) * (3/(2 sqrt(2))) = 3 sqrt(3) / 2 — EXACTLY the
+//               constant the dense scan had been landing on with no derivation attempted.
+//   Split P     a = 1.1, b = -0.2, e = -0.4, so A = 3/2 and E = 2/5:
+//               c* = (sqrt(454) - 2) / 30, and the supremum is
+//               2 sqrt(3) sqrt(1 - c*^2) (3c*/2 + 2/5) = 3.620073899187... — a quadratic
+//               surd, so the constant is closed form after all.
+//
+// FISCHER-KOCH S is the one member whose maximum is NOT on the diagonal (there it is only
+// sqrt(3), a local maximum), so it needs its own invariant family, and the family the scan
+// points at is (x, y, z) = (t + 3pi/2, t, pi/4). On it cos2z = 0 and sin2z = 1, F vanishes
+// identically (so the maximum sits ON the surface, as Schwarz P's does), dF/dy = -dF/dx, and
+// substituting s = sin t collapses |grad F|^2 to the degree-6 polynomial
+//
+//      G(u) = 4u^6 + 8 sqrt(2) u^5 - 4u^4 - 12 sqrt(2) u^3 - 3u^2 + 4 sqrt(2) u + 5.
+//
+// The substitution v = sqrt(2) u clears the radicals from its derivative:
+// G'(u) = sqrt(2) (3v^5 + 10v^4 - 4v^3 - 18v^2 - 3v + 4) = sqrt(2) (v + 1)(3v^4 + 7v^3 -
+// 11v^2 - 7v + 4). So the maximizer is a root of an INTEGER QUARTIC — solvable in radicals,
+// which makes the constant an explicit algebraic number of degree at most 4 over Q(sqrt 2)
+// rather than the "no closed form found" the file used to record. The root in (0, 1) is
+// v* = 0.3969844262244973..., and sqrt(G(v*/sqrt 2)) = 2.4439726372930344, which the dense
+// global scan reproduces to its last digit.
+//
+// THE STORED CONSTANTS ARE UNCHANGED by any of that, deliberately: they already round the
+// supremum UP at the sixth significant figure, which is the safe direction and is worth about
+// three parts per million of wall thickness, while re-storing them would move every rendered
+// lattice for nothing. What the derivations buy is that the numbers are now known rather than
+// merely measured.
 //
 // THE COST OF THE CONSTANT IS WALL THICKNESS, and it is worth stating plainly because it is
 // what a user notices first. The sheet |F| <= bound*omega*t/2 has local half-thickness
@@ -186,12 +224,120 @@ public static class Tpms
             level);
     }
 
+    /// <summary>
+    /// A GRADED sheet stated as a volume fraction rather than as a thickness — the parameter an
+    /// engineer specifies, varying over space. The caller's fraction grading is pushed through
+    /// the same measured cell distribution the uniform solve uses, as a piecewise-linear ladder
+    /// so the composed Lipschitz constant is exact and the per-query cost is a table lookup
+    /// rather than a bisection.
+    /// <para>
+    /// The achieved fraction is NOT reported here and that is deliberate: a graded field is not
+    /// periodic, so "sample one cell" — the estimator both uniform solves rest on — has nothing
+    /// to sample. What the grading states is the fraction the LOCAL cell would have.
+    /// </para>
+    /// </summary>
+    public static Sdf GradedSheetForVolumeFraction(
+        TpmsKind kind, double cellSize, LatticeGrading volumeFraction)
+    {
+        ArgumentNullException.ThrowIfNull(volumeFraction);
+        RequireFraction(volumeFraction.Minimum);
+        RequireFraction(volumeFraction.Maximum);
+        var surface = TpmsSurface.For(kind);
+        var table = surface.Table(QuantileTable.FitResolution);
+        return Sdf.TpmsSheet(kind, cellSize,
+            volumeFraction.Through(f => surface.ThicknessForLevel(table.AbsQuantile(f)) * cellSize));
+    }
+
+    /// <summary>
+    /// The network twin of <see cref="GradedSheetForVolumeFraction"/>: the LEVEL graded so the
+    /// local cell carries the stated fraction.
+    /// </summary>
+    public static Sdf GradedSolidForVolumeFraction(
+        TpmsKind kind, double cellSize, LatticeGrading volumeFraction)
+    {
+        ArgumentNullException.ThrowIfNull(volumeFraction);
+        RequireFraction(volumeFraction.Minimum);
+        RequireFraction(volumeFraction.Maximum);
+        var surface = TpmsSurface.For(kind);
+        var table = surface.Table(QuantileTable.FitResolution);
+        return Sdf.TpmsSolid(kind, cellSize, volumeFraction.Through(table.Quantile));
+    }
+
+    /// <summary>
+    /// The wall a sheet of the given nominal thickness actually has — the number
+    /// <see cref="Sdf.TpmsSheet(TpmsKind, double, double)"/>'s remarks quote as a table, made
+    /// queryable and measured on THIS implementation's own level set.
+    /// <para>
+    /// <b>The excess is inherent, not a defect to be tuned away.</b> A sheet is the band
+    /// <c>|F| ≤ L</c>, whose perpendicular width at a surface point is <c>2L/|grad F|</c>, so
+    /// the wall varies with the gradient wherever the gradient varies — which it does, for every
+    /// one of these polynomials. Normalizing by the LOCAL gradient instead of the global maximum
+    /// would make the wall first-order uniform and would cost the 1-Lipschitz contract that
+    /// makes the field a usable distance at all (Lidinoid's level set passes a near-critical
+    /// point where |grad F| falls to 0.046, so the local form is 20-odd times steeper there).
+    /// So the wall is REPORTED rather than corrected, and
+    /// <see cref="SheetForWallThickness"/> solves the nominal thickness that lands a stated
+    /// median wall.
+    /// </para>
+    /// </summary>
+    public static SheetWall WallThickness(TpmsKind kind, double cellSize, double thickness)
+    {
+        if (!(cellSize > 0))
+            throw new ArgumentOutOfRangeException(nameof(cellSize), cellSize, "The cell size must be positive.");
+        if (thickness < 0)
+            throw new ArgumentOutOfRangeException(nameof(thickness), thickness, "The thickness must be non-negative.");
+        var factors = TpmsSurface.For(kind).WallFactors();
+        return new SheetWall(
+            thickness, thickness * factors.Minimum, thickness * factors.Median, thickness * factors.Maximum);
+    }
+
+    /// <summary>
+    /// The sheet whose MEDIAN wall is <paramref name="wall"/> — the inverse of
+    /// <see cref="WallThickness"/>, and the call to reach for when a print process has a minimum
+    /// feature size in mind. The relation is exactly linear in the nominal thickness (the excess
+    /// factor is a property of the surface, not of the thickness), so the solve is one division
+    /// and the reported wall is what the same measurement gives back.
+    /// </summary>
+    public static (Sdf Field, SheetWall Wall) SheetForWallThickness(
+        TpmsKind kind, double cellSize, double wall)
+    {
+        if (!(wall > 0))
+            throw new ArgumentOutOfRangeException(nameof(wall), wall, "The wall thickness must be positive.");
+        double thickness = wall / TpmsSurface.For(kind).WallFactors().Median;
+        return (Sdf.TpmsSheet(kind, cellSize, thickness), WallThickness(kind, cellSize, thickness));
+    }
+
     private static void RequireFraction(double fraction)
     {
         if (!(fraction > 0 && fraction < 1))
             throw new ArgumentOutOfRangeException(
                 nameof(fraction), fraction, "A volume fraction must lie strictly between 0 and 1.");
     }
+}
+
+/// <summary>
+/// What a TPMS sheet's wall actually measures: the nominal thickness asked for and the
+/// distribution of the wall it produces, over the surface. See <see cref="Tpms.WallThickness"/>
+/// for why they differ and why that is structural.
+/// </summary>
+/// <param name="Nominal">The thickness the field was built with — a guaranteed MINIMUM wall,
+/// which is why <see cref="Minimum"/> equals it to the measurement's own accuracy.</param>
+/// <param name="Minimum">The thinnest wall on the surface.</param>
+/// <param name="Median">The wall half the surface is thinner than — the figure to compare
+/// against a process's feature size.</param>
+/// <param name="Maximum">The thickest wall, as the same first-order relation. It is a genuine
+/// UPPER bound (measured against a direct march of the field on all eight surfaces) and it
+/// over-states where the gradient nearly vanishes, because the band there is no longer thin
+/// against the surface's own curvature — Neovius and Lidinoid are the two measurably affected,
+/// reading 4.5 and 3.3 against a marched 0.38. Read it as "how non-uniform is this surface"
+/// rather than as a length a caller can plan around.</param>
+public readonly record struct SheetWall(double Nominal, double Minimum, double Median, double Maximum)
+{
+    /// <summary>How much thicker the typical wall is than the nominal thickness.</summary>
+    public double MedianExcess => Nominal > 0 ? Median / Nominal : 1;
+
+    /// <summary>How much thicker the worst wall is than the nominal thickness.</summary>
+    public double WorstExcess => Nominal > 0 ? Maximum / Nominal : 1;
 }
 
 /// <summary>
@@ -286,6 +432,7 @@ internal sealed class TpmsSurface
         (-1, [Cos2X]), (-1, [Cos2Y]), (-1, [Cos2Z]),
     ]);
 
+    // 3 sqrt(3) / 2 exactly, by the diagonal lemma at A = 3/2, E = 0 (see the file remarks).
     private static readonly TpmsSurface Lidinoid = new(TpmsKind.Lidinoid, 1.5 * Math.Sqrt(3),
     [
         (0.5, [Sin2X, CosY, SinZ]), (0.5, [Sin2Y, CosZ, SinX]), (0.5, [Sin2Z, CosX, SinY]),
@@ -293,13 +440,17 @@ internal sealed class TpmsSurface
         (0.15, []),
     ]);
 
-    // 2.443972637293 measured; stored rounded up at the sixth figure.
+    // sqrt(G(v*/sqrt 2)) = 2.4439726372930344 with v* the root in (0, 1) of the integer
+    // quartic 3v^4 + 7v^3 - 11v^2 - 7v + 4 (see the file remarks); stored rounded UP at the
+    // sixth figure, which is the safe direction.
     private static readonly TpmsSurface FischerKochS = new(TpmsKind.FischerKochS, 2.44398,
     [
         (1, [Cos2X, SinY, CosZ]), (1, [Cos2Y, SinZ, CosX]), (1, [Cos2Z, SinX, CosY]),
     ]);
 
-    // 3.620073899187 measured; stored rounded up at the sixth figure.
+    // The diagonal lemma at A = 3/2, E = 2/5: c* = (sqrt(454) - 2)/30 and the supremum is
+    // 2 sqrt(3) sqrt(1 - c*^2)(3c*/2 + 2/5) = 3.620073899187; stored rounded UP at the sixth
+    // figure (see the file remarks).
     private static readonly TpmsSurface SplitP = new(TpmsKind.SplitP, 3.62008,
     [
         (1.1, [Sin2X, SinZ, CosY]), (1.1, [Sin2Y, SinX, CosZ]), (1.1, [Sin2Z, SinY, CosX]),
@@ -412,6 +563,81 @@ internal sealed class TpmsSurface
     /// two resolutions.</summary>
     public QuantileTable Table(int resolution) =>
         QuantileTable.For(this, resolution, Sample);
+
+    // ---- the wall the sheet actually has ----
+
+    /// <summary>
+    /// The local wall factor <c>bound / |grad F|</c> over the ZERO level set: min, median and
+    /// max, cached per surface. The sheet's perpendicular half-width at a surface point is
+    /// <c>(bound/|grad F|)·t/2</c>, so multiplying a nominal thickness by these gives the wall
+    /// — a FIRST-ORDER relation, exact in the thin-wall limit, which is the regime a sheet
+    /// lattice is used in and is verified against a direct bisection of the field in the tests.
+    /// <para>
+    /// <b>The samples are weighted by |grad F|, and that is not a detail.</b> A uniform grid
+    /// samples SPACE, and the band <c>|F| ≤ δ</c> is thick exactly where the gradient is small,
+    /// so an unweighted median would be pulled toward the thick-wall regions by the very
+    /// quantity being measured. Weighting by the gradient makes the measure uniform over the
+    /// SURFACE, which is what "the median wall of this sheet" means.
+    /// </para>
+    /// </summary>
+    public (double Minimum, double Median, double Maximum) WallFactors() =>
+        WallFactorCache.GetOrAdd(this, static s => s.MeasureWallFactors());
+
+    private static readonly ConcurrentDictionary<TpmsSurface, (double, double, double)>
+        WallFactorCache = new();
+
+    private (double, double, double) MeasureWallFactors()
+    {
+        const int Resolution = 96;
+        const double Step = 1e-5;
+        double h = 2 * Math.PI / Resolution;
+        // The band's half-width in F: a cell diagonal's worth of gradient, so every surface
+        // crossing lands in it and nothing far from the surface does.
+        double band = 2 * h * GradientBound;
+
+        var samples = new List<(double Factor, double Weight)>();
+        for (int i = 0; i < Resolution; i++)
+        {
+            double x = h * (i + 0.5);
+            for (int j = 0; j < Resolution; j++)
+            {
+                double y = h * (j + 0.5);
+                for (int k = 0; k < Resolution; k++)
+                {
+                    double z = h * (k + 0.5);
+                    if (Math.Abs(Value(x, y, z)) > band)
+                        continue;
+                    double gx = Value(x + Step, y, z) - Value(x - Step, y, z);
+                    double gy = Value(x, y + Step, z) - Value(x, y - Step, z);
+                    double gz = Value(x, y, z + Step) - Value(x, y, z - Step);
+                    double g = Math.Sqrt(gx * gx + gy * gy + gz * gz) / (2 * Step);
+                    if (g <= 0)
+                        continue;
+                    samples.Add((GradientBound / g, g));
+                }
+            }
+        }
+
+        if (samples.Count == 0)
+            return (1, 1, 1);
+        samples.Sort((p, q) => p.Factor.CompareTo(q.Factor));
+        double total = 0;
+        foreach (var (_, w) in samples)
+            total += w;
+
+        double running = 0;
+        double median = samples[^1].Factor;
+        foreach (var (factor, weight) in samples)
+        {
+            running += weight;
+            if (running >= total / 2)
+            {
+                median = factor;
+                break;
+            }
+        }
+        return (samples[0].Factor, median, samples[^1].Factor);
+    }
 
     private double[] Sample(int resolution)
     {
