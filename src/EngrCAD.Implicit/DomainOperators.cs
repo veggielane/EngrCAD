@@ -722,8 +722,9 @@ internal sealed class DisplaceSdf : Sdf
     private readonly Sdf _source;
     private readonly double _amplitude;
     private readonly Vector3d _frequency;
+    private readonly Aabb? _explicitBounds;
 
-    public DisplaceSdf(Sdf source, double amplitude, in Vector3d frequency)
+    public DisplaceSdf(Sdf source, double amplitude, in Vector3d frequency, Aabb? bounds = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (amplitude < 0)
@@ -731,6 +732,7 @@ internal sealed class DisplaceSdf : Sdf
         _source = source;
         _amplitude = amplitude;
         _frequency = frequency;
+        _explicitBounds = bounds;
     }
 
     private double Ripple(in Vector3d p) =>
@@ -749,7 +751,15 @@ internal sealed class DisplaceSdf : Sdf
             distances[i] -= Ripple(new Vector3d(x[i], y[i], z[i]));
     }
 
-    public override Aabb Bounds => _source.Bounds.Expanded(_amplitude);
+    /// <summary>
+    /// The ripple adds material wherever the child reads below the amplitude, so the bound this
+    /// needs of its child is <b>not</b> "the magnitude is a true distance" — it is the weaker
+    /// and checkable <c>{child &lt; t} ⊆ child.Bounds.Expanded(t)</c>, i.e. the child never
+    /// reports less than the per-axis escape from its own bounds. See
+    /// <see cref="Sdf.Displace(double, in Vector3d)"/> for which nodes have that property and
+    /// which measurably do not.
+    /// </summary>
+    public override Aabb Bounds => _explicitBounds ?? _source.Bounds.Expanded(_amplitude);
 
     /// <summary>The gradient of <c>a·sin·sin·sin</c> is bounded by <c>a·|frequency|</c>
     /// (each partial carries one frequency and a product of sines no larger than 1), and it

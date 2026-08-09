@@ -63,6 +63,20 @@ public class LipschitzBoundTests(ITestOutputHelper output)
             ("strut-octet", Sdf.StrutLattice(StrutLatticeKind.Octet, 5, 0.8)),
             ("strut-diamond", Sdf.StrutLattice(StrutLatticeKind.Diamond, 5, 0.8)),
 
+            // The graded lattices, whose bound is 1 + the grading's own constant. A grading
+            // steep enough that a missing propagation would be visible rather than marginal.
+            ("graded-sheet", Sdf.TpmsSheet(
+                TpmsKind.Gyroid, 5, LatticeGrading.Along((0, 0, 1), -10, 10, 0.3, 1.6))),
+            ("graded-solid", Sdf.TpmsSolid(
+                TpmsKind.SchwarzP, 5, LatticeGrading.Along((1, 0, 0), -10, 10, -0.6, 0.6))),
+            ("graded-struts", Sdf.StrutLattice(
+                StrutLatticeKind.Octet, 5, LatticeGrading.Radial((0, 0, 0), 0, 14, 0.4, 1.8))),
+            ("graded-fraction-sheet", Tpms.GradedSheetForVolumeFraction(
+                TpmsKind.Gyroid, 5, LatticeGrading.Along((0, 1, 0), -10, 10, 0.1, 0.45))),
+            ("graded-fraction-struts", StrutLattices.GradedForVolumeFraction(
+                StrutLatticeKind.BodyCentredCubic, 5,
+                LatticeGrading.Along((0, 1, 0), -10, 10, 0.1, 0.45))),
+
             // Every wrapper, over the twisted core: each must propagate.
             ("union", core | plain),
             ("union-reversed", plain | core),

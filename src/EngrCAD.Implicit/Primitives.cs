@@ -503,26 +503,90 @@ internal sealed class EllipsoidSdf(Vector3d radii) : Sdf
     public override Aabb Bounds => new(-radii, radii);
 
     /// <summary>
-    /// <c>2 + (rmax/rmin)²</c>, and it is derived rather than fitted. Writing t = 1/k0, the
-    /// product and quotient rules give
-    /// <c>|∇V| ≤ |2 − t| + |1 − t|·|∇k1|·k0²/k1²</c>, and two substitutions close it: every
-    /// term of ∇k1 carries a factor <c>1/r_i² ≤ 1/rmin²</c> so <c>|∇k1| ≤ k1/rmin²</c>, while
-    /// <c>k1 ≥ k0/rmax</c> gives <c>k0²/k1² ≤ rmax²</c>. For <c>k0 ≥ ½</c> — everywhere but
-    /// the inner half of the solid, where the field is anyway approaching its documented
-    /// centre singularity — that leaves <c>2 + (rmax/rmin)²</c>.
+    /// Derived per AXIS rather than by a triangle inequality, which is what makes it EXACTLY 1
+    /// for a sphere instead of the 3 the earlier form reported.
     /// <para>
-    /// The slack is real and stated: measured against it, the true supremum runs 0.26–0.55 of
-    /// the bound over aspect ratios 1 to 10 (1.00 against 3, 1.26 against 3.56, 41.4 against
-    /// 102), because both substitutions are worst-case simultaneously only at points that do
-    /// not exist. A tighter bound would narrow the cull shell for eccentric ellipsoids; it is
-    /// filed rather than guessed at, since a Lipschitz bound that is too small drops geometry.
+    /// Write <c>w_i = p_i/r_i²</c> (so <c>k1 = |w|</c>) and <c>v_i = w_i/r_i²</c>. Then
+    /// <c>∇k0 = w/k0</c> and <c>∇k1 = v/k1</c>, and the quotient rule gives each component of
+    /// the gradient the SAME factor <c>w_j</c>:
+    /// <c>∂_j V = w_j·[ (2k0−1)/(k0 k1) − k0(k0−1)/(r_j² k1³) ]</c>. Since <c>Σ w_j² = k1²</c>,
+    /// <c>|∇V| ≤ k1·max_j |…| = max_j |(2 − u) − (1 − u)·ρ²/r_j²|</c> with <c>u = 1/k0</c> and
+    /// <c>ρ = k0/k1 ∈ [rmin, rmax]</c>. Writing <c>μ = ρ²/r_j²</c> that is
+    /// <c>|(2 − μ) + u(μ − 1)|</c>, which is BILINEAR in (u, μ), so its maximum over a
+    /// rectangle of ranges is attained at a corner and four evaluations settle it.
+    /// </para>
+    /// <para>
+    /// Two things follow that the old <c>2 + (rmax/rmin)²</c> could not say. A <b>sphere</b>
+    /// has μ ≡ 1 exactly, so the u-term vanishes identically and the bound is <b>1</b> — the
+    /// field there really is <c>|p| − r</c>. And a region far from the solid has small u, so
+    /// the bound falls toward <c>max_j |2 − μ|</c> rather than staying at the whole-space
+    /// worst case. Measured against the true supremum the reported bound runs 1.00 / 0.81 /
+    /// 0.41 of it at aspect 1 / 1.25 / 10, where the old form ran 0.33 / 0.35 / 0.41.
+    /// </para>
+    /// <para>
+    /// <b>The regime is <c>k0 ≥ ½</c>, and it is a real restriction rather than a convenience</b>
+    /// — the field is genuinely DISCONTINUOUS at the centre of a non-spherical ellipsoid, since
+    /// <c>V(t·d) → −|Ad|/|A²d|</c> as t → 0, which is −rmax along the longest axis and −rmin
+    /// along the shortest (measured; <c>EllipsoidSdf</c>'s own tests pin it). So no finite
+    /// Lipschitz constant is valid over a region reaching the centre, and u is capped at 2
+    /// rather than allowed to diverge. What the consumers rest on there is the weaker property
+    /// this field does keep — <c>|V| ≤ (over-report factor)·distance</c>, measured at 1.0 to
+    /// 6.6 over the same family — so the cull's conclusion holds where its stated premise does
+    /// not.
+    /// </para>
+    /// <para>
+    /// The remaining slack is the ρ/axis pairing: ρ² is a convex combination of the r_i²
+    /// weighted by w, and an axis j carries weight <c>w_j²</c> in the norm, so a large
+    /// <c>μ_j = ρ²/r_j²</c> requires that axis to carry LITTLE of the gradient. Taking the two
+    /// ranges independently ignores that link, which is why the eccentric rows stay at 0.41;
+    /// closing it needs a maximization over the weight simplex rather than a closed form.
     /// </para>
     /// </summary>
     public override double LipschitzBound(in Aabb region)
     {
-        double aspect =
-            Math.Max(radii.X, Math.Max(radii.Y, radii.Z)) / Math.Min(radii.X, Math.Min(radii.Y, radii.Z));
-        return 2 + aspect * aspect;
+        double rMin = Math.Min(radii.X, Math.Min(radii.Y, radii.Z));
+        double rMax = Math.Max(radii.X, Math.Max(radii.Y, radii.Z));
+
+        // k0 = |(p_x/rx, p_y/ry, p_z/rz)| over an axis-aligned box: every axis contributes
+        // independently, so both extremes are exact rather than estimated.
+        double k0Max = ScaledNorm(region, radii, farthest: true);
+        double k0Min = ScaledNorm(region, radii, farthest: false);
+
+        // u = 1/k0, capped at the derivation's own regime (k0 >= 1/2).
+        double uHi = k0Min > 0 ? Math.Min(RegimeCap, 1 / k0Min) : RegimeCap;
+        double uLo = k0Max > 0 ? Math.Min(1 / k0Max, uHi) : uHi;
+
+        // mu = rho^2 / r_j^2 with rho = k0/k1 in [rmin, rmax]. Equal semi-axes make this
+        // exactly 1.0 (the same double divided by itself), which is what gives a sphere a
+        // bound of exactly 1 with no special case.
+        double muLo = rMin * rMin / (rMax * rMax);
+        double muHi = rMax * rMax / (rMin * rMin);
+
+        return Math.Max(
+            Math.Max(Corner(uLo, muLo), Corner(uLo, muHi)),
+            Math.Max(Corner(uHi, muLo), Corner(uHi, muHi)));
+
+        static double Corner(double u, double mu) => Math.Abs(2 - mu + u * (mu - 1));
+    }
+
+    /// <summary>The regime the derivation states: <c>k0 ≥ ½</c>, i.e. <c>u ≤ 2</c>.</summary>
+    private const double RegimeCap = 2;
+
+    /// <summary>The largest (or smallest) <c>|(p_i / r_i)|</c> over an axis-aligned box.
+    /// Exact: the axes are independent, so each contributes its own extreme.</summary>
+    private static double ScaledNorm(in Aabb region, in Vector3d radii, bool farthest)
+    {
+        double x = AxisExtreme(region.Min.X, region.Max.X, farthest) / radii.X;
+        double y = AxisExtreme(region.Min.Y, region.Max.Y, farthest) / radii.Y;
+        double z = AxisExtreme(region.Min.Z, region.Max.Z, farthest) / radii.Z;
+        return Math.Sqrt(x * x + y * y + z * z);
+
+        // |t| over [lo, hi]: the larger endpoint magnitude, or the smaller one — and zero when
+        // the interval straddles the origin, which is what makes k0Min zero there.
+        static double AxisExtreme(double lo, double hi, bool farthest) =>
+            farthest ? Math.Max(Math.Abs(lo), Math.Abs(hi))
+            : lo <= 0 && hi >= 0 ? 0
+            : Math.Min(Math.Abs(lo), Math.Abs(hi));
     }
 
     private readonly struct Kernel(Vector3d radii) : ISdfKernel

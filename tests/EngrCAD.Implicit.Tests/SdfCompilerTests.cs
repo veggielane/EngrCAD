@@ -41,9 +41,14 @@ public class SdfCompilerTests(ITestOutputHelper output)
             ("prism-6", Sdf.Prism(6, 5, 9)),
             ("prism-3", Sdf.Prism(3, 5, 9)),
             ("wedge", Sdf.Wedge(10, 8, 9, 3, 1)),
-            ("convex-polyhedron", Cube()),
+            // The exact form's outside branch is a loop over triangles, so it takes the base
+            // class's call-back-into-Evaluate fallback; the half-space form emits its planes.
+            ("convex-polyhedron-fallback", Cube()),
+            ("convex-polyhedron-bound", CubeBound()),
             ("gyroid", Sdf.Gyroid(5, 1)),
             ("pyramid-fallback", Sdf.Pyramid(8, 10)),
+            ("graded-sheet", Sdf.TpmsSheet(
+                TpmsKind.Gyroid, 5, LatticeGrading.Along((0, 0, 1), -8, 8, 0.4, 1.5))),
 
             ("union", sphere | box),
             ("intersection", sphere & box),
@@ -80,12 +85,17 @@ public class SdfCompilerTests(ITestOutputHelper output)
         ];
     }
 
-    private static Sdf Cube() => Sdf.ConvexPolyhedron(
+    private static Sdf Cube() => Sdf.ConvexPolyhedron(CubePlanes());
+
+    private static Sdf CubeBound() =>
+        Sdf.ConvexPolyhedron(CubePlanes(), ConvexDistance.HalfSpaceBound);
+
+    private static (Vector3d, double)[] CubePlanes() =>
     [
         ((1, 0, 0), 4), ((-1, 0, 0), 4),
         ((0, 1, 0), 4), ((0, -1, 0), 4),
         ((0, 0, 1), 4), ((0, 0, -1), 4),
-    ]);
+    ];
 
     private static Sdf Bracket()
     {

@@ -101,23 +101,56 @@ the wall exceeds the nominal thickness:
 
 | surface | median | worst |
 |---|---|---|
-| gyroid | 1.15 | 1.22 |
-| Schwarz D | 1.19 | 1.22 |
-| I-WP | 1.22 | 1.59 |
-| Schwarz P | 1.36 | 1.73 |
-| Fischer–Koch S | 1.41 | 2.02 |
-| Split P | 1.59 | 2.83 |
-| Neovius | 2.69 | 6.99 |
-| Lidinoid | 2.18 | 56.9 |
+| gyroid | 1.15 | 1.24 |
+| I-WP | 1.19 | 1.68 |
+| Schwarz D | 1.20 | 1.26 |
+| Schwarz P | 1.32 | 1.77 |
+| Fischer–Koch S | 1.41 | 2.24 |
+| Split P | 1.54 | 4.95 |
+| Lidinoid | 1.65 | 27.4 |
+| Neovius | 2.32 | 37.7 |
 
 So the thickness you state is a guaranteed **minimum** wall — the useful direction for
-a printable part, and the wrong one for a mass estimate. (Lidinoid's worst case is not
-a defect in the constant: its level set passes through a near-critical point where
+a printable part, and the wrong one for a mass estimate. (The last two worst cases are
+not a defect in the constant: their level sets pass through a near-critical point where
 `|grad F|` falls to 0.046, so the surface is genuinely nearly pinched there.)
 
 Cross-checked by polygonization: a gyroid sheet asked for 1.2 mm of wall on a 10 mm
 cell measures **1.144×** the nominal surface-area-times-thickness, which is the median
 factor above.
+
+**No choice of divisor fixes this**, which is why it is worth stating rather than
+apologising for. A sheet is a *band* of a level set, and a band's width at a surface
+point is `2L/|grad F|` — so it varies wherever the gradient does. Dividing by a
+different constant only rescales the whole distribution; dividing by the *local*
+gradient would make the wall first-order uniform and would cost the 1-Lipschitz
+contract the field exists to keep (twenty-odd times steeper at Lidinoid's
+near-critical point, so the polygonizer's cull would widen by that and buy nothing).
+
+### Asking for the wall you want
+
+So the wall is **reported** instead. `Tpms.WallThickness` measures what a nominal
+thickness produces, and `Tpms.SheetForWallThickness` inverts it:
+
+```csharp run:lattice-wall-thickness
+// What a 1 mm nominal thickness actually gives you.
+var wall = Tpms.WallThickness(TpmsKind.Neovius, cellSize: 8, thickness: 1.0);
+if (wall.Minimum < 1.0 - 1e-6)
+    throw new Exception("the nominal thickness is supposed to be a floor");
+if (wall.MedianExcess < 2)
+    throw new Exception($"Neovius should read about 2.3x, not {wall.MedianExcess}");
+
+// Or state the wall and let it solve the thickness.
+var solved = Tpms.SheetForWallThickness(TpmsKind.Neovius, cellSize: 8, wall: 1.0);
+if (Math.Abs(solved.Wall.Median - 1.0) > 1e-6)
+    throw new Exception($"asked for a 1 mm median wall, got {solved.Wall.Median}");
+if (solved.Wall.Nominal > 0.5)   // about 0.43: the excess factor, undone
+    throw new Exception("the solve barely moved the thickness");
+var sheet = Shape.From(solved.Field) & Shape.Box(24, 24, 24);
+```
+
+`SheetWall.Maximum` is an upper bound and deliberately over-states near a pinch — read
+it as *how non-uniform is this surface*, not as a length to plan around.
 
 ### Volume fraction is the parameter you actually want
 
@@ -213,7 +246,80 @@ Doing that per query is what makes a lattice unusable rather than merely slow (m
 0.9–4.7 µs a sample), so the pruning is done **once**, at construction: the cell is
 divided into sub-cells, each keeping the struts that can be nearest to a point inside it.
 A query is then a fold, an index and a short scan — 132–429 ns a sample, the same order
-as a gyroid's 75 ns.
+as a gyroid's 75 ns. In a **batch** the points are partitioned by sub-cell first, so a
+whole register's worth of them share one candidate list and the struts broadcast as
+constants: measured 2.0–2.8× over the six kinds, bit-identical to the scalar path.
+
+## Graded lattices
+
+A real lattice is rarely uniform — you want stiffness where the stress is and porosity
+where the flow is. `LatticeGrading` is a parameter that varies over space, and every
+lattice factory takes one:
+
+```csharp render:graded-lattice
+// A gyroid sheet, thin at the bottom and thick at the top.
+var thickness = LatticeGrading.Along(direction: (0, 0, 1), start: -18, end: 18,
+                                     atStart: 0.35, atEnd: 1.35);
+
+// ... and an octet lattice graded by VOLUME FRACTION, which is the parameter you state:
+// dense where the load goes in, open where it does not.
+var fraction = LatticeGrading.Along(direction: (0, 0, 1), start: -18, end: 18,
+                                    atStart: 0.42, atEnd: 0.06);
+
+var scene = new Scene(new MeshQuality { SdfResolution = 200 });
+scene.Add(new Part("graded sheet",
+    Shape.From(Sdf.TpmsSheet(TpmsKind.Gyroid, cellSize: 9, thickness))
+        & Shape.Box(26, 26, 36),
+    Palette.Teal, Matrix4d.CreateTranslation((-20, 0, 19))));
+scene.Add(new Part("graded struts",
+    Shape.From(StrutLattices.GradedForVolumeFraction(StrutLatticeKind.Octet, cellSize: 9, fraction))
+        & Shape.Box(26, 26, 36),
+    Palette.Coral, Matrix4d.CreateTranslation((20, 0, 19))));
+```
+
+![A gyroid sheet whose wall thickens from bottom to top, beside an octet lattice whose struts thin from bottom to top](images/graded-lattice.png)
+
+**What is graded is the parameter, never the cell size.** Grading the thickness leaves
+the structure underneath exactly as it was — the polynomial is still periodic, and a
+strut lattice's fold and candidate lists are statements about the strut *axes*, which do
+not move — so the exact sign and everything else the uniform field guarantees carries
+over unchanged. The only cost is the reported `Sdf.LipschitzBound`, which becomes
+`1 + L` where `L` is the grading's own constant, so the polygonizer's cull widens by
+exactly the right amount.
+
+**A grading states its own Lipschitz constant**, and the factories that can derive it do:
+
+| factory | constant |
+|---|---|
+| `LatticeGrading.Constant(v)` | 0 |
+| `LatticeGrading.Along(direction, start, end, atStart, atEnd)` | `\|atEnd − atStart\| / \|end − start\|`, exact |
+| `LatticeGrading.Radial(centre, r0, r1, atInner, atOuter)` | `\|atOuter − atInner\| / \|r1 − r0\|`, exact |
+| `LatticeGrading.FromFunction(f, lipschitzConstant, min, max)` | **yours to state** |
+
+Nothing here can measure the constant for you — sampling a function proves nothing about
+it between the samples — and a constant that is too small makes the cull drop geometry
+silently, so `FromFunction` asks. Values are clamped into the stated range, which is what
+makes that range a guarantee. A grading of `Constant` reproduces the uniform field bit
+for bit.
+
+```csharp run:graded-lattice-fraction
+// Volume-fraction grading: 12% at one end, 40% at the other.
+var grading = LatticeGrading.Along((0, 0, 1), start: -4, end: 4, atStart: 0.12, atEnd: 0.40);
+var field = Tpms.GradedSheetForVolumeFraction(TpmsKind.Gyroid, cellSize: 4, grading);
+
+// The bound is 1 + the grading's own, so a cull knows how far to widen.
+double bound = field.LipschitzBound(new Aabb((-10, -10, -10), (10, 10, 10)));
+if (bound <= 1 || bound > 1.5)
+    throw new Exception($"unexpected Lipschitz bound {bound}");
+```
+
+Note what a graded lattice gives up: it is **no longer periodic**, so there is no
+"sample one cell" to measure an achieved volume fraction from. What the grading states
+is the fraction the *local* cell would carry.
+
+A **conformal** lattice — one following a curved body — is already expressible by
+composing `Twist`, `Bend` or `Taper` over any of these fields; each reports its own
+Lipschitz factor, so the cull stays sound through them.
 
 ## Related
 

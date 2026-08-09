@@ -2,6 +2,7 @@ using EngrCAD.Core;
 using EngrCAD.Interop;
 using EngrCAD.Mesh;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace EngrCAD.Implicit.Tests;
 
@@ -23,7 +24,7 @@ namespace EngrCAD.Implicit.Tests;
 /// than against the algebra it was derived from.
 /// </para>
 /// </summary>
-public class DomainOperatorTests
+public class DomainOperatorTests(ITestOutputHelper output)
 {
     // ---- repetition ----
 
@@ -389,6 +390,102 @@ public class DomainOperatorTests
         var bumpy = Sdf.Sphere(5).Displace(0.5, (2, 0, 0));
         Assert.Equal(1 + 0.5 * 2, bumpy.LipschitzBound(bumpy.Bounds), 12);
     }
+
+    /// <summary>
+    /// <b>The property <c>Displace</c>'s bounds actually rest on</b>, measured over the family
+    /// rather than assumed: <c>{field &lt; t} ⊆ Bounds.Expanded(t)</c>, equivalently the field
+    /// never reports LESS than the per-axis escape from its own bounds. It is weaker than "the
+    /// field is a true distance" — which is why the standing counterexample, a CSG difference
+    /// near its tool's fictitious faces, is in fact covered — and it is what an operator adding
+    /// a bounded value to a field needs of that field.
+    /// </summary>
+    [Fact]
+    public void EveryCsgNode_NeverReportsLessThanTheEscapeFromItsOwnBounds()
+    {
+        var cases = new (string Name, Sdf Field)[]
+        {
+            ("sphere", Sdf.Sphere(5)),
+            ("box", Sdf.Box(6, 4, 3)),
+            ("torus", Sdf.Torus(6, 2)),
+            ("union", Sdf.Sphere(4) | Sdf.Box(3, 3, 9)),
+            ("intersection", Sdf.Sphere(4) & Sdf.Box(3, 3, 9)),
+            ("difference-fictitious", Sdf.Box(2, 2, 2) - Sdf.Sphere(1.2)),
+            ("tangent-intersection",
+                Sdf.Sphere(5).Translate((-5, 0, 0)) & Sdf.Sphere(5).Translate((5, 0, 0))),
+            ("smooth-union", Sdf.Sphere(4).SmoothUnion(Sdf.Box(3, 3, 9), 1.0)),
+            ("offset", Sdf.Box(4, 4, 4).Offset(0.7)),
+            ("shell", Sdf.Sphere(5).Shell(0.6)),
+            ("elongate", Sdf.Sphere(2).Elongate((3, 1, 0))),
+            ("rounded-box", Sdf.RoundedBox(8, 5, 4, 1.2)),
+            ("prism", Sdf.Prism(6, 5, 9)),
+            ("convex-polyhedron", Sdf.ConvexPolyhedron(
+            [
+                ((1, 0, 0), 3), ((-1, 0, 0), 3), ((0, 1, 0), 3),
+                ((0, -1, 0), 3), ((0, 0, 1), 3), ((0, 0, -1), 3), ((1, 1, 1), 4.5),
+            ])),
+            ("repeat", Sdf.Sphere(1).Repeat((3, 3, 3), (3, 2, 2))),
+        };
+
+        foreach (var (name, field) in cases)
+        {
+            var bounds = field.Bounds;
+            double worst = 0;
+            foreach (var p in Probes(seed: 8191, count: 40000, extent: 24))
+            {
+                double escape = Escape(p, bounds);
+                if (escape <= 0)
+                    continue;
+                worst = Math.Max(worst, escape - field.Evaluate(p));
+            }
+            output.WriteLine($"{name,-24} worst (escape − reported) = {worst:E3}");
+            Assert.True(worst <= 1e-9,
+                $"{name}: the field reads {worst:R} less than the escape from its own bounds, so " +
+                "a value-adding operator over it would raise material outside those bounds");
+        }
+    }
+
+    /// <summary>
+    /// The complement, and the reason <see cref="Sdf.Displace(double, in Vector3d, in Aabb)"/>
+    /// exists: a NON-ISOMETRIC domain operator widens its bounds relative to the field it
+    /// reports, so the property above measurably fails and the ripple raises material outside
+    /// the box. Both halves are asserted — the escape, and that stating the region fixes it.
+    /// </summary>
+    [Fact]
+    public void ATaperedChild_BreaksThatProperty_AndTheExplicitBoundsOverloadIsTheAnswer()
+    {
+        var tapered = Sdf.Sphere(1).Taper(1, 3);
+        var probe = new Vector3d(4, 0, 1);
+        double escape = Escape(probe, tapered.Bounds);
+        double reported = tapered.Evaluate(probe);
+        output.WriteLine($"tapered sphere at {probe}: escape {escape:0.####}, field {reported:0.####}");
+        Assert.True(reported < escape,
+            "the taper no longer breaks the bounds property; the fixture proves nothing");
+
+        const double Amplitude = 0.8;
+        var bumpy = tapered.Displace(Amplitude, (4, 4, 4));
+        // The ripple's own solid reaches this point (the child reads under the amplitude there),
+        // and the derived bounds do not contain it.
+        Assert.True(reported < Amplitude);
+        Assert.False(bumpy.Bounds.Contains(probe));
+
+        var stated = tapered.Displace(Amplitude, (4, 4, 4), tapered.Bounds.Expanded(3 * Amplitude));
+        Assert.True(stated.Bounds.Contains(probe));
+        // Stating the region changes the bounds and nothing else.
+        foreach (var p in Probes(seed: 24, count: 2000, extent: 8))
+            Assert.Equal(
+                BitConverter.DoubleToInt64Bits(bumpy.Evaluate(p)),
+                BitConverter.DoubleToInt64Bits(stated.Evaluate(p)));
+    }
+
+    /// <summary>The per-axis distance from a point to a box — zero inside it. This is the
+    /// quantity <c>Aabb.Expanded</c> compares against, so it is the right one to measure.</summary>
+    private static double Escape(in Vector3d p, in Aabb box) =>
+        Math.Max(
+            Math.Max(Axis(p.X, box.Min.X, box.Max.X), Axis(p.Y, box.Min.Y, box.Max.Y)),
+            Axis(p.Z, box.Min.Z, box.Max.Z));
+
+    private static double Axis(double t, double lo, double hi) =>
+        Math.Max(Math.Max(lo - t, t - hi), 0);
 
     // ---- the shared closed form ----
 

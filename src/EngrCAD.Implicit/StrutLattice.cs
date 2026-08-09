@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Numerics;
+using System.Runtime.InteropServices;
 using EngrCAD.Core;
 
 namespace EngrCAD.Implicit;
@@ -33,10 +36,28 @@ namespace EngrCAD.Implicit;
 // argument: the field is compared against a brute-force minimum over an explicit 5x5x5 block
 // of capsules, with a companion showing that comparison can see a missing neighbour.
 //
-// Deliberately scalar in the batch path for now. A capsule kernel vectorizes well, but the
-// fold and the per-point prune are data-dependent branches, so the vector form is its own
-// piece of work; the node still batches through the default loop and is bit-identical to the
-// scalar path by construction (it does not override the seam).
+// THE BATCH PATH VECTORIZES BY GROUPING THE POINTS, NOT BY PADDING THE LISTS. The obstacle is
+// that the candidate list is chosen per point, so four lanes can want four different lists —
+// and neither of the two shapes the backlog proposed is the answer. Padding every sub-cell's
+// list to the longest one and evaluating the union throws away the pruning that made a query
+// affordable at all (up to 648 segments against a handful). Gathering per lane needs a
+// width-agnostic gather Vector<double> does not have, and would spend six scalar loads a lane a
+// candidate to save a few flops.
+//
+// What is left is to make the lanes AGREE: partition the batch by sub-cell with a counting sort,
+// then walk each bucket's points a register at a time with the candidate broadcast as a scalar.
+// The struts become constants and the POINTS become the vector, which is the layout the
+// arithmetic wanted all along — no gather, no branch in the inner loop. The partition is O(n)
+// with a handful of passes against an inner loop that is tens of candidates deep per point, so
+// it is a few per cent of the work; the scatter back is what keeps the caller's order.
+//
+// It is bit-identical by construction rather than by tuning: the fold and the bucket index run
+// through the scalar code verbatim, the kernel mirrors SegmentDistanceSquared term for term, and
+// the running minimum is over the SAME candidate list in the same ascending order. The one
+// documented vector/scalar divergence, Vector.Min's +-0 tie-break, cannot reach the result here
+// because every quantity it touches is a sum of squares and the difference is squared again.
+// A GRADED lattice takes the scalar path: the radius is a delegate call per point, which does
+// not vectorize, and the fallback keeps the graded field exact for free.
 
 /// <summary>
 /// The strut (beam) lattices this engine can build. Each is a periodic set of capsules, so
@@ -124,6 +145,31 @@ public static class StrutLattices
             volumeFraction,
             VolumeFraction(kind, cellSize, diameter),
             diameter);
+    }
+
+    /// <summary>
+    /// A GRADED lattice stated as a volume fraction: the caller's fraction grading pushed
+    /// through the same measured cell distribution <see cref="ForVolumeFraction"/> uses, as a
+    /// piecewise-linear ladder so the composed Lipschitz constant is exact and the per-query
+    /// cost is a lookup. See <see cref="LatticeGrading"/> for why the constant is stated.
+    /// <para>
+    /// No achieved fraction is reported, deliberately: a graded field is not periodic, so the
+    /// "sample one cell" estimator has nothing to sample. What the grading states is the
+    /// fraction the LOCAL cell would carry.
+    /// </para>
+    /// </summary>
+    public static Sdf GradedForVolumeFraction(
+        StrutLatticeKind kind, double cellSize, LatticeGrading volumeFraction)
+    {
+        ArgumentNullException.ThrowIfNull(volumeFraction);
+        RequireCell(cellSize);
+        if (!(volumeFraction.Minimum > 0) || !(volumeFraction.Maximum < 1))
+            throw new ArgumentOutOfRangeException(
+                nameof(volumeFraction), $"[{volumeFraction.Minimum:R}, {volumeFraction.Maximum:R}]",
+                "A volume fraction must lie strictly between 0 and 1.");
+        var table = Table(kind, QuantileTable.FitResolution);
+        return Sdf.StrutLattice(
+            kind, cellSize, volumeFraction.Through(f => 2 * cellSize * table.Quantile(f)));
     }
 
     /// <summary>
@@ -368,6 +414,7 @@ internal sealed class StrutLatticeSdf : Sdf
     private readonly int[] _bucketStart;   // Buckets^3 + 1 offsets into _bucketItems
     private readonly int[] _bucketItems;
     private readonly double _cell, _radius, _bucketSize;
+    private readonly LatticeGrading? _grading;
 
     /// <summary>
     /// <b>The query cost is decided here, not in Evaluate.</b> The visited neighbourhood is
@@ -389,10 +436,13 @@ internal sealed class StrutLatticeSdf : Sdf
     /// and is dropped.
     /// </para>
     /// </summary>
-    public StrutLatticeSdf((Vector3d A, Vector3d B)[] unitCell, double cell, double radius)
+    public StrutLatticeSdf(
+        (Vector3d A, Vector3d B)[] unitCell, double cell, double radius,
+        LatticeGrading? diameterGrading = null)
     {
         _cell = cell;
         _radius = radius;
+        _grading = diameterGrading;
         _bucketSize = cell / Buckets;
 
         _a = new Vector3d[unitCell.Length * 27];
@@ -455,16 +505,158 @@ internal sealed class StrutLatticeSdf : Sdf
         double qz = p.Z - _cell * Math.Round(p.Z / _cell);
         var q = new Vector3d(qx, qy, qz);
 
+        int bucket = BucketOf(qx, qy, qz);
+        double best = double.PositiveInfinity;
+        for (int at = _bucketStart[bucket]; at < _bucketStart[bucket + 1]; at++)
+            best = Math.Min(best, SegmentDistanceSquared(q, _bucketItems[at]));
+        return Math.Sqrt(best) - RadiusAt(p);
+    }
+
+    /// <summary>The radius at a point — the constant one, or the grading's half diameter.</summary>
+    private double RadiusAt(in Vector3d p) => _grading is null ? _radius : _grading.At(p) / 2;
+
+    /// <summary>The sub-cell a FOLDED point lands in. One rule, asked by the scalar path and by
+    /// the batch partition, so the two cannot disagree about which list a point gets.</summary>
+    private int BucketOf(double qx, double qy, double qz)
+    {
         double half = _cell / 2;
         int i = Math.Clamp((int)((qx + half) / _bucketSize), 0, Buckets - 1);
         int j = Math.Clamp((int)((qy + half) / _bucketSize), 0, Buckets - 1);
         int k = Math.Clamp((int)((qz + half) / _bucketSize), 0, Buckets - 1);
-        int bucket = (i * Buckets + j) * Buckets + k;
+        return (i * Buckets + j) * Buckets + k;
+    }
 
-        double best = double.PositiveInfinity;
-        for (int at = _bucketStart[bucket]; at < _bucketStart[bucket + 1]; at++)
-            best = Math.Min(best, SegmentDistanceSquared(q, _bucketItems[at]));
-        return Math.Sqrt(best) - _radius;
+    /// <summary>
+    /// Partition the batch by sub-cell, then run each bucket's points a register at a time
+    /// against that bucket's candidate list with the strut broadcast — see the file remarks for
+    /// why the points rather than the struts are what goes in the lanes.
+    /// </summary>
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        int n = x.Length;
+        if (n == 0)
+            return;
+        if (!SdfBatch.Accelerated || _grading is not null || n < Vector<double>.Count)
+        {
+            base.EvaluateBatch(x, y, z, distances);
+            return;
+        }
+
+        const int BucketCount = Buckets * Buckets * Buckets;
+        var bucketOf = ArrayPool<int>.Shared.Rent(n);
+        var order = ArrayPool<int>.Shared.Rent(n);
+        var starts = ArrayPool<int>.Shared.Rent(BucketCount + 1);
+        using var sorted = new BatchScratch3(n);
+        using var result = new BatchScratch(n);
+        try
+        {
+            Array.Clear(starts, 0, BucketCount + 1);
+            for (int i = 0; i < n; i++)
+            {
+                int b = BucketOf(Fold(x[i]), Fold(y[i]), Fold(z[i]));
+                bucketOf[i] = b;
+                starts[b + 1]++;
+            }
+            for (int b = 0; b < BucketCount; b++)
+                starts[b + 1] += starts[b];
+
+            // The counting sort's cursor rides in the bucketOf slots' own prefix copy: walking
+            // the points in ascending index keeps each bucket's run in the caller's order, which
+            // costs nothing and makes the permutation deterministic.
+            Span<int> cursor = stackalloc int[BucketCount];
+            for (int b = 0; b < BucketCount; b++)
+                cursor[b] = starts[b];
+            for (int i = 0; i < n; i++)
+                order[cursor[bucketOf[i]]++] = i;
+
+            // The fold is recomputed here rather than staged and permuted: it is three rounds
+            // and three multiplies against an inner loop tens of candidates deep, and being a
+            // pure function of the coordinate it cannot disagree with the pass above.
+            for (int i = 0; i < n; i++)
+            {
+                int source = order[i];
+                sorted.X[i] = Fold(x[source]);
+                sorted.Y[i] = Fold(y[source]);
+                sorted.Z[i] = Fold(z[source]);
+            }
+
+            EvaluateRuns(sorted, starts, result.Span);
+
+            for (int i = 0; i < n; i++)
+                distances[order[i]] = result.Span[i] - _radius;
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(bucketOf);
+            ArrayPool<int>.Shared.Return(order);
+            ArrayPool<int>.Shared.Return(starts);
+        }
+    }
+
+    /// <summary>One coordinate folded into the cell, verbatim from <see cref="Evaluate"/>.</summary>
+    private double Fold(double t) => t - _cell * Math.Round(t / _cell);
+
+    /// <summary>
+    /// One bucket run at a time: the candidate list is fixed for the whole run, so the inner
+    /// loop broadcasts a strut and the register holds four points. Mirrors
+    /// <see cref="SegmentDistanceSquared"/> term for term and folds the running minimum over the
+    /// same list in the same ascending order, so the result is bit-identical.
+    /// </summary>
+    private void EvaluateRuns(in BatchScratch3 sorted, int[] starts, Span<double> result)
+    {
+        int w = Vector<double>.Count;
+        ref double sx = ref MemoryMarshal.GetReference(sorted.X);
+        ref double sy = ref MemoryMarshal.GetReference(sorted.Y);
+        ref double sz = ref MemoryMarshal.GetReference(sorted.Z);
+        ref double rr = ref MemoryMarshal.GetReference(result);
+
+        for (int bucket = 0; bucket < Buckets * Buckets * Buckets; bucket++)
+        {
+            int lo = starts[bucket], hi = starts[bucket + 1];
+            if (hi == lo)
+                continue;
+            int from = _bucketStart[bucket], to = _bucketStart[bucket + 1];
+
+            int at = lo;
+            for (; at <= hi - w; at += w)
+            {
+                var px = Vector.LoadUnsafe(ref sx, (nuint)at);
+                var py = Vector.LoadUnsafe(ref sy, (nuint)at);
+                var pz = Vector.LoadUnsafe(ref sz, (nuint)at);
+                var best = new Vector<double>(double.PositiveInfinity);
+                for (int c = from; c < to; c++)
+                {
+                    int item = _bucketItems[c];
+                    var a = _a[item];
+                    var ba = _b[item] - a;
+                    var bax = new Vector<double>(ba.X);
+                    var bay = new Vector<double>(ba.Y);
+                    var baz = new Vector<double>(ba.Z);
+                    // The denominator is the SCALAR LengthSquared broadcast, so the division is
+                    // the identical double the scalar path divides by.
+                    var denominator = new Vector<double>(ba.LengthSquared);
+
+                    var pax = px - new Vector<double>(a.X);
+                    var pay = py - new Vector<double>(a.Y);
+                    var paz = pz - new Vector<double>(a.Z);
+                    var h = SdfBatch.Clamp01((pax * bax + pay * bay + paz * baz) / denominator);
+                    var dx = pax - bax * h;
+                    var dy = pay - bay * h;
+                    var dz = paz - baz * h;
+                    best = Vector.Min(best, dx * dx + dy * dy + dz * dz);
+                }
+                Vector.SquareRoot(best).StoreUnsafe(ref rr, (nuint)at);
+            }
+            for (; at < hi; at++)
+            {
+                var q = new Vector3d(sorted.X[at], sorted.Y[at], sorted.Z[at]);
+                double best = double.PositiveInfinity;
+                for (int c = from; c < to; c++)
+                    best = Math.Min(best, SegmentDistanceSquared(q, _bucketItems[c]));
+                result[at] = Math.Sqrt(best);
+            }
+        }
     }
 
     /// <summary>The capsule's own kernel without the radius — the same clamp-and-project
@@ -504,4 +696,12 @@ internal sealed class StrutLatticeSdf : Sdf
 
     /// <summary>Infinite, like every lattice here — intersect it with a finite solid.</summary>
     public override Aabb Bounds => InfiniteBounds;
+
+    /// <summary>
+    /// Exactly 1 for a uniform lattice (the distance to a union of capsules is a true distance),
+    /// and <c>1 + L/2</c> for a graded one, since the field is that distance minus half the
+    /// graded diameter and the two gradients add.
+    /// </summary>
+    public override double LipschitzBound(in Aabb region) =>
+        _grading is null ? 1 : 1 + _grading.LipschitzConstant / 2;
 }
