@@ -257,9 +257,16 @@ public static class BrepArchive
             return Emit(s, $"Swept(#{generator}, #{path}, {Vec(s.StartX)}, {s.FrameCount})");
         }
 
-        private int HelicalEntity(HelicalSurface s) => Emit(s,
-            $"Helical({Frame(s.Frame)}, {Vec2(s.ProfileStart)}, {Vec2(s.ProfileEnd)}, "
-            + $"{N(s.Pitch)}, {Range(s.DomainU)})");
+        // Two entities rather than one variadic Helical: an arc generator is a different
+        // set of numbers, not extra ones, and a name that says which is easier to diff than
+        // an arity that has to be counted.
+        private int HelicalEntity(HelicalSurface s) => s.IsStraightGenerator
+            ? Emit(s,
+                $"Helical({Frame(s.Frame)}, {Vec2(s.ProfileStart)}, {Vec2(s.ProfileEnd)}, "
+                + $"{N(s.Pitch)}, {Range(s.DomainU)})")
+            : Emit(s,
+                $"HelicalArc({Frame(s.Frame)}, {Vec2(s.ArcCenter)}, {N(s.ArcRadius)}, "
+                + $"{N(s.ArcStartAngle)}, {N(s.ArcSweep)}, {N(s.Pitch)}, {Range(s.DomainU)})");
 
         private int LoftedEntity(LoftedSurface s)
         {
@@ -294,8 +301,20 @@ public static class BrepArchive
                 PolylineCurve3d c => PolylineEntity(c),
                 Helix3d c => Emit(c,
                     $"Helix({Frame(c.Frame)}, {N(c.Radius)}, {N(c.Pitch)}, {N(c.Turns)})"),
-                SpiralArc3d c => Emit(c,
+                // The two axial coefficients are written only when the spiral actually
+                // CLIMBS — the Polyline carrier-pair precedent — so every archive of a
+                // planar cap cut stays byte-identical while a CONICAL spiral (a thread's
+                // 45-degree chamfer or its runout) stops being flattened into its frame's
+                // plane on reload, which is what the four-argument form silently did.
+                SpiralArc3d { AxialAtZero: 0, AxialRate: 0 } c => Emit(c,
                     $"SpiralArc({Frame(c.Frame)}, {N(c.RadiusAtZero)}, {N(c.Slope)}, {Range(c.Domain)})"),
+                SpiralArc3d c => Emit(c,
+                    $"SpiralArc({Frame(c.Frame)}, {N(c.RadiusAtZero)}, {N(c.Slope)}, {Range(c.Domain)}, "
+                    + $"{N(c.AxialAtZero)}, {N(c.AxialRate)})"),
+                HelicalArcCut3d c => Emit(c,
+                    $"HelicalArcCut({Frame(c.Frame)}, {Vec2(c.ArcCenter)}, {N(c.ArcRadius)}, "
+                    + $"{N(c.AxialRate)}, {N(c.CarrierRadial)}, {N(c.CarrierAxial)}, "
+                    + $"{N(c.CarrierOffset)}, {c.Branch}, {Range(c.Domain)})"),
                 OffsetCurve3d c => Wrapped(c, c.Base,
                     b => $"Offset(#{b}, {Vec(c.PlaneNormal)}, {N(c.Distance)})"),
                 CurveSegment c => Wrapped(c, c.Base,
@@ -539,7 +558,14 @@ public static class BrepArchive
             "Polyline" => new PolylineCurve3d(Points(a, 1), Bool(a, 0),
                 a.Count >= 4 ? (Ref<Surface>(a, 2), Ref<Surface>(a, 3)) : null),
             "Helix" => new Helix3d(Frame(a, 0), Num(a, 1), Num(a, 2), Num(a, 3)),
-            "SpiralArc" => new SpiralArc3d(Frame(a, 0), Num(a, 1), Num(a, 2), Range(a, 3)),
+            // Four arguments is the planar cap cut (and every pre-conical file); six adds
+            // the axial law that makes it a conical spiral.
+            "SpiralArc" => a.Count >= 6
+                ? new SpiralArc3d(Frame(a, 0), Num(a, 1), Num(a, 2), Num(a, 4), Num(a, 5), Range(a, 3))
+                : new SpiralArc3d(Frame(a, 0), Num(a, 1), Num(a, 2), Range(a, 3)),
+            "HelicalArcCut" => new HelicalArcCut3d(
+                Frame(a, 0), Vec2(a, 1), Num(a, 2), Num(a, 3), Num(a, 4), Num(a, 5), Num(a, 6),
+                Int(a, 7), Range(a, 8)),
             "Offset" => new OffsetCurve3d(Ref<Curve3d>(a, 0), Vec(a, 1), Num(a, 2)),
             "Segment" => new CurveSegment(Ref<Curve3d>(a, 0), Num(a, 1), Num(a, 2)),
             "Reversed" => new ReversedCurve(Ref<Curve3d>(a, 0)),
@@ -557,6 +583,8 @@ public static class BrepArchive
             "Revolved" => new RevolvedSurface(Ref<Curve3d>(a, 0), Vec(a, 1), Vec(a, 2), Num(a, 3)),
             "Swept" => new SweptSurface(Ref<Curve3d>(a, 0), Ref<Curve3d>(a, 1), Vec(a, 2), Int(a, 3)),
             "Helical" => new HelicalSurface(Frame(a, 0), Vec2(a, 1), Vec2(a, 2), Num(a, 3), Range(a, 4)),
+            "HelicalArc" => new HelicalSurface(
+                Frame(a, 0), Vec2(a, 1), Num(a, 2), Num(a, 3), Num(a, 4), Num(a, 5), Range(a, 6)),
             "Lofted" => new LoftedSurface(Refs<Curve3d>(a, 0), Numbers(a, 1)),
 
             // topology

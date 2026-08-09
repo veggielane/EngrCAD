@@ -258,23 +258,20 @@ internal static class ShapeCompiler
                 ClassifyBrep(drill.Expanded, m, entries);
                 break;
             case ThreadShape thread:
-                // Native for the unmodified basic profile under any similarity placement,
-                // mirrored included — a mirrored thread IS the left-hand thread, and the
-                // factory builds either handedness. Chamfer cones and distance-field
-                // profile offsets still have no B-Rep counterpart and are reported
-                // truthfully rather than lowered to silently different geometry.
+                // Native for the basic profile AND for its distance-field clearance offset,
+                // under any similarity placement, mirrored included — a mirrored thread IS
+                // the left-hand thread, and the factory builds either handedness. Only a
+                // chamfer that reaches the thread depth is reported Impossible, and for a
+                // reason about tangency rather than about the profile.
                 if (!TryDecomposeThreadPlacement(m, out _, out _, out _, out _))
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a sheared or non-uniformly scaled placement cannot re-place a helical thread exactly"));
                 else if (thread.ChamferLength >= thread.Spec.ThreadDepth)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a chamfer at or past the thread depth puts the cone's base exactly on the minor diameter, tangent to every root band along the end plane — coincident curved-surface boolean input; pass a shallower chamferLength, or use ToMesh/ToImplicit"));
-                // Deliberate exact-zero test: "no clearance requested" is a user-parameter
-                // contract (any nonzero offset means distance-field clearance), not a
-                // geometric comparison.
                 else if (thread.ProfileOffset != 0)
-                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                        "printing clearance offsets the profile as a distance field (reflex corners round into arcs) with no exact B-Rep counterpart — model clearance via ToMesh/ToImplicit"));
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "boolean-free helical sweep whose clearance-eroded profile mixes straight and ARC generators (SolidFactory.OffsetPitchProfile); not STEP-exportable"));
                 else if (thread.ChamferLength > 0 || thread.RunoutLength > 0)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "boolean-free helical sweep, its ends treated by a coaxial cone that cuts every band in an exact conical SpiralArc3d; not STEP-exportable"));
@@ -285,19 +282,17 @@ internal static class ShapeCompiler
             case ThreadedHoleShape hole:
                 // Native via ONE combined tool per point: the thread form clipped at the
                 // pilot radius (the pilot volume is part of the same helical rod, so no
-                // coaxial tool∩bore tangency ever reaches the boolean). Clearance stays
-                // Impossible for the same distance-field reason as ExternalThread.
-                // Mirrored placements are Native exactly as ThreadShape's are — the tool
-                // is the same helical rod, so the FlipY identity applies per placed
-                // point with the handedness XOR'd at lowering.
+                // coaxial tool∩bore tangency ever reaches the boolean). A printing
+                // CLEARANCE grows that same tool by the distance-field offset — the
+                // mirror image of an external thread's erosion, so its crest corners round
+                // where the rod's miter — and stays Native. Mirrored placements are Native
+                // exactly as ThreadShape's are: the tool is the same helical rod, so the
+                // FlipY identity applies per placed point with the handedness XOR'd at
+                // lowering.
                 ClassifyBrep(hole.Child, m, entries);
                 if (!TryDecomposeThreadPlacement(m, out _, out _, out _, out _))
                     entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
                         "a sheared or non-uniformly scaled placement cannot re-place a helical thread exactly"));
-                // Deliberate exact-zero test (see ThreadShape above).
-                else if (hole.Clearance != 0)
-                    entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
-                        "printing clearance offsets the profile as a distance field (reflex corners round into arcs) with no exact B-Rep counterpart — model clearance via ToMesh/ToImplicit"));
                 else
                     entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Native,
                         "pilot + thread subtracted as one clipped-profile helical tool; the drilled faces split along exact spiral-arc chains"));
@@ -860,12 +855,9 @@ internal static class ShapeCompiler
                 return body;
             }
 
-            // Exact-zero user-parameter gate (matches the Explain classification above):
-            // only the unmodified basic profile has an exact B-Rep form, and only a
-            // SUB-DEPTH end chamfer stays clear of the root bands it would otherwise be
-            // tangent to.
-            case ThreadShape thread
-                when thread.ProfileOffset == 0 && thread.ChamferLength < thread.Spec.ThreadDepth:
+            // Only a SUB-DEPTH end chamfer stays clear of the root bands it would otherwise
+            // be tangent to (matches the Explain classification above).
+            case ThreadShape thread when thread.ChamferLength < thread.Spec.ThreadDepth:
             {
                 // The ISO 68-1 basic profile, crest centered at phase 0 — the SAME
                 // phase convention as Sdf.Thread (solid = {r ≤ R((z − P·θ/2π) mod P)}
@@ -884,13 +876,20 @@ internal static class ShapeCompiler
                 var frame = Frame3d.FromOrthonormal(
                     translation, rotation.Rotate(Vector3d.UnitX), rotation.Rotate(Vector3d.UnitY));
                 double length = thread.Length * scale;
+                // A printing CLEARANCE is the distance-field offset of that profile, which
+                // is exact here too: it miters the crest corners and rounds the root ones
+                // into arcs of the clearance radius, and an arc-generator helical band is
+                // as boolean-free a sweep as a straight-generator one. The offset is a
+                // length, so it rides the placement's scale with every other one.
                 var rod = SolidFactory.MakeThreadedRod(
-                [
-                    new Vector2d(rMajor, -pitch / 16),
-                    new Vector2d(rMajor, pitch / 16),
-                    new Vector2d(rMinor, 3 * pitch / 8),
-                    new Vector2d(rMinor, 5 * pitch / 8),
-                ], pitch, length, frame, spec.LeftHand ^ reflected);
+                    SolidFactory.OffsetPitchProfile(
+                    [
+                        new Vector2d(rMajor, -pitch / 16),
+                        new Vector2d(rMajor, pitch / 16),
+                        new Vector2d(rMinor, 3 * pitch / 8),
+                        new Vector2d(rMinor, 5 * pitch / 8),
+                    ], pitch, thread.ProfileOffset * scale),
+                    pitch, length, frame, spec.LeftHand ^ reflected);
                 // Deliberate exact-zero test: "no chamfer requested" is a user-parameter
                 // contract, and skipping the two booleans keeps an unchamfered rod's
                 // topology bit-for-bit what it has always been.
@@ -917,7 +916,7 @@ internal static class ShapeCompiler
                 return rod;
             }
 
-            case ThreadedHoleShape hole when hole.Clearance == 0:
+            case ThreadedHoleShape hole:
             {
                 // ONE tool per point: the internal thread form CLIPPED at the pilot
                 // radius, so the tap-drill volume is part of the same helical rod and
@@ -964,6 +963,11 @@ internal static class ShapeCompiler
                     ];
                 }
                 var scaledCorners = corners.Select(c => new Vector2d(c.X * scale, c.Y * scale)).ToList();
+                // The clearance grows the VOID, so the tool that cuts it grows too — the
+                // same distance-field offset with the opposite sign, which is why the tool's
+                // crest corners round where an external thread's miter.
+                var toolProfile = SolidFactory.OffsetPitchProfile(
+                    scaledCorners, pitch * scale, hole.Clearance * scale);
 
                 var effective = m * hole.PlaneMatrix;
                 ValidateThreadedHoleDepth(hole, body, effective);
@@ -987,7 +991,7 @@ internal static class ShapeCompiler
                         * effective.TransformVector(Vector3d.UnitY).Normalized();
                     var frame = Frame3d.FromOrthonormal(origin, xAxis, yAxis);
                     var tool = SolidFactory.MakeThreadedRod(
-                        scaledCorners, pitch * scale, (hole.Depth + overshoot) * scale, frame,
+                        toolProfile, pitch * scale, (hole.Depth + overshoot) * scale, frame,
                         spec.LeftHand ^ reflected);
                     var cutting = body;
                     body = WithImplicitRouteHint(() => BrepBoolean.Difference(cutting, tool));

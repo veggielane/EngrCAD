@@ -2335,10 +2335,17 @@ internal static class TrimmedFaceTessellator
             // u IS the turning angle, so it takes the circle density — the same rule
             // SampleEdge's AngularSegments applies to the helix rails and spiral cuts that
             // bound these faces, so interior rows and boundary samples agree by
-            // construction. v is RULED: the generator is a straight (radius, axial)
-            // segment and PointAt is affine in v at every fixed u, so a v-chord lies
-            // exactly on the surface and needs no refinement at all.
-            HelicalSurface => (2 * Math.PI / segmentsPerCircle, double.PositiveInfinity),
+            // construction. v is RULED for a STRAIGHT generator: PointAt is then affine in
+            // v at every fixed u, so a v-chord lies exactly on the surface and needs no
+            // refinement at all. For an ARC generator that is flatly false, and the step
+            // asks the same question one dimension down — v traverses the arc's own polar
+            // angle, so it takes the circle density measured in THAT angle, which is the
+            // `IsAngularlyParameterized` rule applied to the generator.
+            HelicalSurface h => (
+                2 * Math.PI / segmentsPerCircle,
+                h.IsStraightGenerator
+                    ? double.PositiveInfinity
+                    : 2 * Math.PI / (segmentsPerCircle * Math.Abs(h.ArcSweep))),
             ExtrudedSurface e => (FromCurve(e.Generator), double.PositiveInfinity),
             RevolvedSurface r => (
                 r.DomainU.Length / (r.IsFullTurn ? segmentsPerCircle : curveSamples),

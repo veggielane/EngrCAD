@@ -243,15 +243,20 @@ public static class GeometryTransform
             // move them by an ulp, the AxisRef rule. Profile and pitch are lengths measured
             // in that frame and are untouched.
             case HelicalSurface helical:
-                return new HelicalSurface(
-                    Frame3d.FromOrthonormal(
-                        m.TransformPoint(helical.Frame.Origin),
-                        m.TransformVector(helical.Frame.X),
-                        m.TransformVector(helical.Frame.Y)),
-                    helical.ProfileStart,
-                    helical.ProfileEnd,
-                    helical.Pitch,
-                    helical.DomainU);
+            {
+                var placed = Frame3d.FromOrthonormal(
+                    m.TransformPoint(helical.Frame.Origin),
+                    m.TransformVector(helical.Frame.X),
+                    m.TransformVector(helical.Frame.Y));
+                // An ARC generator's centre, radius and polar angles are lengths and angles
+                // in that same frame, so they too travel verbatim.
+                return helical.IsStraightGenerator
+                    ? new HelicalSurface(
+                        placed, helical.ProfileStart, helical.ProfileEnd, helical.Pitch, helical.DomainU)
+                    : new HelicalSurface(
+                        placed, helical.ArcCenter, helical.ArcRadius, helical.ArcStartAngle,
+                        helical.ArcSweep, helical.Pitch, helical.DomainU);
+            }
 
             default:
                 throw new NotSupportedException(

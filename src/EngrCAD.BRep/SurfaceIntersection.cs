@@ -374,6 +374,17 @@ public static class SurfaceIntersection
     {
         var frame = helical.Frame;
         double rate = helical.AxialRate;
+
+        // An ARC generator makes the cut a HelicalArcCut3d instead — the generator angle is
+        // an arc-cosine of an affine function of u rather than v being linear in it — and
+        // the whole of the difference is which closed form gets built.
+        if (!helical.IsStraightGenerator)
+        {
+            return HelicalArcCut3d.TryBuild(
+                helical, 0, 1, zCap, helical.DomainU, out var arcCut, radialRange)
+                ? [arcCut]
+                : [];
+        }
         double z0 = helical.ProfileStart.Y, z1 = helical.ProfileEnd.Y;
         double r0 = helical.ProfileStart.X;
         double dr = helical.ProfileEnd.X - r0, dz = z1 - z0;
@@ -593,6 +604,24 @@ public static class SurfaceIntersection
     /// </summary>
     private static List<Curve3d> CoaxialHelical(in CoaxialProfileLine line, HelicalSurface helical)
     {
+        // An ARC generator takes the same carrier through the same substitution and lands
+        // on HelicalArcCut3d; the carrier r = a + b·z is its (1, −b, a) form, and its own
+        // axial extent becomes the radial band a + b·z over that extent.
+        if (!helical.IsStraightGenerator)
+        {
+            Interval? radial = null;
+            if (double.IsFinite(line.AxialRange.Start) && double.IsFinite(line.AxialRange.End))
+            {
+                double rA = line.A + line.B * line.AxialRange.Start;
+                double rB = line.A + line.B * line.AxialRange.End;
+                radial = new Interval(Math.Min(rA, rB), Math.Max(rA, rB));
+            }
+            return HelicalArcCut3d.TryBuild(
+                helical, 1, -line.B, line.A, helical.DomainU, out var arcCut, radial)
+                ? [arcCut]
+                : [];
+        }
+
         double r0 = helical.ProfileStart.X, z0 = helical.ProfileStart.Y;
         double dr = helical.ProfileEnd.X - r0, dz = helical.ProfileEnd.Y - z0;
         double rate = helical.AxialRate;
