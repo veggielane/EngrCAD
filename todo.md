@@ -541,11 +541,26 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   AND branch selector, refuse-loudly with named contradictions/stationary points):
   ~~elliptical arcs in sketches~~ ✅ **landed** (`Ellipse2d` + `EllipseSeg`,
   `Sketch.Ellipse`, `SketchBuilder.EllipticalArcTo`; exact in all three reps, docs
-  `sketching.md`) — what remains OF that item is the constraint side: an elliptical arc
-  carries no centre/axis variables, so it rides the chord similarity like a bézier and
-  tangency to one is not in the vocabulary; constraint serialization alongside feature
-  history (deliberately not v1 — it does not fall out of the `[Param]` descriptor
-  pattern).
+  `sketching.md`) — and the constraint side of it is closed too: `PointOn(point, curve)`
+  for both curved carriers, `Tangent(curve, end, line)` for their end tangents, and
+  `Tangent(line, curve)` for a line tangent to an elliptical arc's whole conic. What
+  remains is **constraint serialization alongside feature history** (deliberately not v1
+  — it does not fall out of the `[Param]` descriptor pattern): `ConstrainedSketch` keeps
+  solver ROWS plus display names rather than the public declarations that built them, so
+  a persisted form needs (a) a descriptor grammar for the four entity refs — `point(0,3)`,
+  `holeArc(1,0)`, `centerOf(arc(2))` — the way `GeometryRefs` spells a face query, (b) a
+  record per public constraint method beside the row it adds, and (c) the
+  `EverySketchSegmentKind_HasAJsonForm` treatment: a test enumerating the constraint
+  vocabulary FROM the assembly, so a method added without a JSON form fails rather than
+  taking a document down at save time. The one open design question is where it lives —
+  a `ConstrainedSketch` is an INPUT to a feature rather than a `[Param]`, so it belongs
+  in `Feature.SaveInputs` beside `InputJson.SaveCurves`, and the solved output is an
+  ordinary `Sketch` that already round-trips.
+  - **Tangency to a cubic BÉZIER** is the one carrier the tangency vocabulary refuses,
+    and it is refused with its reason rather than deferred: a cubic has no closed-form
+    support function, so the constraint is `cross(B(t) − p, d) = 0` together with
+    `cross(B′(t), d) = 0` — two rows over the foot parameter as a new variable, which is
+    the `PointOnBezier` shape plus one row, and removes the one DOF a tangency means.
 ## Deformation / analysis follow-ups
 
 The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /

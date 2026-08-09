@@ -951,6 +951,169 @@ internal sealed class CurveTangentConstraint(
 }
 
 /// <summary>
+/// A line is TANGENT to an elliptical arc's carrier conic — the tangency the vocabulary
+/// lacked for that segment kind, and it needs no foot parameter at all.
+///
+/// <para><b>The residual is the line's own signed distance from the ellipse's support.</b>
+/// Writing the conic as <c>p(u) = C + M u</c> with <c>M = [A B]</c> and <c>|u| = 1</c>, the
+/// signed distance from a point of it to a line with unit normal n̂ through q is
+/// <c>n̂·(C − q) + (Mᵀn̂)·u</c>, whose extremes over the unit circle are
+/// <c>n̂·(C − q) ± |Mᵀn̂|</c>. Tangency is one extreme vanishing, so
+/// <c>r = n̂·(C − q) − σ·|Mᵀn̂|</c> — ONE row, SIGNED, first order everywhere (|Mᵀn̂| is a
+/// hypotenuse of two linear functions of the direction and never vanishes for a real
+/// ellipse), and no new unknown. It reduces to the circular
+/// <see cref="TangentLineArcConstraint"/> exactly when A and B are perpendicular and
+/// equal, since |Mᵀn̂| is then the radius whatever the direction.</para>
+///
+/// <para><b>σ is the SIDE, read off the drawing</b>, which is the branch selector the whole
+/// constraint layer runs on: a line has two tangents to a conic and which one is meant is a
+/// property of the sketch as drawn, not something to guess. A line drawn THROUGH the centre
+/// has no side, and the caller is told so rather than left with a solve that converges onto
+/// whichever tangent round-off prefers.</para>
+///
+/// <para><b>It is evaluated in the DRAWN frame, which is what makes the ellipse constant.</b>
+/// The carrier rides the chord similarity, and a similarity maps lines to lines and
+/// preserves tangency — so pulling the LINE back through it (the same
+/// <c>ζ = (p − s)/(e − s)</c> the point-on-ellipse row uses) leaves the conic's centre and
+/// both semi-axes as compile-time constants and puts every unknown in the two pulled-back
+/// line points. The residual is then a length in the drawn frame's units.</para>
+/// </summary>
+internal sealed class TangentLineEllipseConstraint : SketchConstraint
+{
+    private readonly int _p1, _p2;
+    private readonly int _start;      // −1 when the carrier is fixed (a full-ellipse loop)
+    private readonly int _end;
+    private readonly Vector2d _chord;     // e₀ − s₀ in the drawn sketch
+    private readonly Vector2d _drawnStart;
+    private readonly Vector2d _center, _semiX, _semiY;
+    private readonly double _side;
+
+    public TangentLineEllipseConstraint(
+        int p1, int p2, int start, int end, in Vector2d drawnStart, in Vector2d drawnEnd,
+        in Vector2d center, in Vector2d semiAxisX, in Vector2d semiAxisY, double side)
+    {
+        _p1 = p1;
+        _p2 = p2;
+        _start = start;
+        _end = end;
+        _drawnStart = drawnStart;
+        _chord = drawnEnd - drawnStart;
+        _center = center;
+        _semiX = semiAxisX;
+        _semiY = semiAxisY;
+        _side = side;
+    }
+
+    public override int Rows => 1;
+
+    private bool Fixed => _start < 0;
+
+    /// <summary>A live point pulled back into the drawn frame (the identity when the
+    /// carrier cannot move).</summary>
+    private Vector2d Pull(double[] x, int variable, in Vector2d chord, in Vector2d s)
+    {
+        var p = Point(x, variable);
+        if (Fixed || !(chord.LengthSquared > 0))
+            return p;
+        var zeta = PointOnEllipseConstraint.ComplexDivide(p - s, chord);
+        return PointOnEllipseConstraint.ComplexMultiply(zeta, _chord) + _drawnStart;
+    }
+
+    private (Vector2d U, Vector2d V, Vector2d Chord, Vector2d S) Frame(double[] x)
+    {
+        var s = Fixed ? default : Point(x, _start);
+        var chord = Fixed ? default : Point(x, _end) - s;
+        return (Pull(x, _p1, chord, s), Pull(x, _p2, chord, s), chord, s);
+    }
+
+    public override void Residual(double[] x, double scale, double[] residual, int row)
+    {
+        var (u, v, _, _) = Frame(x);
+        var d = v - u;
+        double length = d.Length;
+        if (!(length > 0))
+        {
+            residual[row] = 0;
+            return;
+        }
+        var unit = d / length;
+        residual[row] = (_center - u).Cross(unit)
+            - _side * Math.Sqrt(Square(_semiX.Cross(unit)) + Square(_semiY.Cross(unit)));
+    }
+
+    public override void Jacobian(double[] x, double scale, double[] jacobian, int row, int columns)
+    {
+        var (u, v, chord, s) = Frame(x);
+        var d = v - u;
+        double length = d.Length;
+        if (!(length > 0))
+            return;
+        var unit = d / length;
+        var w = _center - u;
+
+        // Each of f, alpha, beta is cross(k, d)/|d| for a constant k, so all three share one
+        // derivative form: d/dd [cross(k, d)/|d|] = ((−k.Y, k.X) − cross(k, d̂)·d̂)/|d|.
+        double f = w.Cross(unit), alpha = _semiX.Cross(unit), beta = _semiY.Cross(unit);
+        double support = Math.Sqrt(Square(alpha) + Square(beta));
+        var df = (new Vector2d(-w.Y, w.X) - unit * f) / length;
+        var gradient = df;
+        if (support > 0)
+        {
+            var dAlpha = (new Vector2d(-_semiX.Y, _semiX.X) - unit * alpha) / length;
+            var dBeta = (new Vector2d(-_semiY.Y, _semiY.X) - unit * beta) / length;
+            gradient -= (dAlpha * alpha + dBeta * beta) * (_side / support);
+        }
+
+        // d = v − u, and u also enters through w = C − u.
+        var gradientU = new Vector2d(-unit.Y, unit.X) - gradient;
+        var gradientV = gradient;
+
+        if (Fixed)
+        {
+            Add(jacobian, row, columns, _p1, gradientU.X);
+            Add(jacobian, row, columns, _p1 + 1, gradientU.Y);
+            Add(jacobian, row, columns, _p2, gradientV.X);
+            Add(jacobian, row, columns, _p2 + 1, gradientV.Y);
+            return;
+        }
+
+        if (!(chord.LengthSquared > 0))
+            return;
+        var p1 = Point(x, _p1);
+        var p2 = Point(x, _p2);
+        var e = Point(x, _end);
+        var inverseChord = PointOnEllipseConstraint.ComplexDivide(new Vector2d(1, 0), chord);
+        var inverseChordSquared = PointOnEllipseConstraint.ComplexMultiply(inverseChord, inverseChord);
+        var toDrawn = _chord;
+
+        // zeta = (p − s)/(e − s): d(zeta)/dp = 1/(e−s), d/ds = (p−e)/(e−s)², d/de = (s−p)/(e−s)².
+        Contribute(jacobian, row, columns, _p1,
+            PointOnEllipseConstraint.ComplexMultiply(toDrawn, inverseChord), gradientU);
+        Contribute(jacobian, row, columns, _p2,
+            PointOnEllipseConstraint.ComplexMultiply(toDrawn, inverseChord), gradientV);
+        // BOTH pulled points move with the carrier's own joints.
+        Contribute(jacobian, row, columns, _start, PointOnEllipseConstraint.ComplexMultiply(
+            toDrawn, PointOnEllipseConstraint.ComplexMultiply(p1 - e, inverseChordSquared)), gradientU);
+        Contribute(jacobian, row, columns, _start, PointOnEllipseConstraint.ComplexMultiply(
+            toDrawn, PointOnEllipseConstraint.ComplexMultiply(p2 - e, inverseChordSquared)), gradientV);
+        Contribute(jacobian, row, columns, _end, PointOnEllipseConstraint.ComplexMultiply(
+            toDrawn, PointOnEllipseConstraint.ComplexMultiply(s - p1, inverseChordSquared)), gradientU);
+        Contribute(jacobian, row, columns, _end, PointOnEllipseConstraint.ComplexMultiply(
+            toDrawn, PointOnEllipseConstraint.ComplexMultiply(s - p2, inverseChordSquared)), gradientV);
+    }
+
+    private static double Square(double v) => v * v;
+
+    private static void Contribute(
+        double[] jacobian, int row, int columns, int variable, in Vector2d factor, in Vector2d g)
+    {
+        var grad = PointOnEllipseConstraint.ComplexMultiply(new Vector2d(factor.X, -factor.Y), g);
+        Add(jacobian, row, columns, variable, grad.X);
+        Add(jacobian, row, columns, variable + 1, grad.Y);
+    }
+}
+
+/// <summary>
 /// The Levenberg–Marquardt engine behind <see cref="ConstrainedSketch"/> — the
 /// MateSolver pattern on plain 2D length variables (no frames, no rotation encoding, so
 /// no variable scaling is needed: every variable is already a length). Dense linear

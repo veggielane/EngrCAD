@@ -707,6 +707,81 @@ public sealed class ConstrainedSketch
     }
 
     /// <summary>
+    /// <paramref name="line"/> is tangent to an elliptical arc's CARRIER conic — the whole
+    /// ellipse, exactly as <c>Tangent(line, arc)</c> is tangent to an arc's whole circle
+    /// and <c>PointOn</c> is on a carrier rather than on the drawn stretch.
+    ///
+    /// <para>It needs no foot parameter: an ellipse is a conic, so the extreme signed
+    /// distance from it to a line is <c>n̂·(C − q) ± |Mᵀn̂|</c> for the semi-axis matrix
+    /// <c>M = [A B]</c>, and tangency is one extreme vanishing — ONE row, signed, first
+    /// order, no new unknown, reducing to the circular form exactly when A and B are
+    /// perpendicular and equal.</para>
+    ///
+    /// <para><b>Which of the two tangents is meant is read off the drawing</b> (the branch
+    /// selector the whole layer runs on), so a line drawn THROUGH the ellipse's centre has
+    /// no side and is refused by name — the same singularity, and the same treatment, as a
+    /// point drawn at an arc's centre. A BÉZIER is refused too, and for a reason rather
+    /// than a deferral: it has no closed algebraic support function, so its tangency needs
+    /// the foot parameter as a variable, which is a different constraint shape (two rows
+    /// over one unknown) and is filed.</para>
+    /// </summary>
+    public ConstrainedSketch Tangent(SketchLineRef line, SketchCurveRef curve)
+    {
+        RequireOwned(line.Owner, line.Description);
+        RequireOwned(curve.Owner, curve.Description);
+        string what = $"Tangent({line}, {curve})";
+        if (curve.Segment is not EllipseSeg ellipse)
+            throw new ArgumentException(
+                $"{what}: tangency is available for an elliptical arc, whose carrier is a conic with a " +
+                "closed-form support function. A cubic bézier has none, so its tangency needs its foot " +
+                "parameter as a solver variable and is not in the vocabulary.");
+        // A full-ellipse loop's carrier is simply FIXED, which is legal: the row is still
+        // first order in the line's own two points.
+        if (curve.Start >= 0 && curve.Start == curve.End)
+            throw new ArgumentException(
+                $"{what}: {curve} closes on itself, so its two joints are one variable and it has no " +
+                "chord for its shape to ride.");
+
+        var seed = _map.Seed;
+        var p1 = SketchVariables.Point(seed, line.P1);
+        var direction = SketchVariables.Point(seed, line.P2) - p1;
+        // The line is pulled into the DRAWN frame before its side is read, so the seed and
+        // the residual answer the same question.
+        var chord = curve.Start < 0
+            ? default
+            : SketchVariables.Point(seed, curve.End) - SketchVariables.Point(seed, curve.Start);
+        var (u, v) = curve.Start < 0 || !(chord.LengthSquared > 0)
+            ? (p1, p1 + direction)
+            : (PullToDrawn(p1, seed, curve, chord, ellipse),
+               PullToDrawn(p1 + direction, seed, curve, chord, ellipse));
+        var pulled = v - u;
+        if (!(pulled.LengthSquared > 0))
+            throw new ArgumentException($"{what}: {line} is drawn with no length.");
+        var unit = pulled / pulled.Length;
+        double offset = (ellipse.Center - u).Cross(unit);
+        double reach = Math.Max(ellipse.SemiAxisX.Length, ellipse.SemiAxisY.Length);
+        // Scale-free: at zero offset the two tangents coincide in the residual and the
+        // drawing states no side, so the constraint has no branch to keep.
+        if (Math.Abs(offset) <= 1e-9 * Math.Max(reach, _map.CharacteristicLength))
+            throw new ArgumentException(
+                $"{what} is drawn with the line through the ellipse's centre, where the two tangents " +
+                "are indistinguishable and the drawing states no side; move the line off the centre first.");
+
+        return Add(new TangentLineEllipseConstraint(
+            line.P1, line.P2, curve.Start, curve.End, ellipse.Start, ellipse.End,
+            ellipse.Center, ellipse.SemiAxisX, ellipse.SemiAxisY, offset >= 0 ? 1 : -1)
+            { Name = what });
+    }
+
+    private static Vector2d PullToDrawn(
+        in Vector2d p, double[] seed, in SketchCurveRef curve, in Vector2d chord, EllipseSeg ellipse)
+    {
+        var s = SketchVariables.Point(seed, curve.Start);
+        var zeta = PointOnEllipseConstraint.ComplexDivide(p - s, chord);
+        return PointOnEllipseConstraint.ComplexMultiply(zeta, ellipse.End - ellipse.Start) + ellipse.Start;
+    }
+
+    /// <summary>
     /// A curve whose shape rides its chord needs a chord to ride, and there are two ways
     /// not to have one — a loop that is ONE closed curve carries no joints at all (a full
     /// ellipse), and a single-segment loop that is not recognized as closed has its two

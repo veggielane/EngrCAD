@@ -230,7 +230,146 @@ public class SketchCurveConstraintTests
         Assert.Equal(0, tangent.Dot(line), 1e-9);
     }
 
+    // ---- a line tangent to an elliptical carrier ----
+
+    /// <summary>An arch with a triangular hole whose base can be dragged onto the arch.</summary>
+    private static Sketch ArchWithTriangularHole() =>
+        ArchWithEllipse().WithHole(TriangleHole(4));
+
+    private static Sketch TriangleHole(double y) =>
+        Sketch.Start(-6, y).LineTo((6, y)).LineTo((0, y + 5)).Close();
+
+    /// <summary>
+    /// Tangency needs no foot parameter, because an ellipse is a conic: the extreme signed
+    /// distance from it to a line is <c>n̂·(C − q) ± |Mᵀn̂|</c>, so one signed row says
+    /// "one extreme is zero". Verified off the SOLVED geometry through that closed form —
+    /// the line touches the ellipse and does not cross it.
+    /// </summary>
+    [Fact]
+    public void ALineIsPulledOntoTangencyWithAnEllipticalCarrier()
+    {
+        var cs = ArchWithTriangularHole().Constrain();
+        cs.Tangent(cs.HoleLine(0, 0), cs.Curve(1))
+          .Fix(cs.Point(0))
+          .Fix(cs.Point(1));
+
+        var result = cs.TrySolve();
+        Assert.True(result.Converged, result.ToString());
+        var solved = result.Sketch!;
+
+        var (gap, support) = LineToEllipse(solved);
+        Assert.Equal(0, gap, 1e-9);
+        // Touching rather than crossing: the ellipse's whole support lies on one side, so
+        // the centre stands off by exactly its half-width in the line's normal direction.
+        Assert.True(support > 1, $"the ellipse collapsed onto the line (support {support:g3})");
+    }
+
+    /// <summary>
+    /// The carrier MOVES with its joints here too, and this is the case that separates a
+    /// real constraint from one satisfied by the drawn numbers: stretch the arch and the
+    /// LINE follows the new ellipse.
+    /// </summary>
+    [Fact]
+    public void TheTangentLineFollowsAStretchedEllipse()
+    {
+        var cs = ArchWithTriangularHole().Constrain();
+        cs.Tangent(cs.HoleLine(0, 0), cs.Curve(1))
+          .Fix(cs.Point(0))
+          .Distance(cs.Point(0), cs.Point(1), 60)
+          .Horizontal(cs.Line(0));
+
+        var result = cs.TrySolve();
+        Assert.True(result.Converged, result.ToString());
+        var solved = result.Sketch!;
+
+        Assert.Equal(60, (solved.Segments[1].Start - solved.Segments[0].Start).Length, 1e-9);
+        Assert.Equal(0, LineToEllipse(solved).Gap, 1e-9);
+    }
+
+    /// <summary>
+    /// A CIRCLE is the member where the conic support reduces to the radius whatever the
+    /// direction, so the tangency the general row produces is exactly the circular one —
+    /// asserted as the distance from the centre to the line, which knows nothing about
+    /// semi-axis matrices.
+    /// </summary>
+    [Fact]
+    public void ACircularEllipseReducesToTheCircularTangency()
+    {
+        var drawn = Sketch.Start(-20, 0)
+            .LineTo((20, 0))
+            .EllipticalArcTo((-20, 0), 20, 20, 0, largeArc: false, clockwise: false)
+            .Close()
+            .WithHole(TriangleHole(4));
+
+        var cs = drawn.Constrain();
+        cs.Tangent(cs.HoleLine(0, 0), cs.Curve(1)).Fix(cs.Point(0)).Fix(cs.Point(1));
+
+        var result = cs.TrySolve();
+        Assert.True(result.Converged, result.ToString());
+        var solved = result.Sketch!;
+
+        var ellipse = SolvedEllipse(solved);
+        Assert.Equal(ellipse.SemiAxisX.Length, ellipse.SemiAxisY.Length, 1e-9);
+        var (gap, support) = LineToEllipse(solved);
+        Assert.Equal(0, gap, 1e-9);
+        Assert.Equal(ellipse.SemiAxisX.Length, support, 1e-9);
+    }
+
+    /// <summary>A line drawn THROUGH the centre states no side, and the two tangents are
+    /// then indistinguishable in the residual — refused by name rather than left to
+    /// converge onto whichever one round-off prefers.</summary>
+    [Fact]
+    public void ALineThroughTheEllipseCentreIsRefused()
+    {
+        var drawn = ArchWithEllipse().WithHole(TriangleHole(0));
+        var cs = drawn.Constrain();
+        var thrown = Assert.Throws<ArgumentException>(
+            () => cs.Tangent(cs.HoleLine(0, 0), cs.Curve(1)));
+        Assert.Contains("through the ellipse's centre", thrown.Message);
+    }
+
+    /// <summary>A cubic has no closed-form support function, so its tangency needs the foot
+    /// parameter as a variable — a different constraint shape, refused BY NAME with that
+    /// reason rather than approximated.</summary>
+    [Fact]
+    public void TangencyToABezierIsRefusedWithItsReason()
+    {
+        var drawn = ArchWithBezier().WithHole(
+            Sketch.Start(10, 5).LineTo((30, 5)).LineTo((20, 12)).Close());
+        var cs = drawn.Constrain();
+        var thrown = Assert.Throws<ArgumentException>(
+            () => cs.Tangent(cs.HoleLine(0, 0), cs.Curve(2)));
+        Assert.Contains("foot parameter", thrown.Message);
+    }
+
     // ---- helpers ----
+
+    /// <summary>
+    /// The hole edge CLOSEST to tangency with the solved ellipse, and the ellipse's own
+    /// half-width in that edge's normal direction — both in closed form, and both read off
+    /// the solved geometry rather than off the solver.
+    /// <para>The edge is found geometrically rather than by index on purpose: a solved
+    /// sketch is re-normalized, and a triangle that has been dragged through its own apex
+    /// legitimately comes back wound the other way, so an index would name a different edge
+    /// than the constraint did. The companion assertion is that exactly ONE edge is
+    /// tangent, which is what makes the search an identification and not a licence.</para>
+    /// </summary>
+    private static (double Gap, double Support) LineToEllipse(Sketch solved)
+    {
+        var ellipse = SolvedEllipse(solved);
+        var gaps = solved.Holes[0].Segments.Select(seg =>
+        {
+            var unit = (seg.End - seg.Start).Normalized();
+            double offset = (ellipse.Center - seg.Start).Cross(unit);
+            double support = Math.Sqrt(
+                ellipse.SemiAxisX.Cross(unit) * ellipse.SemiAxisX.Cross(unit) +
+                ellipse.SemiAxisY.Cross(unit) * ellipse.SemiAxisY.Cross(unit));
+            return (Gap: Math.Abs(offset) - support, Support: support);
+        }).OrderBy(g => Math.Abs(g.Gap)).ToList();
+        Assert.True(Math.Abs(gaps[1].Gap) > 1e-3,
+            $"a second edge is tangent too ({gaps[1].Gap:g3}), so the hole is degenerate");
+        return gaps[0];
+    }
 
     /// <summary>The solved outer loop's elliptical segment, as the exact curve.</summary>
     private static Ellipse2d SolvedEllipse(Sketch solved) =>

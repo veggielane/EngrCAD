@@ -219,6 +219,24 @@ where the curve and the line share **both** joints, that relation is a constant 
 motion can change, and the solver correctly reports a stationary configuration rather
 than converging to something arbitrary.
 
+An **elliptical arc can also be tangent to a line along its whole carrier**, not just at
+an end — `cs.Tangent(line, curve)`, the conic twin of `cs.Tangent(line, arc)`:
+
+```csharp
+cs.Tangent(cs.HoleLine(0, 0), cs.Curve(1));   // that edge touches the ellipse
+```
+
+It needs no foot parameter either, and for the reason the `PointOn` split already gave.
+Writing the conic as `p(u) = C + M u` with `M = [A B]` and `|u| = 1`, the signed
+distance from a point of it to a line with unit normal n̂ through q is
+`n̂·(C − q) + (Mᵀn̂)·u`, whose extremes over the unit circle are `n̂·(C − q) ± |Mᵀn̂|` —
+so tangency is *one extreme vanishing*: one signed, first-order row, no new unknown, and
+exactly the circular form when A and B are perpendicular and equal. Which of the two
+tangents is meant is read off the drawing, so a line drawn **through** the centre states
+no side and is refused by name. A cubic bézier is refused too, with its reason: it has
+no closed-form support function, so its tangency would need the foot parameter as a
+variable — a different constraint shape.
+
 ## Placing sketches in 3D
 
 Sketches are pure 2D. The modeling operations place them with a `SketchPlane` —
