@@ -50,6 +50,21 @@ public sealed record TopologyReleaseOptions
     public TopologyReleaseStage Stage { get; init; } = TopologyReleaseStage.Remeshed;
 
     /// <summary>
+    /// Keep only the LARGEST connected component of the extracted iso-surface, dropping any
+    /// disconnected islands before smoothing and remeshing. False by default, deliberately:
+    /// silently deleting material the optimiser put there is exactly the tidying that should be
+    /// a stated act, so <see cref="ReleasedTopology.ComponentCount"/> REPORTS the islands by
+    /// default and this OPTS IN to removing them.
+    ///
+    /// <para>"Largest" is by enclosed VOLUME (each component of a thresholded field is its own
+    /// closed blob), so it drops small floating fragments and keeps the load-carrying body; a
+    /// tie in volume breaks on face count. When the extraction found one component this does
+    /// nothing (the deliverable is unchanged), and <see cref="ReleasedTopology.ComponentCount"/>
+    /// still reports what WAS found so a caller sees how many were dropped.</para>
+    /// </summary>
+    public bool KeepLargestComponentOnly { get; init; }
+
+    /// <summary>
     /// Implicit-fairing steps over the iso-surface. Three is a stated default that clears the
     /// element-scale stair-steps at a modest, reported cost in volume; 0 skips smoothing (the
     /// remesh then runs on the raw iso-surface, which is legal but keeps the faceting the
@@ -160,8 +175,9 @@ public sealed class ReleasedTopology
     /// <summary>The design space's total volume — the denominator every fraction here uses.</summary>
     public double TotalVolume { get; }
 
-    /// <summary>The extracted iso-surface, verbatim (stage 0). Kept so a caller can render or
-    /// export the raw level set for comparison.</summary>
+    /// <summary>The extracted iso-surface (stage 0) — verbatim, or its largest component when
+    /// <see cref="TopologyReleaseOptions.KeepLargestComponentOnly"/> dropped the islands. Kept so
+    /// a caller can render or export the level set the pipeline started from.</summary>
     public HalfEdgeMesh IsoSurface { get; }
 
     /// <summary>The surface after fairing; equal by reference to <see cref="IsoSurface"/> when
@@ -235,11 +251,12 @@ public sealed class ReleasedTopology
     /// what remeshing bought.</summary>
     public TriangleQualityReport FinalQuality { get; }
 
-    /// <summary>Edge-connected components of the extracted iso-surface. Extraction marches EVERY
-    /// tetrahedron above the threshold, so a thresholded field with a disconnected island comes
-    /// back as several components rather than the island being silently dropped — this is the
-    /// count, so a caller can decide whether to keep the largest with
-    /// <see cref="MeshConnectedComponents"/>.</summary>
+    /// <summary>Edge-connected components the EXTRACTION found (before any island removal).
+    /// Extraction marches EVERY tetrahedron above the threshold, so a thresholded field with a
+    /// disconnected island comes back as several components rather than the island being silently
+    /// dropped — this is the count whether or not
+    /// <see cref="TopologyReleaseOptions.KeepLargestComponentOnly"/> then kept only the largest,
+    /// so a caller always sees how many islands there were.</summary>
     public int ComponentCount { get; }
 
     /// <summary>The uniform edge length the remesh drove toward (resolved from the median edge
@@ -320,9 +337,22 @@ public sealed partial class TopologyResult
 
         // Stage 0 — the exact iso-surface (a stair-stepped, uneven-triangle mesh).
         var iso = ExtractSurface(options.Threshold);
+        var components = MeshConnectedComponents.Find(iso);
+        // ComponentCount always reports what the EXTRACTION found, so a caller sees how many
+        // islands there were whether or not they were dropped.
+        int componentCount = components.Count;
+        if (options.KeepLargestComponentOnly && components.Count > 1)
+        {
+            // Largest by enclosed volume (a thresholded component is a closed blob), tie-break
+            // on face count. Everything below then measures the KEPT body.
+            var largest = components
+                .OrderByDescending(c => Math.Abs(c.SignedVolume))
+                .ThenByDescending(c => c.FaceCount)
+                .First();
+            iso = largest.ToMesh();
+        }
         double isoVolume = MeshMassProperties.Compute(iso).Volume;
         var isoQuality = TriangleQuality.Analyze(iso);
-        int componentCount = MeshConnectedComponents.Find(iso).Count;
         var isoTarget = new MeshProjectionTarget(iso);
 
         // Stage 1 — fairing. It MOVES the surface off the iso-surface; the displacement of each

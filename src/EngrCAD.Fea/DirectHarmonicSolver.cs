@@ -55,6 +55,18 @@ public sealed record DirectHarmonicOptions
 /// loudly, because an undamped structure driven exactly at a natural frequency has no steady
 /// state to report (the response grows linearly in time, forever).</para>
 ///
+/// <para><b>Two damping models, added into the imaginary part.</b> A VISCOUS matrix enters as
+/// <c>i·omega·C</c>, rising with frequency, and a HYSTERETIC (structural) one as
+/// <c>i·eta·K</c>, frequency-independent — the complex modulus <c>K(1 + i·eta)</c>. Both are
+/// model-carried (<see cref="StructuralModel.SetLossFactor(double)"/> for the loss factor), and
+/// this is the ONLY solver that integrates hysteretic damping, because it is a steady-state
+/// frequency-domain model with no causal time-domain form (the transient refuses it) and no
+/// per-mode real-ratio form off resonance (the modal route refuses it). At a mode's resonance
+/// the hysteretic model amplifies by exactly <c>1/eta</c> and the factorization does NOT refuse,
+/// because the imaginary part <c>eta·K</c> is what keeps the pivot away from zero — so a
+/// hysteretically-damped structure has a steady state even at its own natural frequency, which
+/// is the whole point of the model.</para>
+///
 /// <para><b>The load is the model's own applied forces</b>, exactly as the modal route reads
 /// it, driven in phase at every frequency; a thermal load is refused by name for the same
 /// reason. <b>A non-zero prescribed displacement is refused</b>: a support held at a
@@ -118,11 +130,18 @@ public static class DirectHarmonicSolver
         var (fullMass, _) = FeaAssembly.Mass(model, massRule);
         var mass = FeaAssembly.Reduce(fullMass, reduced, freeCount);
 
-        bool damped = model.HasDamping;
-        var dampingMatrix = damped
+        // The imaginary impedance is omega·C + H: a VISCOUS matrix that scales with frequency
+        // and a HYSTERETIC one that does not (the complex modulus K(1 + i·eta)). Each is
+        // assembled only when the model states it, and null means "absent" rather than a zero
+        // matrix so the undamped path stays the real factorization.
+        var viscousMatrix = model.HasDamping
             ? FeaAssembly.Reduce(
                 FeaAssembly.Damping(model, stiffnessRule, massRule), reduced, freeCount)
-            : ZeroDiagonal(freeCount);
+            : null;
+        var hystereticMatrix = model.HasLossFactor
+            ? FeaAssembly.Reduce(
+                FeaAssembly.HystereticStiffness(model, stiffnessRule), reduced, freeCount)
+            : null;
 
         var loadRe = new double[freeCount];
         double loadNorm = 0;
@@ -164,10 +183,12 @@ public static class DirectHarmonicSolver
 
             double hertz = options.Frequencies[k];
             double omega = 2.0 * Math.PI * hertz;
-            // Real part K - omega²·M; imaginary part omega·C. The scale is applied to the
-            // stored matrices per frequency — cheap beside the factorization it feeds.
+            // Real part K - omega²·M; imaginary part omega·C + H. The frequency scale is
+            // applied to the stored viscous matrix per frequency (cheap beside the
+            // factorization it feeds) while the hysteretic H is added unscaled, since a
+            // structural loss factor is frequency-independent by definition.
             var realPart = FeaAssembly.Combine(stiffness, 1.0, mass, -omega * omega);
-            var imagPart = omega == 0 ? ZeroDiagonal(freeCount) : FeaAssembly.Scaled(dampingMatrix, omega);
+            var imagPart = BuildImaginary(viscousMatrix, hystereticMatrix, omega, freeCount);
 
             SparseLdlt factor;
             try
@@ -241,6 +262,29 @@ public static class DirectHarmonicSolver
         };
         return new DirectHarmonicResponse(
             model, [.. options.Frequencies], real, imaginary, report);
+    }
+
+    /// <summary>
+    /// The imaginary part of the impedance at one frequency, <c>omega·C + H</c>: the viscous
+    /// matrix scaled by frequency plus the frequency-independent hysteretic one. Absent
+    /// matrices are null; when both are absent the result is the zero-diagonal that makes the
+    /// complex factorization reduce to the real one bit for bit.
+    /// </summary>
+    private static PackedSparseMatrix BuildImaginary(
+        PackedSparseMatrix? viscous, PackedSparseMatrix? hysteretic, double omega, int n)
+    {
+        if (viscous is null && hysteretic is null)
+            return ZeroDiagonal(n);
+        // Hysteretic-only: frequency-independent, so it enters at every omega INCLUDING 0.
+        if (viscous is null)
+            return hysteretic!;
+        // Viscous-only: omega·C, which is exactly zero at omega = 0.
+        if (hysteretic is null)
+            return omega == 0 ? ZeroDiagonal(n) : FeaAssembly.Scaled(viscous, omega);
+        // Both: omega·C + H. At omega = 0 the viscous half vanishes and only H remains.
+        return omega == 0
+            ? hysteretic
+            : FeaAssembly.Combine(FeaAssembly.Scaled(viscous, omega), hysteretic, 1.0);
     }
 
     /// <summary>

@@ -5,6 +5,18 @@ using EngrCAD.Core.Solvers;
 namespace EngrCAD.Fea;
 
 /// <summary>
+/// One spatial load pattern and its own history, for the multi-pattern transient
+/// (<see cref="TransientSolveOptions.LoadPatterns"/>): a model that states this pattern's
+/// LOADS (its mesh, supports and materials shared with every other pattern and with the
+/// operator model) and the scalar law that scales it over time.
+/// </summary>
+/// <param name="Pattern">The model carrying this pattern's loads — only its loads may differ
+/// from the others'.</param>
+/// <param name="Factor">The multiplier on this pattern at time <c>t</c> — a constant (gravity),
+/// a harmonic drive, a step, a measured trace.</param>
+public readonly record struct TransientLoadPattern(StructuralModel Pattern, Func<double, double> Factor);
+
+/// <summary>
 /// Options for <see cref="TransientSolver.Solve"/>: a constant step, a count, a scheme, a
 /// damping model, a load history and an initial state.
 ///
@@ -43,29 +55,31 @@ public sealed record TransientSolveOptions
     public TimeIntegration Integration { get; init; } = TimeIntegration.AverageAcceleration;
 
     /// <summary>
-    /// Rayleigh damping <c>C = alpha·M + beta·K</c> (default
-    /// <see cref="RayleighDamping.None"/>).
+    /// Proportional (Rayleigh) damping <c>C = alpha·M + beta·K</c> stated as a RUN option
+    /// (default <see cref="RayleighDamping.None"/>), which composes additively with any
+    /// damping the model itself carries.
     ///
-    /// <para><b>The matrix C is never assembled, and the backlog entry that predicted it
-    /// would be is wrong on a point worth keeping.</b> A transient solve was filed as "the
-    /// ONE consumer that genuinely wants C as a matrix rather than as per-mode ratios" —
-    /// but proportional damping means every appearance of C is either a product
-    /// <c>C·x = alpha·(M·x) + beta·(K·x)</c>, which is two matrix-vector products this solver
-    /// already performs, or a scalar multiple folded into the effective stiffness, which
-    /// collects as <c>(...)·M + (...)·K</c>. Forming C would cost a third sparse matrix with
-    /// the stiffness's sparsity, and buy an operation that is strictly more expensive than
-    /// the two products it replaces (the mass matrix's blocks are scalar multiples of the
-    /// identity, so M has far fewer stored entries than K). So no damping matrix exists here
-    /// either, and <see cref="ModalDamping"/>'s statement that none exists in this project
-    /// stands unqualified.</para>
+    /// <para><b>For this proportional statement the matrix C is never assembled, and the
+    /// backlog entry that predicted it would be is wrong on a point worth keeping.</b> A
+    /// transient solve was filed as "the ONE consumer that genuinely wants C as a matrix
+    /// rather than as per-mode ratios" — but proportional damping means every appearance of
+    /// C is either a product <c>C·x = alpha·(M·x) + beta·(K·x)</c>, which is two matrix-vector
+    /// products this solver already performs, or a scalar multiple folded into the effective
+    /// stiffness, which collects as <c>(...)·M + (...)·K</c>. Forming C would cost a third
+    /// sparse matrix with the stiffness's sparsity, and buy an operation that is strictly more
+    /// expensive than the two products it replaces (the mass matrix's blocks are scalar
+    /// multiples of the identity, so M has far fewer stored entries than K). So the Rayleigh
+    /// path assembles no damping matrix, and the common case stays on it bit for bit.</para>
     ///
-    /// <para>A NON-proportional damping model — a discrete dashpot, two loss factors, joint
-    /// friction — would genuinely need an assembled C in the effective stiffness. The
-    /// vocabulary for stating one now exists on <see cref="StructuralModel"/> (dashpots,
-    /// per-region coefficients), and this solver REFUSES a model that carries it rather than
-    /// silently ignoring it: today only <see cref="DirectHarmonicSolver"/> integrates
-    /// model-carried damping, and transient support is filed. See
-    /// <see cref="RayleighDamping"/> for what proportionality excludes.</para>
+    /// <para><b>NON-proportional damping — a discrete dashpot, per-region coefficients that
+    /// differ — is genuinely a matrix, and this solver now integrates it.</b> The vocabulary
+    /// lives on <see cref="StructuralModel"/> (<see cref="StructuralModel.Dashpot(int, Vector3d, double)"/>,
+    /// <see cref="StructuralModel.SetDamping(int, RayleighDamping)"/>), because it is
+    /// geometry-attached data no run option can carry, and when a model states it the solver
+    /// assembles the one damping matrix the project builds (<c>FeaAssembly.Damping</c>) and
+    /// folds it into the effective stiffness and every right-hand side exactly as
+    /// <see cref="DirectHarmonicSolver"/> does. A model that states no damping still assembles
+    /// no matrix, so <see cref="ModalDamping"/>'s statement is unchanged for that case.</para>
     /// </summary>
     public RayleighDamping Damping { get; init; } = RayleighDamping.None;
 
@@ -74,11 +88,10 @@ public sealed record TransientSolveOptions
     /// Null is a constant 1, so a model's loads are simply held.
     ///
     /// <para><b>One spatial pattern scaled by one scalar law</b>, which covers a step, an
-    /// impulse, a ramp, a harmonic drive and a measured trace. What it does NOT cover is a
-    /// superposition of patterns with independent histories — gravity held while a shaker
-    /// runs — because that needs a LIST of load patterns proven to share one stiffness
-    /// matrix, which is exactly <c>StructuralSolver.SolveAll</c>'s contract and is filed as
-    /// the shape it would take rather than approximated here.</para>
+    /// impulse, a ramp, a harmonic drive and a measured trace. A superposition of patterns
+    /// with independent histories — gravity held while a shaker runs — is
+    /// <see cref="LoadPatterns"/>, and this single-pattern form is exactly that with a
+    /// one-entry list.</para>
     ///
     /// <para><b>A prescribed displacement is not a load and is not scaled by this.</b> It is
     /// held at its stated value for the whole run, which is what a displaced support does;
@@ -90,6 +103,20 @@ public sealed record TransientSolveOptions
     /// the load. Both are legitimate readings of "suddenly applied" and neither is imposed.</para>
     /// </summary>
     public Func<double, double>? LoadFactor { get; init; }
+
+    /// <summary>
+    /// Several spatial load patterns with INDEPENDENT histories — the archetypal case of gravity
+    /// held constant while a shaker runs: <c>f(t) = sum_i g_i(t)·f_i</c>. Null (the default) uses
+    /// the single-pattern form (the solve model's own loads scaled by <see cref="LoadFactor"/>).
+    ///
+    /// <para><b>All patterns share one operator</b> — the same mesh, supports and materials as
+    /// the solve model, only the loads differing — so the stiffness is one matrix and the run
+    /// factors once, exactly <c>StructuralSolver.SolveAll</c>'s contract. When this is set the
+    /// solve model provides only the operator and the initial conditions; its OWN loads and
+    /// <see cref="LoadFactor"/> are refused (the loads live on the patterns, and one law spec is
+    /// enough), so the total load is the superposition over the patterns and nothing else.</para>
+    /// </summary>
+    public IReadOnlyList<TransientLoadPattern>? LoadPatterns { get; init; }
 
     /// <summary>
     /// A per-node initial displacement (null is rest). A prescribed support value wins over
@@ -158,10 +185,9 @@ public sealed record TransientSolveOptions
 /// evaluated once about the undeformed configuration and never updated, so contact, plasticity,
 /// large deformation and follower loads are outside it — each of those makes the problem a
 /// nonlinear solve wrapping this one, with a residual iteration inside every step, which is a
-/// different solver rather than an option on this one. Non-proportional damping is refused for
-/// the reason <see cref="RayleighDamping"/> states. Base excitation (a support whose motion is
-/// a history) and several load patterns with independent histories are filed; see
-/// <see cref="TransientSolveOptions.LoadFactor"/>. Explicit integration is refused with its
+/// different solver rather than an option on this one. Several load patterns with independent
+/// histories are <see cref="TransientSolveOptions.LoadPatterns"/>; base excitation (a support
+/// whose motion is a history) is filed. Explicit integration is refused with its
 /// own reason on <see cref="TimeIntegration.CentralDifference"/>.</para>
 /// </summary>
 public static class TransientSolver
@@ -214,16 +240,20 @@ public static class TransientSolver
         // its own, so nothing here is singular. The static solver's refusal exists because
         // K alone is not.
 
-        if (model.HasDamping)
+        // Structural (hysteretic) loss factors are refused by name. Viscous damping — dashpots,
+        // per-region coefficients — is integrated (it is a real matrix in the time domain), but
+        // hysteretic damping is a frequency-domain complex modulus K(1 + i·eta) with NO causal
+        // time-domain form: a constant-magnitude, frequency-independent imaginary stiffness
+        // cannot be written as any M·a + C·v + K·u the stepper can advance. DirectHarmonicSolver
+        // integrates it, where a steady state at each frequency exists.
+        if (model.HasLossFactor)
             throw new FeaException(
-                $"The model carries its own damping ({model.DampingDescription}), which this "
-                + "transient would silently ignore: its damping statement is "
-                + "TransientSolveOptions.Damping, integrated as products against M and K, and "
-                + "a model-carried C — dashpots, per-region coefficients — is non-proportional "
-                + "in general and needs an assembled matrix in the effective stiffness. Only "
-                + "DirectHarmonicSolver consumes model-carried damping today; transient "
-                + "support for it is filed. For proportional damping, state it on the options "
-                + "and leave the model clean.");
+                $"The model carries a structural loss factor ({model.DampingDescription}), which "
+                + "a transient cannot integrate: hysteretic damping i·eta·K is a frequency-domain "
+                + "complex modulus with no causal time-domain form, so there is no M·a + C·v + "
+                + "K·u to step. DirectHarmonicSolver answers a hysteretically-damped model per "
+                + "frequency. For time integration state viscous damping instead — proportional "
+                + "on the options, or a dashpot / per-region coefficients on the model.");
 
         int nodeCount = mesh.NodeCount;
         int totalDofs = 3 * nodeCount;
@@ -254,16 +284,32 @@ public static class TransientSolver
         // consistent and lumped BRACKET the truth and the comparison is worth having.
         var (fullMass, _) = FeaAssembly.Mass(model, massRule);
 
-        // C = dampA·M + dampB·K, never assembled: every use is either a product, taken as
-        // dampA·(M·x) + dampB·(K·x), or a scalar multiple folded into the coefficients below.
+        // The total damping is C = dampA·M + dampB·K + C_model, and the two halves are handled
+        // differently ON PURPOSE. The PROPORTIONAL part (the run option) is never assembled:
+        // every use is a product dampA·(M·x) + dampB·(K·x) or a scalar folded into the
+        // coefficients below, which is the finding TransientSolveOptions.Damping records. The
+        // MODEL part — dashpots, per-region coefficients that differ — is non-proportional in
+        // general, so it has no product form and is assembled ONCE, the same matrix
+        // DirectHarmonicSolver factors. A model that states no damping assembles nothing, so
+        // the common Rayleigh path is bit-identical to what it always was.
         double dampA = transient.Damping.Alpha, dampB = transient.Damping.Beta;
+        var modelDamping = model.HasDamping
+            ? FeaAssembly.Damping(model, stiffnessRule, massRule)
+            : null;
 
         // Aeff = c0·M + (1+alpha)·c1·C + (1+alpha)·K
         //      = [c0 + (1+alpha)·c1·dampA]·M + [(1+alpha)·(1 + c1·dampB)]·K
+        //        + (1+alpha)·c1·C_model
         double massCoefficient = c0 + (1.0 + alpha) * c1 * dampA;
         double stiffnessCoefficient = (1.0 + alpha) * (1.0 + c1 * dampB);
         var fullEffective = FeaAssembly.Combine(
             fullStiffness, stiffnessCoefficient, fullMass, massCoefficient);
+        if (modelDamping is not null)
+        {
+            fullEffective = FeaAssembly.Combine(
+                fullEffective, 1.0, modelDamping, (1.0 + alpha) * c1);
+        }
+        bool anyDamping = dampA != 0 || dampB != 0 || modelDamping is not null;
 
         // The reduced mass is needed for the initial acceleration's own solve; the reduced
         // STIFFNESS is not needed at all, because every use of K here is a full-vector
@@ -302,16 +348,20 @@ public static class TransientSolver
             model, transient.InitialVelocity, nameof(TransientSolveOptions.InitialVelocity),
             applyPrescribed: false);
 
-        var loadFactor = transient.LoadFactor;
-        var pattern = LoadPattern(model);
-        double factor0 = loadFactor?.Invoke(0) ?? 1.0;
+        // One spatial pattern scaled by one law, or several patterns superposed — the total
+        // load is sum_i laws[i](t)·loadVectors[i]. The single-pattern list reduces to the
+        // incumbent Scale(pattern, factor, .) bit for bit (see ComputeLoad).
+        var (loadVectors, laws) = BuildLoadPatterns(model, transient);
+        double factor0 = laws[0](0);
         var load = new double[totalDofs];
+        var initialLoad = new double[totalDofs];
+        ComputeLoad(loadVectors, laws, 0, initialLoad);
 
         stopwatch.Restart();
         int factorizations = 0;
         var acceleration = InitialAcceleration(
-            model, m, fullMass, fullStiffness, reduced, freeCount,
-            pattern, factor0, displacement, velocity, dampA, dampB, options, progress,
+            model, m, fullMass, fullStiffness, modelDamping, reduced, freeCount,
+            initialLoad, displacement, velocity, dampA, dampB, options, progress,
             ref factorizations);
 
         SparseCholesky? factor = null;
@@ -341,10 +391,10 @@ public static class TransientSolver
         var states = new List<TransientState>();
         var scratch = new Scratch(totalDofs, freeCount);
 
-        Scale(pattern, factor0, load);
+        Array.Copy(initialLoad, load, totalDofs);
         var initial = BuildState(
             model, 0, 0, factor0, displacement, velocity, acceleration, load,
-            fullMass, fullStiffness, dampA, dampB, alpha,
+            fullMass, fullStiffness, modelDamping, dampA, dampB, alpha,
             velocity, displacement, effective, 0, true, options, scratch);
         states.Add(initial);
 
@@ -378,8 +428,11 @@ public static class TransientSolver
             //   t(n+1+alpha) = (1+alpha)·t(n+1) - alpha·t(n) = t(n+1) + alpha·dt.
             // With alpha = 0 that is t(n+1) exactly, so the Newmark path is untouched.
             double weightedTime = time + alpha * dt;
-            double stepFactor = loadFactor?.Invoke(weightedTime) ?? 1.0;
-            Scale(pattern, stepFactor, nextLoad);
+            // The reported per-state factor is the FIRST pattern's law value (the `Value`/
+            // `FailedAt`-stays-first convention the mechanism sweep uses); the actual load is
+            // the full superposition.
+            double stepFactor = laws[0](weightedTime);
+            ComputeLoad(loadVectors, laws, weightedTime, nextLoad);
 
             // rhs = f(t+alpha·dt)
             //     + M·(c0·u + c2·v + c3·a)
@@ -391,10 +444,10 @@ public static class TransientSolver
             for (int i = 0; i < totalDofs; i++)
                 scratch.Full[i] = nextLoad[i] + scratch.MassProduct[i];
 
-            if (dampA != 0 || dampB != 0)
+            if (anyDamping)
             {
                 Combine3(displacement, c1, velocity, c4, acceleration, c5, scratch.W);
-                ApplyDamping(fullMass, fullStiffness, dampA, dampB, scratch.W, scratch, scratch.C1);
+                ApplyDamping(fullMass, fullStiffness, modelDamping, dampA, dampB, scratch.W, scratch, scratch.C1);
                 for (int i = 0; i < totalDofs; i++)
                     scratch.Full[i] += (1.0 + alpha) * scratch.C1[i];
 
@@ -402,7 +455,7 @@ public static class TransientSolver
                 // branch is dead there and the Newmark path costs no extra products.
                 if (alpha != 0)
                 {
-                    ApplyDamping(fullMass, fullStiffness, dampA, dampB, velocity, scratch, scratch.C1);
+                    ApplyDamping(fullMass, fullStiffness, modelDamping, dampA, dampB, velocity, scratch, scratch.C1);
                     for (int i = 0; i < totalDofs; i++)
                         scratch.Full[i] += alpha * scratch.C1[i];
                 }
@@ -469,9 +522,9 @@ public static class TransientSolver
                 work += 0.5 * (nextDisplacement[i] - displacement[i]) * (load[i] + nextLoad[i]);
                 scratch.W[i] = 0.5 * (velocity[i] + nextVelocity[i]);
             }
-            if (dampA != 0 || dampB != 0)
+            if (anyDamping)
             {
-                ApplyDamping(fullMass, fullStiffness, dampA, dampB, scratch.W, scratch, scratch.C1);
+                ApplyDamping(fullMass, fullStiffness, modelDamping, dampA, dampB, scratch.W, scratch, scratch.C1);
                 double quadratic = 0;
                 for (int i = 0; i < totalDofs; i++)
                     quadratic += scratch.W[i] * scratch.C1[i];
@@ -489,7 +542,7 @@ public static class TransientSolver
 
             var state = BuildState(
                 model, step, time, stepFactor, displacement, velocity, acceleration, load,
-                fullMass, fullStiffness, dampA, dampB, alpha,
+                fullMass, fullStiffness, modelDamping, dampA, dampB, alpha,
                 nextVelocity, nextDisplacement, effective, worstResidual, converged,
                 options, scratch);
             states.Add(state);
@@ -523,7 +576,7 @@ public static class TransientSolver
             Steps = transient.Steps,
             Duration = transient.Duration,
             Integration = scheme,
-            Damping = dampA == 0 && dampB == 0 ? "undamped" : transient.Damping.ToString(),
+            Damping = DescribeDamping(transient.Damping, model),
             MatrixNonZeros = effective.NonZeroCount,
             FactorNonZeros = factor?.FactorNonZeroCount ?? 0,
             Method = options.Method,
@@ -576,8 +629,9 @@ public static class TransientSolver
         StructuralModel model,
         PackedSparseMatrix reducedMass,
         PackedSparseMatrix fullMass, PackedSparseMatrix fullStiffness,
+        PackedSparseMatrix? modelDamping,
         int[] reduced, int freeCount,
-        double[] pattern, double factor0, double[] displacement, double[] velocity,
+        double[] initialLoad, double[] displacement, double[] velocity,
         double dampA, double dampB,
         StructuralSolveOptions options, ProgressCancel? progress,
         ref int factorizations)
@@ -586,11 +640,13 @@ public static class TransientSolver
         var acceleration = new double[totalDofs];
 
         var stiffProduct = fullStiffness.Multiply(displacement);
-        double[]? massVelocity = null, stiffVelocity = null;
+        double[]? massVelocity = null, stiffVelocity = null, modelVelocity = null;
         if (dampA != 0)
             massVelocity = fullMass.Multiply(velocity);
         if (dampB != 0)
             stiffVelocity = fullStiffness.Multiply(velocity);
+        if (modelDamping is not null)
+            modelVelocity = modelDamping.Multiply(velocity);
 
         var rhs = new double[freeCount];
         bool anything = false;
@@ -599,11 +655,13 @@ public static class TransientSolver
             int r = reduced[dof];
             if (r < 0)
                 continue;
-            double value = factor0 * pattern[dof] - stiffProduct[dof];
+            double value = initialLoad[dof] - stiffProduct[dof];
             if (massVelocity is not null)
                 value -= dampA * massVelocity[dof];
             if (stiffVelocity is not null)
                 value -= dampB * stiffVelocity[dof];
+            if (modelVelocity is not null)
+                value -= modelVelocity[dof];
             rhs[r] = value;
             // Exact-zero test: the acceleration is a linear image of this vector, so an
             // exactly zero right-hand side has an exactly zero solution and the factorization
@@ -724,6 +782,114 @@ public static class TransientSolver
         return pattern;
     }
 
+    /// <summary>
+    /// The spatial load vectors and their scalar laws — one pattern (the model's own loads
+    /// scaled by <see cref="TransientSolveOptions.LoadFactor"/>) or several
+    /// (<see cref="TransientSolveOptions.LoadPatterns"/>). The single-pattern list is what
+    /// keeps the incumbent run bit-identical, since <see cref="ComputeLoad"/> reduces to
+    /// <c>Scale(pattern, law(t))</c> for it.
+    /// </summary>
+    private static (double[][] Vectors, Func<double, double>[] Laws) BuildLoadPatterns(
+        StructuralModel model, TransientSolveOptions transient)
+    {
+        if (transient.LoadPatterns is { } patterns)
+        {
+            if (patterns.Count == 0)
+                throw new ArgumentException(
+                    "LoadPatterns was set but empty; give at least one pattern, or leave it null "
+                    + "and state the load on the model.");
+            if (transient.LoadFactor is not null)
+                throw new FeaException(
+                    "Both LoadFactor and LoadPatterns were set. LoadPatterns carries a law per "
+                    + "pattern, so a single LoadFactor has no pattern to scale — state the "
+                    + "constant-load case as one pattern with a constant factor instead.");
+            if (ModelHasLoad(model))
+                throw new FeaException(
+                    "The solve model carries its own loads AND LoadPatterns was set. When several "
+                    + "patterns are given the loads live on the patterns and the solve model "
+                    + "provides only the operator and the initial conditions — clear its loads "
+                    + "(ClearLoads), or state its loads as one of the patterns.");
+            RequireOneOperator(model, patterns);
+
+            var vectors = new double[patterns.Count][];
+            var laws = new Func<double, double>[patterns.Count];
+            for (int i = 0; i < patterns.Count; i++)
+            {
+                ArgumentNullException.ThrowIfNull(patterns[i].Pattern);
+                ArgumentNullException.ThrowIfNull(patterns[i].Factor);
+                vectors[i] = LoadPattern(patterns[i].Pattern);
+                laws[i] = patterns[i].Factor;
+            }
+            return (vectors, laws);
+        }
+        // Single pattern: the model's own loads, held or scaled by LoadFactor.
+        var law = transient.LoadFactor ?? (_ => 1.0);
+        return ([LoadPattern(model)], [law]);
+    }
+
+    /// <summary><c>into = sum_i laws[i](t)·vectors[i]</c>. Overwrites with the first pattern
+    /// then adds the rest, so ONE pattern is bit-identical to <c>Scale(vectors[0], laws[0](t),
+    /// into)</c>.</summary>
+    private static void ComputeLoad(
+        double[][] vectors, Func<double, double>[] laws, double time, double[] into)
+    {
+        Scale(vectors[0], laws[0](time), into);
+        for (int i = 1; i < vectors.Length; i++)
+        {
+            double g = laws[i](time);
+            var v = vectors[i];
+            for (int dof = 0; dof < into.Length; dof++)
+                into[dof] += g * v[dof];
+        }
+    }
+
+    private static bool ModelHasLoad(StructuralModel model)
+    {
+        for (int node = 0; node < model.Mesh.NodeCount; node++)
+        {
+            if (model.ForceOf(node) != Vector3d.Zero)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Every pattern must share one operator with the solve model — the same
+    /// <see cref="AnalysisMesh"/> instance (a value comparison would scramble the answer by
+    /// permutation), restraint MASK and material per element. Only the loads may differ, the
+    /// mirror of <c>StructuralSolver.SolveAll</c>'s contract.
+    /// </summary>
+    private static void RequireOneOperator(
+        StructuralModel model, IReadOnlyList<TransientLoadPattern> patterns)
+    {
+        var mesh = model.Mesh;
+        for (int c = 0; c < patterns.Count; c++)
+        {
+            var other = patterns[c].Pattern;
+            if (!ReferenceEquals(other.Mesh, mesh))
+                throw new FeaException(
+                    $"Load pattern {c} was built on a different AnalysisMesh instance from the "
+                    + "solve model. Patterns share one factorization, so build every one over the "
+                    + "same mesh object.");
+            for (int node = 0; node < mesh.NodeCount; node++)
+            {
+                if (other.RestraintOf(node) != model.RestraintOf(node))
+                    throw new FeaException(
+                        $"Load pattern {c} restrains node {node} differently from the solve model. "
+                        + "Supports are ELIMINATED, so a different restraint pattern is a "
+                        + "different matrix and cannot share a factorization.");
+            }
+            for (int e = 0; e < mesh.ElementCount; e++)
+            {
+                if (!Equals(other.MaterialOf(e), model.MaterialOf(e)))
+                    throw new FeaException(
+                        $"Load pattern {c} gives element {e} a different material from the solve "
+                        + "model. The stiffness is a function of the materials, so they do not "
+                        + "share one.");
+            }
+        }
+    }
+
     // ---- per-step arithmetic ---------------------------------------------------------
 
     private sealed class Scratch(int totalDofs, int freeCount)
@@ -732,6 +898,7 @@ public static class TransientSolver
         public readonly double[] Full = new double[totalDofs];
         public readonly double[] MassProduct = new double[totalDofs];
         public readonly double[] StiffProduct = new double[totalDofs];
+        public readonly double[] ModelDampingProduct = new double[totalDofs];
         public readonly double[] C1 = new double[totalDofs];
         public readonly double[] C2 = new double[totalDofs];
         public readonly int FreeCount = freeCount;
@@ -750,15 +917,22 @@ public static class TransientSolver
             into[i] = factor * source[i];
     }
 
-    /// <summary><c>C·x = dampA·(M·x) + dampB·(K·x)</c> — the only form C ever takes here.</summary>
+    /// <summary>
+    /// <c>C·x = dampA·(M·x) + dampB·(K·x) + C_model·x</c> — the total damping's action on a
+    /// vector. The proportional halves stay products (the finding
+    /// <see cref="TransientSolveOptions.Damping"/> records) while the model's own C, when it
+    /// carries one, enters as the one matrix product there is no way around.
+    /// </summary>
     private static void ApplyDamping(
-        PackedSparseMatrix mass, PackedSparseMatrix stiffness,
+        PackedSparseMatrix mass, PackedSparseMatrix stiffness, PackedSparseMatrix? modelC,
         double dampA, double dampB, double[] x, Scratch scratch, double[] into)
     {
         if (dampA != 0)
             mass.Multiply(x, scratch.MassProduct);
         if (dampB != 0)
             stiffness.Multiply(x, scratch.StiffProduct);
+        if (modelC is not null)
+            modelC.Multiply(x, scratch.ModelDampingProduct);
         for (int i = 0; i < into.Length; i++)
         {
             double value = 0;
@@ -766,8 +940,22 @@ public static class TransientSolver
                 value += dampA * scratch.MassProduct[i];
             if (dampB != 0)
                 value += dampB * scratch.StiffProduct[i];
+            if (modelC is not null)
+                value += scratch.ModelDampingProduct[i];
             into[i] = value;
         }
+    }
+
+    /// <summary>The run's damping as text, both the proportional run option and any the model
+    /// itself carries.</summary>
+    private static string DescribeDamping(RayleighDamping option, StructuralModel model)
+    {
+        var parts = new List<string>();
+        if (option != RayleighDamping.None)
+            parts.Add(option.ToString());
+        if (model.HasDamping)
+            parts.Add(model.DampingDescription);
+        return parts.Count == 0 ? "undamped" : string.Join("; ", parts);
     }
 
     /// <summary>
@@ -784,7 +972,7 @@ public static class TransientSolver
     private static TransientState BuildState(
         StructuralModel model, int step, double time, double loadFactor,
         double[] displacement, double[] velocity, double[] acceleration, double[] load,
-        PackedSparseMatrix fullMass, PackedSparseMatrix fullStiffness,
+        PackedSparseMatrix fullMass, PackedSparseMatrix fullStiffness, PackedSparseMatrix? modelC,
         double dampA, double dampB, double alpha,
         double[] previousVelocity, double[] previousDisplacement,
         PackedSparseMatrix effective, double worstResidual, bool converged,
@@ -808,14 +996,14 @@ public static class TransientSolver
         kinetic *= 0.5;
         strain *= 0.5;
 
-        bool damped = dampA != 0 || dampB != 0;
+        bool damped = dampA != 0 || dampB != 0 || modelC is not null;
         if (damped)
-            ApplyDamping(fullMass, fullStiffness, dampA, dampB, velocity, scratch, scratch.C1);
+            ApplyDamping(fullMass, fullStiffness, modelC, dampA, dampB, velocity, scratch, scratch.C1);
         // Exact-zero test: alpha is 0 for every Newmark member, so a Newmark run never forms
         // the previous step's terms at all and its reaction is the plain residual.
         bool weighted = alpha != 0;
         if (weighted && damped)
-            ApplyDamping(fullMass, fullStiffness, dampA, dampB, previousVelocity, scratch, scratch.C2);
+            ApplyDamping(fullMass, fullStiffness, modelC, dampA, dampB, previousVelocity, scratch, scratch.C2);
         double[]? previousStiffness =
             weighted ? fullStiffness.Multiply(previousDisplacement) : null;
 

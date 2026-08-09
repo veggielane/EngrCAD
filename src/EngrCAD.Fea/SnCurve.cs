@@ -43,12 +43,31 @@ public sealed class SnCurve
     /// it.</param>
     /// <param name="enduranceLife">The knee in CYCLES beyond which the line is flat at
     /// <see cref="EnduranceLimit"/>, or null for a material with no endurance limit.</param>
+    private readonly double? _haibachKnee;
+    private readonly double? _haibachExponent;
+
     public SnCurve(
         string name,
         double fatigueStrengthCoefficient,
         double fatigueStrengthExponent,
         double ultimateStrength,
         double? enduranceLife = null)
+        : this(name, fatigueStrengthCoefficient, fatigueStrengthExponent, ultimateStrength,
+            enduranceLife, null, null)
+    {
+    }
+
+    /// <summary>The full constructor, including the optional Miner–Haibach continuation past a
+    /// knee. Internal because a Haibach curve is DERIVED (<see cref="WithHaibachSlope"/>) rather
+    /// than stated — the transcribed rows carry no continuation of their own.</summary>
+    private SnCurve(
+        string name,
+        double fatigueStrengthCoefficient,
+        double fatigueStrengthExponent,
+        double ultimateStrength,
+        double? enduranceLife,
+        double? haibachKnee,
+        double? haibachExponent)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         if (!(fatigueStrengthCoefficient > 0))
@@ -74,6 +93,8 @@ public sealed class SnCurve
         FatigueStrengthExponent = fatigueStrengthExponent;
         UltimateStrength = ultimateStrength;
         EnduranceLife = enduranceLife;
+        _haibachKnee = haibachKnee;
+        _haibachExponent = haibachExponent;
     }
 
     /// <summary>Material designation.</summary>
@@ -107,15 +128,25 @@ public sealed class SnCurve
     private double BasquinStress(double cycles) =>
         FatigueStrengthCoefficient * Math.Pow(2 * cycles, FatigueStrengthExponent);
 
+    /// <summary>Whether this curve carries a Miner–Haibach sloped continuation past its knee
+    /// (<see cref="WithHaibachSlope"/>) rather than the flat endurance line — in which case it
+    /// has no infinite-life plateau (<see cref="HasEnduranceLimit"/> is false).</summary>
+    public bool HasHaibachContinuation => _haibachKnee is not null;
+
     /// <summary>
     /// The fully reversed alternating stress (MPa) survived for <paramref name="cycles"/>:
-    /// the Basquin line up to the knee, the endurance limit beyond it.
+    /// the Basquin line up to the knee, then either the FLAT endurance line or, for a
+    /// Miner–Haibach curve, the shallower sloped continuation.
     /// </summary>
     public double StressAt(double cycles)
     {
         if (!(cycles > 0))
             throw new ArgumentOutOfRangeException(
                 nameof(cycles), cycles, "A life is a positive cycle count.");
+        // Miner–Haibach: beyond the knee the line continues at a shallower slope through the
+        // knee point, so it keeps falling rather than plateauing.
+        if (_haibachKnee is { } hk && cycles >= hk)
+            return BasquinStress(hk) * Math.Pow(cycles / hk, _haibachExponent!.Value);
         if (EnduranceLife is { } knee && cycles >= knee)
             return BasquinStress(knee);
         return BasquinStress(cycles);
@@ -140,7 +171,62 @@ public sealed class SnCurve
             return double.PositiveInfinity;
         if (EnduranceLimit is { } limit && amplitude <= limit)
             return double.PositiveInfinity;
+        // Miner–Haibach: a stress below the knee stress has a FINITE life on the shallower
+        // continuation, which is the whole point — small cycles below the endurance limit DO
+        // accumulate damage once larger ones have started cracks, so the flat line understates
+        // variable-amplitude damage. (A Haibach curve has EnduranceLimit == null, so the plateau
+        // branch above is skipped and this one carries the sub-knee amplitudes.)
+        if (_haibachKnee is { } hk)
+        {
+            double kneeStress = BasquinStress(hk);
+            if (amplitude <= kneeStress)
+                return hk * Math.Pow(amplitude / kneeStress, 1.0 / _haibachExponent!.Value);
+        }
         return 0.5 * Math.Pow(amplitude / FatigueStrengthCoefficient, 1.0 / FatigueStrengthExponent);
+    }
+
+    /// <summary>
+    /// The Miner–Haibach modification: continue the S-N line past the endurance knee at a
+    /// SHALLOWER slope instead of leaving it flat — the standard variable-amplitude remedy for
+    /// the step a flat line puts in the damage function.
+    ///
+    /// <para><b>Why the flat line is a constant-amplitude idea.</b> Below the endurance limit a
+    /// single amplitude arrests small cracks and accumulates no damage — true for
+    /// constant-amplitude loading. Under a SPECTRUM the larger cycles start cracks, and then the
+    /// small sub-limit cycles DO grow them, so the flat line understates the damage. Haibach
+    /// continues the line past the knee at slope <c>b' = b/(2 + b)</c> — the classical
+    /// <c>k' = 2k − 1</c> in the Wöhler-slope convention, so a sub-limit cycle now carries a
+    /// small finite life rather than none.</para>
+    ///
+    /// <para><b>The continuation removes the endurance PLATEAU, which is a real consequence
+    /// rather than a side effect.</b> The result has no infinite-life strength
+    /// (<see cref="HasEnduranceLimit"/> is false), so a safety factor against infinite life no
+    /// longer exists for it and the fatigue machinery requires a stated design life — the SAME
+    /// rule a knee-less aluminium curve already earns, so it is one rule and not two. The
+    /// damage function is then CONTINUOUS across the knee (a cycle just under the limit carries a
+    /// small damage rather than exactly zero), which is exactly the step the flat line's own
+    /// artefact put there.</para>
+    ///
+    /// <para>Only a curve WITH a knee can be continued past it — a knee-less material's line
+    /// already falls forever, and a curve already carrying a continuation is refused.</para>
+    /// </summary>
+    public SnCurve WithHaibachSlope()
+    {
+        if (_haibachKnee is not null)
+            throw new FeaException(
+                $"'{Name}' already carries a Miner–Haibach continuation.");
+        if (EnduranceLife is not { } knee)
+            throw new FeaException(
+                $"'{Name}' has no endurance knee to continue past — a knee-less material's line "
+                + "already falls forever, so there is no flat endurance segment for Haibach to "
+                + "slope. The modification is for a steel whose FLAT endurance line understates "
+                + "variable-amplitude damage.");
+        // b' = b/(2 + b): the classical k' = 2k − 1 for the Wöhler slope k = -1/b, expressed in
+        // the stress-versus-N exponent this curve uses (see the class remarks).
+        double haibachExponent = FatigueStrengthExponent / (2.0 + FatigueStrengthExponent);
+        return new SnCurve(
+            $"{Name} (Haibach)", FatigueStrengthCoefficient, FatigueStrengthExponent,
+            UltimateStrength, enduranceLife: null, haibachKnee: knee, haibachExponent);
     }
 
     /// <summary>
@@ -205,6 +291,89 @@ public sealed class SnCurve
     }
 
     /// <summary>
+    /// The knee-less material's Marin correction: the combined factor applied at a STATED
+    /// reference life, re-fitting through the same 10³ pivot — the honest version for
+    /// aluminium, which has no endurance limit for <see cref="WithEnduranceFactor"/> to anchor
+    /// on.
+    ///
+    /// <para><b>The reference life is required, not defaulted, because it IS the claim being
+    /// made.</b> A knee-less S-N line falls forever, so "the endurance strength" is only
+    /// meaningful at a stated life — the aluminium convention is 5×10⁸ cycles (the rotating-beam
+    /// run-out) — and the factor knocks THAT strength down. The corrected line passes through
+    /// the pristine line's own 10³-cycle point (the pivot, for the same reason
+    /// <see cref="WithEnduranceFactor"/> uses it: below it plastic strain dominates and the
+    /// factors do not apply) and through <c>factor·(pristine strength at the reference life)</c>,
+    /// and it stays KNEE-LESS — the correction does not invent an endurance limit the material
+    /// does not have.</para>
+    ///
+    /// <para>A curve that HAS a knee is refused by name (use <see cref="WithEnduranceFactor"/>,
+    /// whose reference IS the knee); a factor of exactly 1 returns this curve verbatim; a
+    /// reference life at or below the 10³ pivot is refused, since the correction would tilt the
+    /// low-cycle regime Basquin does not describe.</para>
+    /// </summary>
+    /// <param name="enduranceFactor">The combined Marin factor in (0, 1].</param>
+    /// <param name="referenceLife">The life in CYCLES at which the factor is applied (5e8 is
+    /// the aluminium rotating-beam convention). Above the 10³ pivot.</param>
+    /// <param name="note">What the factor accounts for, appended to the name.</param>
+    public SnCurve WithEnduranceFactorAt(
+        double enduranceFactor, double referenceLife, string? note = null)
+    {
+        if (!(enduranceFactor > 0) || enduranceFactor > 1)
+            throw new FeaException(
+                $"'{Name}': the combined Marin factor must be in (0, 1]; {enduranceFactor} was "
+                + "given. A factor above one would claim the part outlasts the polished "
+                + "laboratory specimen its own data came from.");
+        if (HasEnduranceLimit)
+            throw new FeaException(
+                $"'{Name}' has an endurance knee, so its reference life IS that knee — use "
+                + "WithEnduranceFactor, which anchors on it. WithEnduranceFactorAt is for a "
+                + "knee-less material (aluminium), whose reference life is not fixed by the "
+                + "curve and must be stated.");
+        if (!(referenceLife > MarinPivotLife) || double.IsInfinity(referenceLife))
+            throw new FeaException(
+                $"'{Name}': the reference life must be finite and above the 10³-cycle pivot the "
+                + $"correction turns about; {referenceLife:G3} cycles was given. State the "
+                + "high-cycle life the endurance factor is quoted at (5e8 is the aluminium "
+                + "rotating-beam convention).");
+        // Exact-1 identity: the pristine curve comes back verbatim, no arithmetic to move ulps.
+        if (enduranceFactor == 1.0)
+            return this;
+
+        double pivotStress = BasquinStress(MarinPivotLife);
+        double correctedRefStress = enduranceFactor * BasquinStress(referenceLife);
+        double b = Math.Log(correctedRefStress / pivotStress) / Math.Log(referenceLife / MarinPivotLife);
+        double coefficient = pivotStress / Math.Pow(2 * MarinPivotLife, b);
+        string name = note is null
+            ? $"{Name} (x{enduranceFactor:G4} at {referenceLife:G3} cycles)"
+            : $"{Name} ({note})";
+        // Still knee-less: the correction does not invent an endurance limit.
+        return new SnCurve(name, coefficient, b, UltimateStrength, null);
+    }
+
+    /// <summary>
+    /// The knee-less twin of <see cref="WithFactors(SurfaceFinish, double?, double)"/>: the
+    /// standard Marin factor applied at a stated reference life through
+    /// <see cref="WithEnduranceFactorAt"/>. For aluminium, where a reference life must be given.
+    /// </summary>
+    /// <param name="finish">The part's surface condition at the crack-starting surface.</param>
+    /// <param name="referenceLife">The life the endurance factor is quoted at (5e8 is the
+    /// aluminium rotating-beam convention).</param>
+    /// <param name="diameterMm">Section diameter for the size effect, or null.</param>
+    /// <param name="reliability">The survival probability; one of the standard levels.</param>
+    public SnCurve WithFactorsAt(
+        SurfaceFinish finish, double referenceLife, double? diameterMm = null,
+        double reliability = 0.5)
+    {
+        double ka = MarinFactors.Surface(finish, UltimateStrength);
+        double kb = diameterMm is { } d ? MarinFactors.Size(d) : 1.0;
+        double ke = MarinFactors.Reliability(reliability);
+        string note = $"{finish} at {referenceLife:G3}"
+            + (diameterMm is { } dd ? $", d {dd:G3}" : "")
+            + (reliability != 0.5 ? $", R {reliability:G6}" : "");
+        return WithEnduranceFactorAt(ka * kb * ke, referenceLife, note);
+    }
+
+    /// <summary>
     /// <see cref="WithEnduranceFactor"/> with the factor built from the standard Marin
     /// correlations: <c>Surface(finish, S_ut) · Size(diameter) ·
     /// Reliability(reliability)</c>. See <see cref="MarinFactors"/> for what each
@@ -238,7 +407,10 @@ public sealed class SnCurve
     public override string ToString() =>
         $"{Name}: sigma'_f {FatigueStrengthCoefficient:G6} MPa, b {FatigueStrengthExponent:G4}, "
         + $"S_ut {UltimateStrength:G6} MPa"
-        + (EnduranceLimit is { } e ? $", endurance {e:G4} MPa at {EnduranceLife:G2} cycles" : ", no endurance limit");
+        + (EnduranceLimit is { } e ? $", endurance {e:G4} MPa at {EnduranceLife:G2} cycles"
+            : _haibachKnee is { } hk
+                ? $", Haibach slope {_haibachExponent:G4} past {hk:G2} cycles (no plateau)"
+                : ", no endurance limit");
 }
 
 /// <summary>The surface condition at the crack-starting surface — the rows of the

@@ -268,15 +268,9 @@ Remaining follow-ups:
 ## Simulation
 
 - [ ] **Topology optimisation follow-ups** (SIMP landed 2026-08-04 — `TopologyOptimizer`,
-  design.md §3k, docs `examples/fea-topology.md`). Each of these is a NAMED absence in the
-  shipped feature rather than a defect, and each was weighed and deferred:
-  - **Non-design (passive) regions.** Material that must stay — under a bolt head, around a
-    bearing bore — and material that must go. It is a per-element bound rather than a new
-    algorithm (clamp those elements to 1 or to `MinimumDensity` and exclude them from the
-    bisection's free set), so it is small; what needs deciding first is how a caller NAMES
-    them, since `Facets` selects boundary facets and this wants a volume selector. The
-    natural spelling is a `Func<Vector3d, bool>` over element centroids, matching
-    `TetMeshOptions.SizingField`.
+  design.md §3k, docs `examples/fea-topology.md`; passive regions, several load cases and the
+  largest-connected-component release filter landed 2026-08-09). Each of these is a NAMED
+  absence in the shipped feature rather than a defect, and each was weighed and deferred:
   - **MMA (Method of Moving Asymptotes)**, the general answer OC is not. Needed the moment
     there are two constraints or a different objective; a substantial dependency-free build
     (a per-variable convex subproblem with asymptotes updated from the iteration history,
@@ -288,11 +282,6 @@ Remaining follow-ups:
     question settled: the stiffness carries a penalised modulus, so a void element's stress
     is not physical and the standard answer (a separate stress interpolation, `rho^q` with
     `q < p`) is a second modelling decision.
-  - **Several load cases with a stated weighting.** The refusal is about the weighting being
-    a design decision, not about the arithmetic — `StructuralSolver.SolveAll` already
-    factors once and substitutes per case, so the sensitivity is a weighted sum of the
-    per-case energies and the loop is unchanged. What it wants is a `(model, weight)` list
-    and a docs paragraph on why a min-max (worst-case) formulation is a different problem.
   - **Design-dependent loads (self-weight).** Refused by name today. It needs the adjoint
     term the self-adjoint shortcut drops, plus a decision about the load interpolation (a
     linear `rho` mass with a `rho^p` stiffness makes low densities artificially efficient,
@@ -301,18 +290,6 @@ Remaining follow-ups:
     problem has a unique optimum, so starting there and ramping is the standard way to
     reduce dependence on the starting design. Cheap to add and it changes committed
     numbers, so it wants its own before/after measurement rather than being switched on.
-  - **A largest-connected-component FILTER over the released surface** (the only piece of
-    the old faceting/islands item still open). `TopologyResult.Release` landed 2026-08-09:
-    it extracts, FAIRS the element-scale stair-steps (`LaplacianMeshSmoother`) and REMESHES
-    to a uniform edge length (`Remesher`), returning a `ReleasedTopology` whose per-stage
-    volume delta, surface displacement and triangle-shape (`TriangleQuality`) are all
-    MEASURED — so a caller sees what smoothing and remeshing each traded rather than one
-    opaque result. It also REPORTS how many components the extraction left
-    (`ReleasedTopology.ComponentCount`) rather than deleting a floating island, which is
-    right (silently deleting material the optimiser put there is exactly the tidying that
-    should be a stated option). Keeping only the largest is one call over
-    `MeshConnectedComponents` and is still the caller's; offering it as a named
-    `TopologyReleaseOptions` flag is the small open piece.
   - **Cost.** One factorization per iteration, and no reuse between them: measured 288
     elements in 0.43 s, 1 152 in 2.5 s and 10 800 in about 50 s at 60 iterations. The
     standard remedies are a preconditioned CG warm-started from the previous iterate's
@@ -322,27 +299,6 @@ Remaining follow-ups:
     `Factorize`, so a "refactorize with the same pattern" entry point is a real and bounded
     saving, and `Analyze`'s own table says the numeric pass is where the time is.
 
-- [ ] **Miner–Haibach: the sloped line past the endurance knee.** The flat S-N line beyond
-  the knee makes a cycle's damage contribution JUMP from exactly nothing to `count/10⁶` as
-  it crosses, which is a genuine step in `D(k)` — so `D(k) = target` has no solution when
-  the target lands inside one, and the spectrum load factor
-  (`FatigueAnalysis.LoadFactor`, landed) reports the crossing itself and says so. That
-  step is the model's artefact, not the solve's, and the standard variable-amplitude
-  remedy is the **Haibach modification**: continue the line past the knee at a shallower
-  slope (classically `2b − 1`, i.e. `(2b−1)` in the same Basquin exponent), because under
-  a spectrum the small cycles below the limit DO accumulate damage once larger ones have
-  started cracks — which is exactly why the flat line is a constant-amplitude idea. It is
-  a change to `SnCurve` (`LifeAt`/`StressAt` beyond the knee) rather than to the fatigue
-  arithmetic, so the whole rainflow and static machinery inherits it; the design questions
-  are whether it is a `SnCurve` MODE (a derived curve like `WithFactors`, keeping the
-  transcribed row pristine) and what it does to the infinite-life safety factor, which
-  under a sloped line no longer exists as such — the honest answer is probably that the
-  Haibach form REQUIRES `DesignRepetitions` for the same reason aluminium does, which
-  would make the refusal one rule instead of two. The oracle carries over unchanged (scale
-  the history by the factor, the damage lands on the target) and the step's disappearance
-  is itself assertable: `D(k)` becomes continuous, so the two-sided bracket the
-  infinite-life factor is pinned with would read a *small* damage rather than exactly
-  zero.
 - [ ] **Log-scale colour mapping residuals** (the LEGEND half ✅ landed: `FieldLegend`
   reads the `log10(…)` units declaration — `TryLogUnits`/`TickMarks` — and prints
   anti-logged decade ticks, end ticks stating the true range, title in the base units
@@ -360,12 +316,6 @@ Remaining follow-ups:
   neutral (grey), which touches `SourceColors` and possibly the legend (a "no value"
   swatch). The fatigue docs page sidesteps it today by plotting an aluminium life
   field, where every node is finite — that choice is documented on the page.
-- [ ] **Marin-style correction for knee-less (aluminium) curves.** `WithEnduranceFactor`
-  (landed) refuses a curve with no endurance limit by name, because the classical
-  construction anchors on the limit; the honest version for aluminium applies the
-  factor at a STATED reference life (5e8 is the rotating-beam convention) and re-fits
-  through the same 10³ pivot — one more parameter, but it must be required rather than
-  defaulted, since the reference life IS the claim being made.
 
 FEA as a first-class citizen of the hybrid kernel: the CAD model (any representation)
 feeds the mesher, results feed back into the viewer as fields on the mesh. The mesh
@@ -556,46 +506,11 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   precisely what is and is not covered. Note the steady-state RESPONSE under such damping no
   longer waits on this: `DirectHarmonicSolver` factors the full complex system per frequency
   with the model's own damping assembled — what remains open here is the damped NATURAL MODES.
-- [ ] **FEA: transient integration of model-carried damping.** `StructuralModel` now carries a
-  damping vocabulary (`SetDamping` per region, `Dashpot`) that only `DirectHarmonicSolver`
-  consumes; `TransientSolver` REFUSES a model carrying it rather than silently ignoring it.
-  Landing it there is mechanical — the effective stiffness gains `(1+alpha)·a1·C` with C from
-  `FeaAssembly.Damping`, and the right-hand-side C·x products become matrix products against
-  the assembled C — but it needs its own verification (a dashpot's decay envelope against the
-  2-DOF closed form, and the energy-balance identity re-derived with the C term), so it is
-  filed rather than bolted on.
-- [ ] **FEA: hysteretic (structural) damping for the direct harmonic solve.** A loss factor
-  eta enters the steady state as a frequency-INDEPENDENT imaginary stiffness `i·eta·K` (the
-  complex modulus), not as `i·omega·C` — at the direct solve's seam that is one more term in
-  the imaginary part (`eta_r·K_r` per region beside `omega·C`), and it is the classic direct-
-  solve-only damping model. Needs its own 1-DOF closed-form oracle
-  (`|u| = f/sqrt((k − omega²m)² + (eta·k)²)`) and a decision about whether `SetDamping` grows
-  a loss-factor overload or a separate `SetLossFactor` — the vocabulary should not let one
-  region state both without saying what the sum means.
 - [ ] **FEA: residual-VECTOR basis augmentation.** `HarmonicSolveOptions.StaticCorrection`
   handles the static part of what truncated modes miss (mode acceleration), which is most of it
   — 3.079% → 1.8e-16 at zero frequency on the cantilever. The remainder wants the static
   response orthogonalised against the kept modes and added to the basis as a pseudo-mode, which
   also improves the response at non-zero frequencies rather than only at DC.
-- [ ] **FEA: base-acceleration (support motion) excitation for the harmonic sweep.** The
-  central claim was CHECKED and holds: `VibrationMode.ParticipationFactor` is documented and
-  computed as `Gamma_d = phi' M iota_d` over the free degrees of freedom, and the modal force
-  of a unit base acceleration in RELATIVE coordinates is exactly `-Gamma_d`, so the sweep needs
-  a load-vector spelling and no new mathematics. Three things the entry did not say, all of
-  which have to be decided rather than discovered:
-  - **The answer is RELATIVE displacement, not absolute.** `M u'' + C u' + K u = -M·iota·a_g`
-    is written in coordinates measured from the moving support, which is the right quantity for
-    STRESS (a rigid ground motion carries none) and the wrong one for a plotted displacement.
-    Absolute is relative plus the rigid ground field, so both are available — but a
-    `HarmonicResponse` whose displacement silently changed meaning would be the worst outcome,
-    so the two must be named apart.
-  - **The influence vector is a rigid translation only when every support moves TOGETHER.**
-    With supports on different foundations it is the quasi-static response to a unit motion of
-    one support group, which is a static solve per group rather than a constant vector. v1
-    should take the uniform case and refuse the other by name.
-  - **A displacement-stated input scales as omega²**, so the vocabulary has to say whether the
-    caller is giving an acceleration, a velocity or a displacement amplitude; naming the method
-    after the acceleration and offering the other two as conversions is the honest shape.
 - [ ] **FEA: adaptive block shrink on Lanczos QR rank deficiency.** Block Lanczos landed
   (`ModalSolveOptions.BlockSize`/`BucklingSolveOptions.BlockSize`; design.md §3e carries the
   three measured findings) and treats a rank-deficient residual block as a BREAKDOWN — return
@@ -603,15 +518,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   refinement is to drop the collapsed column and continue with a narrower block, which saves
   the restart's re-convergence; deliberately not built until a fixture wants it, since no
   case in the suite reaches the breakdown path other than by exhausting a small space.
-- [ ] **FEA: transient dynamics — several load patterns with independent histories.**
-  `TransientSolveOptions.LoadFactor` scales the model's ONE spatial load pattern by one scalar
-  law, which covers a step, an impulse, a ramp, a harmonic drive and a measured trace. What it
-  cannot express is the archetypal real case of gravity held constant while a shaker runs: that
-  needs `f(t) = sum_i g_i(t)·f_i` over a LIST of patterns, and the list has to be proven to
-  share one stiffness matrix — which is exactly `StructuralSolver.SolveAll`'s contract, so
-  `RequireOneOperator` is the check it would reuse rather than a new one. The shape is a
-  `(StructuralModel pattern, Func<double,double> factor)` list with the single-pattern form as
-  sugar over it, mirroring `Solve` being `SolveAll([model])[0]`.
 - [ ] **FEA: transient dynamics — base excitation (support motion as a history).** A prescribed
   displacement is currently HELD constant for the run and is deliberately not scaled by the load
   factor (a support that has been moved stays moved). A seismic or shaker input needs `u_c(t)`

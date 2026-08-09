@@ -385,10 +385,49 @@ answer. Re-modelling the result by hand is a step every topology-optimisation wo
 | a prescribed non-zero displacement | the applied force then moves with the stiffness, so minimising `f'u` makes the structure as *compliant* as possible. The sign of the whole problem flips |
 | a thermal load | `alpha·dT` enters through `D`, so the load scales with `rho^p` — design-dependent by construction |
 | local stress constraints | they need aggregation (p-norm or Kreisselmeier–Steinhauser), and the aggregation parameter **changes the answer**, so it is a separate feature with its own verification rather than a flag on this one |
-| several load cases | the objective is then a weighted sum, and the weighting is the design decision. Hence one model per call, and no overload that would have to invent one |
 
 Nothing here publishes a stress, and that is deliberate: the stiffness carries a *penalised*
 modulus, so an element's stress would be the SIMP stress rather than a physical one.
+
+## Passive regions and several load cases
+
+**Pin material that must stay or must go.** `SolidRegion` and `VoidRegion` are
+`Func<Vector3d, bool>` predicates over element centroids — a *volume* selector, matching
+`TetMeshOptions.SizingField`, because `Facets` selects boundary facets and this wants the
+interior:
+
+```csharp
+var result = TopologyOptimizer.Minimize(model, new TopologyOptions
+{
+    VolumeFraction = 0.4,
+    FilterRadius = 3.0,
+    SolidRegion = c => (c - bearingBore).Length < 8,   // keep material around the bore
+    VoidRegion  = c => c.Y > 40,                        // a clearance keep-out
+});
+```
+
+A pinned element keeps density 1 or the floor and drops out of the redistribution, so the
+constraint still holds exactly with the passive material counted toward it. It is a *bound*, not
+a new algorithm — and it can only ever raise compliance, because a passive-constrained design is
+also a valid free design at the same volume.
+
+**Optimise against several loads at once.** `Minimize(cases, options)` minimises the weighted-sum
+compliance `Σ w_i·u_i'Ku_i` over a list of `(model, weight)` cases that share one mesh, supports
+and materials (only the loads differ), so one factorization serves them all:
+
+```csharp
+var result = TopologyOptimizer.Minimize(
+    [new TopologyLoadCase(pushDown, 1.0), new TopologyLoadCase(pushSideways, 1.0)],
+    options);
+```
+
+The weighting is yours because it *is* the design decision — a min-max worst-case formulation is
+a different problem, filed.
+
+**Keep only the largest piece.** `TopologyReleaseOptions.KeepLargestComponentOnly` drops
+disconnected islands from the released surface — off by default, because silently deleting
+material the optimiser placed should be a stated act, and even on it leaves `ComponentCount`
+reporting what the extraction found.
 
 ## What is verified
 
@@ -410,6 +449,10 @@ while this solves 3D elasticity on tetrahedra. What is asserted instead:
 | extraction of a uniform field | exactly the body's own volume |
 | extraction of a linear field | exactly the analytic slab, to 8 decimals |
 | the MBB optimum is left–right symmetric | mean `\|density − mirror\|` at round-off; an off-centre load breaks it by 3× |
+| pinned-solid / pinned-void elements hold density 1 / the floor | exact to 12 decimals; whole-domain fraction still met to round-off |
+| a passive constraint raises compliance | forcing a hole through a cantilever's tension corner **+54.8%**, material into the idle tip **+6.2%** |
+| two mirror loads give a mirror-symmetric structure | two-case mirror difference **18%** of a single case's (residual is the Kuhn mesh's own asymmetry) |
+| `KeepLargestComponentOnly` drops an island by its own volume | exact on a two-blob field; no-op on a connected one |
 | smoothing moves the surface within a band | volume **−6%**, farthest vertex **0.73 mm** — measured, and asserted inside a band |
 | remeshing improves triangle shape | slivers **2 950 → 73**, mean smallest-angle **21° → 48°**, surface unmoved to `2e-14` |
 | the released solid round-trips through STL | signed-tetrahedral volume matches the delivered volume to float precision; `Validate`-clean and closed |

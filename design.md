@@ -1164,10 +1164,12 @@ candidate it saw but did not accept, and both solvers' refusals name which case 
 diagonalise C: `phi' C phi = diag(alpha + beta·omega_n²)`, so the equations separate and
 `zeta_n = alpha/(2·omega_n) + beta·omega_n/2` is the whole of what any consumer needs. Forming
 `C` in order to project it back down to those numbers would be arithmetic with nothing to show
-for it, so this project has no damping matrix and that is a design statement. (This paragraph
-used to carry a prediction that direct time integration would be "the one future consumer that
-genuinely wants the matrix". It landed, and it does not — §3g says why, and the statement above
-now holds without qualification.)
+for it, so the MODAL route needs no damping matrix and that is a design statement. (This
+paragraph used to carry a prediction that direct time integration would be "the one future
+consumer that genuinely wants the matrix". For the proportional RUN OPTION it does not — §3g
+says why. But the non-proportional damping a MODEL carries has no per-mode form, so it is a
+matrix wherever it is consumed: `FeaAssembly.Damping` is the one place it is built, now factored
+by §3f's direct harmonic solve AND folded into §3g's transient effective stiffness.)
 
 **What proportional damping excludes is stated precisely rather than implied away**: a discrete
 dashpot, two materials with different loss factors in one model, viscoelasticity, joint friction
@@ -1211,10 +1213,37 @@ rule.** §3g's finding — everywhere a C's uses are products or scalar folds, a
 buys a slower operation — stands untouched. This factorization is different in KIND: it
 consumes the VALUES of `i·omega·C` as a matrix, there is no product to decompose into, and
 a non-proportional C is data rather than a projection of ratios. So `FeaAssembly.Damping`
-is the one place a damping matrix exists, built per-element (`sum_e alpha_e·M_e +
+is the one place a viscous damping matrix is BUILT, per-element (`sum_e alpha_e·M_e +
 beta_e·K_e` + dashpot blocks) through ONE assembly path — which is what makes "every region
 states the same value" bit-identical to "the default states it once", asserted rather than
-hoped.
+hoped — and it is now consumed twice (this solver, and §3g's transient).
+
+**Hysteretic (structural) damping is the second model the imaginary part carries, and it is
+this solver's alone.** A loss factor `eta` enters the steady-state equation as a
+frequency-INDEPENDENT imaginary stiffness `i·eta·K` — the complex modulus `K(1 + i·eta)` —
+where a viscous `C` enters as `i·omega·C`, rising with frequency. That is why it lives on the
+direct solve and nowhere else: it has **no causal time-domain form** (a constant-magnitude
+imaginary stiffness cannot be written as any `M·a + C·v + K·u`, so the transient refuses it) and
+**no per-mode real ratio off resonance** (the modal route refuses it). The vocabulary is a
+SEPARATE `SetLossFactor` rather than a `SetDamping` overload, because a loss factor is
+dimensionless where a viscous coefficient is N·s/mm and one method cannot mean both; the two
+compose additively, the imaginary impedance being `omega·C + eta·K`. `FeaAssembly.HystereticStiffness`
+assembles `sum_e eta_e·K_e` — the K assembly scaled per element by the region's loss factor — so
+its sparsity is K's exactly and it factors beside `K − omega²·M` with no wider pattern. **The
+verification is the scalar fixture and it has three teeth.** At a mode's resonance the response
+amplifies by exactly `1/eta` (25 for eta = 0.04, against `1/(2·zeta)` viscous — so `eta = 2·zeta`
+matches the peak and nothing else), and the factorization does NOT refuse there, because `eta·K`
+is the imaginary part keeping the pivot away from zero: a hysteretically-damped structure has a
+steady state even at its own natural frequency, which is the whole reason to model it. A sweep
+against `f/sqrt((k − omega²m)² + (eta·k)²)` agrees to **3e-16** — the statement that the
+imaginary part stayed CONSTANT rather than scaling with frequency, which is what a viscous term
+substituted by mistake would fail everywhere but at the tuning point. And a hysteretic model and
+a viscous one tuned to the SAME resonant peak CROSS OVER off resonance (hysteretic smaller below,
+larger above, because `eta·k` exceeds the shrinking `omega·c` below resonance and falls short
+above) — a mutation a viscous-term-in-disguise could not produce. One caveat is left as the
+model's own answer rather than special-cased: at `omega = 0` the complex modulus makes a "static"
+response slightly complex (magnitude `1/sqrt(1 + eta²)` of the true static), the well-known DC
+anomaly of hysteretic damping, negligible for the loss factors it is used at.
 
 **An undamped model is accepted, and the refusal at an exact resonance is the physics.**
 The modal route requires an explicit damping statement because `None` makes every resonance
@@ -1240,6 +1269,27 @@ form `u(W) = u_static + sum_n phi_n F_n [1/D_n − 1/w_n²]` has a bracket that 
 missing modes' static flexibility rides along at every other frequency. It costs one static
 solve the caller has usually already done. `TruncationError` is NaN without one — because then
 it is not small, it is unknown.
+
+**Base (support) excitation is a load-vector spelling, not new mathematics.** A shaker or
+seismic input drives the model through its supports, and in RELATIVE coordinates the equation is
+`M·u'' + C·u' + K·u = -M·iota_d·a_g`, whose modal force is exactly `-phi_n'·M·iota_d·a_g =
+-Gamma_d·a_g` — the participation factor `VibrationMode.ParticipationFactor` already carries. So
+`HarmonicSolveOptions.BaseExcitation` reuses the whole modal machinery, replacing the nodal
+projection `phi'f` with `-Gamma_d·a_g` and nothing else. Three decisions the item flagged were
+all real. **The answer is RELATIVE displacement** (measured from the moving support), which is
+the right quantity for STRESS since a rigid ground motion carries none — so `IsRelativeToBase`
+names it apart rather than silently changing what `Displacement` means, the absolute value being
+the relative one plus the rigid ground field. **The whole base moves TOGETHER** — `iota_d` is a
+rigid translation only for a single foundation, so v1 takes the uniform case and states it
+(independent support-group motion needs a quasi-static solve per group, which this does not do)
+rather than detecting a grouping the model does not carry. And **which quantity is held constant
+matters** — an acceleration input has a frequency-independent modal force, a velocity one scales
+by `omega` and a displacement one by `omega²` (`a_g = omega·v_g`, `omega²·u_g`), so `BaseMotionKind`
+states it and the sweep carries the scaling. The oracle is the SDOF fixture's exact equivalence:
+a base acceleration `a_g` produces the same relative response as the inertial nodal force `m·a_g`
+(both project to one modal force), measured to 2.2e-16, with the resonant relative displacement
+on the closed form `a_g/(2·zeta·omega_n²)`. A model with both nodal forces and base excitation,
+or base excitation with a static correction, refuse by name.
 
 Three smaller decisions worth recording. **The load comes from the modal model's own applied
 forces**, since every load type reduces to consistent nodal forces when applied, so there is no
@@ -1283,13 +1333,35 @@ is one of exactly two things, and neither wants the matrix:
   `[a0 + (1+alpha)·a1·alpha_R]·M + [(1+alpha)(1 + a1·beta_R)]·K` — one `FeaAssembly.Combine`
   with two coefficients, which is why that overload exists.
 
-So forming `C` would cost a third sparse matrix to buy a slower operation. Under proportional
-damping no matrix is ever formed — the one damping matrix that has since arrived
-(`FeaAssembly.Damping`, for §3f's direct per-frequency harmonic solve) is the case whose
-factorization consumes VALUES rather than products, the exception that proves this finding
-rather than a reversal of it. The general shape is worth keeping: **a prediction about what a
+So forming `C` for the proportional RUN OPTION would cost a third sparse matrix to buy a slower
+operation, and it never is. The general shape is worth keeping: **a prediction about what a
 future consumer will need is a hypothesis, and the consumer arriving is the experiment.** Four
 agents in a row have found a filed diagnosis wrong; this is the fifth.
+
+### But model-carried damping IS the matrix, and the transient now integrates it
+
+The finding above is about the proportional run option. **Non-proportional damping the MODEL
+carries — a discrete dashpot, per-region coefficients that differ — has no product form**, so
+it is exactly the case that wants the matrix, and the transient assembles it (`FeaAssembly.Damping`,
+the one place a `C` is built, now with two consumers: this solver and §3f's direct harmonic).
+The total damping is `C = alpha·M + beta·K + C_model` and the two halves are handled differently
+on purpose: the proportional halves stay products, while `C_model` folds into the effective
+stiffness as `(1+alpha)·a1·C_model` and enters each step's right-hand side and the reaction as
+the one `C_model·x` product there is no way around. A model that states no damping assembles
+nothing, so the common Rayleigh path is bit-identical to what it always was — the transient's
+own refusal of model-carried damping is gone, replaced by integration.
+
+**The verification is the single-degree-of-freedom fixture again, and it earns its keep because
+the two paths are different arithmetic.** A grounded dashpot along the one free axis puts `c` on
+that DOF alone, so the reduced 1×1 damping is exactly `[c]` and the modal ratio is
+`zeta = c/(2·m·omega)` with no fitting; the free-vibration decay lands on the damped closed form
+to the trapezoidal rule's own predicted phase error (0.1513% measured against 0.1513% predicted)
+and the energy-balance identity — the dissipation `∫v'Cv dt` equalling the energy that left the
+system — reads **9.6e-14** with an assembled `C` in it rather than products. The check with the
+most teeth is that a UNIFORM Rayleigh damping stated on the MODEL (which assembles the matrix)
+reproduces the same statement on the OPTIONS (which takes products) to **2.2e-13** relative:
+the general assembled path IS the special product path by another route, which is what makes
+the non-proportional feature trustworthy rather than merely plausible.
 
 ### The initial acceleration is a solve against M, and assuming it away is a modelling error
 
@@ -1302,6 +1374,24 @@ spurious half-step into the answer whose symptom is a startup wobble that decays
 indistinguishable from physics by inspection. It is skipped only when the right-hand side is
 EXACTLY zero — an exact-zero test, since the acceleration is a linear image of that vector — and
 `Factorizations` reports which happened, so the cost is visible rather than mysterious.
+
+### Several load patterns with independent histories: one factorization, superposed
+
+`LoadFactor` scales one spatial pattern by one law; the case it cannot express is gravity held
+constant while a shaker runs, `f(t) = sum_i g_i(t)·f_i`. `LoadPatterns` is a `(model, law)` list,
+each pattern's model carrying its own loads and its own time law, all sharing the operator with
+the solve model — so `K` is one matrix and the run factors once, exactly `SolveAll`'s contract
+(`RequireOneOperator` reused). The single-pattern form IS a one-entry list: `ComputeLoad`
+overwrites with the first pattern and adds the rest, so for one pattern it is
+`Scale(pattern, law(t))` byte for byte, which is what keeps every incumbent transient number
+unchanged (asserted, and the phase-error predictions would have caught a drift). When patterns
+are given the solve model provides only the operator and the initial conditions — its own loads
+and `LoadFactor` are refused, since the loads live on the patterns and one law spec is enough.
+The oracle is LINEARITY: a linear system from rest responds to a sum of loads with the sum of the
+responses, so the two-pattern run equals the two single-pattern runs added at every step (7e-14
+relative), a mutation a dropped or mis-scaled pattern could not survive. Base excitation as a
+support-motion HISTORY (a support that moves over time rather than a fixed offset) is the one
+transient excitation still filed.
 
 ### An unrestrained body is accepted, where the static solver refuses one
 
@@ -1759,17 +1849,42 @@ curve's own low-cycle point as the anchor rather than a second transcribed const
 (`f·S_ut` would be one more datasheet number to verify). S_ut is untouched because a
 finish does not change a static failure; a factor of exactly 1 returns the pristine
 object verbatim (re-deriving would move the coefficients by ulps for nothing — the
-exact-zero-semantic-test tier); and the refusals are named: aluminium (no limit to
-anchor on — a knee-less material needs a stated reference life, a different
-construction), a knee at or below the pivot, diameters past the correlation's 254 mm
-data (the classical 0.6 floor is an assumption, not a fit, and this library does not
-assume it silently), and reliabilities off the standard table, since interpolating a
-normal quantile through it would invent precision the underlying 8%-scatter assumption
-does not have. The transcription tests are the textbook's own worked values (0.798 /
-0.858 / 0.814), not the formulas re-typed — a re-typed formula agrees with its own
-transcription mistake — and the first run caught exactly that: three hand-approximated
-expected values were off in the third decimal and the worked-value anchors (690 MPa
-machined, 32 mm) were not.
+exact-zero-semantic-test tier); and the refusals are named: a knee at or below the
+pivot, diameters past the correlation's 254 mm data (the classical 0.6 floor is an
+assumption, not a fit, and this library does not assume it silently), and reliabilities
+off the standard table, since interpolating a normal quantile through it would invent
+precision the underlying 8%-scatter assumption does not have. The transcription tests are
+the textbook's own worked values (0.798 / 0.858 / 0.814), not the formulas re-typed — a
+re-typed formula agrees with its own transcription mistake — and the first run caught
+exactly that: three hand-approximated expected values were off in the third decimal and
+the worked-value anchors (690 MPa machined, 32 mm) were not.
+
+**The knee-less (aluminium) correction landed as a SEPARATE overload, and the separation
+IS the design.** `WithEnduranceFactor` anchors on the endurance limit, which aluminium does
+not have — so `WithEnduranceFactorAt(factor, referenceLife)` / `WithFactorsAt(finish,
+referenceLife, …)` apply the factor at a STATED reference life instead, re-fitting through
+the same 10³ pivot. The reference life is REQUIRED rather than defaulted, because a
+knee-less line falls forever so "the endurance strength" only exists at a stated life (5×10⁸
+is the rotating-beam convention), and the reference life IS the claim being made — defaulting
+it would put a number the user did not state into the answer. The corrected line stays
+knee-less (the correction does not invent an endurance limit the material lacks), and the
+oracle is the defining identity: at the reference life the corrected strength is exactly
+`factor·(pristine there)`, the pivot is untouched, and a knee'd curve is refused by name (its
+reference IS its knee).
+
+**Miner–Haibach landed as an S-N MODE** (`WithHaibachSlope`), a derived curve leaving the
+transcribed row pristine, and the design turns on what removing the flat line does to the rest
+of the machinery. The flat endurance line is a constant-amplitude idea — a sub-limit amplitude
+arrests small cracks and does no damage — so `D(k)` has a STEP where a cycle crosses the limit,
+which the spectrum factor (§below) reports as a crossing rather than a solution. Haibach
+continues the line past the knee at the shallower slope `b' = b/(2+b)` (the classical
+`k' = 2k−1` for the Wöhler slope `k = -1/b`), so a sub-limit cycle carries a small finite
+damage and `D(k)` becomes continuous (measured 1.125e-4 on a 0.9·limit spectrum where the flat
+line reads exactly 0; identical to the flat curve BELOW the knee). The load-bearing consequence
+is that the endurance PLATEAU is gone, so a Haibach curve reports `HasEnduranceLimit = false` —
+and that makes the infinite-life refusal ONE rule rather than two: the fatigue machinery already
+refuses an infinite-life factor for a knee-less material and requires a design life, so a
+Haibach curve reuses that path verbatim (the "one rule instead of two" the backlog predicted).
 
 ### Rainflow over a transient run, and the two design questions it answered in code
 
@@ -1872,8 +1987,10 @@ over), and the factor is exactly inverse in the load scale.
 the damage function — a crossing cycle goes from contributing nothing to contributing
 `count/10^6` — so `D(k) = target` has no solution when the target lands inside a step; what
 is reported is then the crossing itself (the smallest multiplier at which the target is
-reached), and the step belongs to the flat-line S-N model rather than to this solve, with
-Miner–Haibach filed as the standard remedy. And a node whose history never MOVES carries no
+reached), and the step belongs to the flat-line S-N model rather than to this solve — and
+`SnCurve.WithHaibachSlope` is the standard remedy that removes it (a sloped continuation past
+the knee makes `D(k)` continuous, so a target inside the old step now has a solution; see the
+Miner–Haibach subsection above). And a node whose history never MOVES carries no
 counted cycle at all, so it reads NaN however large its steady stress: rainflow measures
 cycles, and a steady load is a static-strength question — the static pair answers it, since
 two identical cases still carry a mean and report the `S_ut/sigma_m` margin. The refusals
@@ -1942,10 +2059,43 @@ and becomes wrong: `Gravity`/`BodyForce` (self-weight is integrated over the ful
 once, so a run would minimise one structure's compliance under a different structure's
 weight), a prescribed non-zero displacement (the force moves with the stiffness, so minimising
 `f'u` maximises COMPLIANCE — the sign of the whole problem flips), and a thermal load
-(`alpha·dT` enters through `D`, so it scales with `rho^p`). Local stress constraints and
-several load cases are refused as NAMED non-goals for a different reason — each needs a
-parameter that changes the answer (an aggregation exponent, a weighting), so each is a
-separate feature with its own verification rather than a flag on this one.
+(`alpha·dT` enters through `D`, so it scales with `rho^p`). Local stress constraints remain a
+NAMED non-goal, because aggregation (p-norm or Kreisselmeier–Steinhauser) needs a parameter that
+CHANGES THE ANSWER, so it is a separate feature with its own verification.
+
+### Passive regions and several load cases landed, each a per-element or per-case addition
+
+**Passive (non-design) regions** are a per-element bound rather than a new algorithm: `SolidRegion`
+/ `VoidRegion` are `Func<Vector3d, bool>` centroid predicates (a VOLUME selector, matching
+`SizingField`, since `Facets` selects boundaries), and a matching element is pinned at 1 or the
+floor and dropped from the optimality-criteria redistribution — the bisection then shares the
+remaining budget among the free elements, so the constraint still holds exactly with the pinned
+material counted toward it. The oracle is two-fold and both parts are mutation-proof: pinning is
+EXACT (no filter, a pinned element ends at 1 or the floor at every element, the whole-domain
+fraction met to round-off), and a passive constraint can only RAISE compliance because it
+shrinks the feasible set — any passive-constrained design is also a valid free design at the
+same volume, so the free optimum is at least as good (measured: forcing a hole through a
+cantilever's tension corner cost +54.8%, forcing material into the idle tip +6.2%). A no-passive
+run is the incumbent path bit for bit.
+
+**Several load cases** with a stated weighting now minimise `sum_i w_i·u_i'Ku_i`. The refusal
+was about the WEIGHTING being a design decision, never about the arithmetic — all cases share
+mesh, supports and materials, so `K(rho)` is one matrix and each case is a back-substitution
+(exactly `SolveAll`'s contract, `RequireOneOperator` reused), the compliance and the
+sensitivity are weighted sums, and the loop is unchanged. So the multi-case `Minimize` IS the
+implementation and the single-model form is `Minimize([case(model, 1)])` bit for bit, the same
+sugar-over-the-general-form shape `Solve` = `SolveAll([model])[0]` follows. What stays refused is
+a min-max (worst-case) formulation, which is a genuinely different problem, filed. The oracle is
+SYMMETRY, chosen because a plausible truss is exactly this feature's failure mode: two
+mirror-image loads, each optimising ALONE into an asymmetric structure, combine equally-weighted
+into a mirror-symmetric one (the two-case mirror difference falls to 18% of a single case's, and
+the residual is the Kuhn tet mesh's own non-mirror-symmetry — the recorded diagonal lesson —
+rather than the solver); a 3:1 weighting leans the mass toward the heavier case.
+
+**Releasing a topology with islands** gained `KeepLargestComponentOnly` — off by default,
+because silently deleting material the optimiser placed is a stated act, and even on it leaves
+`ComponentCount` reporting what the extraction FOUND. "Largest" is by enclosed volume; verified
+on a two-blob field where the smaller blob is dropped by exactly its own volume.
 
 ### The constraint is on the PHYSICAL volume, and the closed form is what caught it
 
