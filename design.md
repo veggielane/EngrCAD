@@ -1168,10 +1168,37 @@ rule.** §3g's finding — everywhere a C's uses are products or scalar folds, a
 buys a slower operation — stands untouched. This factorization is different in KIND: it
 consumes the VALUES of `i·omega·C` as a matrix, there is no product to decompose into, and
 a non-proportional C is data rather than a projection of ratios. So `FeaAssembly.Damping`
-is the one place a damping matrix exists, built per-element (`sum_e alpha_e·M_e +
+is the one place a viscous damping matrix is BUILT, per-element (`sum_e alpha_e·M_e +
 beta_e·K_e` + dashpot blocks) through ONE assembly path — which is what makes "every region
 states the same value" bit-identical to "the default states it once", asserted rather than
-hoped.
+hoped — and it is now consumed twice (this solver, and §3g's transient).
+
+**Hysteretic (structural) damping is the second model the imaginary part carries, and it is
+this solver's alone.** A loss factor `eta` enters the steady-state equation as a
+frequency-INDEPENDENT imaginary stiffness `i·eta·K` — the complex modulus `K(1 + i·eta)` —
+where a viscous `C` enters as `i·omega·C`, rising with frequency. That is why it lives on the
+direct solve and nowhere else: it has **no causal time-domain form** (a constant-magnitude
+imaginary stiffness cannot be written as any `M·a + C·v + K·u`, so the transient refuses it) and
+**no per-mode real ratio off resonance** (the modal route refuses it). The vocabulary is a
+SEPARATE `SetLossFactor` rather than a `SetDamping` overload, because a loss factor is
+dimensionless where a viscous coefficient is N·s/mm and one method cannot mean both; the two
+compose additively, the imaginary impedance being `omega·C + eta·K`. `FeaAssembly.HystereticStiffness`
+assembles `sum_e eta_e·K_e` — the K assembly scaled per element by the region's loss factor — so
+its sparsity is K's exactly and it factors beside `K − omega²·M` with no wider pattern. **The
+verification is the scalar fixture and it has three teeth.** At a mode's resonance the response
+amplifies by exactly `1/eta` (25 for eta = 0.04, against `1/(2·zeta)` viscous — so `eta = 2·zeta`
+matches the peak and nothing else), and the factorization does NOT refuse there, because `eta·K`
+is the imaginary part keeping the pivot away from zero: a hysteretically-damped structure has a
+steady state even at its own natural frequency, which is the whole reason to model it. A sweep
+against `f/sqrt((k − omega²m)² + (eta·k)²)` agrees to **3e-16** — the statement that the
+imaginary part stayed CONSTANT rather than scaling with frequency, which is what a viscous term
+substituted by mistake would fail everywhere but at the tuning point. And a hysteretic model and
+a viscous one tuned to the SAME resonant peak CROSS OVER off resonance (hysteretic smaller below,
+larger above, because `eta·k` exceeds the shrinking `omega·c` below resonance and falls short
+above) — a mutation a viscous-term-in-disguise could not produce. One caveat is left as the
+model's own answer rather than special-cased: at `omega = 0` the complex modulus makes a "static"
+response slightly complex (magnitude `1/sqrt(1 + eta²)` of the true static), the well-known DC
+anomaly of hysteretic damping, negligible for the loss factors it is used at.
 
 **An undamped model is accepted, and the refusal at an exact resonance is the physics.**
 The modal route requires an explicit damping statement because `None` makes every resonance

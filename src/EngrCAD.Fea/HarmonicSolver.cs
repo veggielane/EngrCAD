@@ -302,15 +302,17 @@ public static class HarmonicSolver
     /// </summary>
     private static void RequireNoModelDamping(StructuralModel model)
     {
-        if (!model.HasDamping)
+        if (!model.HasDamping && !model.HasLossFactor)
             return;
         throw new FeaException(
             $"The model carries its own damping ({model.DampingDescription}), and modal "
-            + "superposition cannot integrate a model-carried C: this route's damping is the "
-            + "per-mode ratios in HarmonicSolveOptions.Damping, which is complete only for "
-            + "proportional damping stated nowhere else. Solve this model with "
-            + "DirectHarmonicSolver, which assembles and factors the model's own damping — "
-            + "or state ratios on a model that carries no damping declarations of its own.");
+            + "superposition cannot integrate it: this route's damping is the per-mode ratios "
+            + "in HarmonicSolveOptions.Damping, which is complete only for proportional viscous "
+            + "damping stated nowhere else. A model-carried C is non-proportional in general, "
+            + "and a structural loss factor (eta·K, frequency-independent) has no per-mode real "
+            + "ratio at all off resonance. Solve this model with DirectHarmonicSolver, which "
+            + "assembles and factors the model's own damping — or state ratios on a model that "
+            + "carries no damping declarations of its own.");
     }
 
     private static void RequireNoRigidModes(ModalResults modes)

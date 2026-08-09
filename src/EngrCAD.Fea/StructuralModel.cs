@@ -180,9 +180,11 @@ public sealed class StructuralModel
     private readonly Dictionary<int, Material> _materials = [];
     private readonly Dictionary<int, ElasticLaw> _laws = [];
     private readonly Dictionary<int, RayleighDamping> _regionDamping = [];
+    private readonly Dictionary<int, double> _regionLossFactor = [];
     private readonly List<DashpotSpec> _dashpots = [];
     private readonly List<string> _conditions = [];
     private RayleighDamping _defaultDamping;
+    private double _defaultLossFactor;
     private double[]? _deltaT;
 
     /// <summary>A model over an analysis mesh with one material everywhere.</summary>
@@ -691,6 +693,85 @@ public sealed class StructuralModel
         _regionDamping.TryGetValue(Mesh.RegionOf(element), out var d) ? d : _defaultDamping;
 
     /// <summary>
+    /// The structural (hysteretic) loss factor <c>eta</c> for every region without its own
+    /// <see cref="SetLossFactor(int, double)"/> — the material's internal damping stated as
+    /// the fraction of stored energy dissipated per radian.
+    ///
+    /// <para><b>Hysteretic damping is a DIFFERENT model from viscous, and deliberately a
+    /// different vocabulary.</b> It enters the steady-state harmonic equation as a
+    /// frequency-INDEPENDENT imaginary stiffness <c>i·eta·K</c> — the complex modulus
+    /// <c>K(1 + i·eta)</c> — where a viscous dashpot enters as <c>i·omega·C</c>, rising with
+    /// frequency. So a loss factor is dimensionless where a viscous coefficient carries
+    /// N·s/mm, and putting them on one method would conflate two units. They compose
+    /// additively: the imaginary part is <c>omega·C + eta·K</c>, so a region may state both
+    /// and the sum is well defined.</para>
+    ///
+    /// <para><b>It is a frequency-domain, steady-state-only model with no causal time-domain
+    /// form</b>, which is why only <see cref="DirectHarmonicSolver"/> consumes it and the
+    /// transient refuses it by name. At the resonance of an isolated mode the response
+    /// amplifies by exactly <c>1/eta</c> (against <c>1/(2·zeta)</c> for viscous, so
+    /// <c>eta = 2·zeta</c> matches the peak), but off resonance the two differ because
+    /// <c>eta·K</c> is constant while <c>omega·C</c> is not. The DC anomaly is inherent to
+    /// the model — at <c>omega = 0</c> the complex stiffness makes a "static" response
+    /// slightly complex, magnitude <c>1/sqrt(1 + eta²)</c> of the true static — and is left
+    /// as the model's own answer rather than special-cased away.</para>
+    /// </summary>
+    /// <param name="eta">The loss factor, dimensionless and non-negative (0.001–0.05 for
+    /// metals, higher for elastomers and layered damping treatments).</param>
+    public StructuralModel SetLossFactor(double eta)
+    {
+        RequireLossFactor(eta);
+        _defaultLossFactor = eta;
+        _conditions.Add($"loss factor {eta:G6} (default for all regions)");
+        return this;
+    }
+
+    /// <summary>
+    /// The structural loss factor for ONE region, overriding the default — two materials with
+    /// different internal damping, which makes the hysteretic stiffness
+    /// <c>sum_r eta_r·K_r</c> non-proportional the moment two regions differ.
+    /// </summary>
+    public StructuralModel SetLossFactor(int region, double eta)
+    {
+        RequireLossFactor(eta);
+        _regionLossFactor[region] = eta;
+        _conditions.Add($"loss factor {eta:G6} on region {region}");
+        return this;
+    }
+
+    private static void RequireLossFactor(double eta)
+    {
+        if (!(eta >= 0) || double.IsInfinity(eta))
+            throw new FeaException(
+                $"A loss factor must be finite and non-negative; {eta} was given. A negative "
+                + "loss factor ADDS energy at every cycle (the steady state it describes does "
+                + "not exist), and 0 is the honest way to say a region has no hysteretic "
+                + "damping — omit the call for that.");
+    }
+
+    /// <summary>The structural loss factor of one element, by its region id.</summary>
+    public double LossFactorOf(int element) =>
+        _regionLossFactor.TryGetValue(Mesh.RegionOf(element), out double e) ? e : _defaultLossFactor;
+
+    /// <summary>True when the model carries any structural (hysteretic) loss factor — a
+    /// non-zero default or per-region value. What the direct harmonic solve reads and what
+    /// the modal and transient routes refuse by name.</summary>
+    public bool HasLossFactor
+    {
+        get
+        {
+            if (_defaultLossFactor > 0)
+                return true;
+            foreach (double e in _regionLossFactor.Values)
+            {
+                if (e > 0)
+                    return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
     /// A discrete viscous damper between one node and GROUND, resisting that node's
     /// velocity along <paramref name="axis"/> with force <c>-c·(v·a)·a</c>. Its 3x3 block
     /// <c>c·a·a'</c> lands on the node's own diagonal block of C.
@@ -811,12 +892,13 @@ public sealed class StructuralModel
         }
     }
 
-    /// <summary>A readable description of the model's own damping, for a report.</summary>
+    /// <summary>A readable description of the model's own damping — viscous and
+    /// hysteretic — for a report.</summary>
     public string DampingDescription
     {
         get
         {
-            if (!HasDamping)
+            if (!HasDamping && !HasLossFactor)
                 return "undamped";
             var parts = new List<string>();
             if (_defaultDamping != RayleighDamping.None)
@@ -828,6 +910,13 @@ public sealed class StructuralModel
             }
             if (_dashpots.Count > 0)
                 parts.Add($"{_dashpots.Count} dashpot{(_dashpots.Count == 1 ? "" : "s")}");
+            if (_defaultLossFactor > 0)
+                parts.Add($"loss factor {_defaultLossFactor:G6}");
+            foreach (var (region, eta) in _regionLossFactor.OrderBy(p => p.Key))
+            {
+                if (eta > 0 || _defaultLossFactor > 0)
+                    parts.Add($"region {region}: loss factor {eta:G6}");
+            }
             return string.Join("; ", parts);
         }
     }

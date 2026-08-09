@@ -865,14 +865,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   precisely what is and is not covered. Note the steady-state RESPONSE under such damping no
   longer waits on this: `DirectHarmonicSolver` factors the full complex system per frequency
   with the model's own damping assembled — what remains open here is the damped NATURAL MODES.
-- [ ] **FEA: hysteretic (structural) damping for the direct harmonic solve.** A loss factor
-  eta enters the steady state as a frequency-INDEPENDENT imaginary stiffness `i·eta·K` (the
-  complex modulus), not as `i·omega·C` — at the direct solve's seam that is one more term in
-  the imaginary part (`eta_r·K_r` per region beside `omega·C`), and it is the classic direct-
-  solve-only damping model. Needs its own 1-DOF closed-form oracle
-  (`|u| = f/sqrt((k − omega²m)² + (eta·k)²)`) and a decision about whether `SetDamping` grows
-  a loss-factor overload or a separate `SetLossFactor` — the vocabulary should not let one
-  region state both without saying what the sum means.
 - [ ] **FEA: residual-VECTOR basis augmentation.** `HarmonicSolveOptions.StaticCorrection`
   handles the static part of what truncated modes miss (mode acceleration), which is most of it
   — 3.079% → 1.8e-16 at zero frequency on the cantilever. The remainder wants the static

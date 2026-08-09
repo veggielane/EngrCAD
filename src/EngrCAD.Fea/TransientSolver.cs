@@ -215,6 +215,21 @@ public static class TransientSolver
         // its own, so nothing here is singular. The static solver's refusal exists because
         // K alone is not.
 
+        // Structural (hysteretic) loss factors are refused by name. Viscous damping — dashpots,
+        // per-region coefficients — is integrated (it is a real matrix in the time domain), but
+        // hysteretic damping is a frequency-domain complex modulus K(1 + i·eta) with NO causal
+        // time-domain form: a constant-magnitude, frequency-independent imaginary stiffness
+        // cannot be written as any M·a + C·v + K·u the stepper can advance. DirectHarmonicSolver
+        // integrates it, where a steady state at each frequency exists.
+        if (model.HasLossFactor)
+            throw new FeaException(
+                $"The model carries a structural loss factor ({model.DampingDescription}), which "
+                + "a transient cannot integrate: hysteretic damping i·eta·K is a frequency-domain "
+                + "complex modulus with no causal time-domain form, so there is no M·a + C·v + "
+                + "K·u to step. DirectHarmonicSolver answers a hysteretically-damped model per "
+                + "frequency. For time integration state viscous damping instead — proportional "
+                + "on the options, or a dashpot / per-region coefficients on the model.");
+
         int nodeCount = mesh.NodeCount;
         int totalDofs = 3 * nodeCount;
         var reduced = FeaAssembly.ReducedIndices(model, out int freeCount);

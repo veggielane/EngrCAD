@@ -355,6 +355,66 @@ internal static class FeaAssembly
         return builder.ToSymmetricUpper();
     }
 
+    /// <summary>
+    /// The FULL hysteretic stiffness <c>H = sum_e eta_e·K_e</c> over every degree of freedom
+    /// (symmetric upper) — the model's structural (loss-factor) damping, assembled.
+    ///
+    /// <para><b>This is the frequency-INDEPENDENT imaginary stiffness a complex modulus
+    /// <c>K(1 + i·eta)</c> produces</b>, and it is why hysteretic damping belongs to the
+    /// direct per-frequency solve alone: it enters the imaginary part as <c>eta·K</c> where a
+    /// viscous <c>C</c> enters as <c>omega·C</c>, so it has no per-mode ratio form off
+    /// resonance and no causal time-domain form at all. It uses the SAME element stiffness the
+    /// real assembly builds (<see cref="TetElement.Stiffness"/>), scaled per element by the
+    /// region's own loss factor, so a uniform loss factor assembles exactly <c>eta·K</c> to
+    /// round-off and two regions differing produce the non-proportional <c>sum eta_e·K_e</c>.
+    /// Its sparsity is <c>K</c>'s exactly, so factored beside the real part <c>K - omega²·M</c>
+    /// it needs no wider pattern than the stiffness already has.</para>
+    /// </summary>
+    public static PackedSparseMatrix HystereticStiffness(
+        StructuralModel model, in TetQuadrature stiffnessRule)
+    {
+        var mesh = model.Mesh;
+        int perElement = mesh.NodesPerElement;
+        int elementDofs = 3 * perElement;
+        var builder = new SparseMatrixBuilder(3 * mesh.NodeCount, 3 * mesh.NodeCount);
+        var ke = new double[elementDofs * elementDofs];
+        var positions = new Vector3d[perElement];
+        var dofs = new int[elementDofs];
+
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            double eta = model.LossFactorOf(e);
+            // Exact-zero skip: a region with no loss factor contributes no entries at all, so
+            // a model damped only on one region assembles exactly that region's eta·K.
+            if (eta == 0)
+                continue;
+
+            var nodes = mesh.Element(e);
+            for (int i = 0; i < perElement; i++)
+            {
+                positions[i] = mesh.Position(nodes[i]);
+                for (int a = 0; a < 3; a++)
+                    dofs[3 * i + a] = 3 * nodes[i] + a;
+            }
+            TetElement.Stiffness(mesh.Order, positions, model.ElasticityOf(e), stiffnessRule, ke);
+            for (int i = 0; i < elementDofs; i++)
+            {
+                int ri = dofs[i];
+                int row = i * elementDofs;
+                for (int j = 0; j < elementDofs; j++)
+                {
+                    double v = eta * ke[row + j];
+                    if (v == 0)
+                        continue;
+                    int rj = dofs[j];
+                    if (ri <= rj)
+                        builder.Add(ri, rj, v);
+                }
+            }
+        }
+        return builder.ToSymmetricUpper();
+    }
+
     /// <summary><c>s·a</c> — one pass over the entries, for the per-frequency
     /// <c>omega·C</c> the direct harmonic solve factors.</summary>
     public static PackedSparseMatrix Scaled(PackedSparseMatrix a, double s)

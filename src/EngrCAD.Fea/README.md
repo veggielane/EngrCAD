@@ -2051,12 +2051,16 @@ matrix pair. **That is a different solver, not a bigger version of this one**, a
 attempts it. `ModalDamping` also takes a flat ratio (`Uniform`) or a measured table
 (`PerMode`), both of which are proportional by construction.
 
-**A damping matrix exists in exactly ONE place.** Wherever a C's only uses are products or
-scalar multiples folded into another matrix — the modal ratios, the transient's effective
-stiffness — forming it buys a slower operation and nothing is assembled; that finding stands.
-The exception is `FeaAssembly.Damping`, assembled for `DirectHarmonicSolver` alone, because
-its factorization consumes the VALUES of `i·omega·C` (there is no product to decompose into)
-and a non-proportional C is geometry-attached data no ratio can carry.
+**A damping matrix is BUILT in exactly one place.** Wherever a proportional C's only uses are
+products or scalar multiples folded into another matrix — the modal ratios, the transient's
+Rayleigh option — forming it buys a slower operation and nothing is assembled; that finding
+stands. The exception is `FeaAssembly.Damping`, the model's own NON-proportional viscous C,
+built there and consumed two ways: `DirectHarmonicSolver` factors the VALUES of `i·omega·C`
+(there is no product to decompose into), and the transient folds it into the effective
+stiffness and each step's right-hand side. Its hysteretic sibling `FeaAssembly.HystereticStiffness`
+(`eta·K`, the loss-factor damping) is built the same way and factored by the direct solve
+alone. A non-proportional C — dashpots, differing per-region coefficients, loss factors — is
+geometry-attached data no per-mode ratio can carry.
 
 ## Frequency response by modal superposition
 
@@ -2101,15 +2105,15 @@ solve**, because then it is not small, it is unknown.
 
 ## The direct per-frequency solve: `DirectHarmonicSolver`
 
-Factorizes the full complex system `(K - W²M + i·W·C)` at every sweep point over Core's
-`SparseLdlt` (complex symmetric LDLᵀ, the union pattern of the two parts, AMD by default —
-the shifted family its own remarks name as the one AMD serves). **The value is fidelity, not
-speed**: one complex factorization per frequency, hundreds of times a modal sweep, and
-nothing amortises across points because the matrix carries the frequency — the amortisation
-here is per-frequency, one factor serving every right-hand side AT that frequency, of which
-a sweep has exactly one. What it buys is what modal superposition structurally cannot
-express: **non-proportional damping**, stated on the MODEL because it is geometry-attached
-data no per-mode ratio can carry —
+Factorizes the full complex system `(K - W²M + i·W·C + i·eta·K)` at every sweep point over
+Core's `SparseLdlt` (complex symmetric LDLᵀ, the union pattern of the two parts, AMD by
+default — the shifted family its own remarks name as the one AMD serves). **The value is
+fidelity, not speed**: one complex factorization per frequency, hundreds of times a modal
+sweep, and nothing amortises across points because the matrix carries the frequency — the
+amortisation here is per-frequency, one factor serving every right-hand side AT that
+frequency, of which a sweep has exactly one. What it buys is what modal superposition
+structurally cannot express: **non-proportional damping**, stated on the MODEL because it is
+geometry-attached data no per-mode ratio can carry —
 
 ```csharp
 model.SetDamping(new RayleighDamping(alpha, beta));      // model-wide material damping
@@ -2117,12 +2121,28 @@ model.SetDamping(1, new RayleighDamping(0, betaRubber)); // a lossier region —
                                                          // non-proportional if it differs
 model.Dashpot(node, new Vector3d(0, 0, 1), 0.05);        // a discrete damper to ground
 model.Dashpot(nodeA, nodeB, 0.02);                       // between two nodes, along their chord
+model.SetLossFactor(0.04);                               // HYSTERETIC damping: eta·K, constant
+model.SetLossFactor(1, 0.15);                            // a lossier region's own loss factor
 
 var response = DirectHarmonicSolver.Solve(model, new DirectHarmonicOptions
 {
     Frequencies = HarmonicSweep.Logarithmic(10, 5000, 60),
 });
 ```
+
+**Hysteretic (structural) damping is the SECOND model the imaginary part carries**, and this is
+the only solver that has it. A loss factor `eta` enters as the frequency-INDEPENDENT imaginary
+stiffness `eta·K` — the complex modulus `K(1 + i·eta)` — where a viscous dashpot enters as
+`omega·C`, rising with frequency; the total imaginary impedance is `omega·C + eta·K`, and a
+region may state both. It belongs to this solver alone because it is a steady-state
+frequency-domain model with no causal time-domain form (the transient refuses it) and no
+per-mode real ratio off resonance (the modal route refuses it). At a mode's resonance the
+hysteretic model amplifies by exactly `1/eta` (against `1/(2·zeta)` viscous, so `eta = 2·zeta`
+matches the peak) and the factorization does NOT refuse there, because `eta·K` is what keeps the
+pivot away from zero — a hysteretically-damped structure has a steady state even at its own
+natural frequency, which is the whole point of the model. (`FeaAssembly.HystereticStiffness`
+assembles it, the K assembly scaled per element by the region's loss factor, so its sparsity is
+K's exactly and it factors beside the real part with no wider pattern.)
 
 A pair dashpot's coupling block can land where the stiffness pattern has no entry at all
 (two nodes sharing no element), which is precisely the union-pattern case `SparseLdlt`
@@ -2149,6 +2169,12 @@ catches a per-region map applied to the wrong region); resonant amplification ex
 `1/(2·zeta)` to 1e-6 with the -90° phase; equal per-region values bit-identical to the
 uniform statement (one assembly path); and the exact-resonance refusal driven through a
 frequency scan that reproduces the solver's own pivot arithmetic verbatim.
+**Hysteretic** damping is verified the same scalar-fixture way: resonant amplification exactly
+`1/eta` (25 for eta = 0.04); a whole sweep against `f/sqrt((k-W²m)² + (eta·k)²)` to **3e-16**,
+which is the statement that the imaginary part stayed CONSTANT rather than scaling with
+frequency; a crossover against a viscous model tuned to the same peak (hysteretic smaller below
+resonance, larger above — a viscous term in disguise could not produce it); and the composed
+`omega·c + eta·k` against its own closed form.
 
 ## Verification
 

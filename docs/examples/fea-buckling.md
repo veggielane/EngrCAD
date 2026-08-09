@@ -293,8 +293,8 @@ peak sample would measure the sweep instead of the response.
 
 ## The direct per-frequency solve
 
-`DirectHarmonicSolver` factorizes the full complex system `(K - W²M + i·W·C)` at every sweep
-point over `SparseLdlt`'s complex symmetric LDLᵀ. **Its value is fidelity, not speed** — the
+`DirectHarmonicSolver` factorizes the full complex system `(K - W²M + i·W·C + i·eta·K)` at every
+sweep point over `SparseLdlt`'s complex symmetric LDLᵀ. **Its value is fidelity, not speed** — the
 cost is one complex factorization per frequency, hundreds of times a modal sweep, and nothing
 amortises across sweep points because the matrix carries the frequency — so reach for it where
 modal superposition structurally cannot go: **non-proportional damping**, where `phi' C phi`
@@ -354,6 +354,24 @@ and against a hand-built complex 2x2 oracle for a dashpot coupling two nodes tha
 element. The report carries the worst backward residual `|Zu - f|/|f|` over the sweep —
 7.4e-9 measured near resonance, the honest figure for an unpivoted factorization — and the
 smallest pivot magnitude met, which is the conditioning tell.
+
+**Hysteretic (structural) damping is the second model the imaginary part carries, and it is
+this solver's alone.** A loss factor `eta` enters as the frequency-INDEPENDENT imaginary
+stiffness `eta·K` — the complex modulus `K(1 + i·eta)` — where a viscous dashpot enters as
+`omega·C`, rising with frequency:
+
+```csharp
+model.SetLossFactor(0.04);        // material internal damping everywhere
+model.SetLossFactor(1, 0.15);     // a lossier region's own loss factor
+```
+
+It belongs to this solver alone because it is a frequency-domain, steady-state-only model:
+there is no causal time-domain form for it (the transient refuses it) and no per-mode real
+ratio off resonance (the modal route refuses it). At a mode's resonance the response amplifies
+by exactly `1/eta` — against `1/(2·zeta)` viscous, so `eta = 2·zeta` matches the peak and
+nothing else — and the factorization does *not* refuse there, because `eta·K` is the imaginary
+part keeping the pivot away from zero. The two models compose additively (`omega·C + eta·K`), so
+a part may carry both material and joint damping.
 
 What still needs the modal route's vocabulary but not its basis is filed: frequency-dependent
 moduli and frequency-dependent load distributions have no vocabulary here yet, and the damped
