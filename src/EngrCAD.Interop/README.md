@@ -274,6 +274,28 @@ logging complements them, never replaces them.
     about the parameter mapping** — the same reason `FaceGeometry.ExactSampleParameters`
     exists on the polyline side.
 
+    **An OPEN angular edge is the fourth occurrence of that same rule.** A circle or an
+    ellipse cut into arcs by a boolean — which is what every split rim is — asked
+    `IsAngularlyParameterized` only on the CLOSED path, so an open one fell to
+    `curveSamples` and carried the same sample count at every density: raising
+    `segmentsPerCircle` refined the grid around such a rim and never the rim itself.
+    Measured on a threaded rod's 5%-depth end-chamfer cone, whose strip is bounded by three
+    spiral arcs and one arc of the cap circle: the spirals scaled 5/9/17/33 with the density
+    while the circle piece sat at 25 samples at 32, 64, 128 **and** 256, and the strip's
+    worst facet-vs-surface agreement was 0.9935 at 256 against a floor of 0.9973 — now
+    1.0000, with the worst face moving off the strip entirely.
+
+    **The count is the MAXIMUM of the two, never a replacement, and that was MEASURED
+    rather than preferred.** Replacing `curveSamples` is the tidier rule and it makes the
+    default density measurably WORSE: at the default 32/24 a sub-half-turn arc is finer
+    under `curveSamples` than under the angular count, so replacing it COARSENS every split
+    rim in the repository — a partial revolve's tessellated volume stopped matching its
+    exact closed form (2.35451265 against 2.35146969, a discrete identity turned into an
+    approximation), a slot pocket left its stated chordal-error band, and 19 of this
+    project's 632 tests moved. The maximum is monotone — no edge anywhere gets coarser — so
+    the change can only add fidelity, which is the whole safety argument for touching a
+    shared sampling rule; with it, one test moves and it is the one documenting the floor.
+
     **A STRAIGHT edge takes the angular density of any face whose azimuth it crosses**
     (`StraightEdgeSegments`). Two samples describe a straight CURVE exactly and may
     describe the FACE it bounds not at all: a `Shape.Drill` tool's flat bottom is a

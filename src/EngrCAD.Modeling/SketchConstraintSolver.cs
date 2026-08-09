@@ -652,6 +652,468 @@ internal sealed class ArcEndpointConstraint(int point, int center, int radius) :
 }
 
 /// <summary>
+/// A point lies on the CARRIER of an elliptical arc — the whole ellipse, exactly as
+/// <c>PointOn(point, arc)</c> takes the whole circle.
+///
+/// <para><b>The filed premise was wrong, and the correction is the design.</b> The backlog
+/// entry said a point-on-ellipse residual "would need its own foot parameter as a VARIABLE"
+/// because an ellipse's nearest point is a quartic root. True of the DISTANCE, and a
+/// constraint does not need the distance: an ellipse is a CONIC, so membership has a closed
+/// algebraic form. With centre C and semi-axis VECTORS A and B (the representation
+/// <c>EllipseSeg</c> already carries), M = [A B] maps the unit circle onto it, so
+/// <c>|M⁻¹(p − C)| − 1</c> is signed, zero exactly on the ellipse, and first order
+/// everywhere but the centre — which is the circle's own residual <c>|p − c| − r</c> with
+/// the radius replaced by a matrix, and reduces to it bit for bit when A = (r, 0),
+/// B = (0, r).</para>
+///
+/// <para><b>Where the carrier's own variables come from.</b> An elliptical arc carries no
+/// centre or axis variables — it rides the chord SIMILARITY of its two joints, exactly as a
+/// bézier does. That is not an obstacle here but the simplification: the quantity
+/// <c>M⁻¹(p − C)</c> is invariant under a similarity, so it can be evaluated once and for
+/// all against the DRAWN ellipse in the normalized chord coordinate ζ = (p − s)/(e − s),
+/// whose derivatives in p, s and e are one complex division each. A FULL ellipse loop has
+/// no joints at all, so its carrier is fixed and only the point moves — still first order,
+/// and stated rather than special-cased.</para>
+///
+/// <para>The row is scaled by the drawn ellipse's own geometric-mean semi-axis so it is a
+/// LENGTH like every other residual here; for a circle that scaling makes it exactly the
+/// radial displacement.</para>
+/// </summary>
+internal sealed class PointOnEllipseConstraint : SketchConstraint
+{
+    private readonly int _point;
+    private readonly int _start;      // −1 when the carrier is fixed (a full-ellipse loop)
+    private readonly int _end;
+    private readonly Vector2d _chord;    // e0 − s0 in the drawn sketch
+    private readonly Vector2d _offset;   // C0 − s0
+    private readonly Vector2d _fixedCenter;
+    private readonly double _m00, _m01, _m10, _m11;   // M0⁻¹, row major
+    private readonly double _scale;
+
+    public PointOnEllipseConstraint(
+        int point, int start, int end, in Vector2d drawnStart, in Vector2d drawnEnd,
+        in Vector2d center, in Vector2d semiAxisX, in Vector2d semiAxisY)
+    {
+        _point = point;
+        _start = start;
+        _end = end;
+        _chord = drawnEnd - drawnStart;
+        _offset = center - drawnStart;
+        _fixedCenter = center;
+        // M = [A B]; its inverse is adj(M)/det(M), and det is nonzero for a real ellipse.
+        double determinant = semiAxisX.X * semiAxisY.Y - semiAxisY.X * semiAxisX.Y;
+        _m00 = semiAxisY.Y / determinant;
+        _m01 = -semiAxisY.X / determinant;
+        _m10 = -semiAxisX.Y / determinant;
+        _m11 = semiAxisX.X / determinant;
+        _scale = Math.Sqrt(semiAxisX.Length * semiAxisY.Length);
+    }
+
+    public override int Rows => 1;
+
+    /// <summary>Whether the carrier moves with the sketch at all.</summary>
+    private bool Fixed => _start < 0;
+
+    private Vector2d Normalized(double[] x)
+    {
+        var p = Point(x, _point);
+        if (Fixed)
+            return p - _fixedCenter;
+        var s = Point(x, _start);
+        var chord = Point(x, _end) - s;
+        // Exact-zero division guard: a collapsed chord leaves the carrier undefined, and
+        // reporting the drawn offset makes the row constant rather than NaN.
+        if (!(chord.LengthSquared > 0))
+            return p - _fixedCenter;
+        var zeta = ComplexDivide(p - s, chord);
+        return ComplexMultiply(zeta, _chord) - _offset;
+    }
+
+    private Vector2d Mapped(in Vector2d v) => new(_m00 * v.X + _m01 * v.Y, _m10 * v.X + _m11 * v.Y);
+
+    public override void Residual(double[] x, double scale, double[] residual, int row) =>
+        residual[row] = _scale * (Mapped(Normalized(x)).Length - 1);
+
+    public override void Jacobian(double[] x, double scale, double[] jacobian, int row, int columns)
+    {
+        var q = Mapped(Normalized(x));
+        double length = q.Length;
+        // Exact-zero guard: at the ellipse's own centre the residual has no gradient
+        // DIRECTION — the same singularity PointOn(point, arc) refuses at an arc's centre,
+        // caught there so a caller is told rather than left with a stalled solve.
+        if (!(length > 0))
+            return;
+        var unit = q / length;
+        // grad_v r = _scale · R_conj(f)ᵀ-chain: dq/dv = M0⁻¹ R_f, so ∂r/∂v = (M0⁻ᵀ q̂)ᵀ R_f,
+        // and R_fᵀ g is the complex product conj(f)·g.
+        var g = new Vector2d(_m00 * unit.X + _m10 * unit.Y, _m01 * unit.X + _m11 * unit.Y);
+
+        if (Fixed)
+        {
+            Add(jacobian, row, columns, _point, _scale * g.X);
+            Add(jacobian, row, columns, _point + 1, _scale * g.Y);
+            return;
+        }
+
+        var p = Point(x, _point);
+        var s = Point(x, _start);
+        var e = Point(x, _end);
+        var chord = e - s;
+        if (!(chord.LengthSquared > 0))
+            return;
+        var inverseChord = ComplexDivide(new Vector2d(1, 0), chord);
+        var inverseChordSquared = ComplexMultiply(inverseChord, inverseChord);
+        // ζ = (p − s)/(e − s): ∂ζ/∂p = 1/(e−s), ∂ζ/∂s = (p−e)/(e−s)², ∂ζ/∂e = −(p−s)/(e−s)².
+        Contribute(jacobian, row, columns, _point, ComplexMultiply(_chord, inverseChord), g);
+        Contribute(jacobian, row, columns, _start,
+            ComplexMultiply(_chord, ComplexMultiply(p - e, inverseChordSquared)), g);
+        Contribute(jacobian, row, columns, _end,
+            ComplexMultiply(_chord, ComplexMultiply(s - p, inverseChordSquared)), g);
+    }
+
+    private void Contribute(
+        double[] jacobian, int row, int columns, int variable, in Vector2d factor, in Vector2d g)
+    {
+        var grad = ComplexMultiply(new Vector2d(factor.X, -factor.Y), g);
+        Add(jacobian, row, columns, variable, _scale * grad.X);
+        Add(jacobian, row, columns, variable + 1, _scale * grad.Y);
+    }
+
+    internal static Vector2d ComplexMultiply(in Vector2d a, in Vector2d b) =>
+        new(a.X * b.X - a.Y * b.Y, a.X * b.Y + a.Y * b.X);
+
+    internal static Vector2d ComplexDivide(in Vector2d a, in Vector2d b) =>
+        ComplexMultiply(a, new Vector2d(b.X, -b.Y)) / b.LengthSquared;
+}
+
+/// <summary>
+/// A point lies on a cubic BÉZIER — the one carrier in the sketch vocabulary with no closed
+/// algebraic membership test, so this is the standard treatment the backlog named: the foot
+/// parameter t joins the system as its own VARIABLE and the residual is the vector equation
+/// <c>B(t) − p = 0</c> (two rows), whose Jacobian is exact in every unknown.
+///
+/// <para><b>Two rows and one variable removes exactly one degree of freedom</b>, which is
+/// what a point-on-curve constraint means, so the solver's DOF report needs no special
+/// case.</para>
+///
+/// <para><b>The drawn foot is the seed AND the branch selector</b>, the same rule the whole
+/// constraint layer runs on: a bézier can pass a point three times, and which crossing the
+/// constraint means is read off the drawing rather than guessed. The parameter is NOT
+/// clamped to [0, 1] — clamping would be a branch selector in disguise and would put a
+/// kink in the residual — so the constraint is on the carrier's own polynomial, exactly as
+/// <c>PointOn(point, line)</c> is on the infinite line and <c>PointOn(point, arc)</c> on the
+/// whole circle.</para>
+///
+/// <para>The control points ride the chord similarity, which makes the curve
+/// <c>B(t) = s + (e − s)·β(t)</c> for a fixed complex-valued β read off the DRAWN offsets —
+/// so both moving joints enter through one complex multiply and the derivatives are
+/// one-liners.</para>
+/// </summary>
+internal sealed class PointOnBezierConstraint : SketchConstraint
+{
+    private readonly int _point;
+    private readonly int _start;
+    private readonly int _end;
+    private readonly int _foot;
+    private readonly Vector2d _a1, _a2;   // control offsets from the drawn start, over the drawn chord
+
+    public PointOnBezierConstraint(
+        int point, int start, int end, int foot, in Vector2d drawnStart, in Vector2d drawnEnd,
+        in Vector2d control1, in Vector2d control2)
+    {
+        _point = point;
+        _start = start;
+        _end = end;
+        _foot = foot;
+        var chord = drawnEnd - drawnStart;
+        _a1 = PointOnEllipseConstraint.ComplexDivide(control1 - drawnStart, chord);
+        _a2 = PointOnEllipseConstraint.ComplexDivide(control2 - drawnStart, chord);
+    }
+
+    public override int Rows => 2;
+
+    /// <summary>β(t) and β′(t): the drawn curve expressed over its own chord, so that
+    /// <c>B(t) = s + (e − s)·β(t)</c> holds for any placement of the joints.</summary>
+    private (Vector2d Value, Vector2d Derivative) Beta(double t)
+    {
+        double u = 1 - t;
+        var value = _a1 * (3 * u * u * t) + _a2 * (3 * u * t * t) + new Vector2d(t * t * t, 0);
+        var derivative = _a1 * (3 * u * (u - 2 * t)) + _a2 * (3 * t * (2 * u - t))
+            + new Vector2d(3 * t * t, 0);
+        return (value, derivative);
+    }
+
+    public override void Residual(double[] x, double scale, double[] residual, int row)
+    {
+        var s = Point(x, _start);
+        var chord = Point(x, _end) - s;
+        var (beta, _) = Beta(x[_foot]);
+        var on = s + PointOnEllipseConstraint.ComplexMultiply(chord, beta);
+        var delta = on - Point(x, _point);
+        residual[row] = delta.X;
+        residual[row + 1] = delta.Y;
+    }
+
+    public override void Jacobian(double[] x, double scale, double[] jacobian, int row, int columns)
+    {
+        var s = Point(x, _start);
+        var chord = Point(x, _end) - s;
+        var (beta, dBeta) = Beta(x[_foot]);
+
+        // d/dt: (e − s)·β′(t).
+        var dt = PointOnEllipseConstraint.ComplexMultiply(chord, dBeta);
+        Add(jacobian, row, columns, _foot, dt.X);
+        Add(jacobian, row + 1, columns, _foot, dt.Y);
+
+        // d/dp: −I.
+        Add(jacobian, row, columns, _point, -1);
+        Add(jacobian, row + 1, columns, _point + 1, -1);
+
+        // d/ds: I − R_beta;  d/de: R_beta — complex multiplication by β as a 2×2 block.
+        Add(jacobian, row, columns, _start, 1 - beta.X);
+        Add(jacobian, row, columns, _start + 1, beta.Y);
+        Add(jacobian, row + 1, columns, _start, -beta.Y);
+        Add(jacobian, row + 1, columns, _start + 1, 1 - beta.X);
+
+        Add(jacobian, row, columns, _end, beta.X);
+        Add(jacobian, row, columns, _end + 1, -beta.Y);
+        Add(jacobian, row + 1, columns, _end, beta.Y);
+        Add(jacobian, row + 1, columns, _end + 1, beta.X);
+    }
+}
+
+/// <summary>
+/// The tangent DIRECTION a bézier or an elliptical arc leaves one of its joints in, held
+/// parallel (or perpendicular) to a line — the tangency the vocabulary lacked for those two
+/// segment kinds.
+///
+/// <para>Both ride the chord similarity, so the tangent at a joint is a FIXED complex
+/// multiple of the live chord: a cubic leaves its start along <c>3(C1 − P0)</c> and arrives
+/// at its end along <c>3(P3 − C2)</c>, an elliptical arc leaves along its own derivative
+/// there, and each of those is the drawn value times (e − s)/(e₀ − s₀). So the constraint is
+/// the ordinary two-direction cross/dot product with one direction supplied by a constant
+/// times the chord — the same row <see cref="DirectionConstraint"/> writes, with the curve's
+/// fixed factor folded in.</para>
+/// </summary>
+internal sealed class CurveTangentConstraint(
+    int start, int end, Vector2d factor, int lineP1, int lineP2, bool parallel)
+    : SketchConstraint
+{
+    public override int Rows => 1;
+
+    private Vector2d Direction(double[] x) =>
+        PointOnEllipseConstraint.ComplexMultiply(Point(x, end) - Point(x, start), factor);
+
+    public override void Residual(double[] x, double scale, double[] residual, int row)
+    {
+        var (line, _) = UnitDirection(x, lineP1, lineP2);
+        var curve = Direction(x);
+        double length = curve.Length;
+        if (!(length > 0))
+        {
+            residual[row] = 0;
+            return;
+        }
+        var hat = curve / length;
+        residual[row] = scale * (parallel ? hat.Cross(line) : hat.Dot(line));
+    }
+
+    public override void Jacobian(double[] x, double scale, double[] jacobian, int row, int columns)
+    {
+        var (line, lineLength) = UnitDirection(x, lineP1, lineP2);
+        var curve = Direction(x);
+        double length = curve.Length;
+        if (!(length > 0))
+            return;
+        var hat = curve / length;
+
+        // The line's own columns: the (I − d̂d̂ᵀ)/|d| projection the direction rows all use.
+        Span<Vector2d> dLine = stackalloc Vector2d[4];
+        UnitDerivatives(line, lineLength, dLine);
+        var against = parallel ? new Vector2d(-hat.Y, hat.X) : hat;
+        foreach (var (variable, index) in (ReadOnlySpan<(int, int)>)
+                 [(lineP1, 0), (lineP1 + 1, 1), (lineP2, 2), (lineP2 + 1, 3)])
+        {
+            Add(jacobian, row, columns, variable, scale * against.Dot(dLine[index]));
+        }
+
+        // The curve's: d(hat)/d(chord) is the same projection, composed with the constant
+        // complex factor, and the chord's own derivative is −I at the start and +I at the end.
+        var target = parallel ? new Vector2d(line.Y, -line.X) : line;
+        var projected = (target - hat * hat.Dot(target)) / length;
+        var back = PointOnEllipseConstraint.ComplexMultiply(
+            new Vector2d(factor.X, -factor.Y), projected);
+        Add(jacobian, row, columns, start, -scale * back.X);
+        Add(jacobian, row, columns, start + 1, -scale * back.Y);
+        Add(jacobian, row, columns, end, scale * back.X);
+        Add(jacobian, row, columns, end + 1, scale * back.Y);
+    }
+}
+
+/// <summary>
+/// A line is TANGENT to an elliptical arc's carrier conic — the tangency the vocabulary
+/// lacked for that segment kind, and it needs no foot parameter at all.
+///
+/// <para><b>The residual is the line's own signed distance from the ellipse's support.</b>
+/// Writing the conic as <c>p(u) = C + M u</c> with <c>M = [A B]</c> and <c>|u| = 1</c>, the
+/// signed distance from a point of it to a line with unit normal n̂ through q is
+/// <c>n̂·(C − q) + (Mᵀn̂)·u</c>, whose extremes over the unit circle are
+/// <c>n̂·(C − q) ± |Mᵀn̂|</c>. Tangency is one extreme vanishing, so
+/// <c>r = n̂·(C − q) − σ·|Mᵀn̂|</c> — ONE row, SIGNED, first order everywhere (|Mᵀn̂| is a
+/// hypotenuse of two linear functions of the direction and never vanishes for a real
+/// ellipse), and no new unknown. It reduces to the circular
+/// <see cref="TangentLineArcConstraint"/> exactly when A and B are perpendicular and
+/// equal, since |Mᵀn̂| is then the radius whatever the direction.</para>
+///
+/// <para><b>σ is the SIDE, read off the drawing</b>, which is the branch selector the whole
+/// constraint layer runs on: a line has two tangents to a conic and which one is meant is a
+/// property of the sketch as drawn, not something to guess. A line drawn THROUGH the centre
+/// has no side, and the caller is told so rather than left with a solve that converges onto
+/// whichever tangent round-off prefers.</para>
+///
+/// <para><b>It is evaluated in the DRAWN frame, which is what makes the ellipse constant.</b>
+/// The carrier rides the chord similarity, and a similarity maps lines to lines and
+/// preserves tangency — so pulling the LINE back through it (the same
+/// <c>ζ = (p − s)/(e − s)</c> the point-on-ellipse row uses) leaves the conic's centre and
+/// both semi-axes as compile-time constants and puts every unknown in the two pulled-back
+/// line points. The residual is then a length in the drawn frame's units.</para>
+/// </summary>
+internal sealed class TangentLineEllipseConstraint : SketchConstraint
+{
+    private readonly int _p1, _p2;
+    private readonly int _start;      // −1 when the carrier is fixed (a full-ellipse loop)
+    private readonly int _end;
+    private readonly Vector2d _chord;     // e₀ − s₀ in the drawn sketch
+    private readonly Vector2d _drawnStart;
+    private readonly Vector2d _center, _semiX, _semiY;
+    private readonly double _side;
+
+    public TangentLineEllipseConstraint(
+        int p1, int p2, int start, int end, in Vector2d drawnStart, in Vector2d drawnEnd,
+        in Vector2d center, in Vector2d semiAxisX, in Vector2d semiAxisY, double side)
+    {
+        _p1 = p1;
+        _p2 = p2;
+        _start = start;
+        _end = end;
+        _drawnStart = drawnStart;
+        _chord = drawnEnd - drawnStart;
+        _center = center;
+        _semiX = semiAxisX;
+        _semiY = semiAxisY;
+        _side = side;
+    }
+
+    public override int Rows => 1;
+
+    private bool Fixed => _start < 0;
+
+    /// <summary>A live point pulled back into the drawn frame (the identity when the
+    /// carrier cannot move).</summary>
+    private Vector2d Pull(double[] x, int variable, in Vector2d chord, in Vector2d s)
+    {
+        var p = Point(x, variable);
+        if (Fixed || !(chord.LengthSquared > 0))
+            return p;
+        var zeta = PointOnEllipseConstraint.ComplexDivide(p - s, chord);
+        return PointOnEllipseConstraint.ComplexMultiply(zeta, _chord) + _drawnStart;
+    }
+
+    private (Vector2d U, Vector2d V, Vector2d Chord, Vector2d S) Frame(double[] x)
+    {
+        var s = Fixed ? default : Point(x, _start);
+        var chord = Fixed ? default : Point(x, _end) - s;
+        return (Pull(x, _p1, chord, s), Pull(x, _p2, chord, s), chord, s);
+    }
+
+    public override void Residual(double[] x, double scale, double[] residual, int row)
+    {
+        var (u, v, _, _) = Frame(x);
+        var d = v - u;
+        double length = d.Length;
+        if (!(length > 0))
+        {
+            residual[row] = 0;
+            return;
+        }
+        var unit = d / length;
+        residual[row] = (_center - u).Cross(unit)
+            - _side * Math.Sqrt(Square(_semiX.Cross(unit)) + Square(_semiY.Cross(unit)));
+    }
+
+    public override void Jacobian(double[] x, double scale, double[] jacobian, int row, int columns)
+    {
+        var (u, v, chord, s) = Frame(x);
+        var d = v - u;
+        double length = d.Length;
+        if (!(length > 0))
+            return;
+        var unit = d / length;
+        var w = _center - u;
+
+        // Each of f, alpha, beta is cross(k, d)/|d| for a constant k, so all three share one
+        // derivative form: d/dd [cross(k, d)/|d|] = ((−k.Y, k.X) − cross(k, d̂)·d̂)/|d|.
+        double f = w.Cross(unit), alpha = _semiX.Cross(unit), beta = _semiY.Cross(unit);
+        double support = Math.Sqrt(Square(alpha) + Square(beta));
+        var df = (new Vector2d(-w.Y, w.X) - unit * f) / length;
+        var gradient = df;
+        if (support > 0)
+        {
+            var dAlpha = (new Vector2d(-_semiX.Y, _semiX.X) - unit * alpha) / length;
+            var dBeta = (new Vector2d(-_semiY.Y, _semiY.X) - unit * beta) / length;
+            gradient -= (dAlpha * alpha + dBeta * beta) * (_side / support);
+        }
+
+        // d = v − u, and u also enters through w = C − u.
+        var gradientU = new Vector2d(-unit.Y, unit.X) - gradient;
+        var gradientV = gradient;
+
+        if (Fixed)
+        {
+            Add(jacobian, row, columns, _p1, gradientU.X);
+            Add(jacobian, row, columns, _p1 + 1, gradientU.Y);
+            Add(jacobian, row, columns, _p2, gradientV.X);
+            Add(jacobian, row, columns, _p2 + 1, gradientV.Y);
+            return;
+        }
+
+        if (!(chord.LengthSquared > 0))
+            return;
+        var p1 = Point(x, _p1);
+        var p2 = Point(x, _p2);
+        var e = Point(x, _end);
+        var inverseChord = PointOnEllipseConstraint.ComplexDivide(new Vector2d(1, 0), chord);
+        var inverseChordSquared = PointOnEllipseConstraint.ComplexMultiply(inverseChord, inverseChord);
+        var toDrawn = _chord;
+
+        // zeta = (p − s)/(e − s): d(zeta)/dp = 1/(e−s), d/ds = (p−e)/(e−s)², d/de = (s−p)/(e−s)².
+        Contribute(jacobian, row, columns, _p1,
+            PointOnEllipseConstraint.ComplexMultiply(toDrawn, inverseChord), gradientU);
+        Contribute(jacobian, row, columns, _p2,
+            PointOnEllipseConstraint.ComplexMultiply(toDrawn, inverseChord), gradientV);
+        // BOTH pulled points move with the carrier's own joints.
+        Contribute(jacobian, row, columns, _start, PointOnEllipseConstraint.ComplexMultiply(
+            toDrawn, PointOnEllipseConstraint.ComplexMultiply(p1 - e, inverseChordSquared)), gradientU);
+        Contribute(jacobian, row, columns, _start, PointOnEllipseConstraint.ComplexMultiply(
+            toDrawn, PointOnEllipseConstraint.ComplexMultiply(p2 - e, inverseChordSquared)), gradientV);
+        Contribute(jacobian, row, columns, _end, PointOnEllipseConstraint.ComplexMultiply(
+            toDrawn, PointOnEllipseConstraint.ComplexMultiply(s - p1, inverseChordSquared)), gradientU);
+        Contribute(jacobian, row, columns, _end, PointOnEllipseConstraint.ComplexMultiply(
+            toDrawn, PointOnEllipseConstraint.ComplexMultiply(s - p2, inverseChordSquared)), gradientV);
+    }
+
+    private static double Square(double v) => v * v;
+
+    private static void Contribute(
+        double[] jacobian, int row, int columns, int variable, in Vector2d factor, in Vector2d g)
+    {
+        var grad = PointOnEllipseConstraint.ComplexMultiply(new Vector2d(factor.X, -factor.Y), g);
+        Add(jacobian, row, columns, variable, grad.X);
+        Add(jacobian, row, columns, variable + 1, grad.Y);
+    }
+}
+
+/// <summary>
 /// The Levenberg–Marquardt engine behind <see cref="ConstrainedSketch"/> — the
 /// MateSolver pattern on plain 2D length variables (no frames, no rotation encoding, so
 /// no variable scaling is needed: every variable is already a length). Dense linear

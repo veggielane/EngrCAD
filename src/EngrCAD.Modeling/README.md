@@ -139,6 +139,22 @@ is a cone point and is refused in favour of `Coincident`; point-on-arc reuses th
 row the solver already applies to an arc's own endpoints. A point drawn at an arc's
 centre is refused by name (`|p − c| − r` has no gradient direction there).
 
+The two CURVED carriers take the same constraint through `cs.Curve(i)`, and they need
+different residuals for a reason worth knowing. An ellipse is a CONIC, so membership is
+closed form — `|M⁻¹(p − C)| − 1` is the arc's own `|p − c| − r` with the radius replaced
+by the semi-axis matrix, one row and no new unknown — while a cubic has no such form, so
+its foot parameter joins the system as a VARIABLE and the residual is `B(t) − p = 0`, two
+rows against one unknown, removing exactly the one degree of freedom the constraint means.
+`Tangent(curve, SketchCurveEnd, line)` holds either carrier's END tangent parallel (or
+perpendicular) to a line — a fixed multiple of the live chord, so the ordinary direction
+row with the curve's constant folded in — and **`Tangent(line, curve)` holds a line
+tangent to an elliptical arc's whole conic**, which needs no foot parameter either: the
+extreme signed distance from the conic to a line is `n̂·(C − q) ± |Mᵀn̂|`, so tangency is
+one extreme vanishing, one signed first-order row reducing to `Tangent(line, arc)` exactly
+when the semi-axes are perpendicular and equal. The side is read off the drawing, so a
+line through the centre is refused by name; a cubic is refused with its reason (no
+closed-form support function, so its tangency wants the foot as a variable).
+
 **Elliptical arcs** are first-class: `Sketch.Ellipse(semiX, semiY[, rotation])` and the
 builder's `EllipticalArcTo(end, semiX, semiY, rotation, largeArc, clockwise)` — SVG's
 `A` command with the same two flags and the same out-of-range rule (semi-axes too small
@@ -150,7 +166,9 @@ SVG writer round-trips it as an `A` command. It round-trips through
 `ToCurves`/`FromCurves` as `Ellipse2d`, so feature persistence carries it. Two honest
 limits: an ellipse with equal semi-axes stays an ellipse (so `IsCircular` and cylinder
 promotion will not claim it — use `Circle` when you mean a circle), and it carries no
-constraint variables yet, so like a bézier only its endpoint joints can be constrained.
+constraint variables of its own, so like a bézier it rides the SIMILARITY of its two
+endpoint joints — which is what makes point-on-carrier and tangency expressible against
+it without a second variable scheme.
 
 Primitives: `Rectangle`, `RoundedRectangle`, `Circle`, `Ellipse`, `Polygon`, `Slot`. Sketches are
 pure 2D; `Shape.Extrude/Revolve/Sweep` place them with a `SketchPlane` (`XY`/`XZ`/`YZ`

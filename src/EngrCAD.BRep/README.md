@@ -55,6 +55,26 @@ operations. Depends only on `EngrCAD.Core`.
   that omits the axial term entirely needs the *stricter* "in the frame's own X/Y plane",
   because adding a zero VECTOR is not a no-op on a −0.0 coordinate and every threaded
   rod's cap loop must stay bit-identical.
+  `HelicalArcCut3d` is the same family one generator up — what a coaxial straight-profile
+  carrier cuts from an **arc-generator** `HelicalSurface`, i.e. from a clearance thread's
+  rounded root band. Write the carrier as α·r + β·Z = γ (α = 0 is a plane ⊥ the axis,
+  β = 0 a coaxial cylinder, both nonzero a cone) and substitute the band's
+  r = C_r + ρ·cos φ, Z = C_z + ρ·sin φ + rate·u: collecting gives
+  ρ·cos(φ − ψ) = D + slope·u with ψ = atan2(β, α), so where a straight generator makes v
+  LINEAR in u, an arc makes the generator ANGLE a shifted arc-cosine of an affine function
+  of it, and the radius and axial coordinate follow. Which acos BRANCH is a property of the
+  arc rather than a parameter to guess, and `TryBuild` reads it off the generator's own
+  angular range against the representative of ψ nearest it — an arc ending exactly at
+  δ = ±π (its extreme radius, where a cylinder carrier meets it) merely touches that
+  boundary, while one reaching δ = 0 or ±π in its INTERIOR is tangent to the carrier there
+  and is declined rather than half-answered. The two degenerate carriers keep their own
+  coordinate verbatim (a cap plane returns γ for the axial coordinate, a cylinder γ for the
+  radius), because those are the numbers a cap loop and a runout rim weld against.
+  `ParameterAtAngle` inverts the relation, and it exists for a measured reason: v is not
+  linear in u here, so sampling the cut at uniform u and pairing the samples with band-grid
+  rows at uniform v shears every quad against the cap it neighbours (measured on a 0.05
+  clearance rod at 16 segments per circle: 308 folded facets, worst normal agreement
+  −0.366, and a residual that GREW with density instead of converging).
   `LoftRailCurve` is the curve a fixed section parameter traces across a `LoftedSurface`
   (the loft analogue of `SweptRailCurve`); it evaluates the surface itself rather than
   re-interpolating the junction points, so a rail edge and the face's u = 0 grid column are
@@ -454,6 +474,26 @@ operations. Depends only on `EngrCAD.Core`.
     Euler–Poincaré 0 at genus 0. Exact volume for ANY length:
     L·(2π/P)·∫₀^P ½R(s)² ds (the full angular sweep at each z washes out the phase).
 
+    **A generator piece may be a circular ARC** (`MakeThreadedRod(IReadOnlyList<ThreadProfilePiece>, …)`,
+    the general form the corner overload delegates to), which is what makes a printing
+    CLEARANCE exact rather than approximated: `OffsetPitchProfile(corners, pitch, offset)`
+    is the distance-field offset `Sdf.Thread`'s clearance already is, and its corner rule is
+    ONE expression — `offset × turn` decides MITER versus ARC, so eroding an external thread
+    (mitered crest, rounded roots) and growing the tool that cuts an internal one (the exact
+    reverse) are the same code with opposite signs. An arc piece's band is an arc-generator
+    `HelicalSurface` and its cap cut a `HelicalArcCut3d`; nothing else about the rod changes.
+    A flat whose offset half-plane goes REDUNDANT is dropped and its neighbours mitered — an
+    M6×1's crest flat is gone by a clearance of 0.108 mm, well inside the 0.1–0.25 an FDM
+    printer wants, and the eroded thread is correctly a pointed ridge — with the drop allowed
+    only where both of that flat's corners miter, which is exactly the statement that the
+    region is locally convex there; anything else is refused BY NAME. Verified as one
+    geometry rather than by shape: every lateral tessellation vertex of an eroded M6×1 rod
+    reads |sdf| ≤ 2.0e-15 against `Sdf.Thread`'s own clearance field at clearances 0.02
+    through 0.25, where the SAME vertices read up to 0.2495 against the uncleared field, and
+    the volume converges quadratically (6.007e-3 / 1.512e-3 / 3.783e-4 / 9.562e-5 at
+    32/64/128/256 segments, ratios 0.2517 / 0.2502 / 0.2528) onto the Pappus integral of its
+    own generator.
+
     **`leftHand: true`** winds the same profile the other way. It is not a second
     construction: the axial rate becomes −P/2π and every formula here already carries the
     signed rate, so a rail's phase u runs DOWN as z runs up and three consequences follow
@@ -819,12 +859,34 @@ operations. Depends only on `EngrCAD.Core`.
   the surface's width are the same condition, and it belongs to the surface. Measured on an
   M8×1.25 6 mm rod: cross-drilling refused at 13 of 13 bores from 0.6 to 3.0 and now builds
   Validate-clean, closed, converging solids at 8 of them; a tilted plane cut refused at 4 of
-  4 and now works at 20°. What remains is a different mechanism and is filed — a branch that
-  stops at a FOLD (the corrector refusing a step it was not trying to take out of the
-  domain) still ends inside the face. Halving the step and retrying was built for exactly
-  that, took cross-drilling to 10 of 13, and was REVERTED: fillet bands are anisotropic too,
-  so it reached them and broke seven tests, which is the standing rule that an algorithm
-  able only to trade one refusal for another should not be reached at all.
+  4 and now works at 20°.
+
+  **A FOLD is the other way a step is refused, and the trace now goes through it.** Where
+  the corrector refuses a step it was NOT trying to take out of the domain, there is no rail
+  to land on: the curve has turned back within one step — a cross-drill's cylinder doubling
+  back across a thread band — so the constraint plane a whole step ahead has no solution
+  near it, and the branch used to stop mid-face with `FaceSplitter` refusing it by name.
+  `RetryThroughFold` retries the step at successively halved lengths from the last accepted
+  point, then walks the step back up to the pair's own (the standard continuation rule, so a
+  fold early in a long branch cannot spend its step budget and truncate it).
+
+  **What makes it landable is the SCOPE, and the fold identifies itself.** The refused
+  step's own linearization either leaves a bounded domain or it does not, and that is
+  exactly the test `TryLandOnDomain` makes before it does anything else — asked rather than
+  restated, so the two cannot disagree about which case a refusal is, and the retry is only
+  ever reached where the trace previously stopped with nothing appended. The recorded
+  attempt scoped it by the surface pair's ASPECT — the same gate the second seed pass
+  carries — which halves at rail exits too, reaches whole-solid fillet bands (long and only
+  r·π/2 wide, so anisotropic by that measure) and broke seven Interop tests while taking the
+  tilted-plane family from 1 of 4 to 0 of 4: the standing rule that an algorithm able only
+  to trade one refusal for another should not be reached at all. Measured on the same bore
+  sweep: TWO bores stranded a branch inside a face (1.2 and 1.6) and now ONE does, with the
+  1.6 bore's failure moving DOWNSTREAM to two unpaired edges where a helix rail and its
+  coincident cut segment run between the same two points — a different defect the fold
+  refusal had been hiding, and the one the 2.8 bore already had. The remaining 1.2 case is
+  not a corrector refusal at all: raising the halving budget from 5 to 14 leaves it byte for
+  byte, so its branch stops for one of the trace's other reasons and a shorter step is not
+  its remedy.
 
   **The extents are measured as SPEED × domain length, never as a chordal polyline** —
   `ParameterExtents` averages |∂P/∂u| over a 4×4 cross of cell CENTRES (never the domain's

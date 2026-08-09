@@ -295,12 +295,35 @@ public static class BRepTessellator
         // turns gets N·segmentsPerCircle segments, a cut spanning a fraction of a turn
         // the matching fraction. Helical band grids derive their column/row counts from
         // these same polylines, so the sampling agrees by construction.
-        if (edge.Curve.Underlying is Helix3d or SpiralArc3d)
+        // <para>A <see cref="HelicalArcCut3d"/> joins them with ONE difference that is the
+        // whole point of it: the cut of an ARC generator crosses the generator's own
+        // angular sweep as well as its span in u, and the arc is where the curvature is —
+        // a clearance root fillet turns 60 degrees across a u span of a couple of degrees.
+        // <c>TurningAngle</c> therefore reports the LARGER of the two for that type, which
+        // is also what sets the band grid's v rows, since those are read off this very
+        // polyline.</para>
+        if (edge.Curve.Underlying is Helix3d or SpiralArc3d or HelicalArcCut3d)
         {
             int n = AngularSegments(TurningAngle(edge.Curve, domain), segmentsPerCircle);
             var points = new List<Vector3d>(n + 1);
+            // An arc-generator cut is sampled at uniform GENERATOR ANGLE rather than at
+            // uniform u, because v is linear in the angle and NOT in u: the band grid pairs
+            // these samples with interior rows at uniform v, and sampling the other way
+            // shears every quad against the cap it neighbours (measured: 308 folded facets
+            // on a 0.05 clearance rod at 16 segments, and a residual that grew with
+            // density). The two ends are taken from the domain verbatim, so the shared
+            // rail vertices stay bit-exact.
+            var arcCut = edge.Curve as HelicalArcCut3d;
+            double startAngle = arcCut?.AngleAt(domain.Start) ?? 0;
+            double endAngle = arcCut?.AngleAt(domain.End) ?? 0;
             for (int i = 0; i <= n; i++)
-                points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
+            {
+                double fraction = (double)i / n;
+                double t = arcCut is null || i == 0 || i == n
+                    ? domain.ParameterAt(fraction)
+                    : arcCut.ParameterAtAngle(startAngle + (endAngle - startAngle) * fraction);
+                points.Add(edge.Curve.PointAt(t));
+            }
             return points;
         }
 
@@ -327,6 +350,39 @@ public static class BRepTessellator
             for (int i = 1; i < n; i++)
                 points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
             points.Add(edge.Curve.PointAt(domain.End));
+            return points;
+        }
+
+        // An OPEN angular edge — a circle or an ellipse cut into arcs by a boolean, which
+        // is what every split rim is — must resolve the natural grid COLUMNS its span
+        // crosses as well as its own curvature, so it takes the larger of the two counts.
+        // <para>Without the angular half it took `curveSamples` and nothing else: a fixed
+        // count at every density, which is a FLOOR (the same shape as the recorded
+        // baked-tracer-polyline and CurveSegment-turning-angle findings, and the fourth
+        // occurrence of `Underlying` being a TYPE hint that says nothing about the
+        // parameter mapping — the closed case asks `IsAngularlyParameterized` and the open
+        // one did not). Measured on a threaded rod's 5%-depth chamfer cone, whose rim is
+        // three spiral arcs and one arc of the new cap circle: the spirals scaled 5/9/17/33
+        // with the density while the circle piece sat at 25 at 32, 64, 128 AND 256, and the
+        // strip's worst facet-vs-surface agreement was 0.1301 against a floor of
+        // 0.8315.</para>
+        // <para><b>The MAXIMUM of the two counts, never a replacement — which was MEASURED
+        // rather than preferred.</b> Replacing `curveSamples` is the tidier rule and it
+        // makes the default density measurably WORSE: at the default 32/24 a sub-half-turn
+        // arc is finer under `curveSamples` than under the angular count, so replacing it
+        // COARSENS every split rim in the repository — a partial revolve's tessellated
+        // volume stopped matching its exact closed form (2.35451265 against 2.35146969, a
+        // discrete identity turned into an approximation), a slot pocket left its stated
+        // chordal-error band, and 19 of the Interop suite's tests moved. The maximum is
+        // monotone: no edge anywhere gets coarser, so a change here can only add fidelity,
+        // which is the whole safety argument for touching a shared sampling rule.</para>
+        if (IsAngularlyParameterized(edge.Curve))
+        {
+            int angular = AngularSegments(TurningAngle(edge.Curve, domain), segmentsPerCircle);
+            int n = Math.Max(curveSamples, angular);
+            var points = new List<Vector3d>(n + 1);
+            for (int i = 0; i <= n; i++)
+                points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
             return points;
         }
 
@@ -431,6 +487,15 @@ public static class BRepTessellator
         }
         if (curve.Underlying is Line3d)
             return [domain.Start, domain.End];
+        // The open angular rule SampleEdge applies, restated nowhere: face grids and the
+        // boundary edges they weld to must round to the same count.
+        if (IsAngularlyParameterized(curve))
+        {
+            return EvenParams(
+                domain,
+                Math.Max(curveSamples, AngularSegments(TurningAngle(curve, domain), segmentsPerCircle)),
+                includeEnd: true);
+        }
         return EvenParams(domain, curveSamples, includeEnd: true);
     }
 
@@ -521,8 +586,17 @@ public static class BRepTessellator
         face.OuterLoop.Coedges.Count == 4 &&
         face.OuterLoop.Coedges.Where(c => c.Edge.Curve.Underlying is Helix3d)
             .Select(c => c.Edge).Distinct().Count() == 2 &&
-        face.OuterLoop.Coedges.Where(c => c.Edge.Curve.Underlying is SpiralArc3d { IsPlanar: true })
+        face.OuterLoop.Coedges.Where(c => IsPlanarHelicalCut(c.Edge.Curve.Underlying))
             .Select(c => c.Edge).Distinct().Count() == 2;
+
+    /// <summary>A cap cut of either generator family: axis-perpendicular by the same
+    /// exact-zero test on both types.</summary>
+    private static bool IsPlanarHelicalCut(Curve3d curve) => curve switch
+    {
+        SpiralArc3d spiral => spiral.IsPlanar,
+        HelicalArcCut3d arcCut => arcCut.IsPlanar,
+        _ => false,
+    };
 
     private static bool IsRingPairedBand(BrepFace face, Dictionary<BrepEdge, List<Vector3d>> edgePolylines)
     {
@@ -856,6 +930,13 @@ public static class BRepTessellator
     /// </summary>
     private static double TurningAngle(Curve3d curve, in Interval domain)
     {
+        // An arc-generator cut turns in TWO angles at once — the band's phase u (the
+        // parameter) and the generator's own polar angle — and it is the second that
+        // carries the curvature, so the count must resolve whichever is larger.
+        if (curve is HelicalArcCut3d arcCut)
+            return Math.Max(
+                Math.Abs(domain.Length),
+                Math.Abs(arcCut.AngleAt(domain.End) - arcCut.AngleAt(domain.Start)));
         if (curve is not CurveSegment segment)
             return Math.Abs(domain.Length);
         double s0 = segment.BaseStart + (segment.BaseEnd - segment.BaseStart) * domain.Start;
@@ -881,7 +962,8 @@ public static class BRepTessellator
     {
         var coedges = face.OuterLoop.Coedges;
         var railEdges = coedges.Where(c => c.Edge.Curve.Underlying is Helix3d).Select(c => c.Edge).Distinct().ToList();
-        var cutEdges = coedges.Where(c => c.Edge.Curve.Underlying is SpiralArc3d).Select(c => c.Edge).Distinct().ToList();
+        var cutEdges = coedges.Where(c => c.Edge.Curve.Underlying is SpiralArc3d or HelicalArcCut3d)
+            .Select(c => c.Edge).Distinct().ToList();
 
         Vector2d Project(Vector3d p)
         {
@@ -935,6 +1017,17 @@ public static class BRepTessellator
             grid[0, k] = cuts[0][k];
             grid[n, k] = cuts[1][k];
         }
+        // Every column of the band is the SAME curve in (u, v) translated along u — the
+        // cut at height z sits at u(v) = (z − z_generator(v))/rate — so the interior
+        // column at v is its own u at v = 0 plus that shear. For a STRAIGHT generator the
+        // shear is affine, which is exactly what the incumbent lerp between the two rails
+        // computes, so it is kept verbatim there. For an ARC generator it is not: on a
+        // 0.2 mm clearance fillet the chord's sagitta is ~0.17 rad of phase against a
+        // column spacing of ~0.10, so the first interior column would land OUTSIDE the cap
+        // it neighbours and the mesh would poke past the end face.
+        bool straight = surface.IsStraightGenerator;
+        double axialAtZero = surface.AxialAt(0);
+        double rate = surface.AxialRate;
         for (int j = 1; j < n; j++)
         {
             double f = (double)j / n;
@@ -943,7 +1036,10 @@ public static class BRepTessellator
             for (int k = 1; k < m; k++)
             {
                 double v = (double)k / m;
-                grid[j, k] = surface.PointAt(uBottom + (uTop - uBottom) * v, v);
+                double u = straight
+                    ? uBottom + (uTop - uBottom) * v
+                    : uBottom + (axialAtZero - surface.AxialAt(v)) / rate;
+                grid[j, k] = surface.PointAt(u, v);
             }
         }
 

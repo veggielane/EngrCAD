@@ -1661,6 +1661,23 @@ public abstract class Shape
             : PlanarSection.OfMesh(ToMesh(quality), plane.Frame);
 
     /// <summary>
+    /// <see cref="Section"/> without the flattening: the cross-section as exact
+    /// <see cref="CurvedRegion2d"/>s, so a bore's rim is ONE arc rather than however many
+    /// chords a tolerance asked for — which is what a DXF <c>CIRCLE</c> entity, an SVG
+    /// <c>A</c> command and <see cref="Sketch.FromCurvedRegion"/> all want.
+    ///
+    /// <para>Requires a B-Rep lowering (a mesh section has no exact curves to recover), and
+    /// what it cannot express exactly it FLATTENS to <paramref name="chordTolerance"/>
+    /// rather than refusing: an oblique plane through a cylinder cuts an ellipse, which the
+    /// curved 2D tier deliberately does not carry, and a traced intersection is a polyline
+    /// to begin with. So a mixed section is honest, and its exact halves stay exact.</para>
+    /// </summary>
+    /// <exception cref="ShapeConversionException">The shape has no B-Rep form.</exception>
+    public IReadOnlyList<CurvedRegion2d> SectionExact(
+        SketchPlane plane, double chordTolerance = PlanarSection.DefaultChordTolerance) =>
+        PlanarSection.CurvedOfSolid(ToBrep(), plane.Frame, chordTolerance);
+
+    /// <summary>
     /// The OUTLINE the shape casts along <paramref name="plane"/>'s normal, as 2D regions
     /// in the plane's coordinates — OpenSCAD's <c>projection(cut = false)</c>. A through
     /// hole survives as a hole; a blind pocket or an internal cavity does not (there is

@@ -60,11 +60,12 @@ the hole axis shows the internal thread profile (the viewer's
 what makes this cut possible: a downstream *boolean* may slice a modeled thread only
 with axis-perpendicular planes (helical∩tilted-plane falls to the tracer and fails
 loudly), but the viewer's section is a fragment-shader clip, not a boolean — so it
-slices ALONG the thread axis effortlessly, on the same whole geometry:
+slices ALONG the thread axis effortlessly, on the same whole geometry. The crests here
+are crisp because the clearance form is B-Rep-exact, not polygonized:
 
 ```csharp render:thread-hole section:y,0
 var top = SketchPlane.At((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY);
-var block = Shape.Box(16, 12, 10)   // printable: clearance keeps this on the SDF route
+var block = Shape.Box(16, 12, 10)   // printable clearance — and still exact in B-Rep
     .ThreadedHole(StandardThreads.Metric(6), [new(0, 0)], depth: 12, top, clearance: 0.15);
 
 var scene = new Scene(new MeshQuality { SdfResolution = 220 });
@@ -88,7 +89,17 @@ Both are derived from the same ISO 68-1 basic profile, so pairing the **same val
 on the stud and the hole splits the total gap evenly between them. Typical FDM
 values are **0.1–0.25 mm** (start around 0.15 mm and tune for your printer); the
 default is 0, and values at or beyond half the thread depth are rejected because
-they would degenerate the profile:
+they would degenerate the profile.
+
+"Normal to its own boundary" is a distance-field offset, and it has a shape worth
+knowing because it is what makes clearance **exact in every representation**. Eroding
+the material MITERS its crest corners — the two offset lines simply meet — and ROUNDS
+its root corners into arcs of the clearance radius, because that is where the disc
+being subtracted has to fit. An internal thread's void grows instead, so the two swap.
+Past a clearance of `tan(30°)` times the crest half-width the crest flat is consumed
+altogether and the thread is correctly a **pointed ridge** — on an M6×1 that happens at
+0.108 mm, well inside the printable band, so it is the ordinary case rather than an
+edge one:
 
 ```csharp run:thread-clearance
 var quality = new MeshQuality { SdfResolution = 96 };
@@ -104,6 +115,14 @@ try
     throw new Exception("expected the degenerate-profile guard to throw");
 }
 catch (ArgumentOutOfRangeException) { }
+
+// And clearance is B-Rep-native: the eroded profile's rounded root corners sweep to
+// ARC-generator helical bands, so the lateral boundary is still one boolean-free
+// helical sweep. The two representations are one geometry, not two approximations.
+var printedStud = Shape.ExternalThread(8, length: 10, clearance: 0.2, chamferEnds: false);
+printedStud.ToBrep().Validate();
+if (!printedStud.CanConvertTo(TargetRep.Brep))
+    throw new Exception("a clearance thread is B-Rep-native");
 ```
 
 ## Representation support (the honest part)
@@ -113,15 +132,18 @@ exact sign (and a documented approximate distance), so thread shapes compose wit
 every SDF operator, and chamfered or clearance-fitted threads mesh through Surface
 Nets polygonization — the 3D printing route (`ToMesh()` → [STL export](exports.md)).
 
-**External threads with the unmodified basic profile — zero clearance and
-`chamferEnds: false` — are also B-Rep-native.** The entire lateral boundary is ONE
+**External threads are also B-Rep-native** (with `chamferEnds: false`, and with or
+without a printing clearance). The entire lateral boundary is ONE
 boolean-free helical sweep (`SolidFactory.MakeThreadedRod`): each facet of the
 per-pitch profile — root flat, flank, crest flat, flank — sweeps to a single exact
 `HelicalSurface` band wrapping *all* the turns, adjacent bands share exact `Helix3d`
 rail edges, and the flat end caps are disks bounded by the spiral arcs the cap planes
 cut from the bands. No core cylinder exists for a ridge to weld onto, so no tangent
-seams and zero booleans. Any length works (no whole-turn constraint), and such
-threads mesh through exact B-Rep tessellation with crisp helical edges:
+seams and zero booleans. A clearance adds ARC pieces to that profile and nothing else
+changes: the arc bands are the same kind of sweep, and their cap cuts are the same
+closed form one generator up (`HelicalArcCut3d`, where a straight generator gives
+`SpiralArc3d`). Any length works (no whole-turn constraint), and such threads mesh
+through exact B-Rep tessellation with crisp helical edges:
 
 ```csharp render:thread-brep
 // A B-Rep-native M8 stud: exact helical surfaces, tessellated with crisp rails —
@@ -213,12 +235,13 @@ end plane — the same coincident-surface input a full-depth chamfer earns a ref
 also *replaces* that end's lead-in chamfer, because a stud has a lead-in at its free end
 and a runout at its shank end, not both at once.
 
-**Threaded holes are B-Rep-native too** (at zero clearance): the B-Rep path never
+**Threaded holes are B-Rep-native too**, clearance included: the B-Rep path never
 drills the pilot separately — the pilot bore wall and the thread tool's root band
 would be coaxial (tangent, unsupported boolean input) — and instead subtracts ONE
 combined tool per point, the internal thread form clipped at the pilot radius, whose
 helical bands cross the drilled plane in exact spiral arcs chaining into a closed
-loop:
+loop. A clearance simply GROWS that tool by the same distance-field offset, which is
+why its crest corners round where an external thread's miter:
 
 ```csharp run:thread-hole-brep
 var top = SketchPlane.At((0, 0, 4), Vector3d.UnitX, Vector3d.UnitY);
@@ -227,7 +250,11 @@ var tapped = Shape.Box(20, 20, 8)
 
 var brep = tapped.ToBrep();                       // B-Rep-native threaded hole
 if (!tapped.CanConvertTo(TargetRep.Brep))
-    throw new Exception("zero-clearance threaded holes are B-Rep-native");
+    throw new Exception("threaded holes are B-Rep-native");
+
+var printable = Shape.Box(20, 20, 8)
+    .ThreadedHole(StandardThreads.Metric(8), [new(0, 0)], depth: 6, top, clearance: 0.2);
+printable.ToBrep().Validate();                    // and so is the printable fit
 ```
 
 ## Calling a thread out
@@ -296,14 +323,12 @@ if (!handedPair.CanConvertTo(TargetRep.Brep))
 One boundary to know: downstream B-Rep booleans can cut a modeled thread only with
 planes **perpendicular to its axis** (the exact spiral-arc case). A cut slicing
 *along* the threads — like the sectioned illustration above — fails loudly in the
-B-Rep kernel; give the design a clearance (printable parts want one anyway) or drop
-to `ToImplicit()` and the SDF route handles it exactly.
+B-Rep kernel; drop to `ToImplicit()` and the SDF route handles it exactly.
 
 `Explain` reports each case truthfully — Native for the basic profile with or without a
-sub-depth chamfer, and a per-cause Impossible otherwise. The two remaining causes are
-different in kind: a **full-depth chamfer** is a geometric coincidence (the cone lands
-tangent to every root band), while **clearance** has no exact counterpart at all, since it
-offsets the profile as a distance field whose reflex corners round into arcs. Helical
+sub-depth chamfer or a printing clearance, and Impossible for the one remaining cause,
+which is a geometric coincidence rather than a missing capability: a **full-depth
+chamfer** lands its cone tangent to every root band along the end plane. Helical
 surfaces are not STEP-exportable yet (same bucket as swept surfaces):
 
 ```csharp run:thread-explain

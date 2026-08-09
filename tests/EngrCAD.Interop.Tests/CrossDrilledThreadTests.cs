@@ -102,4 +102,36 @@ public class CrossDrilledThreadTests
         }
         Assert.True(built >= 8, $"only {built} of 13 bores build (was 0 before exact termination)");
     }
+
+    /// <summary>
+    /// The FOLD is a mechanism rather than a count, so it is measured as one: a branch
+    /// whose corrector refuses a step heading strictly INSIDE every domain has no rail to
+    /// land on, and `FaceSplitter` then refuses it by name — "Open splitting curves must
+    /// start and end outside the face". The tracer now retries such a step at successively
+    /// halved lengths, which is what a fold needs (the curve turns back within one step,
+    /// so the constraint plane a whole step ahead has no solution near it) and what a rail
+    /// exit does not.
+    ///
+    /// <para>Measured across this sweep: TWO bores refused that way (1.2 and 1.6) and now
+    /// ONE does. The 1.6 bore's failure moved DOWNSTREAM, to two unpaired edges where a
+    /// helix rail and its coincident cut segment run between the same two points — a
+    /// different defect the fold refusal had been hiding, and the one the 2.8 bore already
+    /// had. The remaining 1.2 case is NOT a corrector refusal: raising the halving budget
+    /// from 5 to 14 leaves it byte for byte, so its branch stops for one of the trace's
+    /// other reasons (a tangential contact, a branch jump, or the step cap) and a shorter
+    /// step is not its remedy.</para>
+    /// </summary>
+    [Fact]
+    public void AFoldNoLongerStrandsABranchInsideItsFace()
+    {
+        int stranded = 0;
+        for (double radius = 0.6; radius <= 3.01; radius += 0.2)
+        {
+            double r = radius;
+            var thrown = Record.Exception(() => BrepBoolean.Difference(Rod(), CrossDrill(r)));
+            if (thrown?.Message.Contains("Open splitting curves must start and end outside") == true)
+                stranded++;
+        }
+        Assert.True(stranded <= 1, $"{stranded} of 13 bores stranded a branch inside a face (was 2)");
+    }
 }

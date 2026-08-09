@@ -160,6 +160,50 @@ public readonly struct SketchArcRef
     public override string ToString() => Description;
 }
 
+/// <summary>Which end of a <see cref="SketchCurveRef"/> a tangency is taken at.</summary>
+public enum SketchCurveEnd
+{
+    /// <summary>The v = 0 joint, where the segment starts.</summary>
+    Start,
+
+    /// <summary>The v = 1 joint, where the segment ends.</summary>
+    End,
+}
+
+/// <summary>
+/// A cubic BÉZIER or ELLIPTICAL-ARC segment of a <see cref="ConstrainedSketch"/> — the two
+/// segment kinds that carry no shape variables of their own and instead ride the SIMILARITY
+/// of their two endpoint joints (a bézier's control points and an ellipse's centre and both
+/// semi-axis vectors all move with it).
+/// <para>That is what makes them constrainable at all without a second variable scheme: the
+/// carrier is a fixed shape times a live chord, so a point-on-carrier or a tangency residual
+/// is written once against the DRAWN geometry and evaluated through the chord.</para>
+/// </summary>
+public readonly struct SketchCurveRef
+{
+    internal ConstrainedSketch Owner { get; }
+
+    /// <summary>Start joint variable, or −1 when the loop is one closed curve and the
+    /// carrier therefore cannot move at all.</summary>
+    internal int Start { get; }
+
+    internal int End { get; }
+    internal SketchSegment Segment { get; }
+    internal string Description { get; }
+
+    internal SketchCurveRef(
+        ConstrainedSketch owner, int start, int end, SketchSegment segment, string description)
+    {
+        Owner = owner;
+        Start = start;
+        End = end;
+        Segment = segment;
+        Description = description;
+    }
+
+    public override string ToString() => Description;
+}
+
 /// <summary>
 /// The variational 2D constraint layer over a drawn <see cref="Sketch"/> — Onshape's
 /// constraint vocabulary (CadQuery's <c>Sketch.constrain(...).solve()</c> is the API
@@ -210,6 +254,30 @@ public sealed class ConstrainedSketch
     private readonly List<SketchConstraint> _constraints = [];
     private readonly List<string> _constraintNames = [];
 
+    /// <summary>Seeds of the AUXILIARY unknowns some constraints carry — today only a
+    /// point-on-bézier foot parameter, which has no geometry of its own to live on.
+    /// They sit after the sketch's own variables, so <c>Rebuild</c> reads exactly the
+    /// prefix it always did and the DOF report counts the whole system.</summary>
+    private readonly List<double> _auxiliary = [];
+
+    private int AddAuxiliary(double seed)
+    {
+        _auxiliary.Add(seed);
+        return _map.Count + _auxiliary.Count - 1;
+    }
+
+    private double[] SolverSeed()
+    {
+        if (_auxiliary.Count == 0)
+            return _map.Seed;
+        var seed = new double[_map.Count + _auxiliary.Count];
+        _map.Seed.CopyTo(seed, 0);
+        _auxiliary.CopyTo(seed, _map.Count);
+        return seed;
+    }
+
+    private int TotalVariables => _map.Count + _auxiliary.Count;
+
     internal ConstrainedSketch(Sketch sketch)
     {
         ArgumentNullException.ThrowIfNull(sketch);
@@ -248,6 +316,14 @@ public sealed class ConstrainedSketch
     /// <summary>Arc (or full-circle) segment <paramref name="segment"/> of hole
     /// <paramref name="hole"/> — a hole drawn with <c>Sketch.Circle</c> is its segment 0.</summary>
     public SketchArcRef HoleArc(int hole, int segment) => ArcRef(HoleLoop(hole), segment);
+
+    /// <summary>Bézier or elliptical-arc segment <paramref name="segment"/> of the outer
+    /// loop — the two kinds whose shape rides their endpoint joints.</summary>
+    public SketchCurveRef Curve(int segment) => CurveRef(0, segment);
+
+    /// <summary>Bézier or elliptical-arc segment <paramref name="segment"/> of hole
+    /// <paramref name="hole"/>.</summary>
+    public SketchCurveRef HoleCurve(int hole, int segment) => CurveRef(HoleLoop(hole), segment);
 
     /// <summary>An arc's center as a point entity — usable in <see cref="Coincident"/>,
     /// <see cref="Distance(SketchPointRef, SketchPointRef, double)"/>,
@@ -546,6 +622,273 @@ public sealed class ConstrainedSketch
             { Name = $"PointOn({point}, {arc})" });
     }
 
+    /// <summary>
+    /// The point lies on the CARRIER of a bézier or elliptical-arc segment — the whole
+    /// ellipse, or the bézier's own cubic beyond its drawn stretch — for the same reason
+    /// the line and arc overloads take carriers: clamping to the drawn run would be a
+    /// branch selector in disguise.
+    ///
+    /// <para><b>The two kinds are different residuals, and the difference is real rather
+    /// than a convenience.</b> An ellipse is a CONIC, so membership has a closed algebraic
+    /// form — <c>|M⁻¹(p − C)| − 1</c>, the arc's own <c>|p − c| − r</c> with the radius
+    /// replaced by the semi-axis matrix — and costs one row and no new unknown. A cubic
+    /// bézier has no such form, so the foot parameter joins the system as a VARIABLE and
+    /// the residual is <c>B(t) − p = 0</c>: two rows and one unknown, which removes exactly
+    /// the one degree of freedom a point-on-curve constraint should.</para>
+    ///
+    /// <para>The DRAWN foot is the seed and the branch selector, the rule the whole layer
+    /// runs on — a cubic can pass a point three times, and which crossing is meant is read
+    /// off the drawing rather than guessed at.</para>
+    /// </summary>
+    public ConstrainedSketch PointOn(SketchPointRef point, SketchCurveRef curve)
+    {
+        var owned = Owned(point);
+        RequireOwned(curve.Owner, curve.Description);
+        var seed = _map.Seed;
+        switch (curve.Segment)
+        {
+            case EllipseSeg ellipse:
+            {
+                // An ellipse with no chord is legal here — a full-ellipse loop's carrier is
+                // simply FIXED, and the residual is still first order in the point.
+                if (curve.Start >= 0 && curve.Start == curve.End)
+                    throw new ArgumentException(
+                        $"PointOn({point}, {curve}): {curve} closes on itself, so its two joints are one " +
+                        "variable and it has no chord for its shape to ride.");
+                var p = SketchVariables.Point(seed, owned.Variable);
+                double reach = Math.Max(ellipse.SemiAxisX.Length, ellipse.SemiAxisY.Length);
+                // Scale-free, and the SAME refusal PointOn(point, arc) makes: at the
+                // centre the residual has magnitude but no gradient direction.
+                if ((p - ellipse.Center).Length <= 1e-9 * Math.Max(reach, _map.CharacteristicLength))
+                    throw new ArgumentException(
+                        $"PointOn({point}, {curve}) is drawn with the point at the ellipse's centre, " +
+                        "where the residual has no gradient direction; move the point off the centre first.");
+                return Add(new PointOnEllipseConstraint(
+                    owned.Variable, curve.Start, curve.End, ellipse.Start, ellipse.End,
+                    ellipse.Center, ellipse.SemiAxisX, ellipse.SemiAxisY)
+                    { Name = $"PointOn({point}, {curve})" });
+            }
+
+            case CubicSeg cubic:
+            {
+                RequireChord(curve, $"PointOn({point}, {curve})");
+                var p = SketchVariables.Point(seed, owned.Variable);
+                int foot = AddAuxiliary(NearestParameter(cubic, p));
+                return Add(new PointOnBezierConstraint(
+                    owned.Variable, curve.Start, curve.End, foot,
+                    cubic.P0, cubic.P3, cubic.Control1, cubic.Control2)
+                    { Name = $"PointOn({point}, {curve})" });
+            }
+
+            default:
+                throw new ArgumentException($"{curve} is not a bézier or elliptical arc.");
+        }
+    }
+
+    /// <summary>
+    /// The tangent DIRECTION at one END of a bézier or elliptical arc is parallel to
+    /// <paramref name="line"/> — the tangency those two segment kinds lacked.
+    /// <para>Both carriers ride the chord similarity, so their end tangent is a FIXED
+    /// complex multiple of the live chord (a cubic leaves its start along 3(C₁ − P₀), an
+    /// ellipse along its own derivative there), which makes this the ordinary two-direction
+    /// row with the curve's constant folded in. Pass <paramref name="perpendicular"/> for
+    /// the right-angle form.</para>
+    /// </summary>
+    public ConstrainedSketch Tangent(
+        SketchCurveRef curve, SketchCurveEnd at, SketchLineRef line, bool perpendicular = false)
+    {
+        RequireOwned(curve.Owner, curve.Description);
+        RequireOwned(line.Owner, line.Description);
+        RequireChord(curve, $"Tangent({curve}, {at.ToString().ToLowerInvariant()}, {line})");
+        var factor = EndTangentFactor(curve, at);
+        return Add(new CurveTangentConstraint(
+            curve.Start, curve.End, factor, line.P1, line.P2, parallel: !perpendicular)
+            { Name = $"Tangent({curve} {at.ToString().ToLowerInvariant()}, {line})" });
+    }
+
+    /// <summary>
+    /// <paramref name="line"/> is tangent to an elliptical arc's CARRIER conic — the whole
+    /// ellipse, exactly as <c>Tangent(line, arc)</c> is tangent to an arc's whole circle
+    /// and <c>PointOn</c> is on a carrier rather than on the drawn stretch.
+    ///
+    /// <para>It needs no foot parameter: an ellipse is a conic, so the extreme signed
+    /// distance from it to a line is <c>n̂·(C − q) ± |Mᵀn̂|</c> for the semi-axis matrix
+    /// <c>M = [A B]</c>, and tangency is one extreme vanishing — ONE row, signed, first
+    /// order, no new unknown, reducing to the circular form exactly when A and B are
+    /// perpendicular and equal.</para>
+    ///
+    /// <para><b>Which of the two tangents is meant is read off the drawing</b> (the branch
+    /// selector the whole layer runs on), so a line drawn THROUGH the ellipse's centre has
+    /// no side and is refused by name — the same singularity, and the same treatment, as a
+    /// point drawn at an arc's centre. A BÉZIER is refused too, and for a reason rather
+    /// than a deferral: it has no closed algebraic support function, so its tangency needs
+    /// the foot parameter as a variable, which is a different constraint shape (two rows
+    /// over one unknown) and is filed.</para>
+    /// </summary>
+    public ConstrainedSketch Tangent(SketchLineRef line, SketchCurveRef curve)
+    {
+        RequireOwned(line.Owner, line.Description);
+        RequireOwned(curve.Owner, curve.Description);
+        string what = $"Tangent({line}, {curve})";
+        if (curve.Segment is not EllipseSeg ellipse)
+            throw new ArgumentException(
+                $"{what}: tangency is available for an elliptical arc, whose carrier is a conic with a " +
+                "closed-form support function. A cubic bézier has none, so its tangency needs its foot " +
+                "parameter as a solver variable and is not in the vocabulary.");
+        // A full-ellipse loop's carrier is simply FIXED, which is legal: the row is still
+        // first order in the line's own two points.
+        if (curve.Start >= 0 && curve.Start == curve.End)
+            throw new ArgumentException(
+                $"{what}: {curve} closes on itself, so its two joints are one variable and it has no " +
+                "chord for its shape to ride.");
+
+        var seed = _map.Seed;
+        var p1 = SketchVariables.Point(seed, line.P1);
+        var direction = SketchVariables.Point(seed, line.P2) - p1;
+        // The line is pulled into the DRAWN frame before its side is read, so the seed and
+        // the residual answer the same question.
+        var chord = curve.Start < 0
+            ? default
+            : SketchVariables.Point(seed, curve.End) - SketchVariables.Point(seed, curve.Start);
+        var (u, v) = curve.Start < 0 || !(chord.LengthSquared > 0)
+            ? (p1, p1 + direction)
+            : (PullToDrawn(p1, seed, curve, chord, ellipse),
+               PullToDrawn(p1 + direction, seed, curve, chord, ellipse));
+        var pulled = v - u;
+        if (!(pulled.LengthSquared > 0))
+            throw new ArgumentException($"{what}: {line} is drawn with no length.");
+        var unit = pulled / pulled.Length;
+        double offset = (ellipse.Center - u).Cross(unit);
+        double reach = Math.Max(ellipse.SemiAxisX.Length, ellipse.SemiAxisY.Length);
+        // Scale-free: at zero offset the two tangents coincide in the residual and the
+        // drawing states no side, so the constraint has no branch to keep.
+        if (Math.Abs(offset) <= 1e-9 * Math.Max(reach, _map.CharacteristicLength))
+            throw new ArgumentException(
+                $"{what} is drawn with the line through the ellipse's centre, where the two tangents " +
+                "are indistinguishable and the drawing states no side; move the line off the centre first.");
+
+        return Add(new TangentLineEllipseConstraint(
+            line.P1, line.P2, curve.Start, curve.End, ellipse.Start, ellipse.End,
+            ellipse.Center, ellipse.SemiAxisX, ellipse.SemiAxisY, offset >= 0 ? 1 : -1)
+            { Name = what });
+    }
+
+    private static Vector2d PullToDrawn(
+        in Vector2d p, double[] seed, in SketchCurveRef curve, in Vector2d chord, EllipseSeg ellipse)
+    {
+        var s = SketchVariables.Point(seed, curve.Start);
+        var zeta = PointOnEllipseConstraint.ComplexDivide(p - s, chord);
+        return PointOnEllipseConstraint.ComplexMultiply(zeta, ellipse.End - ellipse.Start) + ellipse.Start;
+    }
+
+    /// <summary>
+    /// A curve whose shape rides its chord needs a chord to ride, and there are two ways
+    /// not to have one — a loop that is ONE closed curve carries no joints at all (a full
+    /// ellipse), and a single-segment loop that is not recognized as closed has its two
+    /// joints as one variable. Both are refused here rather than dividing by zero three
+    /// stages down.
+    /// </summary>
+    private static void RequireChord(in SketchCurveRef curve, string what)
+    {
+        if (curve.Start < 0)
+            throw new ArgumentException(
+                $"{what}: a closed single-curve loop carries no joints, so its carrier is fixed and " +
+                "the constraint could only move the other side.");
+        if (curve.Start == curve.End)
+            throw new ArgumentException(
+                $"{what}: {curve} closes on itself, so its two joints are one variable and it has no " +
+                "chord for its shape to ride.");
+    }
+
+    /// <summary>
+    /// The end tangent expressed OVER the drawn chord, so multiplying it by the live chord
+    /// gives the live tangent. A direction, so its sign and magnitude are free — which is
+    /// why an elliptical arc's sweep sign never has to be reasoned about here.
+    /// </summary>
+    private static Vector2d EndTangentFactor(SketchCurveRef curve, SketchCurveEnd at)
+    {
+        switch (curve.Segment)
+        {
+            case CubicSeg cubic:
+            {
+                var chord = cubic.P3 - cubic.P0;
+                var tangent = at == SketchCurveEnd.Start
+                    ? cubic.Control1 - cubic.P0
+                    : cubic.P3 - cubic.Control2;
+                return Divide(tangent, chord, curve);
+            }
+
+            case EllipseSeg ellipse:
+            {
+                double angle = ellipse.StartAngle + (at == SketchCurveEnd.Start ? 0 : ellipse.Sweep);
+                var tangent = ellipse.SemiAxisY * Math.Cos(angle) - ellipse.SemiAxisX * Math.Sin(angle);
+                return Divide(tangent, ellipse.End - ellipse.Start, curve);
+            }
+
+            default:
+                throw new ArgumentException($"{curve} is not a bézier or elliptical arc.");
+        }
+    }
+
+    private static Vector2d Divide(in Vector2d value, in Vector2d chord, in SketchCurveRef curve)
+    {
+        // Exact-zero division guard: a chord-degenerate drawn curve has no similarity to
+        // ride, so there is nothing to express the tangent over.
+        if (!(chord.LengthSquared > 0))
+            throw new ArgumentException(
+                $"{curve} is drawn with coincident endpoints, so it has no chord for its shape to ride.");
+        return PointOnEllipseConstraint.ComplexDivide(value, chord);
+    }
+
+    /// <summary>
+    /// The drawn foot: a coarse scan plus a few Newton steps on <c>(B(t) − p)·B′(t)</c>.
+    /// It is a SEED and a branch choice, never an answer — the solver refines it as an
+    /// ordinary unknown — so the scan needs only to land in the right basin, and the
+    /// parameter is deliberately not clamped to [0, 1].
+    /// </summary>
+    private static double NearestParameter(CubicSeg cubic, in Vector2d p)
+    {
+        const int samples = 64;
+        double best = 0, bestDistance = double.PositiveInfinity;
+        for (int i = 0; i <= samples; i++)
+        {
+            double t = (double)i / samples;
+            double distance = (BezierPoint(cubic, t) - p).LengthSquared;
+            if (distance < bestDistance)
+                (bestDistance, best) = (distance, t);
+        }
+        for (int i = 0; i < 8; i++)
+        {
+            var delta = BezierPoint(cubic, best) - p;
+            var first = BezierDerivative(cubic, best);
+            var second = BezierSecondDerivative(cubic, best);
+            double gradient = delta.Dot(first);
+            double curvature = first.Dot(first) + delta.Dot(second);
+            if (!(Math.Abs(curvature) > 0))
+                break;
+            best -= gradient / curvature;
+        }
+        return best;
+    }
+
+    private static Vector2d BezierPoint(CubicSeg c, double t)
+    {
+        double u = 1 - t;
+        return c.P0 * (u * u * u) + c.Control1 * (3 * u * u * t)
+            + c.Control2 * (3 * u * t * t) + c.P3 * (t * t * t);
+    }
+
+    private static Vector2d BezierDerivative(CubicSeg c, double t)
+    {
+        double u = 1 - t;
+        return (c.Control1 - c.P0) * (3 * u * u) + (c.Control2 - c.Control1) * (6 * u * t)
+            + (c.P3 - c.Control2) * (3 * t * t);
+    }
+
+    private static Vector2d BezierSecondDerivative(CubicSeg c, double t) =>
+        (c.Control2 - c.Control1 * 2 + c.P0) * (6 * (1 - t))
+        + (c.P3 - c.Control2 * 2 + c.Control1) * (6 * t);
+
     /// <summary>Dimension: the arc's radius is <paramref name="radius"/> (&gt; 0).</summary>
     public ConstrainedSketch Radius(SketchArcRef arc, double radius)
     {
@@ -596,15 +939,15 @@ public sealed class ConstrainedSketch
         if (_constraints.Count == 0)
         {
             diagnostics.Add("no constraints — the sketch is returned as drawn");
-            diagnostics.Add(FreedomNote(_map.Count));
-            return new SketchSolveResult(true, 0, 0, _map.Count, 0, 0, diagnostics)
+            diagnostics.Add(FreedomNote(TotalVariables));
+            return new SketchSolveResult(true, 0, 0, TotalVariables, 0, 0, diagnostics)
                 { Sketch = Source };
         }
 
         var system = new List<SketchConstraint>(_constraints);
         AddInternalConstraints(system);
 
-        var outcome = SketchLevenberg.Run(_map.Seed, system, _map.CharacteristicLength, settings);
+        var outcome = SketchLevenberg.Run(SolverSeed(), system, _map.CharacteristicLength, settings);
         int redundant = outcome.Rows - outcome.Rank;
 
         bool converged = outcome.Converged;
@@ -656,7 +999,7 @@ public sealed class ConstrainedSketch
 
         return new SketchSolveResult(
             converged, outcome.Iterations, outcome.Residual,
-            _map.Count, outcome.Rank, redundant, diagnostics)
+            TotalVariables, outcome.Rank, redundant, diagnostics)
             { Sketch = solved };
     }
 
@@ -779,6 +1122,23 @@ public sealed class ConstrainedSketch
         int endJoint = map.SingleCircle ? -1 : map.JointVars[(segment + 1) % map.JointCount];
         return new SketchArcRef(this, map.CenterVars[segment], map.RadiusVars[segment],
             startJoint, endJoint, $"{LoopName(loop)} {(circle ? "circle" : "arc")} {segment}");
+    }
+
+    private SketchCurveRef CurveRef(int loop, int segment)
+    {
+        var map = _map.Loops[loop];
+        RequireSegment(loop, segment);
+        var drawn = map.Segments[segment];
+        if (drawn is not (CubicSeg or EllipseSeg))
+            throw new ArgumentException(
+                $"Segment {segment} of the {LoopName(loop)} loop is {KindName(drawn)}; Curve() is for " +
+                "béziers and elliptical arcs (use Line or Arc).");
+        // A loop that is ONE closed curve has no joints at all — the same structural case
+        // a full circle is — so its carrier is fixed and the ref says so with −1.
+        int start = map.SingleCircle ? -1 : map.JointVars[segment];
+        int end = map.SingleCircle ? -1 : map.JointVars[(segment + 1) % map.JointCount];
+        string kind = drawn is CubicSeg ? "bézier" : "ellipse";
+        return new SketchCurveRef(this, start, end, drawn, $"{LoopName(loop)} {kind} {segment}");
     }
 
     private void RequireSegment(int loop, int segment)

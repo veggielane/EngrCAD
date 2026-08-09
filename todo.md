@@ -519,121 +519,32 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
-- [ ] **Clearance profiles in B-Rep — arc-generator helical bands.** The one thread
-  feature with no exact B-Rep counterpart, and the geometry is fully derived; what is
-  missing is machinery, listed here so the next attempt starts from the maths.
-  A printing clearance is a DISTANCE-FIELD offset of the (radius, axial) profile, so on an
-  external thread (erode by c) the material's CONVEX corners — the two ends of each crest
-  flat — miter to a sharp intersection of the offset lines, while its REFLEX corners — the
-  two ends of each root flat — round into a circular ARC of radius c centred on the
-  original corner. (An internal thread's void dilates and the roles swap.) So the eroded
-  profile per pitch is: crest flat at `major − c`, sharp corner, perpendicular-offset
-  flank, ARC, root flat at `minor − c`, ARC, flank, sharp corner. Every piece but the two
-  arcs is already expressible.
-  - The **miter alternative is refused rather than unexplored**: offsetting each flat and
-    flank perpendicular to itself and mitering the root corners needs no new machinery at
-    all and is a legitimate clearance convention — but `ThreadSdf`'s clearance is the
-    distance-field offset, so the two representations would stop being one geometry, which
-    is the property `ChamferedThreadTests.TheBrepChamferAgreesWithTheImplicitFieldAtEveryVertex`
-    exists to hold. Changing the SDF to match would move committed renders and every
-    printed-fit figure. Either both change together or neither does.
-  - What has to be built: `HelicalSurface` (or a sibling) over a CIRCULAR-ARC generator in
-    the (r, z) plane, with exact `PointAt`/`NormalAt`/`TryProjectPoint`; a new cap-cut
-    CURVE, because substituting an arc generator `(r, z) = C + ρ(cos φ, sin φ)` into
-    `z(v) + rate·u = z_cap` gives `φ(u) = asin((z_cap − C_z − rate·u)/ρ)` — closed form, but
-    `r(u) = C_r ± √(ρ² − (z_cap − C_z − rate·u)²)` is not linear in u, so it is NOT a
-    `SpiralArc3d`; the coaxial intersection family (whose whole derivation rests on v being
-    linear in u for a STRAIGHT generator); `MakeThreadedRod` taking arc segments in its
-    profile; and `BRepTessellator`'s `NaturalSteps`, whose v gets an INFINITE step today on
-    the stated ground that the generator is straight and a v-chord therefore lies exactly on
-    the surface — flatly wrong for an arc, so leaving it would be a silent fidelity
-    regression rather than a refusal. Plus `BrepArchive`, `GeometryTransform` and
-    `BrepSelection`.
-  - Note `SurfaceOffset` does NOT help: it keeps each carrier in its own family and has no
-    `HelicalSurface` case, and a helical band's offset is a helical band on an OFFSET
-    GENERATOR, which is exactly the arc-generator work.
-- [ ] **A traced branch that stops at a FOLD still ends inside its face.** The
-  termination half of the non-coaxial helical work ✅ landed (`TryLandOnDomain` — see the
-  BRep README), taking a cross-drilled M8×1.25 rod from refusing at 13 of 13 bores between
-  0.6 and 3.0 to building Validate-clean closed solids at 8 of them, and a tilted-plane cut
-  from 0 of 4 to 1 of 4. What is left is a different mechanism: where the corrector refuses
-  a step it was NOT trying to take out of the domain — the fold a cross-drill's own cylinder
-  makes as it doubles back — the branch stops mid-face with no boundary to land on, and
-  `FaceSplitter` refuses it by name.
-  - **Halving the step and retrying was built, measured and REVERTED**, which is what makes
-    this a filed item rather than an omission: it takes cross-drilling to 10 of 13, and it
-    reaches whole-solid FILLET bands too (they are anisotropic — long and only `r·π/2`
-    wide), where it broke seven Interop tests and took the tilted-plane family from 1 of 4
-    to 0 of 4. An algorithm that can only trade one refusal for another should not be
-    reached at all. A fix has to be scoped by the FOLD rather than by the surface's aspect,
-    or handle the fold as a fold (a turning point the trace continues through) rather than
-    as a shorter step.
-- [ ] **A trimmed face far narrower than one natural grid cell gets neither interior rows
-  nor refinement.** Measured on a thread's 45° end-chamfer cone, which is the family's
-  worst case: the cone strip is a few hundredths of a millimetre tall wrapped around the
-  whole rod, so its facet count grows LINEARLY with `segmentsPerCircle` (74/148/300/600 at
-  32/64/128/256 for a 5%-depth chamfer) and its worst facet-vs-surface agreement runs
-  0.0606 / 0.5802 / 0.9247 / 0.9819 against a corpus floor of `cos(3·2π/n)`. It CONVERGES,
-  so it is coarseness rather than a floor — but at 32 segments a 25%-depth chamfer still
-  emits 2 folds (worst −0.0406), which the corpus audit at 64 does not see. Refinement
-  cannot help because its step metric is relative to the natural grid step and the whole
-  face is far inside one cell; the rowed paths cannot help because there is no grid row to
-  anchor. The principled fix is a density rule that measures a trimmed face against its OWN
-  uv extent rather than its surface's whole domain — which moves every trimmed face's
-  density, so it needs the corpus and the committed docs PNGs re-taken deliberately.
-- [ ] **2D sketch engine residue** (the front door ✅ landed — `Region2d`
-  polygon-with-holes with automatic nesting detection, `Region2dBoolean` over
-  `Arrangement2d`, `Sketch.ToRegions`, `Profile.FromRegion`; **exact curved 2D
-  booleans ✅ landed too** — `CurvedEdge2d`/`CurvedRegion2d`/`CurvedArrangement2d`/
-  `CurvedRegion2dBoolean`/`CurvedRegion2dOffset` in Core carry lines and arcs
-  unflattened, wired up through `Curve2d.TryToCurvedEdge`, `Profile.FromCurvedRegion`
-  and `Sketch.ToCurvedRegions`/`FromCurvedRegion`/`UnionExact`/`OffsetExact`):
-  `PolySimplification2`-style Douglas–Peucker simplification (only the exact-collinear
-  pass landed). ~~`Region2d` self-intersection validation~~ ✅ **done at `798622a`** —
-  `Region2dValidation` finds a PROPER crossing within one loop or between two, exactly via
-  `Orient2dSign`, over a `Bvh` above 24 segments, and `Region2d`'s constructors refuse
-  rather than producing garbage; `CurvedRegion2d` carries the curved twin over its own
-  x-sweep broad phase.
-- [ ] **Curved-2D-tier follow-ups** (the lines-and-arcs tier ✅ landed and is
-  complete in the sense that matters — its tangent+curvature tie-break is decidable
-  for exactly those two shapes; see design.md §5):
-  - [ ] **Curved `Shape.Section`/`Silhouette`.** A section of a B-Rep could return a
-    `CurvedRegion2d` for the analytic pairs (`PlanarSection` already gets exact circles
-    and lines from `SurfaceIntersection`) instead of flattening them; the silhouette
-    cannot, since it is a union of projected triangles.
-  - [ ] **`ContainedIn` is O(cells × operand edges)** here as well — the curved twin of
-    the open item below, and that item's measured verdict applies here first: a
-    point-location index was built for the polygonal twin and DECLINED at 1.0× on the
-    filed workload, so do not build the curved one without a fixture that provably
-    carries the cells × edges product.
 - [ ] **Sketch constraint follow-ups** (the variational solver ✅ landed —
   `Sketch.Constrain()`/`ConstrainedSketch`, full coincident/tangent/parallel/dimension
   vocabulary, analytic-Jacobian LM with rank-revealing DOF reports, drawn config as seed
   AND branch selector, refuse-loudly with named contradictions/stationary points):
   ~~elliptical arcs in sketches~~ ✅ **landed** (`Ellipse2d` + `EllipseSeg`,
   `Sketch.Ellipse`, `SketchBuilder.EllipticalArcTo`; exact in all three reps, docs
-  `sketching.md`) — what remains OF that item is the constraint side: an elliptical arc
-  carries no centre/axis variables, so it rides the chord similarity like a bézier and
-  tangency to one is not in the vocabulary; constraint serialization alongside feature
-  history (deliberately not v1 — it does not fall out of the `[Param]` descriptor
-  pattern); bézier constraints (tangency at bézier endpoints). ~~point-on-arc/curve
-  constraint~~ ✅ **landed** as `PointOn(point, line)`/`PointOn(point, arc)` — the CARRIER,
-  and both reuse an existing residual rather than adding a spelling of one (point-on-line
-  IS the point-to-line dimension at zero, legitimate because that residual is signed;
-  point-on-arc IS `ArcEndpointConstraint` with an arbitrary point).
-  - [ ] **Point-on-BÉZIER and point-on-ELLIPSE** are the two the vocabulary still lacks,
-    and they are a different problem from the two that landed: a line's and a circle's
-    carrier have a closed-form signed residual (`d̂ × (p − a)`, `|p − c| − r`), where a
-    bézier's or an ellipse's nearest-point is itself a solve, so the residual would need
-    its own foot parameter as a VARIABLE — which is the standard treatment and is real
-    work rather than a reuse. Filed with the bézier tangency it shares a mechanism with.
-- [ ] **Drill follow-ups** (drill-tip angles ✅ landed — `HoleSpec.WithTipAngle`, exact
-  as an identity, depth measured to the shoulder; **cross-PLANE hole validation** ✅
-  landed — bounding-cylinder separation plus a separating axis, since collinear tools
-  bored from opposite faces have zero radial axis distance however much web is left) —
-  remaining: hole tables, and thread cosmetics/annotation. Not covered by the
-  interference test: `ThreadedHole`'s thread void (its tap-drill pilot goes through
-  `Drill` and is), and tools from separate `Shape` branches later unioned.
+  `sketching.md`) — and the constraint side of it is closed too: `PointOn(point, curve)`
+  for both curved carriers, `Tangent(curve, end, line)` for their end tangents, and
+  `Tangent(line, curve)` for a line tangent to an elliptical arc's whole conic. What
+  remains is **constraint serialization alongside feature history** (deliberately not v1
+  — it does not fall out of the `[Param]` descriptor pattern): `ConstrainedSketch` keeps
+  solver ROWS plus display names rather than the public declarations that built them, so
+  a persisted form needs (a) a descriptor grammar for the four entity refs — `point(0,3)`,
+  `holeArc(1,0)`, `centerOf(arc(2))` — the way `GeometryRefs` spells a face query, (b) a
+  record per public constraint method beside the row it adds, and (c) the
+  `EverySketchSegmentKind_HasAJsonForm` treatment: a test enumerating the constraint
+  vocabulary FROM the assembly, so a method added without a JSON form fails rather than
+  taking a document down at save time. The one open design question is where it lives —
+  a `ConstrainedSketch` is an INPUT to a feature rather than a `[Param]`, so it belongs
+  in `Feature.SaveInputs` beside `InputJson.SaveCurves`, and the solved output is an
+  ordinary `Sketch` that already round-trips.
+  - **Tangency to a cubic BÉZIER** is the one carrier the tangency vocabulary refuses,
+    and it is refused with its reason rather than deferred: a cubic has no closed-form
+    support function, so the constraint is `cross(B(t) − p, d) = 0` together with
+    `cross(B′(t), d) = 0` — two rows over the foot parameter as a new variable, which is
+    the `PointOnBezier` shape plus one row, and removes the one DOF a tangency means.
 
 ## Deformation / analysis follow-ups
 

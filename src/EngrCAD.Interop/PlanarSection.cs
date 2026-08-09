@@ -139,6 +139,88 @@ public static class PlanarSection
     }
 
     /// <summary>
+    /// <see cref="OfSolid"/> without the flattening: the section as
+    /// <see cref="CurvedRegion2d"/>s, so a bore's rim comes back as ONE exact arc rather
+    /// than as however many chords a tolerance asked for.
+    ///
+    /// <para><b>The pipeline is the same one</b> — the same edge crossings solved once per
+    /// edge, the same per-face split at those nodes, the same midpoint containment probe,
+    /// the same node-index chaining — and only the EMIT differs, which is why it is one
+    /// enumeration of pieces with two representations rather than two sections. A piece
+    /// whose curve is a straight line or a circle in the cutting plane becomes one exact
+    /// edge; everything else (an oblique plane's ellipse, a traced polyline) is flattened
+    /// to <paramref name="chordTolerance"/> exactly as before, so a mixed section is honest
+    /// rather than refused.</para>
+    ///
+    /// <para><b>Exactness is decided by GEOMETRY, never by the curve's type.</b> A circle is
+    /// accepted only when its axis is parallel to the cutting normal, its centre lies in the
+    /// plane, and the piece's own midpoint is at the stated radius — the standing rule that
+    /// "lies on the carrier" is not "IS the carrier", and the reason a transformed or
+    /// segment-wrapped curve needs no special case here.</para>
+    /// </summary>
+    /// <exception cref="NotSupportedException">The plane is flush with a planar face.</exception>
+    public static IReadOnlyList<CurvedRegion2d> CurvedOfSolid(
+        BrepSolid solid, in Frame3d plane, double chordTolerance = DefaultChordTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(solid);
+        if (!(chordTolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(chordTolerance), "The chord tolerance must be positive.");
+
+        var origin = plane.Origin;
+        var normal = plane.Z;
+        var planeSurface = new PlaneSurface(plane);
+        double weld = Tolerance.Default.Linear;
+
+        foreach (var face in solid.Faces)
+        {
+            if (BoundsStraddle(face.Bounds(), origin, normal))
+                RejectFlushFace(face, origin, normal);
+        }
+
+        var nodes = new List<Vector3d>();
+        foreach (var edge in solid.Edges)
+        {
+            RejectInPlaneEdge(edge, origin, normal, weld);
+            CollectPlaneCrossings(edge, origin, normal, weld, nodes);
+        }
+
+        var loops = new List<IReadOnlyList<CurvedEdge2d>>();
+        var openRuns = new List<CurvedRun>();
+        foreach (var face in solid.Faces)
+        {
+            var bounds = face.Bounds();
+            if (!BoundsStraddle(bounds, origin, normal))
+                continue;
+
+            var grown = bounds.Expanded(weld);
+            var faceNodes = new List<int>();
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                if (grown.Contains(nodes[i]))
+                    faceNodes.Add(i);
+            }
+
+            foreach (var curve in SurfaceIntersection.Intersect(planeSurface, face.Surface, grown))
+            {
+                var samples = SampleParameters(curve, chordTolerance);
+                foreach (var piece in Pieces(curve, face, faceNodes, nodes, samples, weld))
+                {
+                    var edges = CurvedEdges(curve, piece, samples, nodes, plane, weld);
+                    if (edges.Count == 0)
+                        continue;
+                    if (piece.WholeClosedCurve)
+                        loops.Add(edges);
+                    else
+                        openRuns.Add(new CurvedRun(edges, piece.StartNode, piece.EndNode));
+                }
+            }
+        }
+
+        ChainCurvedRuns(openRuns, loops);
+        return CurvedRegion2d.FromLoops(loops);
+    }
+
+    /// <summary>
     /// The SILHOUETTE of a mesh viewed along the plane's normal — OpenSCAD's
     /// <c>projection(cut = false)</c>: the outline the body would cast, as 2D regions in the
     /// plane's coordinates. Internal cavities that do not reach the outline disappear (they
@@ -477,6 +559,50 @@ public static class PlanarSection
         List<IReadOnlyList<Vector2d>> loops, List<SectionRun> openRuns, in Frame3d plane)
     {
         var samples = SampleParameters(curve, chordTolerance);
+        foreach (var piece in Pieces(curve, face, faceNodes, nodes, samples, weld))
+        {
+            // Endpoints are the NODE POSITIONS, not the curve re-evaluated at a searched
+            // parameter: the parameter carries the search's residual (~5e-11 for a ternary
+            // search), while the node is the exact shared crossing both faces agree on.
+            var startPoint = piece.StartNode >= 0 ? nodes[piece.StartNode] : (Vector3d?)null;
+            var endPoint = piece.EndNode >= 0 ? nodes[piece.EndNode] : (Vector3d?)null;
+            var domain = curve.Domain;
+            List<Vector3d> run;
+            if (piece.Wraps)
+            {
+                run = Flatten(curve, piece.Start, domain.End, samples, startPoint, null);
+                run.RemoveAt(run.Count - 1);
+                run.AddRange(Flatten(curve, domain.Start, piece.End, samples, null, endPoint).Skip(1));
+            }
+            else
+            {
+                run = Flatten(curve, piece.Start, piece.End, samples, startPoint, endPoint);
+            }
+            if (run.Count < 2)
+                continue;
+            if (piece.WholeClosedCurve)
+                loops.Add(ToPlane(run, plane));
+            else
+                openRuns.Add(new SectionRun(run, piece.StartNode, piece.EndNode));
+        }
+    }
+
+    /// <summary>One stretch of a face's section curve that survives the trim: its parameter
+    /// span, the node index at each end (−1 for a domain end), and whether it wraps a closed
+    /// curve's seam or IS a whole closed curve.</summary>
+    private readonly record struct SectionPiece(
+        double Start, double End, bool Wraps, bool WholeClosedCurve, int StartNode, int EndNode);
+
+    /// <summary>
+    /// Which stretches of <paramref name="curve"/> lie inside <paramref name="face"/>'s trim
+    /// — the geometric half of the section, shared by the flattened and the curved emits so
+    /// the two can never disagree about where the section IS.
+    /// </summary>
+    private static List<SectionPiece> Pieces(
+        Curve3d curve, BrepFace face, IReadOnlyList<int> faceNodes, IReadOnlyList<Vector3d> nodes,
+        double[] samples, double weld)
+    {
+        var result = new List<SectionPiece>();
         var cuts = new List<(double T, int Node)>();
         foreach (int node in faceNodes)
         {
@@ -492,14 +618,9 @@ public static class PlanarSection
         {
             // No node touches this curve, so it cannot leave the face part way: it is wholly
             // in or wholly out, decided by one probe.
-            if (!InsideFace(face, curve.PointAt(domain.ParameterAt(0.5))))
-                return;
-            var whole = Flatten(curve, domain.Start, domain.End, samples, null, null);
-            if (closed)
-                loops.Add(ToPlane(whole, plane));
-            else
-                openRuns.Add(new SectionRun(whole, -1, -1));
-            return;
+            if (InsideFace(face, curve.PointAt(domain.ParameterAt(0.5))))
+                result.Add(new SectionPiece(domain.Start, domain.End, false, closed, -1, -1));
+            return result;
         }
 
         // Piece boundaries: the cuts, plus the domain ends for an open curve. A closed curve
@@ -526,31 +647,17 @@ public static class PlanarSection
                 : 0.5 * (start + end);
             if (!InsideFace(face, curve.PointAt(probe)))
                 continue;
-
-            // Endpoints are the NODE POSITIONS, not the curve re-evaluated at a searched
-            // parameter: the parameter carries the search's residual (~5e-11 for a ternary
-            // search), while the node is the exact shared crossing both faces agree on.
-            var startPoint = startNode >= 0 ? nodes[startNode] : (Vector3d?)null;
-            var endPoint = endNode >= 0 ? nodes[endNode] : (Vector3d?)null;
-            List<Vector3d> run;
-            if (wraps)
-            {
-                run = Flatten(curve, start, domain.End, samples, startPoint, null);
-                run.RemoveAt(run.Count - 1);
-                run.AddRange(Flatten(curve, domain.Start, end, samples, null, endPoint).Skip(1));
-            }
-            else
-            {
-                run = Flatten(curve, start, end, samples, startPoint, endPoint);
-            }
-            if (run.Count >= 2)
-                openRuns.Add(new SectionRun(run, startNode, endNode));
+            result.Add(new SectionPiece(start, end, wraps, false, startNode, endNode));
         }
+        return result;
     }
 
     /// <summary>An open piece of the section: its polyline plus the node index at each end
     /// (-1 when the piece does not terminate on an edge crossing).</summary>
     private readonly record struct SectionRun(List<Vector3d> Points, int StartNode, int EndNode);
+
+    /// <summary>The curved twin of <see cref="SectionRun"/>.</summary>
+    private readonly record struct CurvedRun(List<CurvedEdge2d> Edges, int StartNode, int EndNode);
 
     /// <summary>
     /// Is a point on a face's surface inside the face's trimmed region? The two-sided parity
@@ -688,6 +795,207 @@ public static class PlanarSection
         }
         points.Add(endPoint ?? curve.PointAt(end));
         return points;
+    }
+
+    /// <summary>
+    /// One piece as exact 2D edges: a single line or arc where the geometry allows it, and
+    /// otherwise the flattened polyline as a chain of line edges — so a mixed section is
+    /// honest rather than refused, and its exact halves stay exact.
+    /// </summary>
+    private static List<CurvedEdge2d> CurvedEdges(
+        Curve3d curve, in SectionPiece piece, double[] samples, IReadOnlyList<Vector3d> nodes,
+        in Frame3d plane, double weld)
+    {
+        var domain = curve.Domain;
+        var startPoint = piece.StartNode >= 0 ? nodes[piece.StartNode] : curve.PointAt(piece.Start);
+        var endPoint = piece.EndNode >= 0 ? nodes[piece.EndNode] : curve.PointAt(piece.End);
+        var start = Flat(plane, startPoint);
+        var end = Flat(plane, endPoint);
+
+        // A straight piece is one line edge, and it is checked by MEASUREMENT: sample the
+        // piece and require every sample on the chord. Cheap, and it needs no opinion about
+        // what the curve's type says it is.
+        if (!piece.Wraps && !piece.WholeClosedCurve && IsStraight(curve, piece.Start, piece.End, weld))
+            return start.DistanceTo(end) > 0 ? [CurvedEdge2d.Line(start, end)] : [];
+
+        if (TryCircleInPlane(curve, plane, weld, out var center, out double radius))
+        {
+            double startAngle = Angle(start - center);
+            if (piece.WholeClosedCurve)
+                return [CurvedEdge2d.Arc(center, radius, startAngle, SweepSign(curve, plane) * 2 * Math.PI)];
+
+            double endAngle = Angle(end - center);
+            double sign = SweepSign(curve, plane);
+            double sweep = endAngle - startAngle;
+            // Bring the sweep onto the arc's own direction of travel; a wrapped piece
+            // spans the seam and legitimately runs past a half turn.
+            while (sign > 0 && sweep <= 0)
+                sweep += 2 * Math.PI;
+            while (sign < 0 && sweep >= 0)
+                sweep -= 2 * Math.PI;
+            if (Math.Abs(sweep) > 0)
+                return [CurvedEdge2d.Arc(center, radius, startAngle, sweep)];
+        }
+
+        List<Vector3d> polyline;
+        if (piece.Wraps)
+        {
+            polyline = Flatten(curve, piece.Start, domain.End, samples, startPoint, null);
+            polyline.RemoveAt(polyline.Count - 1);
+            polyline.AddRange(Flatten(curve, domain.Start, piece.End, samples, null, endPoint).Skip(1));
+        }
+        else
+        {
+            polyline = Flatten(curve, piece.Start, piece.End, samples, startPoint, endPoint);
+        }
+
+        var edges = new List<CurvedEdge2d>(polyline.Count);
+        var previous = Flat(plane, polyline[0]);
+        for (int i = 1; i < polyline.Count; i++)
+        {
+            var next = Flat(plane, polyline[i]);
+            if (next.DistanceTo(previous) > 0)
+                edges.Add(CurvedEdge2d.Line(previous, next));
+            previous = next;
+        }
+        // A whole closed curve's chain must close on its own first point EXACTLY.
+        if (piece.WholeClosedCurve && edges.Count > 0 && edges[^1].End != edges[0].Start)
+            edges[^1] = CurvedEdge2d.Line(edges[^1].Start, edges[0].Start);
+        return edges;
+    }
+
+    /// <summary>Whether a parameter span of a curve is a straight segment, by measurement
+    /// against its own chord rather than by asking what type it is.</summary>
+    private static bool IsStraight(Curve3d curve, double start, double end, double weld)
+    {
+        var a = curve.PointAt(start);
+        var b = curve.PointAt(end);
+        var chord = b - a;
+        double length = chord.Length;
+        if (!(length > 0))
+            return false;
+        var direction = chord / length;
+        for (int i = 1; i < 8; i++)
+        {
+            var p = curve.PointAt(start + (end - start) * i / 8.0) - a;
+            if ((p - direction * p.Dot(direction)).Length > weld)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the curve is a CIRCLE lying in the cutting plane. Geometric throughout: the
+    /// axis must be parallel to the cutting normal, the centre must be in the plane, and
+    /// eight samples must sit at the stated radius — so a wrapped, reversed or reparameterized
+    /// circle needs no case and a curve that merely LIES on one is not mistaken for it.
+    /// </summary>
+    private static bool TryCircleInPlane(
+        Curve3d curve, in Frame3d plane, double weld, out Vector2d center, out double radius)
+    {
+        center = default;
+        radius = 0;
+        if (Underlying(curve) is not Circle3d circle)
+            return false;
+        var axis = circle.XDirection.Cross(circle.YDirection);
+        if (!axis.IsParallelTo(plane.Z, Tolerance.Default))
+            return false;
+        var local = plane.ToLocal(circle.Center);
+        if (Math.Abs(local.Z) > weld)
+            return false;
+        center = new Vector2d(local.X, local.Y);
+        radius = circle.Radius;
+        var domain = curve.Domain;
+        for (int i = 0; i <= 8; i++)
+        {
+            var p = plane.ToLocal(curve.PointAt(domain.ParameterAt(i / 8.0)));
+            if (Math.Abs(p.Z) > weld ||
+                Math.Abs(new Vector2d(p.X, p.Y).DistanceTo(center) - radius) > weld)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>Which way the curve turns about the plane's normal, +1 or −1.</summary>
+    private static double SweepSign(Curve3d curve, in Frame3d plane)
+    {
+        var domain = curve.Domain;
+        var a = plane.ToLocal(curve.PointAt(domain.ParameterAt(0.0)));
+        var b = plane.ToLocal(curve.PointAt(domain.ParameterAt(0.25)));
+        var c = plane.ToLocal(curve.PointAt(domain.ParameterAt(0.5)));
+        double turn = new Vector2d(b.X - a.X, b.Y - a.Y).Cross(new Vector2d(c.X - b.X, c.Y - b.Y));
+        return turn >= 0 ? 1 : -1;
+    }
+
+    private static double Angle(in Vector2d radial) => Math.Atan2(radial.Y, radial.X);
+
+    /// <summary>The curved twin of <see cref="ChainRuns"/>: the same node-index chaining,
+    /// concatenating edge lists and REVERSING each edge when a run is traversed backwards.</summary>
+    private static void ChainCurvedRuns(List<CurvedRun> runs, List<IReadOnlyList<CurvedEdge2d>> loops)
+    {
+        if (runs.Count == 0)
+            return;
+
+        var byNode = new Dictionary<int, List<int>>();
+        for (int i = 0; i < runs.Count; i++)
+        {
+            foreach (int node in new[] { runs[i].StartNode, runs[i].EndNode })
+            {
+                if (node < 0)
+                    continue;
+                if (!byNode.TryGetValue(node, out var list))
+                    byNode[node] = list = [];
+                list.Add(i);
+            }
+        }
+
+        var used = new bool[runs.Count];
+        for (int seed = 0; seed < runs.Count; seed++)
+        {
+            if (used[seed])
+                continue;
+            var chain = new List<CurvedEdge2d>(runs[seed].Edges);
+            used[seed] = true;
+            int startNode = runs[seed].StartNode;
+            int currentNode = runs[seed].EndNode;
+
+            while (currentNode >= 0 && currentNode != startNode)
+            {
+                int next = -1;
+                if (byNode.TryGetValue(currentNode, out var candidates))
+                {
+                    foreach (int candidate in candidates)
+                    {
+                        if (!used[candidate])
+                        {
+                            next = candidate;
+                            break;
+                        }
+                    }
+                }
+                if (next < 0)
+                    break;
+                used[next] = true;
+                bool forward = runs[next].StartNode == currentNode;
+                var edges = runs[next].Edges;
+                if (forward)
+                {
+                    chain.AddRange(edges);
+                }
+                else
+                {
+                    for (int i = edges.Count - 1; i >= 0; i--)
+                        chain.Add(edges[i].Reversed());
+                }
+                currentNode = forward ? runs[next].EndNode : runs[next].StartNode;
+            }
+
+            // A chain that did not close is an open section span and is discarded rather
+            // than faked — the same rule the flattened path follows.
+            if (currentNode != startNode || chain.Count < 2)
+                continue;
+            loops.Add(chain);
+        }
     }
 
     private static IReadOnlyList<Vector2d> ToPlane(IReadOnlyList<Vector3d> points, in Frame3d plane)
