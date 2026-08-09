@@ -21,7 +21,7 @@ Each states whether it is an **exact distance** or a **bound**:
 | `Sdf.Wedge(x, y, z, topX, topOffsetX)` | exact — the field twin of `Shape.Wedge` |
 | `Sdf.Pyramid(baseSize, height)` | exact |
 | `Sdf.Ellipsoid(a, b, c)` | **a bound** — see below |
-| `Sdf.ConvexPolyhedron(halfSpaces)` | exact inside, a lower bound outside |
+| `Sdf.ConvexPolyhedron(halfSpaces)` | exact — `ConvexDistance.HalfSpaceBound` asks for the cheap lower bound instead |
 
 ```csharp render:sdf-primitives
 var scene = new Scene();
@@ -54,6 +54,29 @@ Two things follow. Outside the solid it is a genuine **lower bound** — never n
 the truth, which is what meshing, culling and offsetting need — and equal semi-axes
 reduce it to the sphere's exact distance. Inside, it over-reports depth, so do not read a
 wall thickness off an eccentric ellipsoid's field. The **sign is exact everywhere**.
+
+One more thing is worth knowing before you probe near the middle of a *very* eccentric
+one: the field is genuinely **discontinuous at the centre**. Approaching the origin down
+the long axis the value tends to `−rmax` and down the short axis to `−rmin`, so a
+10 × 1 × 1 ellipsoid reads −10 and −1 a nanometre either side of its own centre. That is
+maximally far from the surface, so nothing that meshes or culls it is affected, and
+`Sdf.LipschitzBound` states the regime it covers rather than pretending otherwise.
+
+### The convex polyhedron
+
+`Sdf.ConvexPolyhedron(halfSpaces)` is the escape hatch for a plane-bounded solid with no
+factory — and unlike an `Sdf.Intersection` over the same half-spaces it reports **finite
+bounds**, by enumerating the vertices where three planes meet and every other is
+satisfied, so a polygonizer can size its own region.
+
+It is **exact**. Inside, the maximum over the face half-spaces already *is* the distance
+(for a convex body the nearest boundary point lies on the nearest face plane); outside,
+that maximum understates wherever the nearest feature is an edge or a corner, so the
+field takes the minimum over the solid's own boundary triangles instead — built from the
+vertices it had already enumerated. `ConvexDistance.HalfSpaceBound` asks for the cheap
+form, which is a correct-sign lower bound at one dot product per plane rather than a
+Voronoi-region test per triangle; reach for it when the polyhedron has many faces and the
+outside magnitude does not matter.
 
 ## Domain operations
 
@@ -90,6 +113,19 @@ scene.Add(new Part("knurled boss", Shape.From(knurled), Palette.Brass,
 ```
 
 ![A cylinder with a sinusoidal knurl over its surface](images/sdf-displace.png)
+
+The ripple is a *product* of three sines, so a zero frequency component makes it
+identically zero rather than two-dimensional. And it is the one operation here that adds
+a **value** rather than moving a point, which is why its bounds carry a precondition:
+material appears wherever the child reads below the amplitude, so the reported bounds are
+right as long as the child never reports less than the escape from its own bounds. Every
+primitive and every boolean satisfies that — including a difference near its subtracted
+tool, which is the case you would expect to break it — but a `Twist`, `Bend` or `Taper`
+underneath does not, so state the region yourself there:
+
+```csharp
+var bumpy = tapered.Displace(0.8, (4, 4, 4), bounds: tapered.Bounds.Expanded(2.4));
+```
 
 ### Repetition
 
@@ -154,6 +190,13 @@ dispatch rather than arithmetic — and it **loses to the batch path in every ca
 `Evaluate(points, distances)` is what meshing, grid bakes and section contours already use,
 reach for `Compile()` only when you are genuinely stuck with one point at a time: a
 marching solver, an interactive probe, a scattered query loop.
+
+A compiler emitting *vector* kernels would beat both, and the honest headroom is small
+enough to be worth stating: on a union chain the marginal cost of one more node in the
+batch path is flat at about **1.36 ns/point** from depth 4 to 48, while a lone sphere —
+which carries the whole AoS→SoA transpose by itself — costs 1.85 ns. So the per-node
+plumbing a vector compiler would remove has already been amortized to below the
+arithmetic.
 
 ## Related
 

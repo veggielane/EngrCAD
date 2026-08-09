@@ -319,6 +319,11 @@
       "live": true
     },
     {
+      "id": "graded-lattice",
+      "page": "examples/lattices.md",
+      "live": true
+    },
+    {
       "id": "hardware-breadth",
       "page": "examples/components.md",
       "live": true
