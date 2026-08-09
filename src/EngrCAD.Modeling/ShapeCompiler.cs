@@ -275,9 +275,9 @@ internal static class ShapeCompiler
                 else if (thread.ProfileOffset != 0)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "printing clearance offsets the profile as a distance field (reflex corners round into arcs) with no exact B-Rep counterpart — model clearance via ToMesh/ToImplicit"));
-                else if (thread.ChamferLength > 0)
+                else if (thread.ChamferLength > 0 || thread.RunoutLength > 0)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native,
-                        "boolean-free helical sweep, its ends chamfered by a coaxial cone that cuts every band in an exact conical SpiralArc3d; not STEP-exportable"));
+                        "boolean-free helical sweep, its ends treated by a coaxial cone that cuts every band in an exact conical SpiralArc3d; not STEP-exportable"));
                 else
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "boolean-free helical sweep (SolidFactory.MakeThreadedRod); not STEP-exportable"));
@@ -894,16 +894,24 @@ internal static class ShapeCompiler
                 // Deliberate exact-zero test: "no chamfer requested" is a user-parameter
                 // contract, and skipping the two booleans keeps an unchamfered rod's
                 // topology bit-for-bit what it has always been.
-                if (thread.ChamferLength <= 0)
+                double runout = thread.RunoutLength * scale;
+                if (thread.ChamferLength <= 0 && runout <= 0)
                     return rod;
                 double chamfer = thread.ChamferLength * scale;
                 // Both ends, so the B-Rep is the same solid Sdf.Thread's start/end
-                // chamfers describe. Each tool meets the rod ONLY on its cone, which cuts
-                // every helical band in an exact conical SpiralArc3d.
+                // treatments describe. Each tool meets the rod ONLY on its cone, which
+                // cuts every helical band in an exact conical SpiralArc3d — and that is
+                // true of a shallow RUNOUT cone for exactly the same reason, since the
+                // family is coaxial-straight-generator carriers, not 45° ones.
                 foreach (bool atMaxAxial in (ReadOnlySpan<bool>)[true, false])
                 {
-                    var tool = SolidFactory.MakeThreadEndChamferTool(
-                        rMajor, chamfer, atMaxAxial ? length : 0, atMaxAxial, frame);
+                    bool isRunout = !atMaxAxial && runout > 0;
+                    if (!isRunout && chamfer <= 0)
+                        continue;
+                    double drop = isRunout ? thread.RunoutDrop * scale : chamfer;
+                    double axial = isRunout ? runout : chamfer;
+                    var tool = SolidFactory.MakeThreadEndConeTool(
+                        rMajor, drop, axial, atMaxAxial ? length : 0, atMaxAxial, frame);
                     rod = WithImplicitRouteHint(() => BrepBoolean.Difference(rod, tool));
                 }
                 return rod;

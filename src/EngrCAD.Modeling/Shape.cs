@@ -554,10 +554,22 @@ public abstract class Shape
     /// stays Impossible too (a distance-field offset rounds reflex corners into arcs with
     /// no exact B-Rep counterpart); meshes then bridge through Surface Nets — the
     /// printing route.</para>
+    /// <para><paramref name="runoutLength"/> models the incomplete thread a die or a
+    /// rolling head leaves where the thread meets its shank: over that axial length at the
+    /// <b>z = 0</b> end the crests are truncated by a coaxial cone running from the major
+    /// diameter down to the <see cref="ThreadSpec.PitchDiameter"/>, so the thread washes
+    /// out instead of ending in a full-form crest. It REPLACES that end's lead-in chamfer
+    /// (a stud has a lead-in at its free end and a runout at its shank end, not both at
+    /// once) and is <b>Native in both representations</b>: the cone is the general member
+    /// of the family a 45° chamfer belongs to, so its cut on every helical band is the
+    /// same exact conical <see cref="SpiralArc3d"/>. Ending on the PITCH diameter rather
+    /// than the minor is what keeps it exact — a cone reaching the minor diameter is
+    /// tangent to every root band along the end plane, which is the coincident
+    /// curved-surface input the boolean refuses.</para>
     /// </summary>
     public static Shape ExternalThread(
         ThreadSpec spec, double length, double clearance = 0, bool chamferEnds = true,
-        double? chamferLength = null)
+        double? chamferLength = null, double runoutLength = 0)
     {
         ArgumentNullException.ThrowIfNull(spec);
         if (length <= 0)
@@ -565,17 +577,25 @@ public abstract class Shape
         if (chamferLength is { } explicitChamfer && (!(explicitChamfer >= 0) || explicitChamfer >= spec.MajorDiameter / 2))
             throw new ArgumentOutOfRangeException(nameof(chamferLength),
                 "A chamfer must be non-negative and shallower than the major radius.");
+        if (!(runoutLength >= 0) || !double.IsFinite(runoutLength))
+            throw new ArgumentOutOfRangeException(nameof(runoutLength),
+                "A runout length must be non-negative and finite.");
+        if (runoutLength >= length)
+            throw new ArgumentOutOfRangeException(nameof(runoutLength),
+                $"The runout ({runoutLength}) must be shorter than the thread ({length}).");
         ValidateThreadClearance(clearance, spec);
         return new ThreadShape(
-            spec, length, -clearance, chamferLength ?? (chamferEnds ? spec.ThreadDepth : 0));
+            spec, length, -clearance, chamferLength ?? (chamferEnds ? spec.ThreadDepth : 0),
+            runoutLength);
     }
 
     /// <summary>Coarse-metric convenience overload:
     /// <c>ExternalThread(8, …)</c> is an M8×1.25 stud (see <see cref="StandardThreads.Metric"/>).</summary>
     public static Shape ExternalThread(
         double size, double length, double clearance = 0, bool chamferEnds = true,
-        double? chamferLength = null) =>
-        ExternalThread(StandardThreads.Metric(size), length, clearance, chamferEnds, chamferLength);
+        double? chamferLength = null, double runoutLength = 0) =>
+        ExternalThread(
+            StandardThreads.Metric(size), length, clearance, chamferEnds, chamferLength, runoutLength);
 
     /// <summary>
     /// Cuts internally threaded holes: at each 2D point on <paramref name="plane"/>

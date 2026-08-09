@@ -235,29 +235,65 @@ public static partial class SolidFactory
     /// <param name="frame">The rod's own axis pose; defaults to the world frame.</param>
     public static BrepSolid MakeThreadEndChamferTool(
         double majorRadius, double chamferLength, double endAxial, bool atMaxAxial,
-        Frame3d? frame = null)
+        Frame3d? frame = null) =>
+        MakeThreadEndConeTool(majorRadius, chamferLength, chamferLength, endAxial, atMaxAxial, frame);
+
+    /// <summary>
+    /// The general coaxial END CONE of which a 45° chamfer is the equal-drop member, and
+    /// which is what a thread RUNOUT is: the cone reaches <paramref name="majorRadius"/>
+    /// exactly <paramref name="axialLength"/> from the end face and has dropped
+    /// <paramref name="radialDrop"/> by the time it gets there, so its half-angle is
+    /// <c>atan(radialDrop / axialLength)</c> rather than a fixed 45°.
+    /// <para>Nothing about the cut changes with the angle — it is still a coaxial
+    /// straight-generator surface of revolution, so its intersection with every helical
+    /// band is the exact conical <see cref="SpiralArc3d"/> of
+    /// <c>SurfaceIntersection</c>'s coaxial family. A shallow, long cone is therefore
+    /// exactly as B-Rep-native as a short 45° one, which is the whole reason a runout
+    /// needs no new machinery: the thread's crests are progressively truncated over the
+    /// runout length, which is what an incomplete (washed-out) thread IS.</para>
+    /// <para>The overshoot that keeps every OTHER face of the tool clear of the rod is
+    /// taken as a quarter of each extent separately — a quarter of the axial length
+    /// axially, a quarter of the radial drop radially — which is the same number twice at
+    /// 45° and therefore leaves a chamfer tool bit-for-bit what it always was.</para>
+    /// </summary>
+    /// <param name="majorRadius">The rod's major radius; the cone reaches it exactly
+    /// <paramref name="axialLength"/> from the end face.</param>
+    /// <param name="radialDrop">How much smaller the cone is at the end face than at
+    /// <paramref name="majorRadius"/>; must be less than the major radius.</param>
+    /// <param name="axialLength">Axial distance over which that drop happens.</param>
+    /// <param name="endAxial">Axial coordinate of the rod's end face in
+    /// <paramref name="frame"/> (0 for the bottom cap, the rod's length for the top).</param>
+    /// <param name="atMaxAxial">True when the rod's material lies BELOW
+    /// <paramref name="endAxial"/> (the top end), false for the bottom end.</param>
+    /// <param name="frame">The rod's own axis pose; defaults to the world frame.</param>
+    public static BrepSolid MakeThreadEndConeTool(
+        double majorRadius, double radialDrop, double axialLength, double endAxial,
+        bool atMaxAxial, Frame3d? frame = null)
     {
         if (!(majorRadius > 0) || !double.IsFinite(majorRadius))
             throw new ArgumentOutOfRangeException(nameof(majorRadius));
-        if (!(chamferLength > 0) || !double.IsFinite(chamferLength))
-            throw new ArgumentOutOfRangeException(nameof(chamferLength));
+        if (!(radialDrop > 0) || !double.IsFinite(radialDrop))
+            throw new ArgumentOutOfRangeException(nameof(radialDrop));
+        if (!(axialLength > 0) || !double.IsFinite(axialLength))
+            throw new ArgumentOutOfRangeException(nameof(axialLength));
         if (!double.IsFinite(endAxial))
             throw new ArgumentOutOfRangeException(nameof(endAxial));
-        double over = chamferLength / 4;
-        if (!(majorRadius - chamferLength - over > 0))
-            throw new ArgumentOutOfRangeException(nameof(chamferLength),
-                "The chamfer cone would reach the axis; chamfer less than the major radius.");
+        double axialOver = axialLength / 4;
+        double over = radialDrop / 4;
+        if (!(majorRadius - radialDrop - over > 0))
+            throw new ArgumentOutOfRangeException(nameof(radialDrop),
+                "The end cone would reach the axis; the radial drop must be less than the major radius.");
 
         var f = frame ?? Frame3d.FromXY(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY);
         // In (radius, axial): the cone runs from the wide end, one overshoot outside the
         // rod, to the narrow end, one overshoot past the end face. `sign` turns the top
         // end's geometry into the bottom end's by reflecting the axial direction.
         double sign = atMaxAxial ? 1 : -1;
-        double wideAxial = endAxial - sign * (chamferLength + over);
-        double narrowAxial = endAxial + sign * over;
+        double wideAxial = endAxial - sign * (axialLength + axialOver);
+        double narrowAxial = endAxial + sign * axialOver;
         double wideRadius = majorRadius + over;
-        double narrowRadius = majorRadius - chamferLength - over;
-        double outerRadius = majorRadius + chamferLength + 2 * over;
+        double narrowRadius = majorRadius - radialDrop - over;
+        double outerRadius = majorRadius + radialDrop + 2 * over;
 
         Vector3d At(double radius, double axial) => f.Origin + f.X * radius + f.Z * axial;
         var profile = Profile.FromPoints(

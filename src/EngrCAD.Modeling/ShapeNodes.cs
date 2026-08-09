@@ -725,20 +725,37 @@ internal sealed class DrillShape : Shape
 /// Impossible with a per-cause report (chamfer cones and distance-field profile offsets
 /// have no exact B-Rep counterpart yet, and a mirrored thread is left-handed).
 /// </summary>
-internal sealed class ThreadShape(ThreadSpec spec, double length, double profileOffset, double chamferLength) : Shape
+internal sealed class ThreadShape(
+    ThreadSpec spec, double length, double profileOffset, double chamferLength,
+    double runoutLength = 0) : Shape
 {
     public ThreadSpec Spec => spec;
     public double Length => length;
     public double ProfileOffset => profileOffset;
     public double ChamferLength => chamferLength;
 
+    /// <summary>Axial length of the RUNOUT cone at the z = 0 end, 0 for none. The cone
+    /// truncates the crests from the major diameter down to the PITCH diameter over this
+    /// length — an incomplete (washed-out) thread — and replaces that end's lead-in
+    /// chamfer. The pitch diameter rather than the minor is what keeps it exact: a cone
+    /// ending on the minor diameter is tangent to every root band along the end plane,
+    /// the coincident curved-surface input the boolean refuses.</summary>
+    public double RunoutLength => runoutLength;
+
+    /// <summary>The runout cone's radial drop: major radius down to pitch radius.</summary>
+    public double RunoutDrop => (spec.MajorDiameter - spec.PitchDiameter) / 2;
+
     internal Sdf ToSdf() => Sdf.Thread(
         spec.MajorDiameter / 2, spec.MinorDiameter / 2, spec.Pitch,
         spec.CrestFlatWidth, spec.RootFlatWidth, length,
-        profileOffset, startChamfer: chamferLength, endChamfer: chamferLength,
-        leftHand: spec.LeftHand);
+        profileOffset,
+        startChamfer: runoutLength > 0 ? RunoutDrop : chamferLength,
+        endChamfer: chamferLength,
+        leftHand: spec.LeftHand,
+        startSlope: runoutLength > 0 ? RunoutDrop / runoutLength : 1);
 
-    internal override string Describe() => $"Thread({spec.Designation}, L={length:g4})";
+    internal override string Describe() =>
+        $"Thread({spec.Designation}, L={length:g4})";
 }
 
 /// <summary>

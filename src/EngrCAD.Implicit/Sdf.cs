@@ -706,19 +706,26 @@ public abstract class Sdf
     /// <para>Approximate distance, exact sign (see <see cref="ThreadSdf"/> for the
     /// fidelity contract). <paramref name="profileOffset"/> dilates (+) / erodes (−) the
     /// profile normal to its boundary — the printing-clearance mechanism.
-    /// <paramref name="startChamfer"/>/<paramref name="endChamfer"/> cut 45° cones at
+    /// <paramref name="startChamfer"/>/<paramref name="endChamfer"/> cut cones at
     /// z = 0 / z = length ending at radius majorRadius + profileOffset − chamfer.</para>
     /// </summary>
     /// <param name="leftHand">Wind the thread left-handed — the exact mirror image of
     /// the right-hand form (the helical phase reads z + P·θ/2π instead of z − P·θ/2π),
     /// so every fidelity guarantee above holds unchanged.</param>
+    /// <param name="startSlope">Radial drop per unit of axial travel of the z = 0 cone;
+    /// 1 (the default) is the 45° lead-in, and a smaller value is a thread RUNOUT — the
+    /// same cone stretched over a longer axial length, so the crests are truncated
+    /// progressively rather than all at once. It matches
+    /// <c>SolidFactory.MakeThreadEndConeTool</c> exactly, which is what keeps one
+    /// modelled thread one geometry in both representations.</param>
+    /// <param name="endSlope">The same for the z = length cone.</param>
     public static Sdf Thread(
         double majorRadius, double minorRadius, double pitch,
         double crestWidth, double rootWidth, double length,
         double profileOffset = 0, double startChamfer = 0, double endChamfer = 0,
-        bool leftHand = false) =>
+        bool leftHand = false, double startSlope = 1, double endSlope = 1) =>
         new ThreadSdf(majorRadius, minorRadius, pitch, crestWidth, rootWidth, length,
-            profileOffset, startChamfer, endChamfer, leftHand);
+            profileOffset, startChamfer, endChamfer, leftHand, startSlope, endSlope);
 
     // ---- combinators ----
 
