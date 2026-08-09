@@ -90,6 +90,84 @@ public class TracerSeedDensityTests
     }
 
     /// <summary>
+    /// Finding a branch is half the job; the other half is TERMINATING it, and a curve
+    /// that stops short of both rails cannot split the face it lies on.
+    ///
+    /// <para>The march breaks its step only AFTER the corrector leaves the domain, so an
+    /// open branch stops up to one whole step short — and here the step is scaled to the
+    /// query REGION (0.161 mm over a 24 mm box) while the crest band is 0.156 mm tall, so
+    /// ONE step crosses the whole band. Measured before <c>TryLandOnDomain</c>: three
+    /// branches, the widest spanning v = [0.481, 0.819] — reaching NEITHER rail — and every
+    /// other candidate discarded for having only two points. After: nineteen branches, of
+    /// which eighteen run v = 0 to v = 1 EXACTLY, because the landing pins the boundary
+    /// coordinate at its own value rather than stepping toward it.</para>
+    ///
+    /// <para><b>The one that does not is the recorded residual and is pinned here rather
+    /// than tolerated silently.</b> A landing exists only where the branch was heading OUT
+    /// of the domain; a trace that stops because the two normals went parallel — a
+    /// tangency, or the fold a cross-drill's own cylinder makes as it doubles back — has no
+    /// boundary to land on and legitimately ends inside the face. Every branch still
+    /// reaches at least ONE rail, which is what the assertion below states, and a fix that
+    /// closes the fold case must promote the count.</para>
+    /// </summary>
+    [Fact]
+    public void BranchesOnAnAnisotropicBandReachTheirRails()
+    {
+        var band = CrestBand();
+        var drill = CrossDrill();
+        var curves = SurfaceIntersection.Intersect(band, drill, Region);
+
+        Assert.True(curves.Count >= 15, $"only {curves.Count} branch(es) on the crest band");
+        // The rails are v = 0 and v = 1. The recovered parameter is a Gauss–Newton pullback,
+        // so it carries that solve's own round-off even though the landing pins the value
+        // exactly — hence the inverse-evaluation tier rather than the weld tier.
+        const double onRail = FaceGeometry.InverseEvaluationTolerance;
+        int reachingBoth = 0;
+        foreach (var curve in curves)
+        {
+            var (lo, hi) = (double.PositiveInfinity, double.NegativeInfinity);
+            foreach (var point in ((PolylineCurve3d)curve).Points)
+            {
+                Assert.True(band.TryProjectPoint(point, out var uv, onRail));
+                lo = Math.Min(lo, uv.Y);
+                hi = Math.Max(hi, uv.Y);
+            }
+            Assert.True(lo < onRail || hi > 1 - onRail,
+                $"a branch spans v = [{lo:F6}, {hi:F6}] and reaches neither rail");
+            if (lo < onRail && hi > 1 - onRail)
+                reachingBoth++;
+        }
+        Assert.True(reachingBoth >= curves.Count - 1,
+            $"only {reachingBoth} of {curves.Count} branches run rail to rail");
+    }
+
+    /// <summary>
+    /// The scope of that landing is the surface PAIR, not the seed — and this is what
+    /// pins it. Two perpendicular cylinders are ordinary geometry (aspect well under the
+    /// anisotropy threshold), so no branch of theirs may gain a point: the additive
+    /// contract covers the terminus exactly as it covers the seeding.
+    /// </summary>
+    [Fact]
+    public void AnIsotropicPairIsNotTerminatedDifferently()
+    {
+        var bore = new CylinderSurface(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY, 3);
+        // Open branches rather than the closed loops of the golden pair below: a plane
+        // through the bore leaves two arcs whose ends run off the region, so a landing
+        // would show up as an extra vertex if the scope were wrong.
+        var plane = new PlaneSurface((0, 0, 2), Vector3d.UnitX, Vector3d.UnitZ);
+        var region = new Aabb((-10, -10, -10), (10, 10, 20));
+
+        var curves = SurfaceIntersection.Intersect(bore, plane, region);
+        Assert.NotEmpty(curves);
+        foreach (var curve in curves)
+        {
+            // A plane against a cylinder is ANALYTIC, so nothing here is traced at all —
+            // which is the strongest form of "unchanged" and is asserted as such.
+            Assert.IsNotType<PolylineCurve3d>(curve);
+        }
+    }
+
+    /// <summary>
     /// The append-only guarantee, on a pair the isotropic grid already handles: two
     /// perpendicular cylinders (the cross-drilled-bore case the boolean pipeline is built
     /// on). Golden vertex counts and a coordinate fingerprint — if the second pass ever

@@ -322,13 +322,15 @@ public static class BrepBoolean
         if (curve is not PolylineCurve3d polyline || polyline.IsClosed)
             return curve;
         var points = polyline.Points.ToList();
+        if (points.Count < 2)
+            return curve;
         bool changed = false;
-        if (TryBoundaryLanding(points[0], fa, fb, step, out var atStart))
+        if (TryBoundaryLanding(points[0], points[0] - points[1], fa, fb, step, out var atStart))
         {
             points.Insert(0, atStart);
             changed = true;
         }
-        if (TryBoundaryLanding(points[^1], fa, fb, step, out var atEnd))
+        if (TryBoundaryLanding(points[^1], points[^1] - points[^2], fa, fb, step, out var atEnd))
         {
             points.Add(atEnd);
             changed = true;
@@ -341,9 +343,21 @@ public static class BrepBoolean
     /// already ends there (within the weld tier) or no boundary is within reach. Candidates are
     /// ranked by distance from <paramref name="end"/>, so an end near two boundaries takes the
     /// nearer — the one the trace was actually leaving through.
+    ///
+    /// <para><b>A candidate BEHIND the trace is refused</b>, and the refusal is not a nicety:
+    /// on a thread band the two rails are a fraction of a millimetre apart, well inside the
+    /// reach, so a curve that already terminates exactly on one rail is within reach of the
+    /// OTHER — and appending that lands the polyline back where it started, doubling it over
+    /// itself. Measured on an M8 crest flat cross-drilled Ø2: the curve came back with domain
+    /// [0, 0.479] whose second half retraced the first, so face splitting found its crossings at
+    /// 0 and 0.240 and refused the terminus at 0.479. The trace's own last chord says which way
+    /// it was going, and a landing it was moving AWAY from is not the one it was heading for.
+    /// The "already there" test alone cannot cover this: it reads the MINIMUM over candidates,
+    /// so it is silent whenever the true landing's own Newton misses (a rail helix seeded from
+    /// 32 samples over five turns can converge to another root entirely).</para>
     /// </summary>
     private static bool TryBoundaryLanding(
-        in Vector3d end, BrepFace fa, BrepFace fb, double step, out Vector3d landing)
+        in Vector3d end, in Vector3d heading, BrepFace fa, BrepFace fb, double step, out Vector3d landing)
     {
         landing = default;
         double best = double.PositiveInfinity;
@@ -359,6 +373,10 @@ public static class BrepBoolean
                     if (!TryEdgeSurfaceCrossing(coedge.Edge, other.Surface, end, out var point))
                         continue;
                     double distance = point.DistanceTo(end);
+                    // Exact-zero sign test on a dot product, never a tolerance: what is being
+                    // asked is which SIDE of the terminus the candidate lies on.
+                    if ((point - end).Dot(heading) <= 0)
+                        continue;
                     if (distance < best && distance <= reach)
                     {
                         best = distance;

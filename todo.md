@@ -535,83 +535,68 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
-- [ ] **Threads follow-ups** (B-Rep-native external threads AND threaded holes ✅
-  landed — `HelicalSurface`/`SpiralArc3d`/`MakeThreadedRod`, boolean-free lateral
-  sweep, clipped-pilot hole tool; **left-hand threads and the ISO 261 fine-pitch
-  series** ✅ landed too; **general trimmed helical FACES and the coaxial analytic
-  intersection family** ✅ landed as well — see below) — remaining:
-  - [ ] **(a) 45° end-chamfer cones in B-Rep — a SUB-DEPTH chamfer ✅ landed; a residual
-    ~10% of depths still refuses.** `Shape.ExternalThread(..., chamferLength: 0.5)` now
-    lowers to a `Validate`-clean, two-manifold solid whose tessellation is closed and whose
-    volume converges: one ordinary difference against the new
-    `SolidFactory.MakeThreadEndChamferTool`, every pair it makes analytic. Measured
-    (win-x64, M8×1.25, 6 mm rod, 32/64/128/256 segments per circle) the plain rod is
-    246.5616 / 247.7583 / 248.0578 / 248.1329 and one 0.5 mm chamfer 245.8516 / 246.9694 /
-    247.2383 / 247.3058, so the chamfer measures 0.7100 / 0.7889 / 0.8195 / 0.8271 —
-    settling on the prototype's ~0.83. Every vertex of the chamfered B-Rep tessellation
-    reads |sdf| ≤ 1.14e-15 against `Sdf.Thread`'s own chamfered field, so the two
-    representations are the same geometry rather than similar ones (`ChamferedThreadTests`).
-    The `chamferEnds: true` DEFAULT — a chamfer of the full thread depth — stays Impossible
-    by name: the cone's base lands exactly on the minor diameter and therefore tangent to
-    every root band along the end plane.
-
-    **Four defects had to go, and only one was about chamfers** (all four written up in the
-    READMEs). The recognizer did NOT decline the cone — it declined the tool's coaxial
-    ANNULUS, which `TryCoaxialProfileLine` refuses by design (its b is infinite) and whose
-    doc comment said it was "handled by `PlaneHelical` after the caller synthesizes the
-    plane", except no caller ever did; the pair fell to the tracer and its polyline ended
-    strictly inside the band. A cone's cut on a CONSTANT-radius band is a circle exactly,
-    but the general expressions reached it only up to rounding, so `IsPlanar` — an
-    exact-zero test — came out true at one end of a rod and false at the other.
-    `CurveSegment.PointAt` wrapped a parameter one ULP past an OPEN base's domain end,
-    teleporting the last sample to the base's START (0.375 mm off the face, after which the
-    band tier stopped recognizing a band and the ear clipper folded 244 of 3562 facets).
-    And `BRepTessellator.SampleEdge` read a `CurveSegment`'s [0, 1] domain as RADIANS,
-    giving every split spiral edge the same count at any density.
-
-    ~~**What remains**: a sporadic ~10% of chamfer depths still fails, loudly…~~
-    ✅ **fixed** — and two things in the old diagnosis were wrong, both worth recording.
-    The failures were **not loud**: re-scanning at `88d6e14`, all 76 depths built,
-    validated and tessellated without an exception, so nothing failed in the boolean at
-    all — what remained was 10 depths (0 / 4 / 3 / 3 per size, not 1 / 3 / 1 / 2) emitting
-    SILENT folds, which is a worse failure than a throw and is why the count-based
-    assertions never saw it. And the tie-break was **innocent**: `SweepCycle` takes the
-    LAST of the tied minimum run and the FIRST of the tied maximum run exactly as
-    documented, and on these loops there are no ties at all — measured, `lo` and `hi` are
-    each a single vertex. The congruence the entry noticed was real but pointed one level
-    down: the two cone faces differ in which chain is DENSE (65 samples against 8), so on
-    one of them `lower[0]` lands at the same v as the whole 65-sample upper run, and every
-    pop test along that run then compares three points that are collinear BY CONSTRUCTION.
-    The defect is `SweepMonotone`'s `TurnsIntoInterior` reading the exact sign of a cross
-    product whose true value is zero: pure round-off, so the sweep popped on ~1e-15 of
-    jitter and fanned the rim flat into the end plane at facet-vs-surface agreement
-    **−0.7071 = −cos 45°** exactly. Fixed by testing the dimensionless SINE of the turn;
-    see the Interop README and design.md for why that constant is not tuned and why the
-    facet COUNT (not the fold count) is the oracle that proves it exact — exactly the 10
-    rows change, the other 66 stay byte-identical, and no changed row gains or loses a
-    facet. Pinned by `ChamferedThreadTests.SubDepthChamfersCarryNoFoldsAtAnyFraction`.
-  - [ ] **(b) Clearance profiles in B-Rep** (distance-field offsets round reflex corners —
-    needs arc-generator helical bands). Unchanged, and note `SurfaceOffset` does NOT help:
-    it keeps each carrier in its own family and has no `HelicalSurface` case, and a
-    helical band's offset is a helical band on an offset *generator*, which is what the
-    arc-generator work has to build.
-  - [ ] **(c) NON-coaxial helical intersections** — helical∩cross-hole-cylinder and
-    helical∩tilted-plane. These are genuinely transcendental (no v-linear-in-u substitution
-    exists), so they belong to the marching tracer. **The SEEDING half is fixed**
-    (`SurfaceIntersection`'s anisotropic second pass — see the BRep README): an M8 crest
-    flat cross-drilled Ø6 went from **zero** branches to three, and its flank band from six
-    to nineteen, with the whole suite bit-identical because the isotropic pass still runs
-    first and `March` dedupes later seeds against traced branches. What remains is the
-    STEPPING half, and it is a different mechanism: the branches that are now found still
-    stop short of the band's rails, because the tracer breaks its step *after* `Correct`
-    leaves the domain (the same fact `SnapTracerEnds` exists to paper over on the boolean
-    side). Until a traced curve can terminate exactly on a bounded band's rail, a
-    cross-drilled thread cannot be split — so this is now a tracer-termination item, not a
-    seeding one.
-  - [ ] **(d) Thread runout and cosmetic-thread annotation.** The runout half now has its
-    geometry: a coaxial cylinder cuts a helical band in one complete iso-v helix, exactly
-    (`SurfaceIntersection`'s coaxial case), which is the runout diameter. The annotation
-    half is still cheap — `ThreadCallout` exists.
+- [ ] **Clearance profiles in B-Rep — arc-generator helical bands.** The one thread
+  feature with no exact B-Rep counterpart, and the geometry is fully derived; what is
+  missing is machinery, listed here so the next attempt starts from the maths.
+  A printing clearance is a DISTANCE-FIELD offset of the (radius, axial) profile, so on an
+  external thread (erode by c) the material's CONVEX corners — the two ends of each crest
+  flat — miter to a sharp intersection of the offset lines, while its REFLEX corners — the
+  two ends of each root flat — round into a circular ARC of radius c centred on the
+  original corner. (An internal thread's void dilates and the roles swap.) So the eroded
+  profile per pitch is: crest flat at `major − c`, sharp corner, perpendicular-offset
+  flank, ARC, root flat at `minor − c`, ARC, flank, sharp corner. Every piece but the two
+  arcs is already expressible.
+  - The **miter alternative is refused rather than unexplored**: offsetting each flat and
+    flank perpendicular to itself and mitering the root corners needs no new machinery at
+    all and is a legitimate clearance convention — but `ThreadSdf`'s clearance is the
+    distance-field offset, so the two representations would stop being one geometry, which
+    is the property `ChamferedThreadTests.TheBrepChamferAgreesWithTheImplicitFieldAtEveryVertex`
+    exists to hold. Changing the SDF to match would move committed renders and every
+    printed-fit figure. Either both change together or neither does.
+  - What has to be built: `HelicalSurface` (or a sibling) over a CIRCULAR-ARC generator in
+    the (r, z) plane, with exact `PointAt`/`NormalAt`/`TryProjectPoint`; a new cap-cut
+    CURVE, because substituting an arc generator `(r, z) = C + ρ(cos φ, sin φ)` into
+    `z(v) + rate·u = z_cap` gives `φ(u) = asin((z_cap − C_z − rate·u)/ρ)` — closed form, but
+    `r(u) = C_r ± √(ρ² − (z_cap − C_z − rate·u)²)` is not linear in u, so it is NOT a
+    `SpiralArc3d`; the coaxial intersection family (whose whole derivation rests on v being
+    linear in u for a STRAIGHT generator); `MakeThreadedRod` taking arc segments in its
+    profile; and `BRepTessellator`'s `NaturalSteps`, whose v gets an INFINITE step today on
+    the stated ground that the generator is straight and a v-chord therefore lies exactly on
+    the surface — flatly wrong for an arc, so leaving it would be a silent fidelity
+    regression rather than a refusal. Plus `BrepArchive`, `GeometryTransform` and
+    `BrepSelection`.
+  - Note `SurfaceOffset` does NOT help: it keeps each carrier in its own family and has no
+    `HelicalSurface` case, and a helical band's offset is a helical band on an OFFSET
+    GENERATOR, which is exactly the arc-generator work.
+- [ ] **A traced branch that stops at a FOLD still ends inside its face.** The
+  termination half of the non-coaxial helical work ✅ landed (`TryLandOnDomain` — see the
+  BRep README), taking a cross-drilled M8×1.25 rod from refusing at 13 of 13 bores between
+  0.6 and 3.0 to building Validate-clean closed solids at 8 of them, and a tilted-plane cut
+  from 0 of 4 to 1 of 4. What is left is a different mechanism: where the corrector refuses
+  a step it was NOT trying to take out of the domain — the fold a cross-drill's own cylinder
+  makes as it doubles back — the branch stops mid-face with no boundary to land on, and
+  `FaceSplitter` refuses it by name.
+  - **Halving the step and retrying was built, measured and REVERTED**, which is what makes
+    this a filed item rather than an omission: it takes cross-drilling to 10 of 13, and it
+    reaches whole-solid FILLET bands too (they are anisotropic — long and only `r·π/2`
+    wide), where it broke seven Interop tests and took the tilted-plane family from 1 of 4
+    to 0 of 4. An algorithm that can only trade one refusal for another should not be
+    reached at all. A fix has to be scoped by the FOLD rather than by the surface's aspect,
+    or handle the fold as a fold (a turning point the trace continues through) rather than
+    as a shorter step.
+- [ ] **A trimmed face far narrower than one natural grid cell gets neither interior rows
+  nor refinement.** Measured on a thread's 45° end-chamfer cone, which is the family's
+  worst case: the cone strip is a few hundredths of a millimetre tall wrapped around the
+  whole rod, so its facet count grows LINEARLY with `segmentsPerCircle` (74/148/300/600 at
+  32/64/128/256 for a 5%-depth chamfer) and its worst facet-vs-surface agreement runs
+  0.0606 / 0.5802 / 0.9247 / 0.9819 against a corpus floor of `cos(3·2π/n)`. It CONVERGES,
+  so it is coarseness rather than a floor — but at 32 segments a 25%-depth chamfer still
+  emits 2 folds (worst −0.0406), which the corpus audit at 64 does not see. Refinement
+  cannot help because its step metric is relative to the natural grid step and the whole
+  face is far inside one cell; the rowed paths cannot help because there is no grid row to
+  anchor. The principled fix is a density rule that measures a trimmed face against its OWN
+  uv extent rather than its surface's whole domain — which moves every trimmed face's
+  density, so it needs the corpus and the committed docs PNGs re-taken deliberately.
 - [ ] **2D sketch engine residue** (the front door ✅ landed — `Region2d`
   polygon-with-holes with automatic nesting detection, `Region2dBoolean` over
   `Arrangement2d`, `Sketch.ToRegions`, `Profile.FromRegion`; **exact curved 2D

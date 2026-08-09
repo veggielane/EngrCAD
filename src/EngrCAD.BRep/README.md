@@ -488,6 +488,19 @@ operations. Depends only on `EngrCAD.Core`.
     depth puts the cone tangent to every root band along the end plane — coincident
     curved-surface boolean input — and is refused one layer up, in the Shape compiler:
     this factory builds the tool for whatever chamfer it is given.
+  - `MakeThreadEndConeTool(majorRadius, radialDrop, axialLength, endAxial, atMaxAxial[, frame])`
+    — the GENERAL member of that family, and `MakeThreadEndChamferTool` is it at equal drop.
+    Nothing about the cut changes with the angle (it is still a coaxial straight-generator
+    revolve, so `SurfaceIntersection`'s coaxial case gives the exact conical `SpiralArc3d`),
+    which is what makes a thread **RUNOUT** a parameter rather than a surface: a shallow
+    cone stretched over two pitches truncates the crests progressively, and that IS the
+    incomplete (washed-out) thread a die or a rolling head leaves at a shank. The overshoot
+    is taken as a quarter of each extent SEPARATELY — a quarter of the axial length
+    axially, a quarter of the drop radially — which is the same number twice at 45° and so
+    leaves a chamfer tool bit-for-bit what it always was (pinned by test). `Shape.ExternalThread`
+    drives it with `runoutLength:`, dropping to the PITCH diameter, which is what keeps it
+    exact: a cone reaching the MINOR diameter is tangent to every root band along the end
+    plane, the same refusal the full-depth chamfer earns.
 
 - **`Draft`** — draft angles (OCCT `BRepOffsetAPI_DraftAngle`), the moulding/casting taper:
   `Draft.Apply(solid, neutralOrigin, pullDirection, angle, faceSelector?)` (or the
@@ -775,6 +788,43 @@ operations. Depends only on `EngrCAD.Core`.
   a strip a sixth of a millimetre wide — narrower than a Ø6 cross-drill's whole window.
   Measured against that drill: the crest band returned **zero** branches and the flank band
   six; with the second pass, three and nineteen.
+
+  **A branch on such a pair also TERMINATES exactly, on the same scoping argument**
+  (`TryLandOnDomain`). The march breaks its step only AFTER the corrector has left the
+  domain, so an open branch always stops up to one whole step short of the rail it was
+  running into. On ordinary geometry that shortfall is cosmetic; on the surfaces the second
+  seed pass exists for it is not, because the step is scaled to the QUERY REGION while the
+  band is not — an M8 crest flat is 0.156 mm tall against a 0.161 mm step over a 24 mm box,
+  so ONE step crosses the whole band. Measured before: branches spanning v = [0.481, 0.819]
+  of a band whose rails are v = 0 and v = 1, i.e. reaching NEITHER, and two-point branches
+  discarded outright by the three-point minimum. A curve that reaches neither rail cannot
+  split the face it lies on, which is why a cross-drilled thread refused at every bore.
+
+  The landing is SOLVED, not extrapolated: the tracer's own Newton with one coordinate
+  PINNED at its boundary value — three unknowns against the three components of
+  S<sub>a</sub> − S<sub>b</sub> = 0, spelled as `Solve4` with the plane row replaced by
+  `delta[k] = 0`, so the pinned coordinate keeps the boundary value bit for bit and the
+  landing lies ON the rail rather than near it. The boundary taken is the FIRST one the
+  step crosses. The seed usually cannot come from the corrected parameters, because the
+  corrector usually REFUSED the step: `Eval` clamps a non-periodic parameter, so a step
+  past a rail evaluates the rail's own point, the partials across it collapse to zero and
+  the corrector fails on a singular pivot without the domain test ever running — so
+  `PredictStep` supplies it, the least-squares image of the step's displacement in each
+  surface's own parameters, exact for a displacement in the tangent plane.
+
+  **The scope is the PAIR, not the seed.** Scoping by seed looks tidier and leaves the
+  isotropic grid's OWN branches on an anisotropic band ending strictly inside the face: a
+  cross-drilled M8 flank band still refused with six of them. The condition that hides a
+  branch from the isotropic grid and the condition that makes the region-scaled step exceed
+  the surface's width are the same condition, and it belongs to the surface. Measured on an
+  M8×1.25 6 mm rod: cross-drilling refused at 13 of 13 bores from 0.6 to 3.0 and now builds
+  Validate-clean, closed, converging solids at 8 of them; a tilted plane cut refused at 4 of
+  4 and now works at 20°. What remains is a different mechanism and is filed — a branch that
+  stops at a FOLD (the corrector refusing a step it was not trying to take out of the
+  domain) still ends inside the face. Halving the step and retrying was built for exactly
+  that, took cross-drilling to 10 of 13, and was REVERTED: fillet bands are anisotropic too,
+  so it reached them and broke seven tests, which is the standing rule that an algorithm
+  able only to trade one refusal for another should not be reached at all.
 
   **The extents are measured as SPEED × domain length, never as a chordal polyline** —
   `ParameterExtents` averages |∂P/∂u| over a 4×4 cross of cell CENTRES (never the domain's

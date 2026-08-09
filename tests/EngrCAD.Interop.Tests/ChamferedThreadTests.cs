@@ -224,6 +224,54 @@ public class ChamferedThreadTests
     }
 
     /// <summary>
+    /// The COARSENESS the sub-depth-chamfer note files as a separate residual, measured
+    /// and pinned from BOTH sides so it cannot rot into a guess.
+    ///
+    /// <para>A chamfer cone's surviving band is an extreme-aspect strip — 0.034 mm tall
+    /// around a 25 mm circumference at the shallowest depth here — and its facet count grows
+    /// LINEARLY with <c>segmentsPerCircle</c> (74 / 148 / 300 / 600 at 32 / 64 / 128 / 256
+    /// for a 5%-depth chamfer), because the cone is ruled and its v collapses to one cell.
+    /// So its facet-vs-surface agreement is far below the corpus floor of
+    /// <c>cos(3·2π/n)</c> at coarse densities: 0.0606 / 0.5802 / 0.9247 / 0.9819 for that
+    /// chamfer.</para>
+    ///
+    /// <para><b>It CONVERGES, which is the finding</b> — this is coarseness rather than a
+    /// floor, so it is a density problem and not a sampling defect. Neither refinement nor
+    /// the rowed paths can reach it: refinement's step metric is relative to the natural
+    /// grid step and the whole face is far inside one cell, and a rowed path needs a grid
+    /// row to anchor on. At 32 segments a 25%-depth chamfer still emits folds, which the
+    /// corpus audit at 64 does not see; the count is pinned as an upper bound so a fix
+    /// fails this test and gets promoted.</para>
+    /// </summary>
+    [Fact]
+    public void TheChamferConesAreCoarseAtLowDensityAndConverge()
+    {
+        var solid = Chamfered(0.05 * 0.625 * (Math.Sqrt(3) / 2 * Pitch));
+        double previous = -1;
+        foreach (int segments in (ReadOnlySpan<int>)[32, 64, 128, 256])
+        {
+            var report = TessellationQuality.Audit(solid, segments, segments);
+            Assert.Empty(report.Refusals);
+            Assert.Equal(0, report.Slivers);
+            Assert.True(report.WorstDot > previous,
+                $"agreement went {previous:F4} -> {report.WorstDot:F4} at {segments} segments");
+            previous = report.WorstDot;
+        }
+        // Converged, and the corpus floor at 256 is cos(3*2*pi/256) = 0.99729: the cone
+        // clears its own family's bar once the density reaches it.
+        Assert.True(previous > 0.98, $"the finest audit still reads {previous:F4}");
+
+        // The coarse-density fold, recorded rather than tolerated. A 25% chamfer at 32
+        // segments is the measured worst of the family.
+        var quarter = Chamfered(0.25 * 0.625 * (Math.Sqrt(3) / 2 * Pitch));
+        var coarse = TessellationQuality.Audit(quarter, 32, 32);
+        Assert.True(coarse.Folds <= 2,
+            $"{coarse.Folds} folded facets at 32 segments, above the recorded 2");
+        Assert.True(coarse.Folds > 0,
+            "the fixture no longer carries the coarse-density fold it exists to record");
+    }
+
+    /// <summary>
     /// The B-Rep chamfer IS the implicit chamfer: every vertex of the tessellation reads
     /// zero against <see cref="Sdf.Thread"/>'s own chamfered field. That is the check that
     /// can see a chamfer placed at the wrong depth or on the wrong end, where a volume

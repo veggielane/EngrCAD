@@ -33,10 +33,21 @@ namespace EngrCAD.Implicit;
 /// boundary — flanks shift perpendicular to themselves, crest/root flats radially —
 /// implemented exactly as a distance shift of the 2D field. This is the printing-
 /// clearance mechanism: erode an external thread, dilate an internal thread's void.
-/// <c>startChamfer</c>/<c>endChamfer</c> cut 45° lead-in cones at z = 0 / z = length:
+/// <c>startChamfer</c>/<c>endChamfer</c> cut lead-in cones at z = 0 / z = length:
 /// a chamfer of length c brings the end face down to majorRadius + profileOffset − c
 /// (pass the thread depth to land on the minor diameter). The cone distance is exact in
 /// the axial half-plane and correctly signed in 3D.
+/// </para>
+/// <para>
+/// <c>startSlope</c>/<c>endSlope</c> are the cones' radial drop per unit of axial travel;
+/// 1 is the 45° lead-in and a SMALLER value is a thread RUNOUT — the same cone over a
+/// longer axial length, truncating the crests progressively rather than all at once,
+/// which is what an incomplete (washed-out) thread is. It exists so the implicit form can
+/// say what <c>SolidFactory.MakeThreadEndConeTool</c> says: a runout modelled in one
+/// representation and not the other would make one <c>ThreadShape</c> two geometries.
+/// The 45° arithmetic is kept on its own branch so every existing thread field is
+/// bit-identical (dividing by <c>sqrt(2)</c> and multiplying by <c>1/sqrt(2)</c> are not
+/// the same double).
 /// </para>
 /// </summary>
 internal sealed class ThreadSdf : Sdf
@@ -59,14 +70,26 @@ internal sealed class ThreadSdf : Sdf
     // cut exactly their own depth (a shared max-based anchor over-cut the smaller end).
     private readonly double _startChamferBase;
     private readonly double _endChamferBase;
+    // Radial drop per unit of axial travel. Exactly 1 is the 45° lead-in and keeps the
+    // original arithmetic; anything else is a runout cone. Stored beside the normalizing
+    // factor 1/sqrt(1 + s²) so the field stays a true distance in the axial half-plane.
+    private readonly double _startSlope;
+    private readonly double _endSlope;
+    private readonly double _startNormalizer;
+    private readonly double _endNormalizer;
 
     private static readonly double InvSqrt2 = 1 / Math.Sqrt(2);
 
     public ThreadSdf(
         double majorRadius, double minorRadius, double pitch,
         double crestWidth, double rootWidth, double length,
-        double profileOffset, double startChamfer, double endChamfer, bool leftHand = false)
+        double profileOffset, double startChamfer, double endChamfer, bool leftHand = false,
+        double startSlope = 1, double endSlope = 1)
     {
+        if (!(startSlope > 0) || !double.IsFinite(startSlope))
+            throw new ArgumentOutOfRangeException(nameof(startSlope), "Cone slopes must be positive and finite.");
+        if (!(endSlope > 0) || !double.IsFinite(endSlope))
+            throw new ArgumentOutOfRangeException(nameof(endSlope), "Cone slopes must be positive and finite.");
         if (!(minorRadius > 0) || !(majorRadius > minorRadius))
             throw new ArgumentOutOfRangeException(nameof(majorRadius),
                 "Thread radii must satisfy 0 < minorRadius < majorRadius.");
@@ -99,6 +122,10 @@ internal sealed class ThreadSdf : Sdf
         _endChamfer = endChamfer;
         _startChamferBase = effectiveMajor - startChamfer;
         _endChamferBase = effectiveMajor - endChamfer;
+        _startSlope = startSlope;
+        _endSlope = endSlope;
+        _startNormalizer = 1 / Math.Sqrt(1 + startSlope * startSlope);
+        _endNormalizer = 1 / Math.Sqrt(1 + endSlope * endSlope);
 
         // Lead angle at the smallest surface radius (most conservative — λ shrinks
         // with r, so cos λ(rRef) · sec λ(r ≥ rRef) ≤ 1 on the threaded surface).
@@ -120,10 +147,22 @@ internal sealed class ThreadSdf : Sdf
 
         double side = (SignedProfileDistance(u, r) - _profileOffset) * _cosLead;
 
+        // Deliberate exact-1 test, not a tolerance: the 45° cone is the incumbent case and
+        // its expression is kept verbatim so every thread field already in the repository
+        // is bit-identical (a * InvSqrt2 and a / Math.Sqrt(2) differ in the last bit).
         if (_endChamfer > 0)
-            side = Math.Max(side, (r - (_endChamferBase + (_length - p.Z))) * InvSqrt2);
+        {
+            double t = _length - p.Z;
+            side = Math.Max(side, _endSlope == 1
+                ? (r - (_endChamferBase + t)) * InvSqrt2
+                : (r - (_endChamferBase + _endSlope * t)) * _endNormalizer);
+        }
         if (_startChamfer > 0)
-            side = Math.Max(side, (r - (_startChamferBase + p.Z)) * InvSqrt2);
+        {
+            side = Math.Max(side, _startSlope == 1
+                ? (r - (_startChamferBase + p.Z)) * InvSqrt2
+                : (r - (_startChamferBase + _startSlope * p.Z)) * _startNormalizer);
+        }
 
         double axial = Math.Max(-p.Z, p.Z - _length);
         double outside = Math.Sqrt(
