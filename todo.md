@@ -2462,6 +2462,29 @@ from what was already understood rather than from scratch.
     `Pattern` with a pose per part, and the derivation must ride the one-declaration rule
     (footprint and 3D body derive from the same `PartDefinition`, never a second source). The
     sub-bullets below are the OPEN stages.
+  - **✅ STAGE 2 — the board and its parts as an Assembly — LANDED** (`PcbBoard`/`PcbStackup`/
+    `PcbLayout`/`PcbPlacement`/`PlacedPad`/`CopperLayer` + the `Pad` extension + IDF import;
+    docs `examples/ecad-pcb.md`, design.md §6d, README). The whole derivation rides the
+    one-declaration rule off the STAGE-1 schematic graph: a `PcbBoard` is a polygon outline +
+    thickness + copper stackup + its own holes/keep-outs, `Plate()` is the exact B-Rep
+    (`Shape.Extrude` + `Shape.Drill`) with the closed-form volume oracle `area·t − Σπr²·t`; a
+    `PcbLayout` places components at `(x, y, rot, side)` and DERIVES the copper (pads projected
+    per layer, pin↔pad identity), the drills (through-hole pads drill the plate, SMD drills
+    nothing), and the 3D bodies (`ToAssembly` → board + one occurrence per placed body,
+    flattening to `PartInstance`s the BOM/exporters consume). The bottom flip is a genuine
+    reflection on the part transform (`Mirror(Mirror(x)) == x`, board +Z untouched — the
+    FlipX-not-FlipZ doctrine), and `WorldOf(placement)` is bit-identical to the assembly's own
+    `PartInstance.World`. `Check()` is the geometric lift of the pin-counting identity
+    (`PlacedPinCount == PlacedPadCount`, every pin covered once; pads-off-board / pins-without-
+    pads / missing-footprints / holes-in-keep-out named). `Save`/`Load` embeds the schematic
+    and is a byte fixed point; `Pad` gained `Kind`/`DrillDiameter` write-only-when-stated so a
+    stage-1 footprint saves byte-identically. **IDF 4.0 import landed too** (`IdfReader`/
+    `PcbImport`/`IdfWriter`): board outline + holes + placements + keep-outs, unit-honoured, a
+    round-trip byte fixed point for the geometry it carries, malformed structure refused by
+    name. Residual follow-ups: IDF arc outlines / cutout loops / `.emp` component bodies (v1
+    flattens/drops/ignores them with a diagnostic); keep-out DRC is a centre-in-polygon test,
+    not yet the copper-clearance region query; the drawn schematic SHEET, KiCad `.kicad_pcb`
+    and STEP AP214 board-assembly interchange stay open below.
   - **The one genuinely new thing is a CONNECTIVITY DATA MODEL beside the geometry, and
     keeping the two coherent is the whole discipline.** A netlist is a graph — components,
     pins, nets — and it is NOT a signed distance field or a topology. The failure mode of

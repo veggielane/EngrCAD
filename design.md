@@ -6790,12 +6790,90 @@ version. These throw (a malformed file), where the document model's soft-degrade
 warning path has no analogue here because a schematic's connectivity carries no opaque
 records — the one opaque thing, the body, is optional and simply absent.
 
-### Not in stage 1
+### Stage 2 — the board and its parts (`PcbBoard`, `PcbLayout`, IDF import)
 
-Board geometry, footprint placement, positioning constraints, copper DRC, routing, MID/LDS
-3D routing and interchange (IDF/KiCad/STEP) are later stages over this one graph. A drawn
-schematic SHEET (symbols and wires to SVG/DXF/PDF via the `DrawingSheet` machinery) is a
-VIEW of the graph and a later deliverable; `Netlist.ToText()` is the stage-1 textual view.
+Stage 2 turns a schematic into a board, and the load-bearing rule carries over verbatim: **one
+declaration produces both**. The schematic graph is the single source; the board copper, the
+footprint placement and the 3D bodies all DERIVE from it — a pin and its pad are one identity
+(pin `1` ↔ pad `1`), which is the seam DRC and routing (later stages) will consume.
+
+**The plate is built with the existing `Shape` API, and its volume is a closed-form oracle.** A
+`PcbBoard` is a polygon outline + thickness + a `PcbStackup` (two copper layers by default, N via
+`Layers`) + its own `BoardHole`s (mounting holes and vias) and `KeepOut`s. `Plate()` extrudes the
+outline and drills the holes (`Shape.Extrude` + `Shape.Drill`), so it is an exact B-Rep whose
+volume is `outline area × thickness − Σ πr² × thickness` (`ExpectedPlateVolume`) — the tessellated
+volume approaches it from below by each round hole's inscribed-polygon chord deficit, matched to
+~1e-4 relative through `Part.MassProperties`' Richardson route, while the un-drilled prism is exact
+to 1e-6. The outline is stored as a polygon (the common board shape, and exactly what IDF carries)
+so it round-trips exactly.
+
+**The placement transform is the assembly's own transform math, and the bottom flip is a genuine
+reflection on the part.** A `PcbLayout` is a schematic + board + `PcbPlacement`s, each a
+`(x, y, rotationDegrees, side)` pose naming a component. The board occupies z ∈ [0, thickness];
+a top placement seats at the thickness with its body extending up, a bottom placement seats at 0.
+`PlacementPose` is a proper `Frame3d` (translate + rotate about Z); `PartTransform(side)` is
+identity on top and a reflection across the board plane (`Matrix4d.CreateScale((1,1,-1))`) on the
+bottom, which lives on the component's `Part.Transform`. So `WorldOf(placement)` is exactly
+`OccurrenceFrame.Then(worldXY).ToMatrix() * partTransform` — **bit-identical to the
+`PartInstance.World` the assembly's `Flatten` produces** (both call `Posed(occ, 0).Then(root)…`,
+and `Posed` returns the frame untouched at explode 0), which is the oracle for #6. The reflection's
+square is the identity (`Mirror(Mirror(x)) == x`), the world determinant flips sign under it, and
+the body genuinely hangs below the board — the FlipX-not-FlipZ doctrine in this domain being that
+the reflection is spent on the PART while the pose stays a proper frame, so the board's own +Z
+(world up) is never negated. **A through-hole pad keeps the same world `(x, y)` on both faces** (a
+plated hole serves both), because the reflection across the board plane leaves x, y untouched — so
+a bottom-placed header's holes line up with a top-placed one's, which is why the plate drills from
+`PlacementPose` (no mirror needed for the xy). A through-hole component drills the plate by exactly
+its hole cylinders; **an SMD component drills nothing** (its plate is bit-identical to the bare
+board, since the through-hole set is unchanged).
+
+**The one-declaration identity check is the geometric lift of the schematic's pin count.**
+`PcbLayout.Check` establishes that every pin of every placed component resolves to exactly one
+placed pad at a known copper location — `PlacedPinCount == PlacedPadCount` with every pin covered
+once — and names which way a failure fell (a pad with no pin, a pin with no pad, a pad off the
+board outline, a via/through-hole in a keep-out, a component with no footprint). `PadsOfNet(net)`
+resolves a net's pins to their copper regions. `Place` refuses an unknown reference or a repeated
+one by name at declaration time (the `Schematic.Add` pattern); the softer conditions are named in
+the check. `CopperLayers()` assigns SMD pads to their placement side's outer copper and through-hole
+pads to every layer (a plated hole spans them all) — the copper model the routing/DRC stages read.
+
+**`ToAssembly` is one part per (definition, side), N occurrences.** Identical components on one
+side share a `Part` (so `Bom.For` counts occurrences correctly); a bottom-side part carries the
+reflection on its `Part.Transform`. A body-less component still places its pads — it just has no 3D
+occurrence. The board is the base part; the whole thing flattens to `PartInstance`s the viewer, the
+BOM and every exporter already consume.
+
+**Persistence embeds the schematic (it is the source, not a copy).** `PcbLayout.Save`/`Load`
+extends the schematic seam — one seam refactored so `SchematicWriter.BuildRoot`/`ReadObject` build
+the schematic as an OBJECT the layout nests — with the board, placements, holes and keep-outs
+alongside, write-only-when-stated throughout (a default two-layer stackup, an identity board frame,
+a top-with-no-rotation placement, an empty hole/keep-out list are all omitted). `save → load → save`
+is a byte-identical fixed point. The `Pad` extension is backward-compatible for exactly this reason:
+`Kind`/`DrillDiameter` are written only when non-default, so a stage-1 SMD footprint saves
+byte-identically (the `PinType.Unspecified = 0` convention, applied to `PadKind.Smd = 0`).
+
+**IDF import, honestly.** `IdfReader` reads an IDF 3.0/4.0 board (`.emn`) into a `PcbImport` —
+outline, thickness, drilled holes, placements, keep-outs — honouring the header's unit (MM/THOU →
+mm, recorded in `Diagnostics`, the `IgesReader`/`$INSUNITS` lesson), validating the
+`.SECTION`/`.END_SECTION` nesting up front and refusing a malformed file BY NAME (the
+`StlReader`/`IgesReader` rule). **IDF carries no connectivity** — no pins, no nets — so `ToLayout`
+synthesizes a data-only schematic (a component per placement, named by its package) to hold the
+placements against, which is honest: the layout's identity check then reports the components have no
+footprints rather than pretending pins resolve to copper. `IdfWriter` closes the loop in canonical
+millimetres, so `read → write → read → write` is a byte-identical fixed point for the geometry IDF
+carries (the outline, holes, placements and keep-out polygons round-trip as data; the synthesized
+keep-out names and the fixed header date do not, because IDF has no field for them). v1 scope is
+stated: straight-segment outlines/keep-outs (a nonzero arc angle is flattened to a chord, reported),
+outline cutout loops dropped, the `.emp` library accepted but not modelled.
+
+### Not in stage 2
+
+PCB positioning constraints (over the landed sketch-constraint/`MateSolver`), copper DRC (a
+region-offset clearance query — grow each net's copper by half the clearance, require disjoint —
+over the exact 2D machinery), autorouting, panel cutouts and enclosure fit, thermal coupling, and
+MID/LDS 3D routing are later stages over this one graph; each reads the netlist↔copper identity
+stage 2 establishes. The richer interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies)
+follows IDF. A drawn schematic SHEET is still a VIEW of the graph and a later deliverable.
 
 ## 7. Query layer
 
