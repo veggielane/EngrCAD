@@ -1761,16 +1761,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   face REGIONS. The B-Rep boolean now HAS the planar half of that machinery
   (`CoplanarFaces` — same-plane recognition, area-overlap sampling, normal-agreement
   classification), so a planar *glue* is within reach; curved overlaps still are not.
-- [ ] Ray-parity B-Rep point classifier (drop the `MeshSdf` bridge in booleans).
-  Assessed (task #11): exact ray∩surface exists for planes/quadrics but not for
-  trimmed NURBS/swept faces (needs a surface-ray marching with the same rigor as
-  `SurfaceIntersection`), and parity through a trimmed face needs the crossing point
-  classified against the trim — the pole/parity lessons (`FaceGeometry.Contains`'
-  both-directions rule) all apply per ray. The `MeshSdf` probe's known weakness is
-  sliver fragments near the surface, which the largest-triangle-centroid rule already
-  mitigates; the classifier is worth building only when a boolean failure is traced to
-  a probe misclassification the mesh cannot fix, otherwise it is rigor without a
-  customer.
 - [ ] **Exact-surface mass-property quadrature** (OCCT `BRepGProp` + `GProp_Domain`) —
   mass properties ✅ landed by tessellate-then-sum with Richardson extrapolation (1.9e-7
   relative on a cylinder at default quality). Exact quadrature is worth doing only

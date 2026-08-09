@@ -3635,6 +3635,25 @@ route stops too**. What remains is one near-tangency (the bore's entry rim touch
 plate's top EDGE, a circle against a line) rather than two limits for two reasons, which is
 the useful form for a limit to be in.
 
+#### An exact ray-parity classifier is rigor without a customer, and the reason is a measurement
+
+The obvious way to remove the `MeshSdf` bridge from the boolean is an EXACT B-Rep point
+classifier — cast a ray and count parity against every trimmed face — so that a fragment's
+inside/outside is decided against the exact surfaces rather than against a tessellated field.
+It is not built, and the decision is a scoping one rather than a gap: exact ray∩surface exists
+for planes and quadrics but not for trimmed NURBS or swept faces (that would want a surface-ray
+march with `SurfaceIntersection`'s own rigor), and parity THROUGH a trimmed face still needs the
+crossing classified against the trim, so every pole/parity lesson `FaceGeometry.Contains` carries
+(the both-directions rule, `ParityRayPointsDown`) reappears per ray. Against that cost, the
+`MeshSdf` probe's one known weakness is sliver fragments near the surface, and the
+largest-triangle-centroid rule already mitigates it — so the classifier buys robustness the
+kernel does not currently lack. **The verdict is checked rather than assumed**: every recent
+`ProbePoint` fix (the pole-cap loop measured by its closest approach, the thin-fragment
+boundary step-off above) was traced to a parity or coverage rule INSIDE the mesh-probe
+framework and fixed there, not to a case the mesh cannot decide. So the exact classifier is
+worth building only when a boolean failure is traced to a probe misclassification the mesh
+CANNOT fix; until then it is rigor without a customer.
+
 #### Coincident (flush) planar surface
 
 Transversal intersection is not the only way two solids can meet: they can *share*
