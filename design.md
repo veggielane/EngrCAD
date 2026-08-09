@@ -2022,19 +2022,72 @@ exactly.
   its `LipschitzBound` stays 1 and its diameter means what it says. They therefore live
   behind different factories rather than one `Lattice(kind)` that would hide which contract
   a caller just bought.
-  - Each TPMS constant is DERIVED where a derivation exists (√3 for Schwarz P, Schwarz D and
-    the gyroid; exactly 7 for Neovius; 3√3 for I-WP) and MEASURED in every case, with the two
-    that have no closed form storing the measured supremum rounded up at the sixth figure.
-    The test asserts the field's own slope is **at most 1 and at least 0.99** — sound *and*
-    tight, because a loose constant costs wall thickness in direct proportion.
-  - **The cost of that constant is the wall, and it is why volume fraction is the parameter
-    offered as the engineering one.** The sheet's local half-thickness is
-    `(bound / |grad F|)·t/2`, so the requested thickness is a guaranteed MINIMUM and the
-    excess is how far the local gradient falls short of the global maximum — measured on the
-    level set from 1.15 (gyroid) to 6.99 (Neovius) and 56.9 at Lidinoid's near-critical
-    point. `Tpms.SheetForVolumeFraction` and friends solve for the fraction and report what
+  - **Every TPMS constant is DERIVED, and the last three share ONE derivation.** √3 for
+    Schwarz P, Schwarz D and the gyroid; exactly 7 for Neovius; 3√3 for I-WP; and then the
+    **diagonal lemma**, which is worth more than three formulas: every polynomial here is
+    CYCLIC in (x, y, z), so the diagonal x = y = z = t is invariant under the cycle, the three
+    partials are equal on it, and |∇F| there is |F_diag′(t)|/√3 — a ONE-VARIABLE problem. For
+    the shape Lidinoid and Split P share it gives |∇F| = 2√3·|sin 2t|·|A cos 2t + E| with
+    A = a − 2b and E = −e, maximized where 2Ac² + Ec − A = 0; Lidinoid falls out as exactly
+    3√3/2 (which the file had recorded as "no derivation attempted, the scan lands on it") and
+    Split P as the quadratic surd at c* = (√454 − 2)/30. **Fischer–Koch S is the one member
+    whose maximum is not on the diagonal** (there it is only √3), so it has its own invariant
+    family (t + 3π/2, t, π/4), on which F vanishes identically — the maximum sits ON the
+    surface, as Schwarz P's does — and |∇F|² collapses to a degree-6 polynomial G(sin t) whose
+    derivative, after v = √2·u, factors as √2(v+1)(3v⁴ + 7v³ − 11v² − 7v + 4): the maximizer is
+    the root of an INTEGER QUARTIC, hence solvable in radicals, so the constant is an explicit
+    algebraic number rather than "no closed form found". **The stored constants are unchanged**
+    — they already round up at the sixth figure, the safe direction, worth three parts per
+    million of wall, where re-storing them would move every rendered lattice for nothing. The
+    tests check each closed form against a global scan AND the load-bearing STEP of each
+    derivation (the diagonal identity on all eight kinds, the family reduction, the
+    factorization), because a value can agree by coincidence where a structural claim cannot;
+    the slope test asserts **at most 1 and at least 0.99** — sound *and* tight, because a loose
+    constant costs wall thickness in direct proportion.
+  - **The cost of that constant is the wall, and the excess is INHERENT — no choice of divisor
+    fixes it.** The sheet's local half-thickness is `(bound / |grad F|)·t/2`, so the requested
+    thickness is a guaranteed MINIMUM and the excess is how far the local gradient falls short
+    of the global maximum — measured area-weighted on the level set from 1.15 (gyroid) to 2.32
+    (Neovius), worst 37.7 there and 27.4 at Lidinoid's near-critical point. **A sheet is a BAND
+    of a level set and a band's width is 2L/|∇F|**, so it varies wherever the gradient does:
+    dividing by a different CONSTANT (the surface maximum rather than the global one) only
+    rescales the distribution, and dividing by the LOCAL gradient would make the wall
+    first-order uniform at the cost of the 1-Lipschitz contract the field exists to keep —
+    twenty-odd times steeper at Lidinoid's near-critical point, so the cull would widen by that
+    and buy nothing. So the wall is REPORTED (`Tpms.WallThickness` → a `SheetWall`) and
+    `Tpms.SheetForWallThickness` solves the nominal thickness for a stated median (a 1.0 mm
+    wall asks for 0.43 on Neovius and 0.87 on the gyroid), verified POINT BY POINT against a
+    direct march of the sheet's own field rather than distribution against distribution — two
+    medians can disagree merely by being taken over different measures of the surface. Under 3%
+    inside the regime the first-order relation claims (the band locally parallel, i.e. an
+    excess factor under two), with the points past it COUNTED rather than quietly dropped, and
+    `SheetWall.Maximum` documented as an upper bound that over-states exactly there.
+    `Tpms.SheetForVolumeFraction` and friends still solve for the fraction and report what
     they ACHIEVED (the `BiArcFit.MaxDeviation` convention), measured on a grid sharing no
     sample with the one the parameter was solved on.
+  - **Graded lattices grade the PARAMETER, never the cell, and that scoping is the design**
+    (`LatticeGrading`; graded overloads of `Sdf.TpmsSheet`/`TpmsSolid`/`StrutLattice` plus
+    `Tpms.GradedSheetForVolumeFraction` and `StrutLattices.GradedForVolumeFraction`). Grading a
+    thickness leaves the structure underneath exactly as it was — a TPMS's polynomial is still
+    periodic, and a strut lattice's fold and three-wide candidate neighbourhood are arguments
+    about the strut AXES, which do not move — so the exact sign, the completeness of the
+    visited neighbourhood and the periodicity are inherited rather than restated, and the only
+    cost is the Lipschitz bound, which becomes 1 + the grading's own. Grading the CELL SIZE
+    would be a different and much larger feature (the fold stops being a fold and there is no
+    sound evaluation to fall back on), so it is refused by omission rather than approximated.
+    **The grading's constant is STATED, never measured** — `Along` and `Radial` derive theirs
+    exactly, since a coordinate along a unit direction and a distance from a point are both
+    1-Lipschitz and the clamp cannot steepen either, while `FromFunction` makes the caller say
+    it, because sampling a function proves nothing about it between the samples and a constant
+    that is too small drops geometry silently. A volume-fraction grading rides the same
+    measured cell distribution the uniform solves use, as a piecewise-linear ladder, so the
+    composed constant is exact (the map IS the ladder) and a query is a lookup rather than a
+    bisection. **A constant grading reproduces the uniform field BIT FOR BIT**, which is the
+    identity saying this is one geometry; what a graded field gives up is the volume-fraction
+    ESTIMATOR's premise, since "sample one cell" needs a periodic field, so no achieved
+    fraction is reported and what the grading states is the fraction the LOCAL cell would
+    carry. A CONFORMAL lattice is already expressible by composing `Twist`/`Bend`/`Taper`,
+    each of which reports its own factor; a general free-form warp is a different feature.
   - **One term table per surface is the single source of the scalar evaluator AND the emitted
     expression**, so the compiled form is bit-identical by construction rather than by
     testing — eight formulas rather than sixteen copies free to drift. It is also what let
@@ -2048,6 +2101,19 @@ exactly.
     done ONCE at construction into per-sub-cell candidate lists (exact, since the distance to
     a segment is convex so its maximum over a box is at a corner). Two cheaper strategies
     were measured and lost; see the implicit README's table for the numbers.
+  - **The strut batch path vectorizes by grouping the POINTS, and neither obvious shape is
+    how.** The obstacle is that the candidate list is chosen per point, so four lanes can want
+    four different lists; padding every sub-cell's list to the longest throws away exactly the
+    pruning that made a query affordable (648 segments against a handful), and gathering per
+    lane needs a width-agnostic gather `Vector<double>` does not have. What is left is to make
+    the lanes AGREE — partition the batch by sub-cell with a counting sort, then walk each
+    bucket's points a register at a time with the strut broadcast as a scalar, so the struts
+    become constants and the points become the vector. Measured 2.0–2.8× over the six kinds
+    (win-x64), bit-identical by construction: the fold and the bucket index go through ONE
+    shared rule both paths ask, the kernel mirrors the scalar term for term with the segment's
+    own `LengthSquared` broadcast so the division is the identical double, and `Vector.Min`'s
+    ±0 tie-break cannot reach a result whose every quantity is a sum of squares squared again.
+    A GRADED lattice takes the scalar loop (the radius is a delegate call per point).
 - **The two primitives whose published formulas did not survive measurement** are recorded
   under the numerical lessons in CLAUDE.md: the ellipsoid (a genuine lower bound outside, an
   over-report of depth inside, with the error table against an exact Lagrange-multiplier
@@ -2055,6 +2121,51 @@ exactly.
   the square pyramid (Quilez's closed form is exact for the pyramid with its base REMOVED,
   reading 5.831 against a true 3.0 below the base centre, so `Sdf.Pyramid` takes the
   minimum over its own boundary triangles instead).
+- **`Sdf.ConvexPolyhedron` takes the pyramid's route too**, and the split is where the
+  arithmetic changes rather than where the code is convenient: INSIDE, the max over the face
+  half-spaces IS the distance (for a convex body the nearest boundary point lies on the
+  nearest face plane) and is returned unchanged, bit for bit; OUTSIDE it understates wherever
+  the nearest feature is an edge or a corner, so the node takes the minimum over its own
+  boundary TRIANGLES — grouped per plane from the vertices it was already enumerating for
+  `Bounds`, ordered by angle in the plane and fanned, with winding irrelevant since a distance
+  does not read it. The cheap form stays nameable as `ConvexDistance.HalfSpaceBound` (two
+  estimators answering one question must both be nameable) because the query then costs a
+  Voronoi-region test per triangle rather than one dot product per plane.
+- **The ellipsoid's Lipschitz bound is derived per AXIS**, which is what makes it exactly 1
+  for a sphere where the earlier `2 + (rmax/rmin)²` reported 3: every component of the
+  gradient carries the same factor `w_j = p_j/r_j²`, so `|∇V| ≤ max_j |(2 − μ) + u(μ − 1)|`
+  with `u = 1/k0` and `μ = ρ²/r_j²` — bilinear, hence four corner evaluations over a region's
+  own `k0` range. **And the `k0 ≥ ½` regime the derivation always carried is a real
+  restriction, now measured**: the field is genuinely DISCONTINUOUS at the centre of a
+  non-spherical ellipsoid, tending to `−|Ad|/|A²d|` along direction d, which is −rmax down the
+  long axis and −rmin down the short one. So no finite constant covers a region containing the
+  centre, `u` is capped at the regime rather than reporting infinity, and what the consumers
+  rest on there is the weaker property the field does keep — its magnitude never exceeding a
+  bounded multiple of the true distance — so the cull's conclusion holds where its stated
+  premise does not.
+- **`Displace`'s bounds needed no fix, and the reason is that the property they rest on is
+  narrower than it looks.** Material appears wherever the child reads below the amplitude, so
+  what `Bounds.Expanded(amplitude)` needs is `{child < t} ⊆ Bounds.Expanded(t)` — the child
+  never reporting LESS than the per-axis escape from its own bounds — which is weaker than
+  "the field is a true distance" and which the whole CSG family satisfies by induction (an
+  exact primitive gives at least its own escape; a union's minimum is at least the escape from
+  the union of the boxes; an intersection's maximum is the per-axis maximum of its operands'
+  escapes, which IS the escape from the intersected box). So the standing counterexample, a
+  difference near its tool's fictitious faces, is covered. What is NOT is a child whose own
+  bounds were widened relative to the field it reports, i.e. the non-isometries:
+  `Sphere(1).Taper(1, 3)` reads 0.667 at a point 1.0 outside its box. Hence
+  `Displace(amplitude, frequency, bounds)`, the stated-region overload, with both halves
+  pinned by test.
+- **A VECTOR-kernel compiler is a separate project rather than a residual, and the ceiling is
+  measured.** It would remove the virtual call per node per chunk and the pooled scratch each
+  operator writes and its parent reads, and it cannot remove the AoS→SoA transpose or the
+  arithmetic. On a union chain the MARGINAL cost of one more node is flat at ~1.36 ns/point
+  from depth 4 to 48 while a lone sphere — carrying the whole transpose by itself — costs
+  1.85 ns, so the per-node plumbing has already been amortized to below the arithmetic and
+  what a vector compiler could remove is a fraction of 1.36 ns. Against that: every node's
+  expression rewritten against `Vector<double>`, plus a per-node masking fallback for the
+  deliberately scalar ones, to which the recorded "block granularity destroys per-lane
+  savings" rule then applies.
 
 ## 5. B-Rep engine
 
