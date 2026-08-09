@@ -223,6 +223,7 @@ var options = ScriptOptions.Default
         typeof(EngrCAD.Interop.BrepBoolean).Assembly,
         typeof(EngrCAD.Query.SpatialCollection<>).Assembly,
         typeof(EngrCAD.Fea.TetMesh).Assembly,
+        typeof(EngrCAD.Ecad.Schematic).Assembly,
         typeof(Shape).Assembly,
         // The viewer, so a snippet can declare `sectionPlanes`/`camera` (see below) --
         // SectionPlane and CameraState live there.
@@ -233,7 +234,7 @@ var options = ScriptOptions.Default
         "System", "System.IO", "System.Linq", "System.Collections.Generic",
         "EngrCAD.Core", "EngrCAD.Core.Geometry2", "EngrCAD.Mesh", "EngrCAD.Implicit",
         "EngrCAD.BRep", "EngrCAD.Interop", "EngrCAD.Query", "EngrCAD.Modeling",
-        "EngrCAD.Fea", "EngrCAD.Viewer");
+        "EngrCAD.Fea", "EngrCAD.Ecad", "EngrCAD.Viewer");
 
 var rendered = 0;
 var executed = 0;
@@ -461,6 +462,24 @@ foreach (var (file, marker) in new[]
         errors.Add($"{file}: the placeholder \"{marker}\" is still in the file — a merge " +
                    "neutralized the count token and the restore did not match it. Replace it " +
                    "with the real figure from this run.");
+}
+
+// The bare token, one step more general. The three-way splice neutralizes count tokens to
+// the literal word "PLACEHOLDER" and restores them afterwards, so the exact-marker checks
+// above assume the restore produced a KNOWN wrong string. It need not: a forgotten restore
+// leaves "~PLACEHOLDER tests", and — the case that actually shipped — an agent editing the
+// status paragraph can leave the word in prose ("a Footprint/Pad layout PLACEHOLDER the
+// board stage will consume"), which no count-shaped marker matches. The word is never
+// legitimate in committed narrative, so any occurrence in these files is an unfinished edit.
+foreach (var file in new[] { "CLAUDE.md", "todo.md", "design.md" })
+{
+    var path = Path.Combine(docsRoot, "..", file);
+    if (!File.Exists(path)) continue;
+    var lines = File.ReadAllLines(path);
+    for (var i = 0; i < lines.Length; i++)
+        if (lines[i].Contains("PLACEHOLDER", StringComparison.Ordinal))
+            errors.Add($"{file}:{i + 1}: the word \"PLACEHOLDER\" is committed here — a merge " +
+                       "neutralized a token or an edit left a stub. Replace it with the real text.");
 }
 
 // ---- conflict-marker guard ---------------------------------------------------------

@@ -2612,6 +2612,24 @@ from what was already understood rather than from scratch.
   of it is geometry this kernel already does — copper clearance IS a region offset, a
   keep-out IS a boolean, and a trace on a moulded surface IS the tamper-mesh's conductive
   serpentine, already built.
+  - **✅ STAGE 1 — code-defined schematics + the connectivity data model — LANDED** (the new
+    kernel-tier project `EngrCAD.Ecad`, Core + Modeling only, no viewer; docs
+    `examples/ecad-schematics.md`, design.md §6d, README in the project). What exists for the
+    later stages to build on: `Schematic` declares `Component`s from reusable
+    `PartDefinition`s (ordered `Pin`s + `PinType`, a `Footprint`/`Pad` DATA placeholder the
+    layout stage consumes, an OPTIONAL `Func<Shape>` body hook) and connects pins into `Net`s
+    (`NetKind` Signal/Stub/NoConnect, no-connect first-class); the object graph IS the netlist
+    and `Netlist`/`ToNetlist()` is a derived read-only view. `Schematic.Check` is the
+    combinatorial DRC (the counting identity `TotalPins == PinsCoveredOnce` plus
+    floating/empty-net checks, offenders NAMED, every guard shown to fire); `Save`/`Load` is
+    the byte-fixed-point JSON seam with `PartDefinition`s interned by identity, a `PartLibrary`
+    re-attaching the code-only body on load, and structural refusals BY NAME. So the model,
+    the verification and the persistence exist — the **next stage** (board + components as an
+    `Assembly`) reads THIS graph: a board is a `Sketch` outline + `Drill`, a component is a
+    `HardwareComponent` (body + seating + host preparation), placement is `LocationSet`/
+    `Pattern` with a pose per part, and the derivation must ride the one-declaration rule
+    (footprint and 3D body derive from the same `PartDefinition`, never a second source). The
+    sub-bullets below are the OPEN stages.
   - **The one genuinely new thing is a CONNECTIVITY DATA MODEL beside the geometry, and
     keeping the two coherent is the whole discipline.** A netlist is a graph — components,
     pins, nets — and it is NOT a signed distance field or a topology. The failure mode of
@@ -2622,19 +2640,13 @@ from what was already understood rather than from scratch.
     same "the declaration is the model" doctrine `SheetMetalBody` and `FeatureHistory`
     already enforce. A DRC or a routing result that disagrees with the netlist is then a
     bug in one derivation, not an unresolvable difference between two hand-kept files.
-  - **Code-defined schematics** — the first deliverable, and the one that fits this repo's
-    code-first philosophy exactly (the `Scene`, `Shape` and `Sketch` APIs are all
-    code-first, and a schematic is one more). A `Schematic` is C# that declares `Component`s
-    (each an instance of a `PartDefinition` carrying pins, a footprint and a 3D body) and
-    connects their pins into `Net`s; the object graph IS the netlist, so there is no
-    capture/netlist round-trip to keep in step. Verification is combinatorial and exact:
-    every pin belongs to exactly one net or is explicitly no-connect (a counting identity),
-    no net is a single pin (a floating-net check), and a `save → load → save` of the
-    schematic is a byte fixed point through the same JSON seam the document model uses. A
-    rendered schematic SHEET (symbols, wires, labels) is a 2D drawing — the `DrawingSheet`/
-    `SheetAnnotation` machinery already draws to SVG/DXF/PDF — so a human-readable diagram
-    is nearly free once the graph exists, and is deliberately a VIEW of the graph rather
-    than a second editable thing.
+  - **Code-defined schematics** ✅ LANDED (see the STAGE 1 note above; the model, the
+    combinatorial verification and the byte-fixed-point persistence all exist). What is
+    deliberately NOT in stage 1 and remains open here: a rendered schematic SHEET (symbols,
+    wires, labels) is a 2D drawing the `DrawingSheet`/`SheetAnnotation` machinery already
+    draws to SVG/DXF/PDF, so it is nearly free once the graph exists and is deliberately a
+    VIEW of the graph rather than a second editable thing — `Netlist.ToText()` is the stage-1
+    textual stand-in it will replace.
   - **The board and its parts are geometry this kernel already builds.** A board is a plate
     with holes and a thickness (`Sketch` outline + `Drill` for mounting holes and vias,
     exact B-Rep today). A component is a `HardwareComponent` — a body + a seating convention

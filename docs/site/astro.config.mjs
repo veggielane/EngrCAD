@@ -222,6 +222,13 @@ document.addEventListener('click', function (event) {
             { label: 'LINQ spatial queries', slug: 'examples/queries' },
           ],
         },
+        {
+          label: 'Electronics (ECAD)',
+          collapsed: true,
+          items: [
+            { label: 'Code-defined schematics', slug: 'examples/ecad-schematics' },
+          ],
+        },
         { label: 'Writing examples', slug: 'writing-examples' },
         { label: 'Changelog', slug: 'changelog' },
         { label: 'API reference', link: 'api/' },
