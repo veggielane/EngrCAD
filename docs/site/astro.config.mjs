@@ -199,6 +199,7 @@ document.addEventListener('click', function (event) {
             { label: 'Remeshing', slug: 'examples/remeshing' },
             { label: 'Tessellation quality', slug: 'examples/quality' },
             { label: 'Importing meshes', slug: 'examples/import' },
+            { label: 'Mesh to B-Rep (STL to STEP)', slug: 'examples/mesh-to-brep' },
           ],
         },
         {

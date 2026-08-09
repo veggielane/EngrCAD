@@ -3989,6 +3989,122 @@ The conversion triangle is complete; each direction has a deliberately chosen al
   tessellation welds, at display scale); saddle cells resolve by the cell-center
   average. Used by the viewer's section-plane isolines (d = 0 exact cross-section,
   ±k·spacing field visualization).
+- **Mesh → B-Rep: `MeshToBrep` reconstruction — the fourth edge, and the only one that puts
+  information BACK.** Implicit→mesh, B-Rep→mesh and mesh→implicit are all controlled
+  discretisations; this direction reconstructs the surfaces a tessellation came from. **The
+  headline metric is the FACE COUNT**, because the fake version of "STL to STEP" — one planar
+  STEP face per triangle — is nearly free and worthless (a 100k-face solid no CAD system can
+  edit), so a drilled plate coming back as SEVEN faces rather than five thousand is what
+  separates the feature from its impostor. Two phases. **(1) Segment + fit** (`MeshToBrep`):
+  region-grow triangles across every edge that is not a sharp crease (feature angle reads the
+  MESH, so a coarse tessellation over-segments and the face count is the honesty check), then
+  plane/cylinder/sphere per region with the worst residual REPORTED. The cylinder axis is the
+  SMALLEST eigenvector of the area-weighted facet-normal covariance (a cylinder's normals span
+  a great circle ⊥ axis), and the radius is an algebraic circle fit in the plane ⊥ axis —
+  **exact for points ON a circle, which is the whole point**: an inscribed n-gon's vertices
+  lie on the cylinder, so the fit recovers the TRUE radius at every density where an
+  inscribed-radius fit `r·cos(π/n)` would be measurably wrong (0.024 low at 32 segments), and
+  that distinction is the first test written. **(2) Assemble** (`SolidAssembler`): a region
+  boundary becomes the EXACT surface∩surface intersection (a `Line3d` through the snapped
+  corners for plane∩plane, a `Circle3d` for a plane∩cylinder rim) rather than the chordal
+  polyline the mesh carried, and a triple point is snapped to the exact meeting of three
+  surfaces (`SurfaceCorner`) — the stage that decides whether the solid CLOSES. Shared edges
+  are built once and referenced by both faces so the result is a manifold directly;
+  `ShapeHealing.Heal` repairs shell orientation and `BrepSolid.Validate()` is the oracle. The
+  verification bar needs no external data (box/cylinder/drilled-plate reconstruct to valid
+  closed solids with matching volumes and 6/3/7 faces). **v1 is the tessellated-CAD case, said
+  out loud** — vertices ON the surface, so a fit's residual is the chord error — and cone,
+  torus, freeform (a NURBS surface fitter is the genuinely new numerical work), noisy scan
+  data, and a seamless closed surface with no boundary edge (a whole sphere is one face with no
+  edge) are all refused BY NAME. A spherical face WITH a boundary (a dome cap, whose rim is a
+  plane∩sphere circle) is reachable through `SurfaceIntersection`'s analytic branch but is not
+  yet tested; that plus cone/torus/NURBS and the seamed single-face solid are the honest
+  remaining work.
+
+### Dual-contouring and tessellation residuals — dispositions
+
+The dual-contouring/sharp-feature and trimmed-face work left a cluster of residuals. Their
+findings live here so the todo entries could be retired without losing them; each is a
+measured decline, a cost note, a pinned residual, or a cross-layer future feature rather than
+a live defect.
+
+- **The adaptive simplifier's tolerance is loose on CURVATURE.** `SurfaceNetsSimplify.Collapse`
+  merges cells whose combined `SurfaceQef` residual stays under the tolerance and CLAMPS the
+  merged point to the cluster's bounding box — so on a nearly-tangent smooth surface (a large
+  sphere) two adjacent planes have a tiny quadric residual whatever the point does along their
+  near-intersection, and what actually bounds the damage is the bounding box rather than the
+  stated length (measured 0.018% of volume at tolerance 0.001 cells). **The cheap true-bound
+  fix is one field evaluation per accepted cluster** — reject the merge when `|d(x)| > tolerance`
+  at the merged point `x`, which makes the tolerance a real error bound (conservative for the
+  lower-bound fields, exact for hard CSG). Filed rather than built: the adaptive mode is opt-in,
+  the bounding-box clamp already bounds the damage, and it would move `polygonize-adaptive.png`.
+- **The adaptive path gives up the uniform walk's O(cross-section) streaming memory bound**
+  (it retains a `SurfaceQef` and cell index per vertex = O(surface)), so it cannot reach the
+  1024³ grids the uniform walk can. A stated cost of the opt-in path.
+- **The repair loop reverts GLOBALLY per level** (a cluster in a manifoldness violation is
+  reverted and the whole face buffer rebuilt, up to eight rounds). It has never needed more
+  than one round on any fixture, so an incremental check (only the faces touching the reverted
+  cluster) is a cost note, not a correctness one.
+- **The Hermite-point projection assumes |grad| = 1 where the field is a lower bound.**
+  `Sdf.Normals` reports the true |grad| and the polygonizer divides by it, so the Newton step
+  is already exact for hard CSG; inside a smooth blend it lands NEAR rather than ON, but there
+  is no sharp feature to resolve there and the bound is one cell either way — a note, not a
+  defect.
+- **The ambiguous-face split is ONE-SIDED and PINCHES the minus-side cell.** The + side owns
+  the test (the sliding window cannot promise a cell the slab beyond its + neighbour), so the
+  minus cell keeps one vertex against its neighbour's two and its link falls into fans — the
+  only source of non-manifold pinch vertices measured after the sheet fix (240 on
+  `Sphere(10).Shell(0.6)` at res 44, 642 on `Box(10) & Gyroid(8,0.2)` at 56, 1686 on a lattice
+  sphere; pinned by `SurfaceNetsPinchTests`). **Two closures were built and both measured WORSE**
+  (the asymptotic-decider on the bilinear saddle, and cutting the ambiguous face's pairing where
+  the cube already links its two arcs): both drove the pinch count to zero AND produced open
+  meshes with bow-tie vertices, because a cell's grouping must match what its NEIGHBOURS do and
+  a face-local pairing does not make two cube interiors agree. The unverified third approach is
+  to make the resolution a function of the MINUS-side cell alone (which the + cell can already
+  read — `previousFarJoins` for x, a neighbour flood for y/z) so both cells decide the same way,
+  with the + cell's cycle also cut at that face. Filed.
+- **The grid WALK is now the polygonizer's dominant cost** (~175 ms of a 213 ms res-384
+  polygonize; assembly is 15–18%). The candidates are the per-cell `int[12]` crossing map (one
+  heap allocation per mixed cell), the crossing interpolation, and the three quad passes
+  re-reading `values` through `Corner()`. A perf lever, re-measure before choosing.
+- **`MeshSdf` batch queries: two levers measured, both declined** (seeding the branch-and-bound
+  1.12–1.20×; a packet query 0.30–0.86× on the collinear rows the batch seam delivers). The
+  full findings are in CLAUDE.md's performance mandates; a third attempt needs a lever that is
+  neither the initial bound nor the traversal amortization.
+- **`SdfProjectionTarget` stalls on a CSG difference's fictitious faces** (documented in the
+  class: two branches trade a probe back and forth, |d| not decreasing). Harmless for remeshing
+  (near-surface points only). The scoped future fix is an Implicit-layer `Sdf.TryClosestPoint(p,
+  out c)` virtual — primitives answer in closed form, operators UNION their children's
+  candidates rather than combining distances, and only candidates where the whole field reads
+  `|d(c)| ≈ 0` survive (a fictitious face sits strictly inside kept/removed material) — which is
+  exact for hard CSG over closed-form primitives and does NOT cover smooth blends/offsets, so
+  the API would have to report which answer the caller got. Not offered as a general
+  closest-point query today; the fix belongs to `EngrCAD.Implicit`.
+- **Trimmed-face residuals are bounded and pinned by tests** (`Box(20,20,20) − Sphere(12)` below
+  the corpus floor at a rim's vertical-tangent column; a sub-depth chamfer cone whose 740-aspect
+  band the sweep cannot improve; a coarse marching-tracer rim where refinement makes the face
+  worse). The two open levers are a ROW PATH reaching the rim's turning vertex (so the base is
+  right there and refinement stays idle) and making the tracer's sample count follow the
+  tessellation density rather than its own arc-length step. `TriangulateRegion` (tier 4) still
+  ear-clips, so a non-wrapping region with an exactly-uv-collinear boundary run would hit the
+  forced fan — nothing exercises it, so the slab sweep was not widened to it. Recorded by
+  `SpherePiercingEverySide_HasNoFoldsAndABoundedResidual`, `SubDepthChamfersCarryNoFoldsAtAnyFraction`,
+  `TrimmedBandGapTests` and `TrimmedFaceRefusalTests`.
+- **The adaptive octree simplifier and `MeshDecimator` are NOT interchangeable in kind**, so
+  the unmeasured "uniform polygonize + decimate reaches the same face count more cheaply than
+  octree clustering" comparison would be informational rather than decision-driving: the
+  octree collapse is EXACT for planar regions (provably lossless there) and keeps quads, where
+  QEM decimation is a triangle approximator. Seeding `MeshDecimator` with the field's quadrics
+  (rather than its own face planes) would need its `Quadric` made public and its `TryOptimize`
+  taught the rank-deficient regularisation dual contouring lives on; filed, not built.
+- **A quad n-gon (n > 4) is still corner-0-fanned, not optimally triangulated**, which is wrong
+  geometry on a NON-convex n-gon — but nothing in the kernel produces one today (planar faces
+  earcut before they reach here, and the `PolygonFan` shorter-diagonal rule handles quads), so
+  it is where the next defect of that family would live rather than a live one. The soup/import
+  fans (`MeshRepair`, `MeshSoupOps`, `StlReader`) are deliberately untouched for the same
+  reason — they decompose soup that is not a mesh yet, where the fan is the documented fallback
+  for input earcut declined — worth revisiting only if a dirty-import case is traced to a fan
+  diagonal.
 
 ## 6b. Unified modeling layer (`EngrCAD.Modeling`)
 
