@@ -2263,6 +2263,22 @@ puts a spurious half-step into the answer whose symptom - a startup wobble that 
 exactly like physics. It is skipped only when that right-hand side is EXACTLY zero, and
 `TransientSolveReport.Factorizations` reports which happened.
 
+## Several load patterns with independent histories
+
+`TransientSolveOptions.LoadFactor` scales ONE spatial pattern by one scalar law, which covers a
+step, an impulse, a ramp, a harmonic drive and a measured trace. The archetypal case it cannot
+express is gravity held CONSTANT while a shaker runs — `f(t) = sum_i g_i(t)·f_i` —
+`TransientSolveOptions.LoadPatterns`: a list of `(model, law)` pairs, each pattern's model
+carrying its own loads and its own time law. All patterns share the operator (mesh, supports,
+materials) with the solve model, so `K` is one matrix and the run factors once — exactly
+`SolveAll`'s contract — and the single-pattern form IS a one-entry list (`ComputeLoad` reduces
+to `Scale`, byte-identical). When patterns are given the solve model provides only the operator
+and the initial conditions; its own loads and `LoadFactor` are refused (the loads live on the
+patterns, one law spec is enough). Verified by SUPERPOSITION: the two-pattern run equals the two
+single-pattern runs added, at every step, to **7e-14** relative — a bug that dropped or
+mis-scaled a pattern could not survive it — and a one-pattern list is bit-identical to the
+single-model form.
+
 ## Two damping paths, and only one assembles a matrix
 
 The run option `TransientSolveOptions.Damping` is PROPORTIONAL (Rayleigh) and never assembles a

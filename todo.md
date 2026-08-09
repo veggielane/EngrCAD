@@ -827,15 +827,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   refinement is to drop the collapsed column and continue with a narrower block, which saves
   the restart's re-convergence; deliberately not built until a fixture wants it, since no
   case in the suite reaches the breakdown path other than by exhausting a small space.
-- [ ] **FEA: transient dynamics — several load patterns with independent histories.**
-  `TransientSolveOptions.LoadFactor` scales the model's ONE spatial load pattern by one scalar
-  law, which covers a step, an impulse, a ramp, a harmonic drive and a measured trace. What it
-  cannot express is the archetypal real case of gravity held constant while a shaker runs: that
-  needs `f(t) = sum_i g_i(t)·f_i` over a LIST of patterns, and the list has to be proven to
-  share one stiffness matrix — which is exactly `StructuralSolver.SolveAll`'s contract, so
-  `RequireOneOperator` is the check it would reuse rather than a new one. The shape is a
-  `(StructuralModel pattern, Func<double,double> factor)` list with the single-pattern form as
-  sugar over it, mirroring `Solve` being `SolveAll([model])[0]`.
 - [ ] **FEA: transient dynamics — base excitation (support motion as a history).** A prescribed
   displacement is currently HELD constant for the run and is deliberately not scaled by the load
   factor (a support that has been moved stays moved). A seismic or shaker input needs `u_c(t)`

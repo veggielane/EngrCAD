@@ -409,9 +409,14 @@ Named rather than approximated:
   avoid.
 - **Hysteretic (structural) damping**, per above — it has no time-domain form.
 - **Adaptive time stepping** — it would refactor at every change.
-- **Base excitation** (a support whose motion is a history) and **several load patterns with
-  independent histories**. A prescribed displacement is held constant and is *not* scaled by
-  the load factor: a support that has been moved stays moved.
+- **Base excitation** (a support whose motion is a history). A prescribed displacement is held
+  constant and is *not* scaled by the load factor: a support that has been moved stays moved.
+
+**Several load patterns with independent histories** — gravity held constant while a shaker runs,
+`f(t) = Σ g_i(t)·f_i` — are `TransientSolveOptions.LoadPatterns`, a `(model, law)` list whose
+patterns share one factorization (the solve model then carries only the operator and the initial
+conditions). It is verified by superposition: the two-pattern run equals the two single-pattern
+runs added, at every step.
 
 ## What is deliberately **not** refused
 

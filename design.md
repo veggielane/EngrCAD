@@ -1330,6 +1330,24 @@ indistinguishable from physics by inspection. It is skipped only when the right-
 EXACTLY zero — an exact-zero test, since the acceleration is a linear image of that vector — and
 `Factorizations` reports which happened, so the cost is visible rather than mysterious.
 
+### Several load patterns with independent histories: one factorization, superposed
+
+`LoadFactor` scales one spatial pattern by one law; the case it cannot express is gravity held
+constant while a shaker runs, `f(t) = sum_i g_i(t)·f_i`. `LoadPatterns` is a `(model, law)` list,
+each pattern's model carrying its own loads and its own time law, all sharing the operator with
+the solve model — so `K` is one matrix and the run factors once, exactly `SolveAll`'s contract
+(`RequireOneOperator` reused). The single-pattern form IS a one-entry list: `ComputeLoad`
+overwrites with the first pattern and adds the rest, so for one pattern it is
+`Scale(pattern, law(t))` byte for byte, which is what keeps every incumbent transient number
+unchanged (asserted, and the phase-error predictions would have caught a drift). When patterns
+are given the solve model provides only the operator and the initial conditions — its own loads
+and `LoadFactor` are refused, since the loads live on the patterns and one law spec is enough.
+The oracle is LINEARITY: a linear system from rest responds to a sum of loads with the sum of the
+responses, so the two-pattern run equals the two single-pattern runs added at every step (7e-14
+relative), a mutation a dropped or mis-scaled pattern could not survive. Base excitation as a
+support-motion HISTORY (a support that moves over time rather than a fixed offset) is the one
+transient excitation still filed.
+
 ### An unrestrained body is accepted, where the static solver refuses one
 
 `StructuralSolver` refuses a free body by name and describes the surviving rigid motions,

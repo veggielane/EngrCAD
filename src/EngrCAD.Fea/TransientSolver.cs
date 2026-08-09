@@ -5,6 +5,18 @@ using EngrCAD.Core.Solvers;
 namespace EngrCAD.Fea;
 
 /// <summary>
+/// One spatial load pattern and its own history, for the multi-pattern transient
+/// (<see cref="TransientSolveOptions.LoadPatterns"/>): a model that states this pattern's
+/// LOADS (its mesh, supports and materials shared with every other pattern and with the
+/// operator model) and the scalar law that scales it over time.
+/// </summary>
+/// <param name="Pattern">The model carrying this pattern's loads — only its loads may differ
+/// from the others'.</param>
+/// <param name="Factor">The multiplier on this pattern at time <c>t</c> — a constant (gravity),
+/// a harmonic drive, a step, a measured trace.</param>
+public readonly record struct TransientLoadPattern(StructuralModel Pattern, Func<double, double> Factor);
+
+/// <summary>
 /// Options for <see cref="TransientSolver.Solve"/>: a constant step, a count, a scheme, a
 /// damping model, a load history and an initial state.
 ///
@@ -76,11 +88,10 @@ public sealed record TransientSolveOptions
     /// Null is a constant 1, so a model's loads are simply held.
     ///
     /// <para><b>One spatial pattern scaled by one scalar law</b>, which covers a step, an
-    /// impulse, a ramp, a harmonic drive and a measured trace. What it does NOT cover is a
-    /// superposition of patterns with independent histories — gravity held while a shaker
-    /// runs — because that needs a LIST of load patterns proven to share one stiffness
-    /// matrix, which is exactly <c>StructuralSolver.SolveAll</c>'s contract and is filed as
-    /// the shape it would take rather than approximated here.</para>
+    /// impulse, a ramp, a harmonic drive and a measured trace. A superposition of patterns
+    /// with independent histories — gravity held while a shaker runs — is
+    /// <see cref="LoadPatterns"/>, and this single-pattern form is exactly that with a
+    /// one-entry list.</para>
     ///
     /// <para><b>A prescribed displacement is not a load and is not scaled by this.</b> It is
     /// held at its stated value for the whole run, which is what a displaced support does;
@@ -92,6 +103,20 @@ public sealed record TransientSolveOptions
     /// the load. Both are legitimate readings of "suddenly applied" and neither is imposed.</para>
     /// </summary>
     public Func<double, double>? LoadFactor { get; init; }
+
+    /// <summary>
+    /// Several spatial load patterns with INDEPENDENT histories — the archetypal case of gravity
+    /// held constant while a shaker runs: <c>f(t) = sum_i g_i(t)·f_i</c>. Null (the default) uses
+    /// the single-pattern form (the solve model's own loads scaled by <see cref="LoadFactor"/>).
+    ///
+    /// <para><b>All patterns share one operator</b> — the same mesh, supports and materials as
+    /// the solve model, only the loads differing — so the stiffness is one matrix and the run
+    /// factors once, exactly <c>StructuralSolver.SolveAll</c>'s contract. When this is set the
+    /// solve model provides only the operator and the initial conditions; its OWN loads and
+    /// <see cref="LoadFactor"/> are refused (the loads live on the patterns, and one law spec is
+    /// enough), so the total load is the superposition over the patterns and nothing else.</para>
+    /// </summary>
+    public IReadOnlyList<TransientLoadPattern>? LoadPatterns { get; init; }
 
     /// <summary>
     /// A per-node initial displacement (null is rest). A prescribed support value wins over
@@ -160,9 +185,9 @@ public sealed record TransientSolveOptions
 /// evaluated once about the undeformed configuration and never updated, so contact, plasticity,
 /// large deformation and follower loads are outside it — each of those makes the problem a
 /// nonlinear solve wrapping this one, with a residual iteration inside every step, which is a
-/// different solver rather than an option on this one. Base excitation (a support whose motion
-/// is a history) and several load patterns with independent histories are filed; see
-/// <see cref="TransientSolveOptions.LoadFactor"/>. Explicit integration is refused with its
+/// different solver rather than an option on this one. Several load patterns with independent
+/// histories are <see cref="TransientSolveOptions.LoadPatterns"/>; base excitation (a support
+/// whose motion is a history) is filed. Explicit integration is refused with its
 /// own reason on <see cref="TimeIntegration.CentralDifference"/>.</para>
 /// </summary>
 public static class TransientSolver
@@ -323,16 +348,20 @@ public static class TransientSolver
             model, transient.InitialVelocity, nameof(TransientSolveOptions.InitialVelocity),
             applyPrescribed: false);
 
-        var loadFactor = transient.LoadFactor;
-        var pattern = LoadPattern(model);
-        double factor0 = loadFactor?.Invoke(0) ?? 1.0;
+        // One spatial pattern scaled by one law, or several patterns superposed — the total
+        // load is sum_i laws[i](t)·loadVectors[i]. The single-pattern list reduces to the
+        // incumbent Scale(pattern, factor, .) bit for bit (see ComputeLoad).
+        var (loadVectors, laws) = BuildLoadPatterns(model, transient);
+        double factor0 = laws[0](0);
         var load = new double[totalDofs];
+        var initialLoad = new double[totalDofs];
+        ComputeLoad(loadVectors, laws, 0, initialLoad);
 
         stopwatch.Restart();
         int factorizations = 0;
         var acceleration = InitialAcceleration(
             model, m, fullMass, fullStiffness, modelDamping, reduced, freeCount,
-            pattern, factor0, displacement, velocity, dampA, dampB, options, progress,
+            initialLoad, displacement, velocity, dampA, dampB, options, progress,
             ref factorizations);
 
         SparseCholesky? factor = null;
@@ -362,7 +391,7 @@ public static class TransientSolver
         var states = new List<TransientState>();
         var scratch = new Scratch(totalDofs, freeCount);
 
-        Scale(pattern, factor0, load);
+        Array.Copy(initialLoad, load, totalDofs);
         var initial = BuildState(
             model, 0, 0, factor0, displacement, velocity, acceleration, load,
             fullMass, fullStiffness, modelDamping, dampA, dampB, alpha,
@@ -399,8 +428,11 @@ public static class TransientSolver
             //   t(n+1+alpha) = (1+alpha)·t(n+1) - alpha·t(n) = t(n+1) + alpha·dt.
             // With alpha = 0 that is t(n+1) exactly, so the Newmark path is untouched.
             double weightedTime = time + alpha * dt;
-            double stepFactor = loadFactor?.Invoke(weightedTime) ?? 1.0;
-            Scale(pattern, stepFactor, nextLoad);
+            // The reported per-state factor is the FIRST pattern's law value (the `Value`/
+            // `FailedAt`-stays-first convention the mechanism sweep uses); the actual load is
+            // the full superposition.
+            double stepFactor = laws[0](weightedTime);
+            ComputeLoad(loadVectors, laws, weightedTime, nextLoad);
 
             // rhs = f(t+alpha·dt)
             //     + M·(c0·u + c2·v + c3·a)
@@ -599,7 +631,7 @@ public static class TransientSolver
         PackedSparseMatrix fullMass, PackedSparseMatrix fullStiffness,
         PackedSparseMatrix? modelDamping,
         int[] reduced, int freeCount,
-        double[] pattern, double factor0, double[] displacement, double[] velocity,
+        double[] initialLoad, double[] displacement, double[] velocity,
         double dampA, double dampB,
         StructuralSolveOptions options, ProgressCancel? progress,
         ref int factorizations)
@@ -623,7 +655,7 @@ public static class TransientSolver
             int r = reduced[dof];
             if (r < 0)
                 continue;
-            double value = factor0 * pattern[dof] - stiffProduct[dof];
+            double value = initialLoad[dof] - stiffProduct[dof];
             if (massVelocity is not null)
                 value -= dampA * massVelocity[dof];
             if (stiffVelocity is not null)
@@ -748,6 +780,114 @@ public static class TransientSolver
             pattern[3 * node + 2] = force.Z;
         }
         return pattern;
+    }
+
+    /// <summary>
+    /// The spatial load vectors and their scalar laws — one pattern (the model's own loads
+    /// scaled by <see cref="TransientSolveOptions.LoadFactor"/>) or several
+    /// (<see cref="TransientSolveOptions.LoadPatterns"/>). The single-pattern list is what
+    /// keeps the incumbent run bit-identical, since <see cref="ComputeLoad"/> reduces to
+    /// <c>Scale(pattern, law(t))</c> for it.
+    /// </summary>
+    private static (double[][] Vectors, Func<double, double>[] Laws) BuildLoadPatterns(
+        StructuralModel model, TransientSolveOptions transient)
+    {
+        if (transient.LoadPatterns is { } patterns)
+        {
+            if (patterns.Count == 0)
+                throw new ArgumentException(
+                    "LoadPatterns was set but empty; give at least one pattern, or leave it null "
+                    + "and state the load on the model.");
+            if (transient.LoadFactor is not null)
+                throw new FeaException(
+                    "Both LoadFactor and LoadPatterns were set. LoadPatterns carries a law per "
+                    + "pattern, so a single LoadFactor has no pattern to scale — state the "
+                    + "constant-load case as one pattern with a constant factor instead.");
+            if (ModelHasLoad(model))
+                throw new FeaException(
+                    "The solve model carries its own loads AND LoadPatterns was set. When several "
+                    + "patterns are given the loads live on the patterns and the solve model "
+                    + "provides only the operator and the initial conditions — clear its loads "
+                    + "(ClearLoads), or state its loads as one of the patterns.");
+            RequireOneOperator(model, patterns);
+
+            var vectors = new double[patterns.Count][];
+            var laws = new Func<double, double>[patterns.Count];
+            for (int i = 0; i < patterns.Count; i++)
+            {
+                ArgumentNullException.ThrowIfNull(patterns[i].Pattern);
+                ArgumentNullException.ThrowIfNull(patterns[i].Factor);
+                vectors[i] = LoadPattern(patterns[i].Pattern);
+                laws[i] = patterns[i].Factor;
+            }
+            return (vectors, laws);
+        }
+        // Single pattern: the model's own loads, held or scaled by LoadFactor.
+        var law = transient.LoadFactor ?? (_ => 1.0);
+        return ([LoadPattern(model)], [law]);
+    }
+
+    /// <summary><c>into = sum_i laws[i](t)·vectors[i]</c>. Overwrites with the first pattern
+    /// then adds the rest, so ONE pattern is bit-identical to <c>Scale(vectors[0], laws[0](t),
+    /// into)</c>.</summary>
+    private static void ComputeLoad(
+        double[][] vectors, Func<double, double>[] laws, double time, double[] into)
+    {
+        Scale(vectors[0], laws[0](time), into);
+        for (int i = 1; i < vectors.Length; i++)
+        {
+            double g = laws[i](time);
+            var v = vectors[i];
+            for (int dof = 0; dof < into.Length; dof++)
+                into[dof] += g * v[dof];
+        }
+    }
+
+    private static bool ModelHasLoad(StructuralModel model)
+    {
+        for (int node = 0; node < model.Mesh.NodeCount; node++)
+        {
+            if (model.ForceOf(node) != Vector3d.Zero)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Every pattern must share one operator with the solve model — the same
+    /// <see cref="AnalysisMesh"/> instance (a value comparison would scramble the answer by
+    /// permutation), restraint MASK and material per element. Only the loads may differ, the
+    /// mirror of <c>StructuralSolver.SolveAll</c>'s contract.
+    /// </summary>
+    private static void RequireOneOperator(
+        StructuralModel model, IReadOnlyList<TransientLoadPattern> patterns)
+    {
+        var mesh = model.Mesh;
+        for (int c = 0; c < patterns.Count; c++)
+        {
+            var other = patterns[c].Pattern;
+            if (!ReferenceEquals(other.Mesh, mesh))
+                throw new FeaException(
+                    $"Load pattern {c} was built on a different AnalysisMesh instance from the "
+                    + "solve model. Patterns share one factorization, so build every one over the "
+                    + "same mesh object.");
+            for (int node = 0; node < mesh.NodeCount; node++)
+            {
+                if (other.RestraintOf(node) != model.RestraintOf(node))
+                    throw new FeaException(
+                        $"Load pattern {c} restrains node {node} differently from the solve model. "
+                        + "Supports are ELIMINATED, so a different restraint pattern is a "
+                        + "different matrix and cannot share a factorization.");
+            }
+            for (int e = 0; e < mesh.ElementCount; e++)
+            {
+                if (!Equals(other.MaterialOf(e), model.MaterialOf(e)))
+                    throw new FeaException(
+                        $"Load pattern {c} gives element {e} a different material from the solve "
+                        + "model. The stiffness is a function of the materials, so they do not "
+                        + "share one.");
+            }
+        }
     }
 
     // ---- per-step arithmetic ---------------------------------------------------------
