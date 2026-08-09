@@ -93,7 +93,43 @@ public sealed record TopologyOptions
     /// construction, so the first update has a volume to redistribute rather than one to
     /// reach.</summary>
     public IReadOnlyList<double>? InitialDensity { get; init; }
+
+    /// <summary>
+    /// Elements whose centroid this predicate accepts are PINNED SOLID — material that must
+    /// stay, whatever the optimiser would prefer: under a bolt head, around a bearing bore, a
+    /// mounting boss. Null (the default) leaves every element free.
+    ///
+    /// <para><b>It is a per-element bound, not a new algorithm.</b> A matching element keeps
+    /// density 1 and is excluded from the optimality-criteria redistribution; the bisection
+    /// then shares the remaining volume budget among the FREE elements, so the constraint still
+    /// holds exactly and the passive material counts toward it. It is a <c>Func&lt;Vector3d,
+    /// bool&gt;</c> over element centroids — a VOLUME selector, matching
+    /// <c>TetMeshOptions.SizingField</c>'s shape — because <c>Facets</c> selects boundary
+    /// facets and this wants the interior.</para>
+    ///
+    /// <para>A solid region whose own volume already exceeds the budget is refused by name, and
+    /// an element accepted by both this and <see cref="VoidRegion"/> is a contradiction refused
+    /// by name.</para>
+    /// </summary>
+    public Func<Vector3d, bool>? SolidRegion { get; init; }
+
+    /// <summary>
+    /// Elements whose centroid this predicate accepts are PINNED VOID — material that must go:
+    /// a clearance channel, a keep-out for a cable, a window. They keep
+    /// <see cref="MinimumDensity"/> (not exactly zero, so the stiffness stays non-singular) and
+    /// are excluded from the redistribution. Null (the default) leaves every element free.
+    /// </summary>
+    public Func<Vector3d, bool>? VoidRegion { get; init; }
 }
+
+/// <summary>
+/// One load case for the multi-load-case <see cref="TopologyOptimizer.Minimize(IReadOnlyList{TopologyLoadCase}, TopologyOptions, ProgressCancel?)"/>:
+/// a model that states this case's LOADS (its mesh, supports and materials shared with every
+/// other case) and the weight it carries in the objective.
+/// </summary>
+/// <param name="Model">The model for this case — only its loads may differ from the others'.</param>
+/// <param name="Weight">This case's weight in the weighted-sum compliance; positive.</param>
+public readonly record struct TopologyLoadCase(StructuralModel Model, double Weight);
 
 /// <summary>
 /// Compliance minimisation by SIMP (Solid Isotropic Material with Penalisation) over a
@@ -152,6 +188,10 @@ public sealed record TopologyOptions
 /// </summary>
 public static class TopologyOptimizer
 {
+    private const byte PassiveFree = 0;
+    private const byte PassiveSolid = 1;
+    private const byte PassiveVoid = 2;
+
     /// <summary>
     /// Minimises <c>c = u'Ku</c> subject to a volume fraction, over one density per element.
     /// </summary>
@@ -164,11 +204,59 @@ public static class TopologyOptimizer
         StructuralModel model, TopologyOptions options, ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(model);
-        ArgumentNullException.ThrowIfNull(options);
+        // The single-model form IS the one-case form, exactly as StructuralSolver.Solve is
+        // SolveAll([model])[0] — one implementation, and the single-case answer is bit-identical
+        // (a weight of exactly 1.0 folds into the arithmetic as itself).
+        return Minimize([new TopologyLoadCase(model, 1.0)], options, progress);
+    }
 
+    /// <summary>
+    /// Minimises the WEIGHTED-sum compliance <c>sum_i w_i·u_i'Ku_i</c> over several load cases,
+    /// subject to a single volume fraction — the multi-load-case form, where the weighting IS
+    /// the design decision.
+    ///
+    /// <para><b>One factorization serves every case, because the stiffness is the same.</b> All
+    /// cases share the mesh, the supports and the materials (only the loads differ), so
+    /// <c>K(rho)</c> is one matrix and each case is a back-substitution against it — exactly
+    /// <c>StructuralSolver.SolveAll</c>'s contract. The compliance is <c>sum_i w_i·c_i</c> and
+    /// the sensitivity is the weighted sum of the per-case strain energies, so the loop is
+    /// unchanged and the only cost is N solves per iteration.</para>
+    ///
+    /// <para><b>The weighting is not something a library can pick.</b> Minimising a weighted sum
+    /// is a design decision: a structure stiff against A twice as much as against B is not the
+    /// same part as the min-max worst-case one, which is a genuinely different problem (filed).
+    /// So the weights are the caller's, and they must be positive — a zero-weight case has no
+    /// effect and a negative one rewards compliance, inverting the sign of the problem.</para>
+    /// </summary>
+    /// <param name="cases">The load cases and their weights. Every case's model must share one
+    /// <see cref="AnalysisMesh"/> instance, one restraint pattern and one material assignment
+    /// with the first — only the loads may differ.</param>
+    /// <param name="options">What to optimise for.</param>
+    /// <param name="progress">Optional cooperative cancellation and progress.</param>
+    public static TopologyResult Minimize(
+        IReadOnlyList<TopologyLoadCase> cases, TopologyOptions options,
+        ProgressCancel? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(cases);
+        ArgumentNullException.ThrowIfNull(options);
+        if (cases.Count == 0)
+            throw new ArgumentException("At least one load case is needed.", nameof(cases));
+        foreach (var lc in cases)
+        {
+            ArgumentNullException.ThrowIfNull(lc.Model);
+            if (!(lc.Weight > 0) || double.IsInfinity(lc.Weight))
+                throw new FeaException(
+                    $"A load-case weight must be finite and positive; {lc.Weight} was given. A "
+                    + "zero-weight case has no effect and a negative one rewards compliance, "
+                    + "inverting the problem for that case.");
+        }
+
+        var model = cases[0].Model;
         var mesh = model.Mesh;
         int count = mesh.ElementCount;
-        RequireUsableModel(model, options);
+        foreach (var lc in cases)
+            RequireUsableModel(lc.Model, options);
+        RequireOneOperator(cases);
 
         // ONE rule for the run: the assembly and the element energies integrate at the same
         // points, which is what makes `sum rho^p·E_e` and `f'u` the SAME number rather than
@@ -182,6 +270,12 @@ public static class TopologyOptimizer
         double totalVolume = 0;
         foreach (double v in volumes)
             totalVolume += v;
+
+        // Passive (non-design) regions, pinned SOLID or VOID by a centroid predicate and left
+        // out of the redistribution. Null on both leaves `passive` all-free, and every branch
+        // below then reduces to the incumbent code path bit for bit.
+        var passive = ComputePassive(
+            mesh, options, volumes, options.VolumeFraction * totalVolume, out _);
 
         var filter = options.Filter == TopologyFilter.None
             ? null
@@ -208,9 +302,18 @@ public static class TopologyOptimizer
         {
             Array.Fill(design, options.VolumeFraction);
         }
+        // Pin passive elements in the initial design. Solid -> 1, void -> the floor. Free
+        // elements keep their seed / uniform value.
+        for (int e = 0; e < count; e++)
+        {
+            if (passive[e] == PassiveSolid)
+                design[e] = 1.0;
+            else if (passive[e] == PassiveVoid)
+                design[e] = options.MinimumDensity;
+        }
 
         var updated = new double[count];
-        var evaluator = new Evaluator(model, options, filter, rule, progress);
+        var evaluator = new Evaluator(cases, options, filter, rule, progress);
         var volumeGradient = VolumeGradient(filter, options.Filter, volumes);
 
         var history = new List<TopologyIteration>();
@@ -226,7 +329,7 @@ public static class TopologyOptimizer
 
             bool met = OptimalityCriteriaStep(
                 design, evaluator.DesignSensitivity, volumeGradient, targetVolume, options,
-                updated);
+                passive, updated);
 
             double change = 0;
             for (int e = 0; e < count; e++)
@@ -319,12 +422,20 @@ public static class TopologyOptimizer
         double[] volumeGradient,
         double targetVolume,
         TopologyOptions options,
+        byte[] passive,
         double[] updated)
     {
         int count = design.Length;
         double hi = 0;
         for (int e = 0; e < count; e++)
+        {
+            // A pinned element never moves, so it neither needs nor should influence the
+            // multiplier bracket — its sensitivity is a load-carrying number the design does
+            // not act on.
+            if (passive[e] != PassiveFree)
+                continue;
             hi = Math.Max(hi, -sensitivity[e] / volumeGradient[e]);
+        }
         // Every B_e is at most 1/2 here, so every element moves DOWN and the volume is the
         // least the move limits allow; the same argument the other way makes the low end the
         // most they allow. A sensitivity that is identically zero (nothing carries load)
@@ -344,6 +455,12 @@ public static class TopologyOptimizer
 
         double Candidate(int e, double lambda)
         {
+            // Pinned elements return their fixed density at every multiplier, so they add a
+            // constant to VolumeAt and never move under the update.
+            if (passive[e] == PassiveSolid)
+                return 1.0;
+            if (passive[e] == PassiveVoid)
+                return options.MinimumDensity;
             double lower = Math.Max(options.MinimumDensity, design[e] - options.MoveLimit);
             double upper = Math.Min(1.0, design[e] + options.MoveLimit);
             double b = -sensitivity[e] / (lambda * volumeGradient[e]);
@@ -399,7 +516,8 @@ public static class TopologyOptimizer
         private readonly ProgressCancel? _progress;
         private readonly int[] _reduced;
         private readonly int _freeCount;
-        private readonly double[] _load;
+        private readonly double[][] _loads;
+        private readonly double[] _weights;
         private readonly double[] _free;
         private readonly Vector3d[] _displacement;
         private readonly double[] _scale;
@@ -407,22 +525,28 @@ public static class TopologyOptimizer
         private readonly double[] _sensitivity;
 
         internal Evaluator(
-            StructuralModel model, TopologyOptions options, DensityFilter? filter,
+            IReadOnlyList<TopologyLoadCase> cases, TopologyOptions options, DensityFilter? filter,
             in TetQuadrature rule, ProgressCancel? progress)
         {
-            _model = model;
+            _model = cases[0].Model;
             _options = options;
             _filter = filter;
             _rule = rule;
             _progress = progress;
-            int count = model.Mesh.ElementCount;
-            _reduced = FeaAssembly.ReducedIndices(model, out _freeCount);
+            int count = _model.Mesh.ElementCount;
+            _reduced = FeaAssembly.ReducedIndices(_model, out _freeCount);
             if (_freeCount == 0)
                 throw new FeaException(
                     "Every degree of freedom is restrained; there is nothing to solve for.");
-            _load = ReducedLoad(model, _reduced, _freeCount);
+            _loads = new double[cases.Count][];
+            _weights = new double[cases.Count];
+            for (int c = 0; c < cases.Count; c++)
+            {
+                _loads[c] = ReducedLoad(cases[c].Model, _reduced, _freeCount);
+                _weights[c] = cases[c].Weight;
+            }
             _free = new double[_freeCount];
-            _displacement = new Vector3d[model.Mesh.NodeCount];
+            _displacement = new Vector3d[_model.Mesh.NodeCount];
             _scale = new double[count];
             _energy = new double[count];
             _sensitivity = new double[count];
@@ -492,27 +616,39 @@ public static class TopologyOptimizer
                           + "run TetSmoothing.Smooth, or mesh at a coarser target size."),
                     ex);
             }
-            factor.Solve(_load, _free);
-
-            for (int node = 0; node < mesh.NodeCount; node++)
+            // ONE factorization, N back-substitutions — the whole point of the multi-case
+            // form, exactly as StructuralSolver.SolveAll. The compliance and the per-element
+            // strain energy are WEIGHTED sums over the cases, so `_energy[e]` accumulates
+            // `sum_c w_c·(u_c,e' k0 u_c,e)` and the sensitivity below reads it directly.
+            double compliance = 0;
+            Array.Clear(_energy, 0, count);
+            for (int c = 0; c < _loads.Length; c++)
             {
-                int x = _reduced[3 * node], y = _reduced[3 * node + 1], z = _reduced[3 * node + 2];
-                _displacement[node] = new Vector3d(
-                    x >= 0 ? _free[x] : 0, y >= 0 ? _free[y] : 0, z >= 0 ? _free[z] : 0);
+                var load = _loads[c];
+                double weight = _weights[c];
+                factor.Solve(load, _free);
+
+                for (int node = 0; node < mesh.NodeCount; node++)
+                {
+                    int x = _reduced[3 * node], y = _reduced[3 * node + 1], z = _reduced[3 * node + 2];
+                    _displacement[node] = new Vector3d(
+                        x >= 0 ? _free[x] : 0, y >= 0 ? _free[y] : 0, z >= 0 ? _free[z] : 0);
+                }
+
+                // c_i = f_i'u_i, the DEFINITION. The identity `sum w_i·c_i = sum rho^p·E_e` (with
+                // E_e the weighted energy) is asserted in the tests, two constructions checking
+                // each other rather than one checking its own arithmetic.
+                double ci = 0;
+                for (int i = 0; i < _freeCount; i++)
+                    ci += load[i] * _free[i];
+                compliance += weight * ci;
+
+                AccumulateElementEnergies(weight);
             }
 
-            // c = f'u, the DEFINITION. The identity `c = sum rho^p·E_e` is asserted in the
-            // tests against this, which is two constructions checking each other rather than
-            // one checking its own arithmetic.
-            double compliance = 0;
-            for (int i = 0; i < _freeCount; i++)
-                compliance += _load[i] * _free[i];
-
-            ElementEnergies();
-
-            // dc/drho~ = -p·rho~^(p-1)·u_e' k0 u_e. Non-positive everywhere, since an energy
-            // is non-negative — which is what makes the OC step's B_e non-negative and needs
-            // no sign guard.
+            // dc/drho~ = -p·rho~^(p-1)·(weighted energy). Non-positive everywhere, since every
+            // per-case energy is non-negative and every weight positive — which is what makes
+            // the OC step's B_e non-negative and needs no sign guard.
             for (int e = 0; e < count; e++)
             {
                 _sensitivity[e] = -_options.Penalty
@@ -548,10 +684,12 @@ public static class TopologyOptimizer
         }
 
         /// <summary>
-        /// <c>u_e' k0 u_e</c> for every element, at the SAME quadrature rule the stiffness is
-        /// assembled with — which is what makes it that quadratic form exactly rather than a
-        /// nearby integral. <c>k0</c> is the UNPENALISED element stiffness, so the SIMP factor
-        /// appears once, in the sensitivity, and never twice.
+        /// ADDS <c>weight·(u_e' k0 u_e)</c> to <see cref="_energy"/> for every element, at the
+        /// SAME quadrature rule the stiffness is assembled with — which is what makes it that
+        /// quadratic form exactly rather than a nearby integral. <c>k0</c> is the UNPENALISED
+        /// element stiffness, so the SIMP factor appears once, in the sensitivity, and never
+        /// twice. Called once per load case, so <c>_energy</c> ends the loop holding the
+        /// weighted sum; the caller clears it first.
         ///
         /// <para>Computed as <c>sum_q w·detJ·(eps' sigma)</c> rather than by forming the
         /// element stiffness and taking a quadratic form: the two are the same number (the
@@ -561,7 +699,7 @@ public static class TopologyOptimizer
         /// the convention that makes <c>eps'·sigma</c> the correct double contraction with no
         /// factor of two to remember.</para>
         /// </summary>
-        private void ElementEnergies()
+        private void AccumulateElementEnergies(double weight)
         {
             var mesh = _model.Mesh;
             int perElement = mesh.NodesPerElement;
@@ -605,8 +743,8 @@ public static class TopologyOptimizer
                 // An energy is non-negative by construction; a negative one would be a defect
                 // rather than a small number, so it is clamped at exactly zero rather than
                 // being allowed to make the OC step's B_e negative and the answer silently
-                // strange.
-                _energy[e] = Math.Max(0, sum);
+                // strange. Accumulated (weighted) across load cases, having been cleared once.
+                _energy[e] += weight * Math.Max(0, sum);
             }
         }
     }
@@ -625,7 +763,101 @@ public static class TopologyOptimizer
         var filter = options.Filter == TopologyFilter.None
             ? null
             : DensityFilter.Build(model.Mesh, options.FilterRadius, volumes);
-        return (new Evaluator(model, options, filter, rule, null), volumes);
+        return (new Evaluator([new TopologyLoadCase(model, 1.0)], options, filter, rule, null), volumes);
+    }
+
+    /// <summary>
+    /// Every case must share one operator with the first: the same <see cref="AnalysisMesh"/>
+    /// instance (a value comparison that said two node numberings matched would scramble the
+    /// answer by permutation), the same restraint MASK (supports are eliminated, so a different
+    /// mask is a different matrix), and the same material per element. Only the loads may differ
+    /// — the mirror of <c>StructuralSolver.SolveAll</c>'s own contract, for the same reason.
+    /// </summary>
+    private static void RequireOneOperator(IReadOnlyList<TopologyLoadCase> cases)
+    {
+        var first = cases[0].Model;
+        var mesh = first.Mesh;
+        for (int c = 1; c < cases.Count; c++)
+        {
+            var other = cases[c].Model;
+            if (!ReferenceEquals(other.Mesh, mesh))
+                throw new FeaException(
+                    $"Load case {c} was built on a different AnalysisMesh instance from case 0. "
+                    + "Load cases share one factorization, which is a statement about one node "
+                    + "numbering; build every case over the same mesh object.");
+            for (int node = 0; node < mesh.NodeCount; node++)
+            {
+                if (other.RestraintOf(node) != first.RestraintOf(node))
+                    throw new FeaException(
+                        $"Load case {c} restrains node {node} differently from case 0 "
+                        + $"({other.RestraintOf(node)} against {first.RestraintOf(node)}). "
+                        + "Supports are ELIMINATED, so a different restraint pattern is a "
+                        + "different matrix and cannot share a factorization.");
+            }
+            for (int e = 0; e < mesh.ElementCount; e++)
+            {
+                if (!Equals(other.MaterialOf(e), first.MaterialOf(e)))
+                    throw new FeaException(
+                        $"Load case {c} gives element {e} a different material from case 0 "
+                        + $"({other.MaterialOf(e).Name} against {first.MaterialOf(e).Name}). The "
+                        + "stiffness is a function of the materials, so the cases do not share "
+                        + "one.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Classifies every element as free, pinned solid or pinned void from its centroid, and
+    /// refuses the two contradictions: an element accepted by both selectors, and a solid
+    /// region whose own volume already exceeds the budget.
+    /// </summary>
+    private static byte[] ComputePassive(
+        AnalysisMesh mesh, TopologyOptions options, double[] volumes, double targetVolume,
+        out double passiveSolidVolume)
+    {
+        int count = mesh.ElementCount;
+        var passive = new byte[count];
+        passiveSolidVolume = 0;
+        var solid = options.SolidRegion;
+        var @void = options.VoidRegion;
+        if (solid is null && @void is null)
+            return passive;
+
+        int solidCount = 0;
+        for (int e = 0; e < count; e++)
+        {
+            var nodes = mesh.Element(e);
+            // The centroid over the four CORNER nodes — the same measure the fixtures and the
+            // release binning use, so a caller's selector sees the element where they expect it.
+            var c = 0.25 * (mesh.Position(nodes[0]) + mesh.Position(nodes[1])
+                + mesh.Position(nodes[2]) + mesh.Position(nodes[3]));
+            bool isSolid = solid is not null && solid(c);
+            bool isVoid = @void is not null && @void(c);
+            if (isSolid && isVoid)
+                throw new FeaException(
+                    $"Element {e} (centroid {c}) is accepted by BOTH SolidRegion and VoidRegion, "
+                    + "so it is told to stay solid and to go at once. The two selectors must not "
+                    + "overlap.");
+            if (isSolid)
+            {
+                passive[e] = PassiveSolid;
+                passiveSolidVolume += volumes[e];
+                solidCount++;
+            }
+            else if (isVoid)
+            {
+                passive[e] = PassiveVoid;
+            }
+        }
+
+        if (passiveSolidVolume > targetVolume)
+            throw new FeaException(
+                $"The SolidRegion holds {passiveSolidVolume:G6} of volume ({solidCount:N0} "
+                + $"elements), which already exceeds the budget {targetVolume:G6} "
+                + $"(VolumeFraction {options.VolumeFraction:G6} of the domain). The pinned-solid "
+                + "material alone uses more than the constraint allows, so no design can be "
+                + "feasible — raise VolumeFraction or shrink the solid region.");
+        return passive;
     }
 
     /// <summary>

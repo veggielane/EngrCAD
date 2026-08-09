@@ -2756,10 +2756,14 @@ the one line that crosses back — the same `HalfEdgeMesh` seam `ExtractSurface`
 
 **Islands and thin necks are stated, not silently tidied.** Extraction keeps EVERY tetrahedron
 above the threshold, so a disconnected island survives as its own component
-(`ReleasedTopology.ComponentCount`) rather than being deleted; keeping only the largest is one
-call over `MeshConnectedComponents` and is left to the caller. A neck one element thick is a
-valid manifold and passes through; fairing can pinch a hair-thin one, which is a property of
-the threshold, not the release.
+(`ReleasedTopology.ComponentCount`) rather than being deleted. `KeepLargestComponentOnly` OPTS
+IN to dropping the islands — off by default, because silently deleting material the optimiser
+put there should be a stated act, and even with it on `ComponentCount` still reports what the
+extraction FOUND so the drop is visible. "Largest" is by enclosed volume; verified on a
+two-blob field where the flag drops the smaller blob by exactly its own volume and leaves a
+single-component surface, and is a no-op on a connected one. A neck one element thick is a valid
+manifold and passes through; fairing can pinch a hair-thin one, which is a property of the
+threshold, not the release.
 
 **Verified by trades, not pictures** (`TopologyReleaseTests`): the delivered solid is
 `Validate`-clean and closed; it round-trips through a real binary STL by **signed-tetrahedral
@@ -2778,7 +2782,33 @@ breaks it) — and by refining at a fixed filter radius onto the same structure.
 | a prescribed non-zero displacement | the force moves with the stiffness, so minimising `f'u` maximises *compliance* — the sign of the problem flips |
 | a thermal load | `alpha·dT` enters through `D`, so the load scales with `rho^p` |
 | local stress constraints | need aggregation, whose parameter changes the answer — a separate feature |
-| several load cases | the objective is a weighted sum and the weighting is the design decision |
 
 Nothing here publishes a stress: the stiffness carries a *penalised* modulus, so an element's
 stress would be the SIMP stress rather than a physical one.
+
+## Passive regions and several load cases
+
+**Passive (non-design) regions** pin material SOLID (it must stay — under a bolt head, around a
+bore) or VOID (it must go — a clearance channel), by a `Func<Vector3d, bool>` over element
+centroids (`SolidRegion` / `VoidRegion` — a VOLUME selector, matching `SizingField`, because
+`Facets` selects boundaries). It is a per-element bound, not a new algorithm: a pinned element
+keeps density 1 or the floor and drops out of the optimality-criteria redistribution, so the
+bisection shares the remaining budget among the free elements and the constraint still holds
+exactly. Verified two ways — pinning is EXACT (with no filter, a pinned-solid element ends at
+density 1 and a pinned-void one at the floor, at every element, and the whole-domain fraction is
+still met to round-off), and a passive constraint can only RAISE compliance because it shrinks
+the feasible set (measured: forcing a hole through a cantilever's tension corner cost **+54.8%**,
+forcing material into the idle tip **+6.2%**). Overlapping selectors and a solid region larger
+than the budget refuse by name.
+
+**Several load cases** with a stated weighting minimise `sum_i w_i·u_i'Ku_i` — a bracket loaded
+two ways, a part that must be stiff against both. `Minimize(cases, options)` takes a
+`(model, weight)` list; the models share one mesh, supports and materials (only the loads
+differ), so `K(rho)` is one matrix and each case is a back-substitution — exactly
+`SolveAll`'s contract, and the single-model form is `Minimize([case(model, 1)])` bit for bit.
+The weighting is the caller's because it IS the design decision (a min-max worst-case
+formulation is a different problem, filed). Verified by SYMMETRY: two mirror-image loads, each
+optimising ALONE into an asymmetric structure, combine equally-weighted into a mirror-symmetric
+one — the two-case mirror difference drops to **18%** of a single case's, a bug that dropped or
+mis-weighted a case could not (the residual is the Kuhn mesh's own asymmetry, not the solver);
+an unequal 3:1 weighting leans the mass toward the heavier case.

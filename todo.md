@@ -577,15 +577,9 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
 ## Simulation
 
 - [ ] **Topology optimisation follow-ups** (SIMP landed 2026-08-04 — `TopologyOptimizer`,
-  design.md §3k, docs `examples/fea-topology.md`). Each of these is a NAMED absence in the
-  shipped feature rather than a defect, and each was weighed and deferred:
-  - **Non-design (passive) regions.** Material that must stay — under a bolt head, around a
-    bearing bore — and material that must go. It is a per-element bound rather than a new
-    algorithm (clamp those elements to 1 or to `MinimumDensity` and exclude them from the
-    bisection's free set), so it is small; what needs deciding first is how a caller NAMES
-    them, since `Facets` selects boundary facets and this wants a volume selector. The
-    natural spelling is a `Func<Vector3d, bool>` over element centroids, matching
-    `TetMeshOptions.SizingField`.
+  design.md §3k, docs `examples/fea-topology.md`; passive regions, several load cases and the
+  largest-connected-component release filter landed 2026-08-09). Each of these is a NAMED
+  absence in the shipped feature rather than a defect, and each was weighed and deferred:
   - **MMA (Method of Moving Asymptotes)**, the general answer OC is not. Needed the moment
     there are two constraints or a different objective; a substantial dependency-free build
     (a per-variable convex subproblem with asymptotes updated from the iteration history,
@@ -597,11 +591,6 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
     question settled: the stiffness carries a penalised modulus, so a void element's stress
     is not physical and the standard answer (a separate stress interpolation, `rho^q` with
     `q < p`) is a second modelling decision.
-  - **Several load cases with a stated weighting.** The refusal is about the weighting being
-    a design decision, not about the arithmetic — `StructuralSolver.SolveAll` already
-    factors once and substitutes per case, so the sensitivity is a weighted sum of the
-    per-case energies and the loop is unchanged. What it wants is a `(model, weight)` list
-    and a docs paragraph on why a min-max (worst-case) formulation is a different problem.
   - **Design-dependent loads (self-weight).** Refused by name today. It needs the adjoint
     term the self-adjoint shortcut drops, plus a decision about the load interpolation (a
     linear `rho` mass with a `rho^p` stiffness makes low densities artificially efficient,
@@ -610,18 +599,6 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
     problem has a unique optimum, so starting there and ramping is the standard way to
     reduce dependence on the starting design. Cheap to add and it changes committed
     numbers, so it wants its own before/after measurement rather than being switched on.
-  - **A largest-connected-component FILTER over the released surface** (the only piece of
-    the old faceting/islands item still open). `TopologyResult.Release` landed 2026-08-09:
-    it extracts, FAIRS the element-scale stair-steps (`LaplacianMeshSmoother`) and REMESHES
-    to a uniform edge length (`Remesher`), returning a `ReleasedTopology` whose per-stage
-    volume delta, surface displacement and triangle-shape (`TriangleQuality`) are all
-    MEASURED — so a caller sees what smoothing and remeshing each traded rather than one
-    opaque result. It also REPORTS how many components the extraction left
-    (`ReleasedTopology.ComponentCount`) rather than deleting a floating island, which is
-    right (silently deleting material the optimiser put there is exactly the tidying that
-    should be a stated option). Keeping only the largest is one call over
-    `MeshConnectedComponents` and is still the caller's; offering it as a named
-    `TopologyReleaseOptions` flag is the small open piece.
   - **Cost.** One factorization per iteration, and no reuse between them: measured 288
     elements in 0.43 s, 1 152 in 2.5 s and 10 800 in about 50 s at 60 iterations. The
     standard remedies are a preconditioned CG warm-started from the previous iterate's

@@ -1948,10 +1948,43 @@ and becomes wrong: `Gravity`/`BodyForce` (self-weight is integrated over the ful
 once, so a run would minimise one structure's compliance under a different structure's
 weight), a prescribed non-zero displacement (the force moves with the stiffness, so minimising
 `f'u` maximises COMPLIANCE — the sign of the whole problem flips), and a thermal load
-(`alpha·dT` enters through `D`, so it scales with `rho^p`). Local stress constraints and
-several load cases are refused as NAMED non-goals for a different reason — each needs a
-parameter that changes the answer (an aggregation exponent, a weighting), so each is a
-separate feature with its own verification rather than a flag on this one.
+(`alpha·dT` enters through `D`, so it scales with `rho^p`). Local stress constraints remain a
+NAMED non-goal, because aggregation (p-norm or Kreisselmeier–Steinhauser) needs a parameter that
+CHANGES THE ANSWER, so it is a separate feature with its own verification.
+
+### Passive regions and several load cases landed, each a per-element or per-case addition
+
+**Passive (non-design) regions** are a per-element bound rather than a new algorithm: `SolidRegion`
+/ `VoidRegion` are `Func<Vector3d, bool>` centroid predicates (a VOLUME selector, matching
+`SizingField`, since `Facets` selects boundaries), and a matching element is pinned at 1 or the
+floor and dropped from the optimality-criteria redistribution — the bisection then shares the
+remaining budget among the free elements, so the constraint still holds exactly with the pinned
+material counted toward it. The oracle is two-fold and both parts are mutation-proof: pinning is
+EXACT (no filter, a pinned element ends at 1 or the floor at every element, the whole-domain
+fraction met to round-off), and a passive constraint can only RAISE compliance because it
+shrinks the feasible set — any passive-constrained design is also a valid free design at the
+same volume, so the free optimum is at least as good (measured: forcing a hole through a
+cantilever's tension corner cost +54.8%, forcing material into the idle tip +6.2%). A no-passive
+run is the incumbent path bit for bit.
+
+**Several load cases** with a stated weighting now minimise `sum_i w_i·u_i'Ku_i`. The refusal
+was about the WEIGHTING being a design decision, never about the arithmetic — all cases share
+mesh, supports and materials, so `K(rho)` is one matrix and each case is a back-substitution
+(exactly `SolveAll`'s contract, `RequireOneOperator` reused), the compliance and the
+sensitivity are weighted sums, and the loop is unchanged. So the multi-case `Minimize` IS the
+implementation and the single-model form is `Minimize([case(model, 1)])` bit for bit, the same
+sugar-over-the-general-form shape `Solve` = `SolveAll([model])[0]` follows. What stays refused is
+a min-max (worst-case) formulation, which is a genuinely different problem, filed. The oracle is
+SYMMETRY, chosen because a plausible truss is exactly this feature's failure mode: two
+mirror-image loads, each optimising ALONE into an asymmetric structure, combine equally-weighted
+into a mirror-symmetric one (the two-case mirror difference falls to 18% of a single case's, and
+the residual is the Kuhn tet mesh's own non-mirror-symmetry — the recorded diagonal lesson —
+rather than the solver); a 3:1 weighting leans the mass toward the heavier case.
+
+**Releasing a topology with islands** gained `KeepLargestComponentOnly` — off by default,
+because silently deleting material the optimiser placed is a stated act, and even on it leaves
+`ComponentCount` reporting what the extraction FOUND. "Largest" is by enclosed volume; verified
+on a two-blob field where the smaller blob is dropped by exactly its own volume.
 
 ### The constraint is on the PHYSICAL volume, and the closed form is what caught it
 
