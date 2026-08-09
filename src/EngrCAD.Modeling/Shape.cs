@@ -1273,10 +1273,11 @@ public abstract class Shape
     /// <see cref="Curve2d"/> in that plane's own 2D coordinates, exactly like a
     /// <see cref="Sketch"/>; <c>sketch.ToCurves()</c> hands over an existing outline and
     /// <c>Sketch.Circle(r).ToCurves()[0]</c> is the common case.
-    /// <para>Every glyph is placed RIGIDLY — rotated to the path's tangent, never bent to
-    /// its curvature — and only its control points are mapped, which is exactly the curve
-    /// because a Bézier is an affine combination of them. So text on a path is as exact as
-    /// straight text: Native in all three representations, nothing sampled. See
+    /// <para>Every glyph is placed RIGIDLY — rotated to the path's tangent (or left
+    /// UPRIGHT, see <paramref name="upright"/>), never bent to its curvature — and only its
+    /// control points are mapped, which is exactly the curve because a Bézier is an affine
+    /// combination of them. So text on a path is as exact as straight text: Native in all
+    /// three representations, nothing sampled. See
     /// <see cref="TextOutlines.SketchesOnPath"/> for the anchoring, arc-length and
     /// alignment conventions.</para>
     /// </summary>
@@ -1295,16 +1296,19 @@ public abstract class Shape
     /// var engraved = dial | marks;
     /// </code>
     /// </example>
+    /// <param name="upright">Lay every glyph un-rotated (world +X up) rather than tilted to
+    /// the path's tangent — the banner/label case; see
+    /// <see cref="TextOutlines.SketchesOnPath"/>.</param>
     /// <exception cref="ArgumentException">The text draws nothing, has more than one line,
     /// contains a character the font lacks, or does not fit on the path.</exception>
     public static Shape TextOnPath(
         string text, TrueTypeFont font, double size, double height, Curve2d path,
-        SketchPlane? plane = null, TextStyle? style = null, double startOffset = 0)
+        SketchPlane? plane = null, TextStyle? style = null, double startOffset = 0, bool upright = false)
     {
         if (height <= 0)
             throw new ArgumentOutOfRangeException(nameof(height));
 
-        var sketches = TextOutlines.SketchesOnPath(text, font, size, path, style, startOffset);
+        var sketches = TextOutlines.SketchesOnPath(text, font, size, path, style, startOffset, upright);
         if (sketches.Count == 0)
             throw new ArgumentException(
                 $"\"{text}\" produces no geometry: it is empty or contains only blank glyphs.", nameof(text));

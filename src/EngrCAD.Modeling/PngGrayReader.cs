@@ -4,15 +4,24 @@ using System.IO.Compression;
 namespace EngrCAD.Modeling;
 
 /// <summary>
-/// A minimal, dependency-free grayscale PNG reader for heightmaps — the reading
-/// counterpart of the viewer's hand-rolled <c>PngWriter</c>, kept in Modeling because
-/// kernel projects take no third-party dependencies (the TrueType reader precedent;
-/// inflate comes from the BCL's <see cref="ZLibStream"/>). Only what a heightmap
-/// needs: color type 0 (grayscale) or 4 (grayscale + alpha, alpha ignored) at bit
-/// depth 8 or 16, non-interlaced, with all five scanline filters (None/Sub/Up/
-/// Average/Paeth) unapplied exactly. Everything else — color, palette, 1/2/4-bit
-/// depths, Adam7 — is rejected with a message naming the limitation, never silently
-/// mis-read. Chunk CRCs are not verified (a corrupt stream fails structurally).
+/// A minimal, dependency-free PNG reader for heightmaps — the reading counterpart of the
+/// viewer's hand-rolled <c>PngWriter</c>, kept in Modeling because kernel projects take no
+/// third-party dependencies (the TrueType reader precedent; inflate comes from the BCL's
+/// <see cref="ZLibStream"/>). Handles what a heightmap needs: color type 0 (grayscale),
+/// 4 (grayscale + alpha, alpha ignored), <b>2 (truecolor RGB) and 6 (truecolor + alpha)</b>
+/// at bit depth 8 or 16, non-interlaced, with all five scanline filters (None/Sub/Up/
+/// Average/Paeth) unapplied exactly.
+/// <para><b>Colour → height rule.</b> A colour pixel becomes a height through its
+/// <b>Rec. 709 relative luminance</b> — <c>Y = 0.2126·R + 0.7152·G + 0.0722·B</c>, the
+/// physically-correct luminance from the sRGB/Rec. 709 primaries — normalised to 0..1 by
+/// <c>2^depth − 1</c> exactly as a grayscale sample is; the alpha channel is ignored. This
+/// is a documented DECISION (a colour image has no single "height" until one is named), so
+/// it is stated rather than inferred: a pure grey pixel reads its own value (the weights
+/// sum to 1), a pure red pixel reads 0.2126, a pure blue 0.0722.</para>
+/// Everything else — <b>palette</b> (color type 3), 1/2/4-bit depths, Adam7 — is rejected
+/// with a message naming the limitation, never silently mis-read. Chunk CRCs, when the
+/// stream carries them, are VERIFIED (`CRC-32/ISO-HDLC`), so a corrupt chunk is named
+/// rather than inflated into wrong heights.
 /// </summary>
 internal static class PngGrayReader
 {
@@ -36,6 +45,21 @@ internal static class PngGrayReader
             var type = data.Slice(at + 4, 4);
             var payload = data.Slice(at + 8, length);
 
+            // Verify the CRC of every CRITICAL chunk (IHDR/PLTE/IDAT/IEND — those with the
+            // ancillary bit clear, i.e. an uppercase first letter). The spec permits skipping
+            // it for ancillary chunks, which we ignore anyway, so a corrupt tEXt cannot fail a
+            // decodable image while a corrupt IHDR or IDAT — the bytes that become heights — is
+            // named rather than inflated into nonsense.
+            if ((type[0] & 0x20) == 0)
+            {
+                uint stored = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(at + 8 + length, 4));
+                uint actual = Crc32(data.Slice(at + 4, 4 + length));   // type + payload
+                if (stored != actual)
+                    throw new FormatException(
+                        $"PNG chunk '{ChunkName(type)}' at offset {at} has a CRC mismatch " +
+                        $"(stored {stored:X8}, computed {actual:X8}); the file is corrupt.");
+            }
+
             if (type.SequenceEqual("IHDR"u8))
             {
                 if (length != 13)
@@ -46,21 +70,22 @@ internal static class PngGrayReader
                 colorType = payload[9];
                 if (width <= 0 || height <= 0)
                     throw new FormatException($"PNG size {width}×{height} is not valid.");
-                if (colorType is not (0 or 4))
+                if (colorType is not (0 or 2 or 4 or 6))
                     throw new FormatException(
-                        $"PNG color type {colorType} is not supported for heightmaps; convert to 8- or 16-bit " +
-                        "grayscale (color type 0). Palette and RGB images would need a color-to-height rule this " +
-                        "reader deliberately does not invent.");
+                        $"PNG color type {colorType} is not supported for heightmaps; use grayscale (0/4) " +
+                        "or truecolor (2/6). Palette images (color type 3) would need a palette lookup this " +
+                        "reader does not do — convert to grayscale or truecolor.");
                 if (bitDepth is not (8 or 16))
                     throw new FormatException(
-                        $"PNG bit depth {bitDepth} is not supported; use 8- or 16-bit grayscale.");
+                        $"PNG bit depth {bitDepth} is not supported; use 8- or 16-bit samples.");
                 if (payload[12] != 0)
                     throw new FormatException("Interlaced (Adam7) PNGs are not supported; save non-interlaced.");
                 sawHeader = true;
             }
             else if (type.SequenceEqual("PLTE"u8))
             {
-                throw new FormatException("Palette PNGs are not supported for heightmaps; convert to grayscale.");
+                throw new FormatException(
+                    "Palette PNGs (color type 3) are not supported for heightmaps; convert to grayscale or truecolor.");
             }
             else if (type.SequenceEqual("IDAT"u8))
             {
@@ -79,7 +104,14 @@ internal static class PngGrayReader
             throw new FormatException("PNG has no image data (IDAT).");
 
         int bytesPerSample = bitDepth / 8;
-        int samplesPerPixel = colorType == 4 ? 2 : 1;      // gray (+ alpha, ignored)
+        int samplesPerPixel = colorType switch
+        {
+            2 => 3,                                        // R G B
+            6 => 4,                                        // R G B A (alpha ignored)
+            4 => 2,                                        // gray + alpha (alpha ignored)
+            _ => 1,                                        // grayscale
+        };
+        bool colour = colorType is 2 or 6;
         int stride = width * bytesPerSample * samplesPerPixel;
 
         // Inflate the zlib stream and unfilter scanline by scanline: each row is one
@@ -130,14 +162,58 @@ internal static class PngGrayReader
             for (int col = 0; col < width; col++)
             {
                 int offset = col * bpp;
-                int value = bitDepth == 8
-                    ? current[offset]
-                    : (current[offset] << 8) | current[offset + 1];
-                heights[row, col] = value / maxValue;
+                double height01;
+                if (colour)
+                {
+                    // Rec. 709 relative luminance from the three colour channels (alpha,
+                    // if present, sits at samples 3 and is not read). The weights sum to 1,
+                    // so a grey pixel R=G=B reads exactly its own normalised value.
+                    double r = Sample(current, offset, bitDepth);
+                    double g = Sample(current, offset + bytesPerSample, bitDepth);
+                    double b = Sample(current, offset + 2 * bytesPerSample, bitDepth);
+                    height01 = (0.2126 * r + 0.7152 * g + 0.0722 * b) / maxValue;
+                }
+                else
+                {
+                    height01 = Sample(current, offset, bitDepth) / maxValue;
+                }
+                heights[row, col] = height01;
             }
             (previous, current) = (current, previous);
         }
         return heights;
+    }
+
+    /// <summary>One sample (8- or 16-bit, big-endian) read as an integer 0..2^depth−1.</summary>
+    private static double Sample(byte[] row, int offset, int bitDepth) =>
+        bitDepth == 8 ? row[offset] : (row[offset] << 8) | row[offset + 1];
+
+    /// <summary>The four-letter chunk name as text, for a diagnostic.</summary>
+    private static string ChunkName(ReadOnlySpan<byte> type) => System.Text.Encoding.ASCII.GetString(type);
+
+    // ---- CRC-32/ISO-HDLC (the zlib/PNG polynomial) ---------------------------
+
+    private static readonly uint[] CrcTable = BuildCrcTable();
+
+    private static uint[] BuildCrcTable()
+    {
+        var table = new uint[256];
+        for (uint n = 0; n < 256; n++)
+        {
+            uint c = n;
+            for (int k = 0; k < 8; k++)
+                c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            table[n] = c;
+        }
+        return table;
+    }
+
+    private static uint Crc32(ReadOnlySpan<byte> data)
+    {
+        uint c = 0xFFFFFFFFu;
+        foreach (byte b in data)
+            c = CrcTable[(c ^ b) & 0xFF] ^ (c >> 8);
+        return c ^ 0xFFFFFFFFu;
     }
 
     /// <summary>The Paeth predictor: whichever of left/up/up-left is closest to

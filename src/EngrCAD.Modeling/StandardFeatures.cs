@@ -64,6 +64,80 @@ public sealed class RevolveSketchFeature(Sketch sketch) : Feature
         new System.Text.Json.Nodes.JsonObject { ["sketch"] = InputJson.SaveSketch(sketch) };
 }
 
+/// <summary>
+/// Modeled TrueType/OpenType text as a parametric feature — an engraved serial number, an
+/// embossed label — driven by <c>[Param]</c> <see cref="Size"/>, <see cref="Height"/>,
+/// <see cref="LetterSpacing"/> and <see cref="Engrave"/>, so it re-tunes through the same
+/// seam a design study, a configuration and the properties panel drive.
+/// <para><b>The text and font are CONSTRUCTOR inputs, not parameters</b> (a font is a binary
+/// blob and a text string is not a numeric/enum <c>[Param]</c> type), so changing either
+/// replaces the instance. That is what makes the regeneration cache cover the font correctly
+/// even though it is not in the parameter snapshot: a fresh instance always re-runs (the
+/// sketch/hole-spec rule), so the cache key never has to name the font.</para>
+/// <para><b>Persistence is honest, not complete:</b> a font has no data form, so
+/// <see cref="SaveInputs"/> returns null and the feature is opaque to
+/// <see cref="FeatureHistory.SaveHistory"/> — its type, name and <c>[Param]</c> values are
+/// still written, and a load skips it with a warning unless a <c>resolveOpaque</c> hook
+/// rebuilds it, exactly as a <c>ComponentFeature</c> over a non-catalogue component does.</para>
+/// </summary>
+public sealed class TextFeature(string text, TrueTypeFont font) : Feature
+{
+    private readonly PlaneRef _plane = PlaneRef.WorldXY;
+
+    /// <summary>Em size of the text (the typographic "point size"; convert a letter height
+    /// with <see cref="TrueTypeFont.EmSizeForCapHeight"/>).</summary>
+    [Param(Min = 1e-9, Units = "mm", Description = "Em size of the text")]
+    public double Size { get; init; } = 6;
+
+    /// <summary>Extrusion depth along the plane normal.</summary>
+    [Param(Min = 1e-9, Units = "mm", Description = "Extrusion height along the plane normal")]
+    public double Height { get; init; } = 1;
+
+    /// <summary>Extra tracking between glyphs as a fraction of the em size (0 = the font's
+    /// own spacing; negative tightens).</summary>
+    [Param(Description = "Extra letter spacing as a fraction of the em size")]
+    public double LetterSpacing { get; init; }
+
+    /// <summary>Subtract the text from the body (engrave) rather than union it (emboss).
+    /// With no body yet, both return the bare text solid.</summary>
+    [Param(Description = "Engrave (subtract) instead of emboss (union)")]
+    public bool Engrave { get; init; }
+
+    /// <summary>Where the text sits; a <see cref="SketchPlane"/> converts implicitly. The
+    /// default is the world XY plane so a first-in-history feature always resolves; set
+    /// <see cref="PlaneRef.TopPlane"/> to label a body's top face.</summary>
+    [Param(Description = "Text placement")]
+    public PlaneRef Plane
+    {
+        get => _plane;
+        init => _plane = value ?? PlaneRef.WorldXY;
+    }
+
+    public override Shape Apply(FeatureContext context)
+    {
+        var plane = Plane.Resolve(context, nameof(Plane));
+        var style = new TextStyle { LetterSpacing = LetterSpacing };
+        if (context.Body is null)
+            return Shape.Text(text, font, Size, Height, plane, style);   // nothing to emboss/engrave onto yet
+
+        // Overshoot the surface so the boolean is always TRANSVERSAL rather than sharing a
+        // coplanar face with the body (the Drill overshoot doctrine): the tool is 5% taller
+        // than the feature and slid so exactly one end pokes past the surface.
+        double reach = Height * 0.05;
+        var tool = Shape.Text(text, font, Size, Height + reach, plane, style);
+        if (Engrave)
+            // A recess of depth Height: the tool occupies [surface − Height, surface + reach].
+            return context.Body - tool.Translate(plane.Normal * -Height);
+        // A proud label Height tall, its base sunk `reach` into the body.
+        return context.Body | tool.Translate(plane.Normal * -reach);
+    }
+
+    /// <summary>Null — a font is a binary blob with no data form, so the feature is opaque
+    /// to whole-history persistence (see the class summary). The <c>[Param]</c> values still
+    /// round-trip; the text and font do not.</summary>
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveInputs() => null;
+}
+
 /// <summary>Drills one hole spec at a list of points on a plane (defaults to the
 /// body's top face).</summary>
 public sealed class HoleFeature(HoleSpec hole, IReadOnlyList<Vector2d> points) : Feature

@@ -4598,6 +4598,15 @@ Design decisions:
   designation-keyed reload comes back as a plausible *different* screw wearing the right
   name, which is the silent-misresolve failure the topological-naming work exists to
   prevent, in another guise.
+- **A feature whose input has no data form is opaque BY NAME, not blocked.** `TextFeature`
+  carries a `TrueTypeFont` — a binary blob, not a value — so it cannot round-trip through
+  `SaveHistory`; the choice is the `ComponentFeature`-over-a-non-catalogue-component rule,
+  `SaveInputs` returns null so the type/name/`[Param]` values are still written honestly and
+  a load skips it with a warning unless a resolve hook rebuilds it. And the regeneration
+  CACHE is a separate question the existing convention already answers: the font is a
+  constructor input on a fixed instance, and "a fresh instance always re-runs" covers it, so
+  the parameter snapshot never has to name a value it could not serialize anyway — the item's
+  stated worry dissolves rather than needing a font-hashing cache key.
 - **An optional parameter's SPELLING is decided by its editor, not by the serializer.** A
   nullable `[Param]` (`double?`, `int?`, `bool?`, `enum?`) round-trips: null is a value JSON
   has, the cache key renders it `"null"`, and a range does not fire on a value that is not

@@ -86,6 +86,15 @@ public static class TextOutlines
     /// an open one may not run off either end.</param>
     /// <param name="startOffset">Arc length from the path's start where the run is
     /// anchored (see <see cref="TextStyle.Align"/>).</param>
+    /// <param name="upright">When true every glyph is TRANSLATED to its path point and left
+    /// un-rotated (its x axis stays world +X), the way a gentle-arc banner or a row of
+    /// labels reads; when false (the default) each glyph is rotated to the path's tangent,
+    /// the engraved-dial case. Upright is a property of the PLACEMENT, not of the type, so
+    /// it is an argument here rather than on <see cref="TextStyle"/>. Both modes anchor at
+    /// the middle of the advance and space by arc length, so both reproduce ordinary layout
+    /// on a straight horizontal path; they differ only in whether a glyph tilts with the
+    /// curve, and in whether <see cref="TextStyle.VerticalAlign"/> lifts along the path's
+    /// left normal (rotated) or world +Y (upright, the glyph's own up).</param>
     /// <exception cref="ArgumentException">The text has more than one line (a second line
     /// would need an offset of the path, which is a different curve and may
     /// self-intersect — build it deliberately and call this again); the font has no glyph
@@ -93,10 +102,10 @@ public static class TextOutlines
     /// available lengths are named).</exception>
     public static IReadOnlyList<Sketch> SketchesOnPath(
         string text, TrueTypeFont font, double size, Curve2d path,
-        TextStyle? style = null, double startOffset = 0)
+        TextStyle? style = null, double startOffset = 0, bool upright = false)
     {
         var sketches = new List<Sketch>();
-        LayoutOnPath(text, font, size, path, style, startOffset, (glyph, scale, pose) =>
+        LayoutOnPath(text, font, size, path, style, startOffset, upright, (glyph, scale, pose) =>
             sketches.AddRange(GlyphOutlines.ToSketches(glyph, scale, pose)));
         return sketches;
     }
@@ -209,11 +218,12 @@ public static class TextOutlines
 
     /// <summary>
     /// Walks one line laid along a curve, handing each glyph a pose whose x axis is the
-    /// path's unit tangent at that glyph's own anchor.
+    /// path's unit tangent at that glyph's own anchor — or world +X when
+    /// <paramref name="upright"/>.
     /// </summary>
     private static void LayoutOnPath(
         string text, TrueTypeFont font, double size, Curve2d path, TextStyle? style,
-        double startOffset, Action<Glyph, double, GlyphPose> place)
+        double startOffset, bool upright, Action<Glyph, double, GlyphPose> place)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(font);
@@ -280,10 +290,26 @@ public static class TextOutlines
                 if (path.IsClosed)
                     at = Wrap(at, total);
                 double t = table.ParameterAtLength(at);
-                var tangent = path.DerivativeAt(t).Normalized();
-                var normal = new Vector2d(-tangent.Y, tangent.X);
-                var origin = path.PointAt(t) - tangent * (advance / 2) + normal * lift;
-                place(glyph, scale, GlyphPose.Along(origin, tangent));
+                var point = path.PointAt(t);
+                GlyphPose pose;
+                if (upright)
+                {
+                    // The glyph frame IS the world frame: shift left by half the advance so
+                    // the mid-advance baseline point lands on the path, and lift along
+                    // world +Y (the glyph's own up). On a straight horizontal path this
+                    // coincides with the rotated branch, so upright reproduces ordinary
+                    // layout there too.
+                    var origin = point - new Vector2d(advance / 2, 0) + new Vector2d(0, lift);
+                    pose = GlyphPose.At(origin);
+                }
+                else
+                {
+                    var tangent = path.DerivativeAt(t).Normalized();
+                    var normal = new Vector2d(-tangent.Y, tangent.X);
+                    var origin = point - tangent * (advance / 2) + normal * lift;
+                    pose = GlyphPose.Along(origin, tangent);
+                }
+                place(glyph, scale, pose);
             }
             pen += advance + tracking;
             previous = glyph.Index;
