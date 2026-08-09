@@ -327,31 +327,6 @@ engine's half-edge structure and the implicit engine's SDFs are both real assets
 verified boundary recovery, radius-edge + sizing-field refinement, region ids from
 multi-body input, per-facet source-triangle tags, 10-node elements. Residuals below.
 
-- [ ] **HYPOTHESIS to measure: `MaxElementSize` may not bound element size in the
-  presence of a fine curved feature.** Found via `docs/examples/fea-structural.md`'s
-  `run:fea-error-estimate` snippet, which sat in `TetMesher.Mesh(part.GetMesh(), new
-  TetMeshOptions { RefineQuality = true, MaxElementSize = 4.0 })` on
-  `Box(60, 20, 8) − Cylinder(4, 40)` long enough to look like a hang from two
-  different processes (a DocsGen run killed at 50+ min, a standalone repro killed at
-  23+ min). The snippet's own author then let it COMPLETE: **~40 minutes,
-  225 083 elements** — against a nominal count of order 900 for h = 4 over that
-  ~9 600 mm³ volume, a **250× overshoot**. The suspect (unmeasured, so a hypothesis
-  and not a finding): the bore is Ø8 through an 8 mm plate, and the tessellated bore
-  wall's facet size — not `MaxElementSize` — appears to drive the refinement. Two
-  things follow whatever the cause: a mesher that answers a request for h = 4 with a
-  quarter of a million elements should either SAY so (a report field, the
-  `RefinementBlockedByFrozenBoundary` convention) or refuse, and 40 silent minutes
-  is indistinguishable from a hang from the outside — a `ProgressCancel` seam
-  and/or an element-budget refusal would make the difference observable. **The cheap
-  experiment that separates the two candidate causes** (bore-wall facet size driving
-  refinement, vs `RefineQuality`'s radius-edge target doing it on its own with the
-  bore incidental): hold the bore fixed and sweep `MaxElementSize` — if the element
-  count barely moves, the size parameter is not in control and the facet-size framing
-  is right; if it scales as h⁻³, the hole is a red herring and the 40 minutes is an
-  expensive-but-correct mesh nobody asked for. Two runs, and it decides which duty
-  above is the real one. (The docs snippet itself is being re-fixtured by its author
-  to a cheap mesh — the example is about the error estimate and never needed an
-  expensive one.)
 - [ ] **Conforming Delaunay for a CURVED non-Delaunay surface triangulation** (what is left of
   the old "boundary recovery on remeshed surfaces" top gap, whose filed diagnosis was measured
   and found wrong in two directions — see design.md §3b and the Fea README table).
@@ -456,12 +431,6 @@ multi-body input, per-facet source-triangle tags, 10-node elements. Residuals be
   meet at an angle, which is exactly why the current layer is deliberately
   straight-sided; and coincident interfaces between bodies (v1 meshes disjoint bodies
   only, and refuses overlapping ones by name).
-- [ ] **Feed the mesher from the model, not just from a mesh.** `TetMesher` takes a
-  `HalfEdgeMesh`, so B-Rep face identity reaches it only if the caller threads a
-  per-triangle tag array through. `BRepTessellator` knows the provenance; exposing it
-  (a per-triangle source-face array beside the mesh) would make
-  `TetMeshOptions.FacetTags` populate itself and let boundary conditions be attached
-  with the `BrepQueries`/`FaceRef` selector vocabulary instead of by hand.
 **Structural (linear static) landed** (`Material`/`Materials`, `AnalysisMesh`,
 `StructuralModel`/`Facets`/`Dof`, `StructuralSolver`/`FeaSolveReport`,
 `StructuralResults`, `TetElement`/`TetQuadrature`; docs `examples/fea-structural.md`) —

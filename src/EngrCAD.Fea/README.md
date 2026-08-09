@@ -485,6 +485,64 @@ there is singular and no polynomial fit says so.
   the option to raise), overlapping bodies. A half-refined mesh is a mesh whose quality report
   is a lie, so the mesher never truncates silently.
 
+### `MaxElementSize` is a *minimum* size, and the mesh cannot be coarser than its surface
+
+`MaxElementSize` (and `SizingField`) only ever **split** a boundary facet larger than the
+target — the boundary refiner never *coarsens* a finely tessellated feature. So a coarse
+request does not give a coarse mesh where the surface is already fine, and this is measured
+rather than asserted. On `Box(60,20,8) − Cylinder(4,40)` at the default tessellation, sweeping
+`MaxElementSize` with the bore held fixed (`MaxElementSizeMeasurement`):
+
+| h | elements | boundary Steiner | quality Steiner | count·h³ |
+| ---: | ---: | ---: | ---: | ---: |
+| 20 | 83 897 | 7 677 | 0 | 671 M |
+| 14 | 68 550 | 10 597 | 0 | 188 M |
+| 10 | 142 911 | 29 966 | 0 | 143 M |
+| 8 | 90 537 | 38 508 | 98 | 46 M |
+| 6 | 101 557 | 43 044 | 443 | 22 M |
+| 4 | 340 508 | 151 968 | 1 424 | 22 M |
+
+A size-bounded mesh has `count·h³` flat (count ∝ h⁻³); here it *falls* from 671 M to 22 M and
+the count is non-monotone (84 k → 143 k → 90 k across h = 20…8) where a 2.5× drop in h would
+have raised a size-bounded count ~15×. At the coarsest request the mesh is already 84 k
+elements — 66× a uniform edge-20 mesh — because the Ø8 bore's ~0.5 mm wall facets floor it, and
+interior quality refinement (`qSteiner`) is 0 for h ≥ 10: the count is **boundary refinement**,
+whose density the surface sets. Only below the far-field facet scale (h ≲ 6) does
+`MaxElementSize` add elements in the expected way. So `MaxElementSize` is a minimum element
+size; it cannot make a mesh coarser than its surface tessellation.
+
+`TetMeshDiagnostics.MinBoundaryFacetSize` reports that floor — the circumradius of the finest
+boundary facet — so a caller can compare it to the requested size. When it is far smaller, the
+fix is to **coarsen the surface tessellation** (fewer segments/circle), the only thing that
+makes the mesh coarser there; raising `MaxElementSize` does nothing. (Runtime is a separate
+concern: every solve and every mesh entry point takes a `ProgressCancel`, so a caller who wants
+to bound a mesh's cost passes one with a deadline rather than watching an apparent hang.)
+
+### Naming a boundary condition by B-Rep face
+
+A facet tag is `TetFacet.SourceTriangle`, and `Facets.Tag(id)` selects the facets that carry
+it — so supplying `TetMeshOptions.FacetTags = B-Rep face ids` lets a support or a load be named
+by face. Building those ids by hand (which triangle is on which face) is exactly what
+`BRepTessellator.TessellateForTetMesh(solid)` removes: it lowers a `BrepSolid` to a triangulated
+surface **and** the per-triangle tags in one call, each tag the index (in `solid.Faces` order)
+of the face the triangle lies on. The face is then named with the query vocabulary rather than a
+coordinate test:
+
+```csharp
+var solid = shape.ToBrep();
+var (mesh, tags) = BRepTessellator.TessellateForTetMesh(solid);
+int bore = solid.Faces.ToList().FindIndex(f => f.IsCylindrical(out _, out _, out _));
+
+var tets  = TetMesher.Mesh(mesh, new TetMeshOptions { FacetTags = tags });
+var model = new StructuralModel(tets, Materials.Steel).Pressure(Facets.Tag(bore), 5.0);
+```
+
+Verified as bit-identity: a solve whose support and load are named by `Facets.Tag(faceId)` is
+bit-for-bit the same solve named by a geometric `Facets.OnPlane` selector (`ModelFedFacetTagsTests`),
+because the two resolve to the same facet set. The mesh `TessellateWithProvenance` returns is
+itself bit-identical to a plain `Tessellate`, since provenance is a by-product carried through
+welding — see the Interop README.
+
 ## Quality: two measures, because neither alone is honest
 
 The **radius-edge ratio** is what Delaunay refinement can bound, and bounding it excludes

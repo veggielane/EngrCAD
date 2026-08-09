@@ -53,6 +53,24 @@ public static class TetMesher
     /// <summary>Coplanarity tolerance for patch grouping and on-plane tests (relative to model extent).</summary>
     private const double PlaneTolerance = 1e-10;
 
+    /// <summary>
+    /// Circumradius of the finest boundary facet — the effective element-size floor the
+    /// input surface imposes (see <see cref="TetMeshDiagnostics.MinBoundaryFacetSize"/>).
+    /// Zero when there are no boundary facets.
+    /// </summary>
+    private static double MinBoundaryFacetSize(TetMesh mesh)
+    {
+        double min = double.PositiveInfinity;
+        foreach (var facet in mesh.BoundaryFacets)
+        {
+            double r = TetGeometry.TriangleCircumradius(
+                mesh.Position(facet.V0), mesh.Position(facet.V1), mesh.Position(facet.V2));
+            if (r > 0 && r < min)
+                min = r;
+        }
+        return double.IsPositiveInfinity(min) ? 0 : min;
+    }
+
     /// <summary>Tetrahedralizes the closed manifold surface <paramref name="surface"/>.</summary>
     public static TetMesh Mesh(
         HalfEdgeMesh surface, TetMeshOptions? options = null, ProgressCancel? progress = null) =>
@@ -285,6 +303,7 @@ public static class TetMesher
             VolumeResidual = residual,
             BoundaryLayer = layerReport,
             RefinementBlockedByFrozenBoundary = coreDiagnostics.RefinementBlockedByFrozenBoundary,
+            MinBoundaryFacetSize = MinBoundaryFacetSize(mesh),
         };
         return mesh;
     }
@@ -389,7 +408,8 @@ public static class TetMesher
                 VolumeResidual: residual,
                 InSphereEscalations: Predicates3d.InSphereEscalations - escalationsBefore,
                 LocationFallbacks: _delaunay.WalkFallbacks,
-                RefinementBlockedByFrozenBoundary: _blockedByFrozen);
+                RefinementBlockedByFrozenBoundary: _blockedByFrozen,
+                MinBoundaryFacetSize: MinBoundaryFacetSize(mesh));
             return mesh;
         }
 
@@ -1345,6 +1365,22 @@ public static class TetMesher
 /// sets the element size beside the layer: refine the WALL surface before meshing. Always
 /// zero without a boundary layer.
 /// </param>
+/// <param name="MinBoundaryFacetSize">
+/// Circumradius of the FINEST boundary facet in the finished mesh — the effective
+/// local element-size floor the input surface's own tessellation imposes, and the number that
+/// answers "why did a coarse <see cref="TetMeshOptions.MaxElementSize"/> still give a huge
+/// mesh". <see cref="TetMeshOptions.RefineQuality"/>'s boundary refinement only SPLITS facets
+/// LARGER than the size target and never coarsens finer ones, so where a curved feature (a
+/// small bore) is tessellated finer than <c>MaxElementSize</c>, this — not <c>MaxElementSize</c>
+/// — sets the element size there, and the element COUNT is a floor <c>MaxElementSize</c> cannot
+/// lift the mesh above. Measured on <c>Box(60,20,8) − Cylinder(4,40)</c> (see
+/// <c>MaxElementSizeMeasurement</c>): the count barely moved from 84 000 to 143 000 as
+/// <c>MaxElementSize</c> swept 20 down to 8 (a 15× drop that a size-bounded mesh would answer
+/// with a ~15× RISE), because the Ø8 bore's ~0.5 mm facets floored it. Compare this to your
+/// requested size: when it is far smaller, coarsen the surface tessellation (fewer
+/// segments/circle) rather than raising <c>MaxElementSize</c>. Zero when the mesh carries no
+/// boundary facets.
+/// </param>
 public readonly record struct TetMeshDiagnostics(
     int InputVertices,
     int InputTriangles,
@@ -1360,7 +1396,8 @@ public readonly record struct TetMeshDiagnostics(
     long InSphereEscalations,
     int LocationFallbacks,
     BoundaryLayerReport? BoundaryLayer = null,
-    int RefinementBlockedByFrozenBoundary = 0)
+    int RefinementBlockedByFrozenBoundary = 0,
+    double MinBoundaryFacetSize = 0)
 {
     /// <summary>A one-line human summary.</summary>
     public override string ToString()
@@ -1369,6 +1406,9 @@ public readonly record struct TetMeshDiagnostics(
             $"{InsideTets} tets from {InputTriangles} triangles / {SurfacePatches} patches / " +
             $"{InputVertices} vertices; {BoundarySteinerPoints} boundary + {QualitySteinerPoints} quality " +
             $"Steiner points, {RecoveryRounds} recovery round(s); volume residual {VolumeResidual:E2}.";
+        if (MinBoundaryFacetSize > 0)
+            core += $" Finest boundary facet {MinBoundaryFacetSize:G3} (the surface's own floor; " +
+                    "MaxElementSize refines only coarser facets).";
         if (RefinementBlockedByFrozenBoundary > 0)
             core += $" {RefinementBlockedByFrozenBoundary} refinement point(s) declined at the frozen " +
                     "layer interface.";

@@ -222,6 +222,26 @@ logging complements them, never replaces them.
   dense sampling used to hand the neighbouring planar faces forced their ear clipping
   into sliver ears (18 of 23 facets degenerate on a variable run's front face,
   non-manifold at 128/96 — now zero, with the volume convergence unchanged at ratio 4.0).
+  - **Provenance** (`TessellateWithProvenance` / `TessellateForTetMesh`) — which B-Rep face
+    each mesh triangle came from, so a tet mesher's boundary-condition tags
+    (`TetMeshOptions.FacetTags`) can populate themselves and a support or a load can be named
+    with the `BrepQueries`/selection vocabulary instead of the caller matching triangles to
+    faces by hand. It is a **by-product carried through welding**, not a second tessellation:
+    `MeshWelder.WeldPolygons`' tagged overload rides a per-polygon tag onto the surviving
+    faces (welding drops no non-degenerate polygon and reorders no face), so
+    `TessellateWithProvenance().Mesh` is **bit-for-bit** `Tessellate`'s output and
+    `FaceProvenance[f]` is the index, in `solid.Faces` order, of the face mesh-face `f` lies
+    on. `TessellateForTetMesh` is the whole bridge to a tet mesher: it triangulates and
+    returns per-**triangle** tags, computed from the welded faces' DEGREES alone (each face
+    fans into `degree − 2` triangles in order, so the diagonal choice — which does not change
+    the tag, both triangles of a quad sharing a face — never enters), and the mesh is all
+    triangles so the mesher's own `Triangulated()` is a no-op that keeps the tags lined up
+    with `TetFacet.SourceTriangle`. Verified two ways: the mesh is bit-identical to
+    `Tessellate`, and on a drilled plate the bore-wall triangles all tag to the one
+    cylindrical face while the caps tag to their planes (`BRepTessellatorProvenanceTests`);
+    end to end, a structural solve whose support and load are named by `Facets.Tag(faceId)`
+    is **bit-identical** to the same solve named by a geometric selector
+    (`ModelFedFacetTagsTests`).
   - **`IsRingPairedBand` — the ring path checks its own precondition.** A plain
     `CylinderSurface` has no parameter grid at all: `TessellateCylinderBand` emits one
     quad per sample index j joining `bottom[j]` to `top[j]`, which is the right band
