@@ -356,4 +356,143 @@ public class SpaceFillingCurveTests
             }
         }
     }
+
+    // ---- the tiled (rectangular-footprint) form ----
+
+    [Fact]
+    public void ATiledCurveCoversTheRECTANGLERatherThanItsBoundingSquare()
+    {
+        // The residual this exists for, measured on the very fixture that named it: an 80 x 12
+        // plate at spacing 3 through the square path spends 1024 cells over an 80 x 80 square
+        // and keeps only the sixth of them the plate contains.
+        var bounds = new Aabb((0, 0, 0), (80, 12, 0));
+
+        var square = SpaceFillingCurve.Over(bounds, SpaceFillingFamily.Hilbert, 3.0);
+        var tiled = SpaceFillingCurve.OverTiled(bounds, 3.0);
+
+        Assert.Equal(1024, square.Points.Count);
+        int insidePlate = square.Points.Count(p => p.Y >= 0 && p.Y <= 12);
+        Assert.Equal(128, insidePlate);                  // 12.5% of what it generated
+
+        // Every tiled point is inside the plate BY CONSTRUCTION, since the footprint IS the
+        // rectangle: nothing is generated to be thrown away.
+        Assert.All(tiled.Points, p =>
+        {
+            Assert.InRange(p.X, 0, 80);
+            Assert.InRange(p.Y, 0, 12);
+        });
+        Assert.Equal(112, tiled.Points.Count);           // 100% of what it generated
+
+        // And the achieved spacing stops being set by the LENGTH: the square path spends 2.5
+        // (over-fine, because 80 is what quantised) where the tiled one lands at 2.857 by 3.0,
+        // both inside the request. Fewer cells AND a spacing nearer the one asked for.
+        Assert.Equal(2.5, square.Spacing, 12);
+        Assert.Equal(80.0 / 28, tiled.SpacingX, 12);
+        Assert.Equal(3.0, tiled.SpacingY, 12);
+    }
+
+    [Fact]
+    public void ATiledCurveIsOneContinuousHamiltonianPath()
+    {
+        var bounds = new Aabb((0, 0, 0), (80, 12, 0));
+        var tiled = SpaceFillingCurve.OverTiled(bounds, 3.0);
+
+        Assert.True(tiled.IsContinuous);
+        Assert.Equal(1, tiled.MaxLatticeStep);
+        Assert.Equal(tiled.BlocksX * tiled.BlocksY * 16, tiled.Lattice.Count);
+        Assert.Equal(tiled.Lattice.Count, tiled.Lattice.Distinct().Count());
+    }
+
+    [Fact]
+    public void ATiledCurveHoldsTheFootprintAndReportsWhatThatDidToTheCells()
+    {
+        var bounds = new Aabb((0, 0, 0), (80, 12, 0));
+        var tiled = SpaceFillingCurve.OverTiled(bounds, 3.0);
+
+        // Held footprint: each axis's cells exactly tile that axis's extent.
+        Assert.Equal(80.0, tiled.SpacingX * tiled.BlocksX * 4, 12);
+        Assert.Equal(12.0, tiled.SpacingY * tiled.BlocksY * 4, 12);
+
+        // Never coarser than the request, on BOTH axes.
+        Assert.True(tiled.SpacingX <= 3.0);
+        Assert.True(tiled.SpacingY <= 3.0);
+        Assert.Equal(Math.Max(tiled.SpacingX, tiled.SpacingY), tiled.Spacing);
+        Assert.True(tiled.Anisotropy >= 1.0);
+    }
+
+    [Fact]
+    public void OneBlockOfTheTiledFormIsTheSquareFormSiteForSite()
+    {
+        // The reduction that makes the tiled path a generalisation rather than a second
+        // algorithm: on a SQUARE at a spacing landing exactly on a block boundary, the two
+        // constructions agree cell for cell and point for point, bit for bit.
+        var bounds = new Aabb((0, 0, 0), (16, 16, 0));
+        var square = SpaceFillingCurve.Over(bounds, SpaceFillingFamily.Hilbert, 4.0);
+        var tiled = SpaceFillingCurve.OverTiled(bounds, 4.0, blockOrder: 2);
+
+        Assert.Equal(1, tiled.BlocksX);
+        Assert.Equal(1, tiled.BlocksY);
+        Assert.Equal(square.Lattice.Count, tiled.Lattice.Count);
+        for (int i = 0; i < square.Lattice.Count; i++)
+        {
+            Assert.Equal(square.Lattice[i], tiled.Lattice[i]);
+            Assert.Equal(BitConverter.DoubleToInt64Bits(square.Points[i].X), BitConverter.DoubleToInt64Bits(tiled.Points[i].X));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(square.Points[i].Y), BitConverter.DoubleToInt64Bits(tiled.Points[i].Y));
+        }
+    }
+
+    [Fact]
+    public void EverySquareFootprintConstructionReportsSquareCells()
+    {
+        // SpacingX/SpacingY are additive: every incumbent construction reports the spacing it
+        // always did, on both axes, bit for bit.
+        var bounds = new Aabb((-7, 3, 0), (25, 19, 0));
+        foreach (var family in All)
+        {
+            var curve = SpaceFillingCurve.Over(bounds, family, 1.5);
+            Assert.Equal(BitConverter.DoubleToInt64Bits(curve.Spacing), BitConverter.DoubleToInt64Bits(curve.SpacingX));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(curve.Spacing), BitConverter.DoubleToInt64Bits(curve.SpacingY));
+            Assert.Equal(1.0, curve.Anisotropy);
+            Assert.Equal(1, curve.BlocksX);
+            Assert.Equal(1, curve.BlocksY);
+        }
+    }
+
+    [Fact]
+    public void ABlockOrderOfZeroIsThePlainSerpentine()
+    {
+        // Stated as a member of the family rather than a degenerate case: every block is one
+        // cell, so the route is a boustrophedon — the tightest fit and the worst isotropy.
+        var bounds = new Aabb((0, 0, 0), (10, 4, 0));
+        var tiled = SpaceFillingCurve.OverTiled(bounds, 1.0, blockOrder: 0);
+
+        Assert.True(tiled.IsContinuous);
+        Assert.Equal(tiled.BlocksX * tiled.BlocksY, tiled.Lattice.Count);
+
+        // Counted the way the family comparison above counts: consecutive EQUAL steps. A
+        // serpentine crosses a whole row of blocksX cells, i.e. blocksX - 1 equal steps, where
+        // Hilbert saturates at 3 whatever the order — which is the trade, stated as a number.
+        int longest = 1, run = 1;
+        for (int i = 2; i < tiled.Lattice.Count; i++)
+        {
+            var a = tiled.Lattice[i - 1] - tiled.Lattice[i - 2];
+            var b = tiled.Lattice[i] - tiled.Lattice[i - 1];
+            run = a == b ? run + 1 : 1;
+            longest = Math.Max(longest, run);
+        }
+        Assert.Equal(tiled.BlocksX - 1, longest);
+    }
+
+    [Fact]
+    public void ATiledCurveRefusesADegenerateRectangleAndAnUnreachableSpacing()
+    {
+        var flat = new Aabb((0, 0, 0), (10, 0, 0));
+        Assert.Throws<ArgumentException>(() => SpaceFillingCurve.OverTiled(flat, 1.0));
+
+        var bounds = new Aabb((0, 0, 0), (100, 100, 0));
+        var error = Assert.Throws<ArgumentOutOfRangeException>(
+            () => SpaceFillingCurve.OverTiled(bounds, 0.01, maxSites: 4096));
+        Assert.Contains("past the 4096-site cap", error.Message);
+        Assert.Contains("FINEST", error.Message);
+    }
 }

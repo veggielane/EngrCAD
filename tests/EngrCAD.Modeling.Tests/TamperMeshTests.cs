@@ -29,7 +29,7 @@ public class TamperMeshTests
     [InlineData(4, 2, 3)]
     public void TheTiledRouteIsAContinuousBijectionOverItsLattice(int order, int blocksX, int blocksY)
     {
-        var route = TiledHilbertRoute.Build(order, blocksX, blocksY);
+        var route = TiledHilbertLattice.Build(order, blocksX, blocksY);
         int m = 1 << order;
 
         Assert.Equal(m * m * blocksX * blocksY, route.Length);
@@ -60,7 +60,7 @@ public class TamperMeshTests
     public void OneBlockIsCoresOwnHilbertCurve(int order)
     {
         // The reduction that makes the tiling a generalisation rather than a second curve.
-        var tiled = TiledHilbertRoute.Build(order, 1, 1);
+        var tiled = TiledHilbertLattice.Build(order, 1, 1);
         var core = SpaceFillingCurve.LatticeSites(SpaceFillingFamily.Hilbert, order);
 
         Assert.Equal(core.Count, tiled.Length);

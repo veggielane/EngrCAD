@@ -200,8 +200,11 @@ public static class TamperMesh
             throw new ArgumentOutOfRangeException(nameof(maxCells), "The cell cap must be at least 1.");
 
         int m = 1 << blockOrder;
-        long blocksX = BlocksFor(width, m, pitch, maxCells);
-        long blocksY = BlocksFor(height, m, pitch, maxCells);
+        // The block-count rule is TiledHilbertLattice's own, asked rather than restated:
+        // two spellings of "how many blocks fit" is exactly the drift the move to Core
+        // removed.
+        long blocksX = TiledHilbertLattice.BlocksFor(width, m, pitch, maxCells);
+        long blocksY = TiledHilbertLattice.BlocksFor(height, m, pitch, maxCells);
         long cellsX = blocksX * m;
         long cellsY = blocksY * m;
         if (cellsX * cellsY > maxCells)
@@ -227,7 +230,7 @@ public static class TamperMesh
                 nameof(traceWidth));
         }
 
-        var route = TiledHilbertRoute.Build(blockOrder, (int)blocksX, (int)blocksY);
+        var route = TiledHilbertLattice.Build(blockOrder, (int)blocksX, (int)blocksY);
         var origin = new Vector2d(footprint.Min.X, footprint.Min.Y);
 
         var built = new TamperNet[nets];
@@ -246,26 +249,6 @@ public static class TamperMesh
         return new TamperMeshLayout(
             footprint, blockOrder, (int)blocksX, (int)blocksY, (int)cellsX, (int)cellsY,
             pitch, pitchX, pitchY, traceWidth, gap, built, route);
-    }
-
-    /// <summary>The smallest whole number of blocks whose cells are at or under
-    /// <paramref name="pitch"/>. Decided by the SAME comparison that defines it — no epsilon,
-    /// the generator's rule — so a footprint landing exactly on a block boundary is honoured
-    /// exactly. The floating estimate is checked against <paramref name="cap"/> BEFORE the
-    /// integer refinement, so an absurdly fine pitch reports the cell cap instead of walking
-    /// to it one block at a time.</summary>
-    private static long BlocksFor(double extent, int cellsPerBlock, double pitch, long cap)
-    {
-        double perBlock = cellsPerBlock * pitch;
-        double estimate = Math.Ceiling(extent / perBlock);
-        if (!(estimate <= cap))
-            return cap + 1;
-        long blocks = Math.Max(1, (long)estimate);
-        while (blocks * perBlock < extent)
-            blocks++;
-        while (blocks > 1 && (blocks - 1) * perBlock >= extent)
-            blocks--;
-        return blocks;
     }
 
     /// <summary>

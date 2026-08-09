@@ -87,11 +87,23 @@ public sealed class SpaceFillingCurve
     private SpaceFillingCurve(
         SpaceFillingFamily family, int order, double requestedSpacing, double spacing,
         Vector2i[] lattice, Vector2d[] points)
+        : this(family, order, requestedSpacing, spacing, spacing, 1, 1, lattice, points)
+    {
+    }
+
+    private SpaceFillingCurve(
+        SpaceFillingFamily family, int order, double requestedSpacing,
+        double spacingX, double spacingY, int blocksX, int blocksY,
+        Vector2i[] lattice, Vector2d[] points)
     {
         Family = family;
         Order = order;
         RequestedSpacing = requestedSpacing;
-        Spacing = spacing;
+        SpacingX = spacingX;
+        SpacingY = spacingY;
+        Spacing = Math.Max(spacingX, spacingY);
+        BlocksX = blocksX;
+        BlocksY = blocksY;
         Lattice = lattice;
         Points = points;
         IsClosed = family == SpaceFillingFamily.Moore;
@@ -132,8 +144,33 @@ public sealed class SpaceFillingCurve
     public double RequestedSpacing { get; }
 
     /// <summary>The spacing ACHIEVED: the model-space distance between consecutive points of
-    /// a continuous family. Always ≤ <see cref="RequestedSpacing"/>.</summary>
+    /// a continuous family. Always ≤ <see cref="RequestedSpacing"/>. Where the cells are not
+    /// square (<see cref="OverTiled"/> on a non-square rectangle) this is the LARGER of
+    /// <see cref="SpacingX"/> and <see cref="SpacingY"/> — the number a bead has to cover.</summary>
     public double Spacing { get; }
+
+    /// <summary>The achieved cell width. Equal to <see cref="Spacing"/> bit for bit for every
+    /// square-footprint construction; only <see cref="OverTiled"/> can make the two differ.</summary>
+    public double SpacingX { get; }
+
+    /// <summary>The achieved cell height — see <see cref="SpacingX"/>.</summary>
+    public double SpacingY { get; }
+
+    /// <summary>How many Hilbert blocks the footprint is tiled from across x. 1 for every
+    /// square-footprint construction, so the tiled path is a generalisation rather than a
+    /// second mode.</summary>
+    public int BlocksX { get; }
+
+    /// <summary>How many Hilbert blocks the footprint is tiled from up y — see
+    /// <see cref="BlocksX"/>.</summary>
+    public int BlocksY { get; }
+
+    /// <summary>How far the cells are from square: <c>max/min</c> of the two spacings, so 1
+    /// exactly wherever the footprint is a square. REPORTED rather than bounded, because
+    /// fitting a rectangle tightly and keeping cells square are genuinely in tension — small
+    /// blocks fit any rectangle closely and stretch the cells, large ones keep the cells square
+    /// and quantise the fit coarsely.</summary>
+    public double Anisotropy => Math.Max(SpacingX, SpacingY) / Math.Min(SpacingX, SpacingY);
 
     /// <summary>The integer lattice sites in visit order. Square families index a
     /// <c>[0, radix^n)²</c> grid; <see cref="SpaceFillingFamily.Gosper"/> indexes the
@@ -211,6 +248,92 @@ public sealed class SpaceFillingCurve
     {
         ArgumentNullException.ThrowIfNull(region);
         return Over(region.Bounds, family, spacing, maxSites);
+    }
+
+    /// <summary>
+    /// Lays a HILBERT curve over <paramref name="bounds"/> as a TILING of square blocks, so the
+    /// footprint is the rectangle rather than its bounding square.
+    ///
+    /// <para><b>Why this exists.</b> <see cref="Over(in Aabb, SpaceFillingFamily, double, int)"/>
+    /// holds the footprint to the region's bounding SQUARE, so on a long thin plate the achieved
+    /// spacing is set by the LENGTH and most of the curve falls outside — an 80 × 12 plate at a
+    /// requested spacing of 3 generates 1024 cells and keeps about 160. Tiling
+    /// <c>blocksX × blocksY</c> Hilbert blocks and linking their ends
+    /// (<see cref="TiledHilbertLattice"/>) covers the rectangle itself; the curve stays ONE
+    /// continuous path, because a block enters and leaves at two adjacent corners of its square
+    /// and the eight symmetries supply whichever pair its neighbours need.</para>
+    ///
+    /// <para><b>The footprint is still what is held</b>, which is what makes the cells
+    /// anisotropic: with the block grid chosen, the cell size on each axis is that axis's extent
+    /// over its cell count, so the curve covers exactly the rectangle asked for and
+    /// <see cref="Anisotropy"/> reports how far from square that left the cells.
+    /// <see cref="Spacing"/> is the larger of the two and is still never coarser than the
+    /// request.</para>
+    ///
+    /// <para><b>Hilbert only.</b> Peano's blocks end at the same two adjacent corners so it
+    /// would tile identically and is a straightforward addition when a caller wants the longer
+    /// straight runs; Moore is a closed LOOP with no ends to link at all, and Gosper's island
+    /// does not tile a rectangle in the first place. <c>blockOrder: 0</c> makes every block one
+    /// cell and the route a plain boustrophedon serpentine — a legitimate member of the family
+    /// rather than a degenerate case, and the one with the tightest fit and the worst
+    /// isotropy.</para>
+    /// </summary>
+    /// <param name="bounds">The rectangle to cover (z ignored — the 2D-bounds convention).</param>
+    /// <param name="spacing">The largest acceptable distance between neighbouring passes, on
+    /// BOTH axes.</param>
+    /// <param name="blockOrder">The Hilbert block order: blocks are <c>2^blockOrder</c> cells
+    /// square. Higher is more isotropic and quantises the fit more coarsely.</param>
+    /// <param name="maxSites">Refusal cap on the site count.</param>
+    public static SpaceFillingCurve OverTiled(
+        in Aabb bounds, double spacing, int blockOrder = 2, int maxSites = DefaultMaxSites)
+    {
+        if (bounds.IsEmpty)
+            throw new ArgumentException("A space-filling curve needs a non-empty region to cover.", nameof(bounds));
+        if (!(spacing > 0) || !double.IsFinite(spacing))
+            throw new ArgumentOutOfRangeException(nameof(spacing), "The spacing must be positive and finite.");
+        if (blockOrder < 0)
+            throw new ArgumentOutOfRangeException(nameof(blockOrder), "The block order cannot be negative.");
+        if (maxSites < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxSites), "The site cap must be at least 1.");
+
+        double width = bounds.Max.X - bounds.Min.X;
+        double height = bounds.Max.Y - bounds.Min.Y;
+        if (!(width > 0) || !(height > 0))
+        {
+            throw new ArgumentException(
+                "A tiled curve needs a region with positive extent on both axes; the bounds given "
+                + "are degenerate.",
+                nameof(bounds));
+        }
+
+        int m = checked(1 << blockOrder);
+        long blocksX = TiledHilbertLattice.BlocksFor(width, m, spacing, maxSites);
+        long blocksY = TiledHilbertLattice.BlocksFor(height, m, spacing, maxSites);
+        long cellsX = blocksX * m;
+        long cellsY = blocksY * m;
+        if (cellsX * cellsY > maxSites)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(spacing),
+                $"A tiled Hilbert curve at spacing {spacing} over {width} by {height} needs "
+                + $"{cellsX} x {cellsY} cells, past the {maxSites}-site cap. The FINEST spacing "
+                + $"this cap allows here is about {Math.Sqrt(width * height / maxSites)}; anything "
+                + "coarser costs less.");
+        }
+
+        double spacingX = width / cellsX;
+        double spacingY = height / cellsY;
+        var route = TiledHilbertLattice.Build(blockOrder, (int)blocksX, (int)blocksY);
+        var points = new Vector2d[route.Length];
+        for (int i = 0; i < route.Length; i++)
+        {
+            points[i] = new Vector2d(
+                bounds.Min.X + (route[i].X + 0.5) * spacingX,
+                bounds.Min.Y + (route[i].Y + 0.5) * spacingY);
+        }
+        return new SpaceFillingCurve(
+            SpaceFillingFamily.Hilbert, blockOrder, spacing, spacingX, spacingY,
+            (int)blocksX, (int)blocksY, route, points);
     }
 
     private static SpaceFillingCurve OverBySquare(
