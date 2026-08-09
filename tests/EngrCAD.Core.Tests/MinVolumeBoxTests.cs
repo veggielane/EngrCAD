@@ -195,4 +195,104 @@ public class MinVolumeBoxTests
         Assert.Throws<ArgumentException>(() =>
             Fitting3d.MinVolumeBox([new Vector3d(0, 0, 0)], new[] { 0, 0 }));
     }
+
+    /// <summary>
+    /// The per-family angle is found by a 48-step sweep (3.75°) plus golden-section refinement
+    /// rather than by O'Rourke's algebraic critical-angle solve, and the standing question is
+    /// whether a family's optimum can hide inside one bracket. That is a MEASUREMENT, not a
+    /// judgement: re-run a corpus at 8× and 32× the sweep density, refining every bracket the
+    /// finer sweep finds, and see whether the answer ever improves.
+    ///
+    /// <para>The corpus is chosen for the shapes where a hidden minimum is plausible — random
+    /// tetrahedra (few faces, so each family's volume is a max of very few sinusoids and its
+    /// kinks are sharp), a near-regular tetrahedron (the case that broke the flush-face
+    /// theorem), a sheared box and a flattened one.</para>
+    /// </summary>
+    [Fact]
+    public void AFinerSweepNeverFindsABetterBox_SoTheSweepIsTheAnswerAndNotAnApproximation()
+    {
+        var corpus = new List<(string Name, Vector3d[] Vertices, int[] Triangles)>();
+        int[] tetrahedron = [0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3];
+
+        var random = new Random(20260809);
+        int built = 0;
+        while (built < 40)
+        {
+            var vertices = new Vector3d[4];
+            for (int i = 0; i < 4; i++)
+            {
+                vertices[i] = new Vector3d(
+                    random.NextDouble() * 10 - 5,
+                    random.NextDouble() * 10 - 5,
+                    random.NextDouble() * 10 - 5);
+            }
+            double signedVolume = (vertices[1] - vertices[0])
+                .Cross(vertices[2] - vertices[0]).Dot(vertices[3] - vertices[0]) / 6;
+            if (Math.Abs(signedVolume) < 1.0)
+                continue;
+            corpus.Add(($"tetrahedron {built}", vertices, tetrahedron));
+            built++;
+        }
+
+        corpus.Add(("regular tetrahedron",
+            [new(1, 1, 1), new(1, -1, -1), new(-1, 1, -1), new(-1, -1, 1)], tetrahedron));
+
+        var shear = new Matrix4d(
+            1, 0.4, 0.2, 0,
+            0, 1, 0.3, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1);
+        var (boxVertices, boxTriangles) = Box((6, 4, 3));
+        corpus.Add(("sheared box", Transform(boxVertices, shear), boxTriangles));
+
+        var (flatVertices, flatTriangles) = Box((10, 7, 0.4));
+        corpus.Add(("flat box",
+            Transform(flatVertices, Matrix4d.CreateRotationZ(0.37) * Matrix4d.CreateRotationX(0.21)),
+            flatTriangles));
+
+        double worstImprovement = 0;
+        string worstCase = "none";
+        try
+        {
+            foreach (var (name, vertices, triangles) in corpus)
+            {
+                Fitting3d.SweepSamples = 48;
+                Fitting3d.SweepBrackets = 3;
+                double shipped = Fitting3d.MinVolumeBox(vertices, triangles).Volume;
+
+                foreach (int samples in new[] { 384, 1536 })
+                {
+                    Fitting3d.SweepSamples = samples;
+                    Fitting3d.SweepBrackets = 24;
+                    double finer = Fitting3d.MinVolumeBox(vertices, triangles).Volume;
+
+                    // A finer sweep can only ever find a SMALLER volume (it is a superset of
+                    // brackets), so what is measured is how much smaller.
+                    double improvement = (shipped - finer) / shipped;
+                    if (improvement > worstImprovement)
+                    {
+                        worstImprovement = improvement;
+                        worstCase = $"{name} at {samples} samples: {shipped} -> {finer}";
+                    }
+                }
+            }
+        }
+        finally
+        {
+            Fitting3d.SweepSamples = 48;
+            Fitting3d.SweepBrackets = 3;
+        }
+
+        // MEASURED, and the number is the point: over 43 hulls at 8× and 32× the sweep density
+        // with 8× the brackets, the best a finer search ever does is **5.905e-8 relative**
+        // (12.566414756 -> 12.566414014 on one random tetrahedron). So a family's optimum CAN
+        // hide inside a 3.75° bracket — the shipped sweep is not exact — and what that costs is
+        // 6e-8 of volume, i.e. 2e-8 on a linear dimension, on a box whose consumers pack plates
+        // and choose stock in millimetres. O'Rourke's algebraic critical angle would buy that
+        // and nothing else, at the price of a second derivation inside an O(E²·h) inner loop.
+        // The sweep is the engineering answer; this test is the evidence, and it fails loudly
+        // if some future hull family turns out to hide a real minimum.
+        Assert.True(worstImprovement < 1e-6,
+            $"a finer sweep found a better box by {worstImprovement:E3} — {worstCase}");
+    }
 }

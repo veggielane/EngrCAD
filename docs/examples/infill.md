@@ -240,3 +240,304 @@ are hexagons, so it fills a hexagonal *island* rather than a rectangle. It is sc
 computed from the walk rather than tabulated — so that the island covers the region's bounding
 circle. That makes its achieved spacing markedly finer than a square family's at the same
 order, which is the honest price of a lattice that does not tile a rectangle.
+
+## A tight fit on a long thin region
+
+Holding the footprint has a stated cost: it is the region's bounding **square**, so on a long
+thin plate the achieved spacing is set by the plate's *length* and most of the curve falls
+outside it. `tiled: true` lays the curve as a tiling of Hilbert **blocks** over the bounding
+**rectangle** instead. A block runs between two adjacent corners of its own square, so the eight
+symmetries of the square supply whichever entry/exit pair each block's neighbours need, and a
+boustrophedon over the block grid links them into one continuous path.
+
+```csharp run:infill-tiled
+var plate = Sketch.Rectangle(80, 12);
+
+var square = SpaceFillingInfill.Fill(plate, spacing: 3.0);
+var tiled = SpaceFillingInfill.Fill(plate, spacing: 3.0, tiled: true);
+
+// `Waste` is the share of the generated curve the clip threw away.
+if (!(square.Waste > 0.8)) throw new Exception($"square wasted {square.Waste:P1}");
+if (!(tiled.Waste < 0.25)) throw new Exception($"tiled wasted {tiled.Waste:P1}");
+
+// And the spacing stops being set by the plate's LENGTH: the square footprint spends 2.5 mm
+// because 80 is what quantised, where the tiled one lands at 2.857 by 3.0 - both inside the
+// request, with far fewer cells.
+if (Math.Abs(square.Spacing - 2.5) > 1e-12) throw new Exception($"{square.Spacing}");
+if (tiled.Curve.SpacingY > 3.0) throw new Exception("never coarser than asked, on both axes");
+```
+
+The price is that the cells are no longer square, and `Curve.Anisotropy` reports how far from
+square they came out. Small blocks fit an arbitrary rectangle closely and stretch the cells;
+large blocks stay isotropic and quantise the fit more coarsely — `blockOrder: 0` is the extreme,
+where every block is one cell and the route is a plain serpentine. Hilbert only: Moore is a
+closed loop with no ends to link, and Gosper does not tile a rectangle at all.
+
+## The travel between runs
+
+`Runs` comes back in *curve* order and the moves between runs are yours. `Link()` orders them —
+one linker, shared by the 2D fill, the solid fill and a surface decoration, so the three cannot
+drift.
+
+```csharp run:infill-link
+var plate = Sketch.Rectangle(60, 40).WithHole(Sketch.Circle(11));
+var fill = SpaceFillingInfill.Fill(plate, spacing: 2.0);
+
+var linkage = fill.Link();
+
+// A permutation by construction: it can shorten the travel and cannot lose a pass.
+if (linkage.Order.Count != fill.Runs.Count) throw new Exception("every run appears");
+if (linkage.Order.Select(o => o.Index).Distinct().Count() != fill.Runs.Count)
+    throw new Exception("exactly once");
+if (linkage.TravelLength > linkage.SourceOrderTravelLength + 1e-9)
+    throw new Exception("never worse than the order it started from");
+
+var ordered = linkage.Reorder(fill.Runs);
+if (ordered.Sum(r => r.Count) != fill.PointCount) throw new Exception("no point is dropped");
+```
+
+It is a greedy nearest-endpoint heuristic and says so: ordering runs to minimise travel is the
+open travelling-salesman problem in disguise, so what is promised is a measured improvement over
+the incumbent order (`TravelLength` beside `SourceOrderTravelLength`) rather than an optimum. It
+is deterministic — ties break on the lower run index, then on not-reversed — because a toolpath
+has to be reproducible.
+
+> **Measured, and worth knowing before you reach for it:** on a space-filling fill the linker
+> reverses *nothing*. The curve order already leaves each run pointing at its successor, which is
+> both the reason greedy is the right heuristic here and the reason the improvement is modest.
+> The reversal exists for run sets that did not come from one curve.
+
+## How thin is the thinnest place
+
+The two refusals catch a whole connected piece being missed. A thin **neck** inside a piece that
+is otherwise filled is not refused — the piece as a whole does catch passes — so seeing it needs
+a *local* measurement rather than a connectivity test. `ThinnestFeature()` is that measurement:
+`Region2dThickness`' opposing-edge probe, the 2D twin of the wall thickness
+[`Manufacturability`](manufacturability.md) measures on a solid.
+
+```csharp run:infill-neck
+// A dumbbell: two fat pads joined by a 2 mm bar. One connected piece, so both refusals stay
+// silent - and the coverage fraction alone does not say WHERE.
+var dumbbell = Sketch.Start(0, 0)
+    .LineTo(20, 0).LineTo(20, 9).LineTo(40, 9).LineTo(40, 0).LineTo(60, 0)
+    .LineTo(60, 20).LineTo(40, 20).LineTo(40, 11).LineTo(20, 11).LineTo(20, 20)
+    .LineTo(0, 20).Close();
+
+var fill = SpaceFillingInfill.Fill(dumbbell, spacing: 4.0, clearance: 0.5);
+var thickness = fill.ThinnestFeature(samplesPerEdge: 4);
+
+if (Math.Abs(thickness.Minimum - 2.0) > 1e-9) throw new Exception($"{thickness.Minimum}");
+// And it LOCATES it: the thin place is in the bar, not in either pad.
+if (thickness.ThinnestAt.X < 20 || thickness.ThinnestAt.X > 40) throw new Exception("located");
+
+// A pass needs Spacing + 2 x Clearance of room, so these two numbers together say the neck
+// cannot hold one.
+if (!(thickness.Minimum < fill.Spacing + 2 * fill.Clearance)) throw new Exception("too wide");
+```
+
+What is reported is the **perpendicular** distance to the line of the segment the probe hit, not
+the raw ray length, which is what makes a tapered slot read its true width. The `Mean` rides
+beside the `Minimum` and never instead of it — a mean says nothing about a neck.
+
+## Filling a solid
+
+`SolidInfill` is the volume consumer: a **3D Hilbert curve** clipped to a body's own signed
+distance field. One connected route through the whole interior, which is what a
+single-extrusion print path or a single-channel cooling passage wants — and which no implicit
+lattice can express, a gyroid being a *surface* rather than a path.
+
+```csharp run:solid-infill-report
+var body = Shape.Box(24, 16, 12);
+var fill = SolidInfill.Fill(body, spacing: 2.5, clearance: 1.0);
+
+// Same contract as the 2D fill: the ACHIEVED spacing is reported, never the request.
+if (fill.Spacing > 2.5) throw new Exception("never coarser than asked");
+if (fill.PointCount == 0) throw new Exception("nothing was placed");
+
+// Within a run, consecutive points are exactly one spacing apart.
+foreach (var run in fill.Runs)
+{
+    for (int i = 1; i < run.Count; i++)
+    {
+        if (Math.Abs(run[i].DistanceTo(run[i - 1]) - fill.Spacing) > 1e-9)
+            throw new Exception("a run steps by exactly the spacing");
+    }
+}
+
+// The clip is a comparison against the field's exact sign, so every point really does clear
+// the surface by the stated clearance.
+var field = body.ToImplicit();
+foreach (var run in fill.Runs)
+{
+    foreach (var p in run)
+        if (field.Evaluate(p) > -1.0 + 1e-12) throw new Exception($"{p} is too near the wall");
+}
+```
+
+```csharp render:solid-infill
+var body = Shape.Box(28, 28, 28);
+var fill = SolidInfill.Fill(body, spacing: 8.0, clearance: 1.0);
+
+var scene = new Scene();
+var shell = new Part("body", body, Palette.Steel) { DisplayMode = DisplayMode.Translucent };
+scene.Add(shell);
+
+// Every step of the curve is one lattice cell along one axis, so a segment is drawn as an
+// axis-aligned bar: the route reads as the single connected path it is rather than as a
+// scatter of visited cells.
+const double w = 2.0;
+int index = 0;
+foreach (var run in fill.Runs)
+{
+    for (int i = 1; i < run.Count; i++)
+    {
+        var a = run[i - 1];
+        var b = run[i];
+        var span = b - a;
+        var bar = Shape.Box(Math.Abs(span.X) + w, Math.Abs(span.Y) + w, Math.Abs(span.Z) + w);
+        scene.Add(new Part($"pass {++index}", bar, Palette.Coral,
+            Matrix4d.CreateTranslation((a + b) * 0.5)));
+    }
+}
+```
+
+![A translucent cube with one connected Hilbert route threading through its interior](images/solid-infill.png)
+
+**The placement question is the one thing genuinely new in 3D, and it is stated rather than
+solved.** The footprint is the body's bounding *cube*, so a long thin part wastes the curve the
+way a long thin plate wastes the 2D one. `Waste` reports it as a number:
+
+```csharp run:solid-infill-waste
+var cube = SolidInfill.Fill(Shape.Box(20, 20, 20), spacing: 3.0, clearance: 0.5);
+var bar = SolidInfill.Fill(Shape.Box(20, 4, 4), spacing: 3.0, clearance: 0.5);
+
+if (!(cube.Waste < 0.5)) throw new Exception($"a cube wastes only its shell, {cube.Waste:P1}");
+if (!(bar.Waste > 0.85)) throw new Exception($"a bar wastes most of the cube, {bar.Waste:P1}");
+```
+
+The 2D answer carries over in principle — a 3D Hilbert block also runs between two adjacent
+corners of its cube, so it tiles — but it is not built, because nothing asks for it yet. The
+per-layer alternative sidesteps the question entirely by keeping the 2D placement per slice:
+take `Shape.Section` at each layer height and run `SpaceFillingInfill.Fill` on it. That is a
+different deliverable — one path per layer, not one path through the part — which is why it is a
+recipe here rather than a wrapper.
+
+Both ways a fill can silently miss are refused by name here too, with the instrument stated:
+there is no 3D erosion to take connected pieces of, so *is there room at all* is answered by a
+probe grid at half the achieved spacing.
+
+```csharp run:solid-infill-refusals
+// Too thin for the clearance at any phase - and the message says how far in a probe did reach.
+var sheet = Shape.Box(40, 40, 0.4);
+try
+{
+    SolidInfill.Fill(sheet, spacing: 5.0, clearance: 1.0);
+    throw new Exception("expected a refusal");
+}
+catch (ArgumentException error) when (error.Message.Contains("deepest a probe found"))
+{
+}
+
+// Room enough, and the lattice's phase stepped over it: a different mistake, a different fix.
+var slab = Shape.Box(60, 60, 8.0);
+try
+{
+    SolidInfill.Fill(slab, spacing: 30.0, clearance: 1.0);
+    throw new Exception("expected a refusal");
+}
+catch (ArgumentException error) when (error.Message.Contains("stepped over"))
+{
+}
+```
+
+## Wrapping a curve onto a surface
+
+`SurfaceDecoration` lays a flat curve **on** a doubly-curved surface — engraving, a decal
+outline, a heater track, or a space-filling texture that follows the shape it decorates. The map
+is `MeshLocalParam`'s discrete exponential map around a seed vertex, so the flat curve's own
+coordinates are millimetres on the surface measured from there.
+
+```csharp render:surface-decoration
+var dome = Shape.Sphere(20);
+var mesh = dome.ToMesh();
+
+// Seed at the pole, +u along world X.
+int seed = 0;
+double best = double.PositiveInfinity;
+for (int v = 0; v < mesh.VertexCount; v++)
+{
+    double d = mesh.GetPosition(v).DistanceTo(new Vector3d(0, 0, 20));
+    if (d < best) { best = d; seed = v; }
+}
+
+var curve = SpaceFillingCurve.Over(
+    new Aabb((-9, -9, 0), (9, 9, 0)), SpaceFillingFamily.Hilbert, spacing: 4.0);
+var decoration = SurfaceDecoration.Wrap(mesh, seed, curve, referenceDirection: Vector3d.UnitX);
+
+var scene = new Scene();
+scene.Add(new Part("dome", dome, Palette.Steel));
+
+// Marks along each run rather than one per point, so the route reads as the continuous track
+// it is. The interpolated marks are pushed back out to the radius, which is the honest way to
+// draw a chord between two surface points without pretending the map gave them.
+int index = 0;
+foreach (var run in decoration.Runs)
+{
+    for (int i = 0; i < run.Count; i++)
+    {
+        for (int k = 0; k < 3; k++)
+        {
+            if (i == run.Count - 1 && k > 0) break;
+            var p = i + 1 < run.Count
+                ? run[i] + (run[i + 1] - run[i]) * (k / 3.0)
+                : run[i];
+            scene.Add(new Part($"mark {++index}", Shape.Sphere(0.75), Palette.Coral,
+                Matrix4d.CreateTranslation(p.Normalized(Tolerance.Default) * 20.2)));
+        }
+    }
+}
+
+var camera = new CameraState(-Math.PI / 2, 1.15, 62, (0, 0, 12));
+```
+
+![A sphere with a Hilbert-curve pattern of marks conforming to its upper cap](images/surface-decoration.png)
+
+**The limit is reported, not averaged away.** The exponential map is exact on a plane, close to
+exact on a developable surface and genuinely distorted where Gaussian curvature concentrates —
+so a conforming curve carries that distortion into its own *spacing*, which is the number a bead
+width is chosen from. `SurfaceCurve` measures it on the curve that was actually laid:
+
+```csharp run:surface-decoration-distortion
+var dome = Shape.Sphere(20);
+var mesh = dome.ToMesh();
+int seed = 0;
+double best = double.PositiveInfinity;
+for (int v = 0; v < mesh.VertexCount; v++)
+{
+    double d = mesh.GetPosition(v).DistanceTo(new Vector3d(0, 0, 20));
+    if (d < best) { best = d; seed = v; }
+}
+
+var curve = SpaceFillingCurve.Over(
+    new Aabb((-9, -9, 0), (9, 9, 0)), SpaceFillingFamily.Hilbert, spacing: 2.0);
+var decoration = SurfaceDecoration.Wrap(mesh, seed, curve, referenceDirection: Vector3d.UnitX);
+
+// The extremes straddle 1: the map shrinks some passes and stretches others.
+if (!(decoration.MinScale < 1.0)) throw new Exception($"MinScale {decoration.MinScale}");
+if (!(decoration.MaxScale > 1.0)) throw new Exception($"MaxScale {decoration.MaxScale}");
+
+// Which is exactly why the MEAN is not the report: it reads a comfortable ~1% while the
+// tightest pass is several percent closer than it was drawn.
+if (!(decoration.Distortion > 5 * Math.Abs(decoration.MeanScale - 1)))
+    throw new Exception("the mean would hide it");
+```
+
+On the test fixture the numbers are `MinScale` 0.9263, `MaxScale` 1.0005, `MeanScale` 0.9882 — a
+mean departure of 1.2% against a worst pass 7.4% tighter than drawn. Read `MinScale` when you
+need a guaranteed pitch and `MaxScale` when you need a guaranteed clearance; the same curve on a
+*developable* tube measures a distortion of 3.5e-4, which is the whole content of the word.
+
+A flat point that reaches past the map has nowhere to go — continuing it would mean inventing
+surface — so the run **breaks** there and `UnmappedPoints` counts what was lost. A non-zero
+count is the signal to state a larger `radius`, and a curve entirely off the map is refused by
+name.

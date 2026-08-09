@@ -172,6 +172,17 @@ Each engine uses the data structure its mathematics wants:
   documented, natural default), refuses exactly-zero pivots by caller column, and
   reports its pivot-magnitude extremes so near-breakdown growth is visible rather than
   silent.
+  **A PIVOTED real sparse indefinite factorization has been surveyed for a consumer and there
+  is none, so it is a correctly-deferred decision rather than open work.** The whole repository
+  produces exactly one indefinite system, `DirectHarmonicSolver`'s, and it takes the COMPLEX
+  path; the real overload has no production caller at all (only a KKT test fixture). Nor is one
+  latent: structural supports are ELIMINATED rather than penalised, so no solver here forms a
+  Lagrange-multiplier saddle system; `TopologyOptimizer`'s "Lagrange multiplier" is a SCALAR
+  found by bisection; and the sketch and mate solvers work on dense `JᵀJ`, which is PSD. The
+  honest version remains a multifrontal/supernodal solver with delayed pivots — the shape
+  recorded above, a project of a different order — so it is not started speculatively. The
+  interim half-step if a consumer does appear is one round of iterative refinement on the
+  caller's side, which `SmallestPivotMagnitude` already supports deciding.
 - **Space-filling curves (`Geometry2.SpaceFillingCurve`) — the name overpromises, so the
   API is built around saying what it really is.** A true space-filling curve is the LIMIT
   of a sequence and has infinite length; what exists is one finite member and the ORDER is
@@ -217,8 +228,52 @@ Each engine uses the data structure its mathematics wants:
   can silently miss are refused by name** — a region the clearance erodes to nothing, and a
   connected piece of the eroded region the lattice's phase stepped over. What is deliberately
   NOT refused is a thin neck inside a piece that is otherwise filled: the piece as a whole
-  catches passes, so the honest answer is the coverage fraction rather than a refusal the
-  detector cannot actually justify.
+  catches passes, so the honest answer is a MEASUREMENT rather than a refusal the detector
+  cannot justify — which is what `Region2dThickness` supplies (below).
+- **The footprint decision has a stated cost, and `OverTiled` is the way out that keeps it.**
+  Holding the footprint to a region's bounding SQUARE means a long thin plate has its spacing
+  set by its LENGTH and most of the curve generated outside it (an 80 × 12 plate at spacing 3:
+  1024 cells, 128 kept). `SpaceFillingCurve.OverTiled` lays a TILING of Hilbert blocks over the
+  bounding RECTANGLE instead, and it is one continuous path for a structural reason rather than
+  by arrangement: an order-n Hilbert block runs between two ADJACENT CORNERS of its own square,
+  so the eight symmetries of the square supply whichever (entry, exit) pair each block's
+  neighbours need and a boustrophedon over the block grid links them (`TiledHilbertLattice`,
+  which moved down from Modeling once a second consumer wanted it — a tamper mesh and an infill
+  both read it, and its block-count rule is now asked rather than restated in either). **The
+  footprint is still what is held**, which is exactly what makes the cells anisotropic — each
+  axis's cell size is that axis's extent over its cell count — so `Anisotropy` is REPORTED
+  rather than bounded, and the trade it reports is real: small blocks fit an arbitrary rectangle
+  closely and stretch the cells, large ones stay isotropic and quantise the fit coarsely, with
+  `blockOrder: 0` the plain serpentine at the extreme. One block reproduces the square form site
+  for site and bit for bit, and every incumbent construction reports
+  `SpacingX == SpacingY == Spacing` bit-identically, so this is a generalisation rather than a
+  second mode. Hilbert only: Peano's blocks end at the same two corners and would tile
+  identically, Moore is a closed LOOP with no ends to link, and Gosper does not tile a rectangle.
+- **`SpaceFillingCurve3d` is the volume member, and it is a PARALLEL type** — the call
+  `CurvedRegion2d` makes against `Region2d`, since a 2D curve's data is `Vector2i`/`Vector2d`
+  and a 3D one's is `Vector3i`/`Vector3d`, so the two share every convention and none of their
+  data. It is **Hilbert only, deliberately**: the consumer is a single connected path through a
+  volume, Z-order's 3D member is not a curve, Peano's is radix 3 (27 cells per level, so three
+  times the spacing quantisation for nothing this wants), and Gosper has no 3D analogue — an
+  enum of one member would only invite the other three to be filled in without a caller. The
+  walk is **Skilling's transpose algorithm** for the reason the 2D file gives for Peano's digit
+  rule: a closed form has no orientation table to get backwards, and the bijectivity test is
+  what would catch one. Measured rather than taken from the literature: the two terminals are
+  ADJACENT CORNERS of the cube (so 3D blocks would tile, if a consumer ever wants that), and the
+  longest straight run saturates at 3 at every order — the SAME number the 2D curve reports, so
+  "no preferred direction" carries into the volume rather than being claimed of it.
+- **`Region2dThickness` is the local measure the connectivity refusals structurally cannot
+  make** — the 2D twin of the wall thickness `Manufacturability` measures on a solid. It probes
+  inward from every boundary segment and reports the PERPENDICULAR distance to the line of the
+  segment it hits, not the raw ray length, which is exact wherever the opposing boundary is
+  straight (for a polygon, everywhere) and is what makes a tapered slot read its true width. The
+  probe starts exactly ON the boundary with no stand-off, because the source segment is excluded
+  by INDEX — exact — and a stand-off biases every reading low by its own length, measured. Holes
+  contribute their own segments, so the web between a bore and a wall is a neck like any other.
+  What it is NOT is named rather than implied: not the medial axis (the largest inscribed disc
+  is a better local width at a fillet and is a different computation, so it is an alternative
+  rather than a silent upgrade — the same call the 3D twin makes) and not a refusal, since it
+  measures and the consumer decides.
 
 ## 3. Mesh engine
 
@@ -2832,13 +2887,33 @@ non-periodic plane and returns cells as polygons of 2D points; every one of thos
 have to be layered back on top of it, inside the code path that carries the entire B-Rep
 boolean regression surface.
 
-**The smaller change that IS worth evaluating** is orthogonal to the arrangement: replace
-the finite-difference `DepartureAngle`/`ArrivalAngle` with **exact analytic tangents**.
-Every analytic curve now overrides `Curve3d.DerivativeAt`, so the 2% chord could become a
-true tangent pulled back through the surface's Jacobian — removing the approximation the
-`1e-12` guard exists to tolerate, without touching the graph, the periodicity or the
-topology. It needs surface partial derivatives at the node, and a decision about what to do
-where the Jacobian is singular (poles), which is why it is a work item rather than a patch.
+**And the smaller change that looked worth evaluating is now REFUSED, by the curved-2D tier's
+own finding.** The long-standing follow-up was to replace the finite-difference
+`DepartureAngle`/`ArrivalAngle` with **exact analytic tangents** — every analytic curve
+overrides `Curve3d.DerivativeAt`, so the 2% chord could become a true tangent pulled back
+through the surface's Jacobian, removing the approximation the `1e-12` guard exists to
+tolerate. Building `CurvedArrangement2d` established that this is backwards.
+
+A 2%-along-the-edge chord is a **SECANT**, and a secant over a finite span encodes CURVATURE:
+writing a curve as `p(s) = v + s·d + ½s²κ·n̂`, the chord to arc length s points along
+`d + ½sκ·n̂`, i.e. the tangent rotated by about `½sκ`. So two edges leaving a node TANGENTIALLY
+— which is not exotic here but the normal case, since every fillet band meets its neighbour
+tangentially — have secants separated by `½s|κ₁ − κ₂|`, first order in the curvature
+difference, while their exact tangents are separated by nothing but round-off. On an r = 2
+fillet band against a planar neighbour at a band length of ~3, that is about 0.015 rad against
+the `1e-12` guard: comfortably decided. With exact tangents the two would tie, the guard would
+read the tie as the back-along-the-same-edge case and add a full 2π, and the walk would choose
+by round-off — which is precisely the failure `CurvedArrangement2d` had to add a
+**curvature tie-break** to fix (a disc tangent to a plate's edge gave the arc a departure of
+`(−1.22e-16, −1)`, and the union came back EMPTY).
+
+So the "improvement" would delete the information the comparison is running on and then have to
+re-derive it, inside the code with the widest regression surface in the repo. The chord is doing
+the tie-break's job for free, the `1e-12` guard is tolerating an approximation that is
+load-bearing rather than merely acceptable, and the item is retired rather than deferred. What
+would genuinely be a change here is the curved tier's own two-key comparator — departure tangent
+with departure curvature as the tie-break — but that is a different, larger piece of work with
+no reported defect asking for it.
 
 Note that the 2D sketch path already gets the benefit this item was reaching for:
 `Region2dBoolean` runs on `Arrangement2d`. It is the B-Rep *face* path that structurally
@@ -5660,7 +5735,58 @@ into runs, and a broken net cannot be monitored at all, so it is refused by name
 at `SpaceFillingInfill`, which reports runs honestly. Conformal placement on a doubly-curved
 wall is not offered: `MeshLocalParam`'s exp map carries 2–5% distortion, which would land
 directly in the pitch and therefore in the guarantee, and a guarantee derived from a distorted
-pitch is not one.
+pitch is not one. (That refusal is unchanged by `SurfaceDecoration` below, and the contrast is
+the point: a decoration REPORTS its distortion and lets a caller size a bead around it, where a
+tamper mesh's whole deliverable is a bound, and a bound built on a distorted pitch is not a
+bound.)
+
+### Filling a volume, decorating a surface, and one linker
+
+The two remaining space-filling consumers, and the seam they share.
+
+**`SolidInfill` is the volume fill**, and it rides the 2D consumer's seams rather than inventing
+its own: the clip is a COMPARISON against an exact signed distance (an `Sdf` is sign-exact, so
+"is this point at least `clearance` inside" needs no tolerance), and everything reported is
+measured. What is genuinely new in 3D is the PLACEMENT question and it is stated rather than
+solved — the footprint is the body's bounding CUBE, so a long thin part wastes the curve as a
+long thin plate wastes the 2D one, and `Waste` reports it as a number (under 50% on a cube, over
+85% on a 20 × 4 × 4 bar) so the tiled 3D footprint stays a decision with evidence rather than a
+guess. The two silent misses are refused by name here too, with the INSTRUMENT stated: there is
+no 3D counterpart to `Region2dOffset`, so "is there room at all" is answered by a probe grid at
+half the achieved spacing, and a solid too thin for the clearance and one the lattice's phase
+stepped over get different messages because they have different fixes. The per-LAYER alternative
+is a documented recipe rather than a wrapper (`Shape.Section` then `SpaceFillingInfill.Fill`),
+because one path per layer and one path through the part are different deliverables.
+
+**`SurfaceDecoration` reports the map's distortion instead of averaging it away**, which is the
+whole design. `MeshLocalParam`'s exp map is exact on a plane, near-exact on a developable surface
+and genuinely distorted where Gaussian curvature concentrates, so a conforming curve carries that
+into its own SPACING — the number a bead width is chosen from. What makes the report honest is
+that the EXTREMES are the answer and the mean rides beside them: measured on a 20-radius sphere
+cap, `MinScale` 0.9263, `MaxScale` 1.0005, `MeanScale` 0.9882 — a mean departure of 1.2% against
+a worst pass 7.4% tighter than drawn, so a mean-only report would call the map faithful. (The
+same curve on a developable tube measures 3.5e-4, which is the entire content of the word
+"developable".) The measurement is taken on the curve that was actually laid rather than quoted
+from the map's own published figures, and a flat point past the map BREAKS the run and is counted
+rather than extrapolated, because continuing it would mean inventing surface. The inverse of the
+map — which `MeshLocalParam` gives per VERTEX and a decoration needs per POINT — is a BVH over
+the triangles in (u, v) plus barycentric interpolation, legal because a triangle's own map is
+affine both ways.
+
+**One linker, not three** (`RunLinker`). A clipped 2D infill, a clipped solid infill and a
+decoration broken at the map's edge all leave the same artefact — a set of runs whose travel is
+the caller's business — so there is one deterministic greedy nearest-endpoint linker over
+(start, end) pairs, dimension-agnostic, with `PathLinkage.Reorder<T>` applying the order
+generically. Three properties carry it: it is a PERMUTATION by construction, so it can shorten
+the travel and cannot lose a pass; it is deterministic (ties break on the lower run index, then
+on not-reversed) because a toolpath has to be reproducible, which is also why no randomised
+improvement is offered; and it is a HEURISTIC that says so, reporting `TravelLength` beside
+`SourceOrderTravelLength` rather than claiming an optimum, since ordering runs to minimise travel
+is the open travelling-salesman problem. **The measured finding is why greedy is right here**: on
+a space-filling fill the linker reverses NOTHING, because the curve order already leaves each run
+pointing at its successor — the incumbent order is a good tour and the linker's job is picking up
+the ends it left behind. The reversal capability is therefore pinned on a hand-built case rather
+than expected from a fill.
 
 ## 6c. Drawings (hidden lines, sheets, drafting)
 

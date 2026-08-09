@@ -350,149 +350,29 @@ implementing. Ordered roughly by value-for-effort within each section.
   inscribed-ngon volume by ~5e-5~~ ✅ **fixed and verified** — see below.
 ## Core (EngrCAD.Core)
 
-- [ ] **Space-filling curves: the two consumers still open** (the generator and the 2D
-  infill/toolpath consumer ✅ landed — `Geometry2.SpaceFillingCurve` + `Morton2d` in Core,
-  `SpaceFillingInfill`/`InfillPath` in Modeling, docs `examples/infill.md`, design.md §2).
-  Both remaining consumers ride the SAME two seams the 2D one established, which is what
-  makes them small: the clip is a comparison against an exact signed distance, and coverage
-  is measured by stroking rather than inferred from the path length.
-  - **Solid infill** — clip the 2D curve per layer against the solid's own field (an `Sdf`
-    is sign-exact, so a layer's inside/outside test costs nothing), or a genuine 3D Hilbert
-    curve through the volume. The 3D form is the interesting one: a single connected path
-    through the whole interior, which is what a one-extrusion-path print or a
-    single-channel cooling passage wants, and no lattice in the implicit engine can express
-    it (a gyroid is a SURFACE, not a path). **The scoping is now clearer than the original
-    entry assumed**: the 2D generator's index walk is the same shape in 3D (three bits per
-    level instead of two, with a rotation table rather than the 2D swap), so a 3D Hilbert
-    lattice is an addition to `SpaceFillingCurve` rather than a new design — what genuinely
-    has no 2D counterpart is the PLACEMENT question, since a cube footprint over a general
-    solid wastes the same way a bounding square does over a long thin plate (below), and
-    the per-layer route sidesteps it entirely by keeping the 2D placement per slice.
-  - **Surface decoration** — a curve laid ON a doubly-curved surface, for engraving or
-    texture. The limit must be stated rather than averaged away: `MeshLocalParam`'s
-    discrete exp map is exact on planes, ≤2% on a developable tube and ≤5% radially on a
-    35° sphere cap, so a conforming curve carries that distortion into its spacing — which
-    is now a REPORTED quantity (`InfillPath.Spacing`), so the distortion has somewhere
-    honest to live beside it.
-- [ ] **Infill residuals, all measured while landing the 2D consumer.**
-  - **A thin NECK inside an otherwise-filled piece is reported, not refused.** The two
-    refusals catch a whole connected piece being missed (erosion empty, or a piece of the
-    erosion the lattice stepped over); a neck narrower than the spacing inside a piece that
-    does catch passes shows up only in `CoveredFraction`. Refusing it needs a LOCAL
-    thickness measure over the region rather than a connectivity test —
-    `Manufacturability`'s opposing-ray thickness is the 3D twin and its 2D analogue is the
-    obvious candidate. Until then the docs say to read the fraction.
-  - **The footprint is the bounding SQUARE, so a long thin region wastes most of the
-    curve** — an 80 × 12 plate at spacing 3 generates 1024 cells and keeps ~160, and an
-    80 × 1.5 one is refused outright because the achieved spacing is set by the LENGTH.
-    Neither of the two placement readings helps (they give the same order); what would is a
-    footprint that is not one square — tiled Hilbert blocks with their ends linked.
-    **That linker now EXISTS**, as `TiledHilbertRoute` in Modeling (built for `TamperMesh`):
-    a block enters and leaves at two adjacent corners of its square, so the eight symmetries
-    supply whichever pair the neighbours need and a boustrophedon over the block grid links
-    them into one Hamiltonian path over any `p × q` rectangle, reducing to Core's own lattice
-    site for site at `1 × 1`. Two things are left. (a) It is **in the wrong project** — its
-    natural home is beside `SpaceFillingCurve` in Core, where `SpaceFillingCurve.Over` could
-    take a rectangle rather than a bounding square and every consumer would get the tight fit;
-    moving it is a rename plus making `Vector2i` symmetry helpers public, and the tamper mesh
-    should then delegate. (b) It is **Hilbert only** — Peano's block ends are at the same two
-    adjacent corners so it would tile identically, Moore's closed loop has no ends to link at
-    all, and Gosper's island does not tile a rectangle in the first place.
-  - **The RUN LINKER is not built.** `InfillPath.Runs` comes back in curve order and the
-    travel between runs is the caller's business. The original entry was right that this is
-    the same problem the 2.5D CAM entry names, and it should be ONE linker; filing it here
-    rather than growing a second one.
-  - **`Footprint`/`CoveredArea` cost O(E²) per arrangement** — measured 0.9 / 1.1 / 3.6 s
-    for 28 / 136 / 564-point fills of a 60×40 plate, which is why the docs example is
-    modest. A stroke that unioned per RUN and then merged the runs by bounds (they are
+- [ ] **Infill footprint and coverage residuals** (the neck measure, the tiled rectangular
+  footprint and the run linker ✅ landed — `Region2dThickness` + `SpaceFillingCurve.OverTiled`
+  + `TiledHilbertLattice` in Core, `RunLinker` in Modeling; see design.md §2 and §6b). What is
+  left is all about the FOOTPRINT measurement rather than the fill:
+  - [ ] **`InfillPath.Footprint`/`CoveredArea` cost O(E²) per arrangement** — measured 0.9 /
+    1.1 / 3.6 s for 28 / 136 / 564-point fills of a 60×40 plate, which is why the docs example
+    is modest. A stroke that unioned per RUN and then merged the runs by bounds (they are
     mostly disjoint) would do better, and `Region2dBoolean.UnionAll` already gets the
-    curve-ordered input its balanced fold wants.
-  - **Gosper's achieved spacing runs 2–2.6× finer than the request** (measured 0.51 / 0.38 /
-    0.77 / 0.58 of the ask at orders 5–7) where a square family's stays under 2×, because
-    the island is placed by a CONSERVATIVE inradius: the nearest unvisited site's distance
-    from the centroid, less the triangular lattice's covering radius. A true inradius of the
-    island's cell union would recover part of that; the conservative bound is sound and was
-    chosen because it is computable from the walk with no island geometry.
-  - **The footprint uses the POLYGONAL `Region2dOffset.Stroke`, not the curved twin the
-    original entry named**, and the reason is that a clipped curve is straight segments only:
-    the two strokes then differ solely in the round joins and caps, which the polygonal tier
-    builds as INSCRIBED fans and the curved one as exact sectors. That makes the reported
-    coverage a one-sided UNDER-estimate, the safe direction for a coverage claim, over the
-    arrangement that is bit-pinned by `Region2dGoldenTests`. An exact-footprint option over
+    curve-ordered input its balanced fold wants. Note the constraint that makes this a job
+    rather than a patch: the arrangement is bit-pinned by `Region2dGoldenTests` and drives
+    `infill-hilbert.png`, so a re-association of the fold has to be shown not to move either.
+  - [ ] **The footprint uses the POLYGONAL `Region2dOffset.Stroke`, not the curved twin.** A
+    clipped curve is straight segments only, so the two differ solely in the round joins and
+    caps — inscribed fans against exact sectors — which makes the reported coverage a one-sided
+    UNDER-estimate, the safe direction for a coverage claim. An exact-footprint option over
     `CurvedRegion2dOffset.Stroke` would raise the number by the sagitta and is worth having
     when the fill's own bead width is the deliverable.
-  - **A fixed-SPACING mode** (`Spacing == RequestedSpacing` exactly, footprint grown to the
-    next power of the radix and clipped) is a legitimate second reading and would be an
-    option rather than a change: it gives the SAME order, so it costs nothing, and it suits
-    a caller sizing a bead more than a caller reproducing a phase. Recorded with the
-    finding rather than built, since nothing in the repo asks for it yet.
-- [ ] **A PIVOTED real sparse symmetric-indefinite factorization, if a consumer ever needs
-  one.** `SparseLdlt` ✅ landed the symmetric-indefinite family (real + complex symmetric
-  L·D·Lᵀ over `SparseCholesky`'s shared symbolic pass — see design.md §2(d) for the
-  three-way weighing), and its REAL path is deliberately unpivoted: it factors iff every
-  leading principal minor is nonsingular, which holds for shifted `K − ω²M` away from a
-  measure-zero set of ω and for saddle systems with constraints ordered last, and it
-  refuses an exactly-zero pivot loudly — but a NEAR-singular minor still amplifies
-  round-off with nothing to repair it (`SmallestPivotMagnitude` is the tell). A real
-  Bunch–Kaufman with magnitude-searched 2×2 pivots cannot ride the up-looking machinery:
-  a 2×2 pivot merges two columns' patterns, so the precomputed symbolic structure and the
-  AMD counts both go stale, and the honest version is a multifrontal/supernodal solver
-  with delayed pivots (MA57's shape) — a project of a different order. File a consumer
-  first: nothing in the repo today produces a real indefinite system that the unpivoted
-  form plus the constraints-last convention cannot factor. (An interim half-step if one
-  appears: one round of iterative refinement on the caller's side, which the
-  pivot-magnitude report already supports deciding.)
-- [x] ~~**`ShapeCompiler` coplanarity, and a finding under it**~~ ✅ **landed** — the
-  companion `CoplanarFaceDistance` check now measures a genuine point-to-PLANE distance
-  (`ShapeCompiler.BottomLiesInFacePlane`, one shared rule for `Drill` and `ThreadedHole`),
-  so it is well defined at any tilt; the angle stays at acos(1 − 1e-6) with a geometric
-  reason rather than a deferral. The coplanar-boolean evidence the item was waiting for
-  says the guard STAYS: `CoplanarFaces.For` collects only `IsPlanar` faces and a drill
-  tool's flat bottom is a `RevolvedSurface` pole cap, so the fusion tier cannot see it.
-- [ ] **`Fitting3d.MinVolumeBox`'s per-family angle is a sweep + golden section, not an
-  algebraic root solve** (the OBB itself ✅ landed). O'Rourke derives the critical angle in
-  closed form; worth doing if a hull ever shows a minimum hiding in a bracket narrower
-  than the 3.75° sweep. The box always contains every input point regardless. (~~a
-  convenience overload in EngrCAD.Mesh~~ ✅ **landed** as `MeshFitting.MinVolumeBox(hull)`
-  / `MinVolumeBoxOf(points)`, asserted bit-identical to the hand-written
-  `Compute(...).Triangulated().ToIndexed()` dance.)
-  **Correction worth remembering**: this item used to state, and `Fitting3d`'s own doc
-  comment used to assert, that the minimum-volume box has a face flush with a hull face
-  (Freeman–Shapira). That is FALSE in 3D — the regular tetrahedron on alternate corners
-  of [−1,1]³ fits its cube at volume 8 while every face-flush candidate measures 16.
-  The shipped implementation follows O'Rourke instead.
-- [ ] **Exact tangents for `FaceSplitter`'s arrangement tracing.** `DepartureAngle` and
-  `ArrivalAngle` take the chord to a point 2% along the edge, and the tightest-turn
-  comparison then needs a `1e-12` angular guard to tolerate the approximation. Every
-  analytic curve now overrides `Curve3d.DerivativeAt`, so the chord could become a true
-  tangent pulled back through the surface's Jacobian. Needs surface partials at the node and
-  a decision about singular Jacobians (poles). This is the change worth making instead of
-  routing the tracing through `Arrangement2d` — see the assessment in design.md §5 for why
-  that one is a no.
-- [ ] **`Region2dBoolean.ContainedIn` is O(cells × operand vertices) — and a
-  point-location index was BUILT, MEASURED and DECLINED, so the next attempt has a bar.**
-  The filed premise ("a per-operand `Region2d` point-location index would close it") was
-  implemented in full — a per-operand y-bucket edge index asking Region2d's own per-edge
-  rules (`OnSegment`/`RayCrossesEdge` extracted as shared single-edge predicates), result-
-  identical by construction since parity is an order-free count over edges no skipped edge
-  can pass, `Region2dGoldenTests` byte-for-byte — and measured NOTHING on the very
-  workload this entry cited: the now-committed `Region2dBooleanBenchmark` (120 and 480
-  overlapping 32-gons) read 40.1 → 41.8 ms and 135.7 → 137.8 ms (win-x64, i9-9900K,
-  minima over interleaved runs of both binaries). The reason is structural: an
-  overlap-heavy union's balanced fold keeps the CELL count tiny exactly where the operand
-  vertex counts grow (two half-union blobs merge into a handful of cells), so the C·V
-  product never gets large and the classification cost is under the ~5% noise floor of
-  the whole union. **The term is real and the workload that would feel it is different**:
-  an operation whose result KEEPS many cells against many-vertex operands — two
-  interleaved combs intersected, a grid of crossing strips — which nothing in the repo
-  currently produces at scale. Re-attempt only with such a consumer measured first, and
-  hold it to the committed benchmark plus a new fixture that provably carries the C·V
-  term. **Still owed**: re-benchmark the arrangement broad phase on a quiet machine — the
-  candidate-pair reduction is a solid 9.1%, but the wall-clock numbers were taken under
-  load and disagreed by 3×.
-- [ ] **`Bvh.Build` follow-ups** (the build ✅ landed 4.9× faster and bit-identical) —
-  reusing a hierarchy across a boolean cascade is untried, and after the fix the broad
-  phase is 10.0 ms of a ~199 ms exact union, so the remaining wins are elsewhere.
+  - [ ] **Gosper's achieved spacing runs 2–2.6× finer than the request** (measured 0.51 / 0.38
+    / 0.77 / 0.58 of the ask at orders 5–7) where a square family's stays under 2×, because the
+    island is placed by a CONSERVATIVE inradius: the nearest unvisited site's distance from the
+    centroid, less the triangular lattice's covering radius. A true inradius of the island's
+    cell union would recover part of that; the conservative bound is sound and was chosen
+    because it is computable from the walk with no island geometry.
 
 ## B-Rep / sketching (EngrCAD.BRep)
 

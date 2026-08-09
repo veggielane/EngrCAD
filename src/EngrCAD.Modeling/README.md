@@ -475,8 +475,92 @@ measurements needed to believe it. Docs: `docs/examples/infill.md`.
   reads the outer loop alone, so a region that comes back in several pieces (a "hole" outside
   its outer loop is a detached piece, not a hole) would otherwise have a piece the curve
   never reached.
+- **`tiled: true`** lays the curve over the region's bounding RECTANGLE
+  (`SpaceFillingCurve.OverTiled`) instead of its bounding square, which is what stops a long
+  thin plate wasting most of the curve: an 80 × 12 plate at spacing 3 wastes over 80% of the
+  square footprint and under 25% of the tiled one, and the achieved spacing stops being set by
+  the plate's LENGTH. `Waste` reports the share the clip threw away, so reaching for it is a
+  decision with a number attached. Hilbert only, refused by name for the families with no
+  block ends to link.
+- **`ThinnestFeature()`** is the LOCAL measurement the per-piece refusal cannot make
+  (`Region2dThickness`, Core): a neck inside a piece that otherwise catches passes is invisible
+  to a connectivity test, and comparing its `Minimum` against `Spacing + 2·Clearance` is how a
+  caller decides whether the `CoveredFraction` it is about to read is missing something local.
+  `ThinnestAt` locates it.
+- **`Link()`** orders the travel between runs — see `RunLinker` below.
 
-### Anti-drill tamper mesh (`TamperMesh.cs`, `TiledHilbertRoute.cs`)
+### Solid infill (`SolidInfill.cs`)
+
+`SolidInfill.Fill(shape, spacing, clearance)` clips Core's **3D Hilbert curve**
+(`SpaceFillingCurve3d`) to a body's own signed distance field: ONE connected route through the
+whole interior, which is what a single-extrusion print path or a single-channel cooling passage
+wants — and which no implicit lattice can express, a gyroid being a *surface* rather than a
+path. It rides the 2D consumer's two seams unchanged (the clip is a COMPARISON against an exact
+sign, and what is reported is what was measured), and a field overload takes an `Sdf` directly
+so a caller who already has one does not pay a second lowering.
+
+- **Both silent misses are refused by name here too, with the instrument STATED.** There is no
+  3D counterpart to `Region2dOffset`, so "is there room at all" is answered by a probe grid at
+  half the achieved spacing: a solid with no probe point deep enough is too thin for this
+  spacing, and one with such a point but no CURVE point is one the lattice's phase stepped
+  over. Different mistakes, different fixes, different messages.
+- **The 3D PLACEMENT question is the one thing genuinely new, and it is stated rather than
+  solved.** The footprint is the bounding CUBE, so a long thin part wastes the curve the way a
+  long thin plate wastes the 2D one — `Waste` reports it (measured: under 50% on a cube,
+  over 85% on a 20 × 4 × 4 bar). The 2D answer carries over in principle (a 3D Hilbert block
+  also runs between two adjacent corners of its cube, so it tiles) and is not built because
+  nothing asks for it. The per-LAYER alternative sidesteps it entirely by keeping the 2D
+  placement per slice — `Shape.Section` then `SpaceFillingInfill.Fill` — which is a different
+  deliverable (one path per layer, not one path through the part) and so is a documented recipe
+  rather than a wrapper.
+
+### Surface decoration (`SurfaceDecoration.cs`)
+
+`SurfaceDecoration.Wrap(mesh, seedVertex, points|curve)` lays a flat curve ON a doubly-curved
+surface — engraving, a decal outline, a heater track, a space-filling texture that follows the
+shape it decorates — through `MeshLocalParam`'s discrete exponential map, inverted per QUERY
+POINT by a BVH over the triangles in (u, v) plus barycentric interpolation (a triangle's own map
+is affine both ways, so the coordinates carry straight over).
+
+- **The map's limit is REPORTED, not averaged away.** The exp map is exact on a plane, close to
+  exact on a developable surface and genuinely distorted where Gaussian curvature concentrates,
+  so a conforming curve carries that into its own SPACING — the number a bead width is chosen
+  from. `MinScale` / `MaxScale` / `Distortion` are measured on the curve that was actually laid:
+  3.5e-4 on a developable tube, and on a 20-radius sphere cap min 0.9263 / max 1.0005 /
+  mean 0.9882 — so the MEAN reads a comfortable 1.2% while the tightest pass is 7.4% closer than
+  it was drawn. That gap is exactly why the extremes are the report and `MeanScale` rides beside
+  them. Read `MinScale` for a guaranteed pitch, `MaxScale` for a guaranteed clearance.
+- **A point past the map BREAKS the run and is counted** (`UnmappedPoints`), because continuing
+  it would mean inventing surface; a curve entirely off the map is refused by name. The default
+  radius is `reach·√2 + 2·longest edge` — a margin rather than a bound, since a query point is
+  placed from the TRIANGLE around it and the map's radius is a GRAPH distance that over-estimates
+  the straight-line one (on a grid whose quads carry one diagonal, half the directions cost the
+  full Manhattan distance, which is where the √2 comes from). A non-zero `UnmappedPoints` is the
+  signal to state a radius.
+
+### One run linker (`RunLinker.cs`)
+
+`RunLinker.Link(ends, from)` orders a set of runs into a tour and says which way round each is
+drawn — ONE linker, read by `InfillPath.Link()`, `SolidInfillPath.Link()` and
+`SurfaceCurve.Link()`, because a clipped infill, a pocket-clearing pass and a 2.5D contour set
+all ask the same question and two of them would drift. Dimension-agnostic (it works on
+(start, end) pairs; `EndsOf` lifts 2D runs into z = 0), and `PathLinkage.Reorder<T>` applies the
+order generically.
+
+- **A permutation by construction**, so it can shorten the travel and cannot lose a pass —
+  asserted rather than assumed.
+- **Deterministic**: greedy nearest-endpoint with ties breaking on the lower run index and then
+  on not-reversed, because a toolpath has to be reproducible. No randomised improvement is
+  offered for that reason.
+- **A heuristic that says so**: `TravelLength` beside `SourceOrderTravelLength`, so what is
+  promised is a measured improvement over the incumbent order rather than an optimum (ordering
+  runs to minimise travel is the open travelling-salesman problem in disguise).
+- **Measured finding**: on a space-filling fill it reverses NOTHING and improves modestly,
+  because the curve order already leaves each run pointing at its successor. That is both the
+  structural reason greedy is right here and the reason the reversal capability is pinned on a
+  hand-built case rather than expected from a fill.
+
+### Anti-drill tamper mesh (`TamperMesh.cs`)
 
 `TamperMesh.Over(face, pitch, traceWidth, nets)` lays the conductive serpentine an enclosure
 wall carries for tamper detection: drill through to reach the protected circuit and you sever
@@ -517,14 +601,16 @@ work.) Docs: `docs/examples/tamper-mesh.md`; design.md §6b.
   for any tiled Hilbert route and the whole row for a serpentine (block order 0, a legitimate
   member). The drill guarantee is the same for both at the same achieved pitch — it depends
   only on the cell — so the channel is the whole reason to prefer Hilbert.
-- **`TiledHilbertRoute` covers a RECTANGLE with one Hamiltonian path**, which is the "tiled
-  Hilbert blocks with their ends linked" the infill residuals name: a block enters and leaves
-  at two adjacent corners of its square, so the eight symmetries supply whichever pair the
-  neighbours need and a boustrophedon over the block grid links them. `1 × 1` is Core's own
-  Hilbert lattice site for site (asserted). It is what makes the achieved pitch land near the
-  request instead of the next power of two, at the cost of a stated trade: small blocks fit
-  tightly and keep cells square, large blocks are more isotropic and quantise coarsely
-  (`Anisotropy` reports it).
+- **`TiledHilbertLattice` covers a RECTANGLE with one Hamiltonian path** — now in
+  EngrCAD.Core beside `SpaceFillingCurve`, since a tamper mesh and a 2D infill both read it: a
+  block enters and leaves at two adjacent corners of its square, so the eight symmetries
+  supply whichever pair the neighbours need and a boustrophedon over the block grid links
+  them. `1 × 1` is Core's own Hilbert lattice site for site (asserted). It is what makes the
+  achieved pitch land near the request instead of the next power of two, at the cost of a
+  stated trade: small blocks fit tightly and keep cells square, large blocks are more
+  isotropic and quantise coarsely (`Anisotropy` reports it). The block-count rule
+  (`TiledHilbertLattice.BlocksFor`) is asked rather than restated here — two spellings of "how
+  many blocks fit" is exactly the drift the move removed.
 - **The copper is BUILT, not booleaned.** `TamperNet.Outline` is one simple polygon from the
   two ±w/2 mitered offsets — `Region2dOffset.Stroke` would union a slab per segment, `O(E²)`
   in the arrangement and minutes at mesh scale. The construction's oracle is an identity: a

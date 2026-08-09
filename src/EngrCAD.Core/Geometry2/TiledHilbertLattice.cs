@@ -1,12 +1,10 @@
-using EngrCAD.Core;
-using EngrCAD.Core.Geometry2;
-
-namespace EngrCAD.Modeling;
+namespace EngrCAD.Core.Geometry2;
 
 /// <summary>
-/// A Hamiltonian path over a RECTANGULAR lattice, tiled from square Hilbert blocks — the
-/// "tiled Hilbert blocks with their ends linked" the infill residuals name, and what makes a
-/// tamper mesh cover a wall rather than a square patch of one.
+/// A Hamiltonian path over a RECTANGULAR lattice, tiled from square Hilbert blocks — what lets
+/// a curve fit a long thin region tightly instead of wasting most of itself inside the region's
+/// bounding SQUARE. <see cref="SpaceFillingCurve.OverTiled"/> is the placed form; a tamper mesh
+/// and a 2D infill both read it, which is why it lives here rather than beside either.
 ///
 /// <para><b>Why it needs no new curve.</b> An order-n Hilbert block starts at cell
 /// <c>(0, 0)</c> and ends at <c>(m − 1, 0)</c> — two ADJACENT CORNERS of its square, both on
@@ -27,9 +25,9 @@ namespace EngrCAD.Modeling;
 /// <para><b>It reduces exactly.</b> One block (<c>1 × 1</c>) is Core's own Hilbert lattice
 /// site for site; block order 0 makes every block a single cell and the route a plain
 /// boustrophedon serpentine, which is a legitimate member rather than a degenerate one — see
-/// the trade recorded on <see cref="TamperMesh.DefaultBlockOrder"/>.</para>
+/// the trade recorded on <c>TamperMesh.DefaultBlockOrder</c>.</para>
 /// </summary>
-internal static class TiledHilbertRoute
+public static class TiledHilbertLattice
 {
     /// <summary>The four corners of a block, as the (entry, exit) vocabulary the chaining
     /// rule is written in.</summary>
@@ -39,6 +37,27 @@ internal static class TiledHilbertRoute
         BottomRight,
         TopRight,
         TopLeft,
+    }
+
+    /// <summary>The smallest whole number of blocks whose cells are at or under
+    /// <paramref name="spacing"/>. Decided by the SAME comparison that defines it — no epsilon,
+    /// the generator's own rule — so an extent landing exactly on a block boundary is honoured
+    /// exactly. The floating estimate is checked against <paramref name="cap"/> BEFORE the
+    /// integer refinement, so an absurdly fine request reports the cap instead of walking to it
+    /// one block at a time. Returns <c>cap + 1</c> when the estimate is past the cap, which is
+    /// what lets the caller phrase its own refusal.</summary>
+    public static long BlocksFor(double extent, int cellsPerBlock, double spacing, long cap)
+    {
+        double perBlock = cellsPerBlock * spacing;
+        double estimate = Math.Ceiling(extent / perBlock);
+        if (!(estimate <= cap))
+            return cap + 1;
+        long blocks = Math.Max(1, (long)estimate);
+        while (blocks * perBlock < extent)
+            blocks++;
+        while (blocks > 1 && (blocks - 1) * perBlock >= extent)
+            blocks--;
+        return blocks;
     }
 
     /// <summary>

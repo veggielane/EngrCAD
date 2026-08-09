@@ -720,6 +720,11 @@
       "live": true
     },
     {
+      "id": "solid-infill",
+      "page": "examples/infill.md",
+      "live": true
+    },
+    {
       "id": "stroke-curved",
       "page": "examples/2d-views.md",
       "live": true
@@ -732,6 +737,11 @@
     {
       "id": "strut-lattices",
       "page": "examples/lattices.md",
+      "live": true
+    },
+    {
+      "id": "surface-decoration",
+      "page": "examples/infill.md",
       "live": true
     },
     {

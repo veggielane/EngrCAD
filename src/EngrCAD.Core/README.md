@@ -216,6 +216,55 @@ concerns.
   lattice's covering radius, computed from the walk — which makes its achieved spacing
   markedly finer than a square family's at the same order. See
   `EngrCAD.Modeling.SpaceFillingInfill` for the toolpath consumer and `docs/examples/infill.md`.
+- **`Geometry2.SpaceFillingCurve.OverTiled`** + **`Geometry2.TiledHilbertLattice`** — the
+  RECTANGULAR footprint. Holding the footprint to a region's bounding SQUARE has a stated
+  cost, and on a long thin plate it is most of the curve: an 80 × 12 plate at spacing 3
+  generates 1024 cells and keeps 128. Tiling `blocksX × blocksY` Hilbert blocks covers the
+  rectangle itself and stays ONE continuous path, because an order-n block runs between two
+  ADJACENT CORNERS of its square and the eight symmetries supply whichever (entry, exit) pair
+  each block's neighbours need — a boustrophedon over the block grid then links them. The
+  footprint is still what is held, which is what makes the cells anisotropic: `SpacingX` and
+  `SpacingY` are each their axis's extent over its cell count, `Spacing` is the larger (never
+  coarser than the request), and `Anisotropy` reports the ratio. **One block reproduces the
+  square form site for site and bit for bit**, and every square-footprint construction reports
+  `SpacingX == SpacingY == Spacing` bit-identically, so the tiled path is a generalisation
+  rather than a second mode. Hilbert only: Peano's blocks end at the same two corners and
+  would tile identically (a straightforward addition), Moore is a closed LOOP with no ends to
+  link, and Gosper does not tile a rectangle. `blockOrder: 0` makes every block one cell and
+  the route a plain serpentine — the tightest fit and the worst isotropy, a member of the
+  family rather than a degenerate case.
+- **`Geometry2.SpaceFillingCurve3d`** — the VOLUME member: a finite-order 3D Hilbert curve
+  over a box, for a consumer that wants ONE connected route through an interior (a
+  single-extrusion print path, a single-channel cooling passage). Every convention above
+  carries over — the ORDER is the parameter, the ACHIEVED `Spacing` is reported, the footprint
+  is held (the box's bounding CUBE) — and so does the verification bar: `8^n` sites counted in
+  closed form and pairwise distinct, consecutive sites exactly one lattice step apart
+  (Manhattan 1, so a face diagonal is not a step), `Length == SegmentCount × Spacing` exactly,
+  and the two terminals MEASURED to be adjacent CORNERS of the cube rather than asserted from
+  the literature (which is also what would let 3D blocks tile). The walk is **Skilling's
+  transpose algorithm**, chosen for the reason the 2D file gives for Peano's digit rule: a
+  closed form has no orientation table to get backwards, and the bijectivity test is what
+  would catch one. **Hilbert only, deliberately** — Z-order's 3D member is not a curve,
+  Peano's is radix 3 (27 cells per level, so three times the spacing quantisation for nothing
+  this consumer wants), and Gosper's lattice has no 3D analogue; an enum of one member would
+  only invite the other three to be filled in without a caller. A PARALLEL type rather than a
+  mode of `SpaceFillingCurve`, the call `CurvedRegion2d` makes against `Region2d`: the two
+  share their conventions and none of their data. Consumer: `EngrCAD.Modeling.SolidInfill`.
+- **`Geometry2.Region2dThickness`** — how thick a planar region is, by an OPPOSING-EDGE ray
+  cast: the 2D twin of the wall thickness `Manufacturability` measures on a solid, and the
+  LOCAL measure a connectivity test cannot give (whether a piece has a NECK narrower than the
+  pass about to be laid through it). What is reported is the **perpendicular distance to the
+  LINE of the segment hit** (`t·|d̂·n̂_hit|`), not the raw ray length — exact wherever the
+  opposing boundary is straight, which for a polygon is everywhere, and what makes a tapered
+  slot read its true width where the raw ray over-reports by `1/cos`. The probe starts exactly
+  ON the boundary with no stand-off, because the source segment is excluded by INDEX (exact),
+  and a stand-off would bias every reading low by its own length — measured, it did. Holes
+  contribute their segments too, so the WEB between a bore and a wall is measured like any
+  other neck. `Minimum` is the number a fill's spacing is compared against, `ThinnestAt`
+  locates it, and `Mean` rides beside them and never instead (a mean says nothing about a
+  neck). Cost is O(samples × edges) over the OUTLINE, so the scan is linear and there is no
+  index to keep in step; the medial-axis inscribed disc is a NAMED alternative rather than a
+  silent upgrade, the same call the 3D twin makes.
 
 ### The CURVED tier — `CurvedEdge2d` / `CurvedRegion2d` / `CurvedArrangement2d`
 
@@ -521,6 +570,15 @@ chain's parity is consistent across every joint.
     solid's planar faces, or one the caller already has) keeps the layering intact. Cost is
     O(E² · h) — measured 3.6 / 22 / 122 ms for 18 / 42 / 78-vertex hulls on 8 cores, with
     the edge loop parallelized deterministically (own slot per index, in-order reduction).
+    **What the sweep costs against O'Rourke's algebraic critical angle is MEASURED, not left
+    as a caveat**: re-running a 43-hull corpus at 8× and 32× the sweep density with 8× the
+    refined brackets, the best a finer search ever finds is **5.905e-8 relative**
+    (12.566414756 → 12.566414014 on a random tetrahedron). So a family's optimum CAN hide
+    inside a 3.75° bracket — the sweep is not exact — and it hides by about 2e-8 of a linear
+    dimension, on a box whose consumers pack plates and choose stock in millimetres. The
+    algebraic solve would buy that and nothing else, inside an O(E²·h) inner loop; the sweep
+    is the engineering answer and `MinVolumeBoxTests` is the evidence, failing loudly if some
+    future hull family turns out to hide a real minimum.
   - All built on **`SymmetricEigen3`** (cyclic-Jacobi 3×3 symmetric eigen-decomposition,
     unconditionally convergent) — now public with **both orderings**
     (`SolveDescending` for fitting's dominant-first convention, `SolveAscending` for the

@@ -207,4 +207,130 @@ public class SpaceFillingInfillTests
         Assert.Equal(fill.Curve.Spacing, fill.Spacing);
         Assert.Equal(fill.Curve.Order, fill.Order);
     }
+
+    // ---- the tiled footprint, the run linker and the neck measure ----
+
+    [Fact]
+    public void ATILEDFillStopsWastingTheCurveOnALongThinPlate()
+    {
+        // The residual the tiled footprint exists for, measured on both sides: a square
+        // footprint over an 80 x 12 plate generates a curve that is mostly outside it.
+        var plate = Sketch.Rectangle(80, 12);
+
+        var square = SpaceFillingInfill.Fill(plate, 3.0);
+        var tiled = SpaceFillingInfill.Fill(plate, 3.0, tiled: true);
+
+        Assert.True(square.Waste > 0.8, $"the square footprint wasted only {square.Waste:P1}");
+        Assert.True(tiled.Waste < 0.25, $"the tiled footprint wasted {tiled.Waste:P1}");
+        Assert.True(tiled.Curve.Points.Count < square.Curve.Points.Count / 4);
+
+        // And the achieved spacing stops being set by the plate's LENGTH.
+        Assert.True(tiled.Curve.SpacingY <= 3.0);
+        Assert.True(tiled.Curve.SpacingY > square.Spacing);
+    }
+
+    [Fact]
+    public void ATiledFillStillClearsTheWallAtEveryPoint()
+    {
+        var plate = Sketch.Rectangle(80, 12);
+        var fill = SpaceFillingInfill.Fill(plate, 3.0, tiled: true, clearance: 1.0);
+        var field = new SketchRegion(plate);
+
+        foreach (var run in fill.Runs)
+        {
+            foreach (var p in run)
+                Assert.True(field.SignedDistance(p) <= -1.0 + 1e-12);
+        }
+    }
+
+    [Fact]
+    public void ATiledFillIsRefusedForAFamilyWithNoBlockEndsToLink()
+    {
+        var plate = Sketch.Rectangle(80, 12);
+        foreach (var family in new[] { SpaceFillingFamily.Moore, SpaceFillingFamily.Peano, SpaceFillingFamily.Gosper })
+        {
+            var error = Assert.Throws<ArgumentOutOfRangeException>(
+                () => SpaceFillingInfill.Fill(plate, 3.0, family, tiled: true));
+            Assert.Contains("Hilbert", error.Message);
+        }
+    }
+
+    [Fact]
+    public void TheLINKERShortensTheTravelAndIsAPermutation()
+    {
+        // A plate with a big bore, so the clip leaves the curve in many runs and the order it
+        // came back in leaves ends to pick up.
+        var plate = Sketch.Rectangle(60, 40).WithHole(Sketch.Circle(11));
+        var fill = SpaceFillingInfill.Fill(plate, 2.0);
+        Assert.True(fill.Runs.Count > 4, $"only {fill.Runs.Count} runs — the fixture is not exercising the linker");
+
+        var linkage = fill.Link();
+
+        Assert.Equal(fill.Runs.Count, linkage.Order.Count);
+        Assert.Equal(fill.Runs.Count, linkage.Order.Select(o => o.Index).Distinct().Count());
+        Assert.True(linkage.TravelLength <= linkage.SourceOrderTravelLength + 1e-9,
+            $"linked {linkage.TravelLength} against curve order {linkage.SourceOrderTravelLength}");
+        Assert.True(linkage.Improvement >= 1.0);
+
+        // Reordering never drops or duplicates a point, which is the property that makes a
+        // linker safe to apply: it can shorten the travel and cannot lose a pass.
+        var reordered = linkage.Reorder(fill.Runs);
+        Assert.Equal(fill.PointCount, reordered.Sum(r => r.Count));
+    }
+
+    [Fact]
+    public void TheLinkerIsDeterministicAndReversesRunsWhereThatIsShorter()
+    {
+        var plate = Sketch.Rectangle(60, 40).WithHole(Sketch.Circle(11));
+        var a = SpaceFillingInfill.Fill(plate, 2.0).Link();
+        var b = SpaceFillingInfill.Fill(plate, 2.0).Link();
+
+        Assert.Equal(a.Order, b.Order);
+        Assert.Equal(BitConverter.DoubleToInt64Bits(a.TravelLength), BitConverter.DoubleToInt64Bits(b.TravelLength));
+
+        // MEASURED, and worth stating rather than asserting the opposite: on a space-filling
+        // fill the linker reverses NOTHING, because the curve order already leaves every run
+        // pointing at its successor — which is the structural reason greedy is the right
+        // heuristic here and the reason the improvement is modest.
+        Assert.DoesNotContain(a.Order, o => o.Reversed);
+    }
+
+    [Fact]
+    public void TheLinkerDoesReverseARunWhereThatIsShorter()
+    {
+        // The capability, pinned on a hand-built case rather than hoped for from a fill: run 1
+        // is laid backwards, so drawing it in reverse costs 1 where drawing it forwards costs 9.
+        var ends = new (Vector3d Start, Vector3d End)[]
+        {
+            (new(0, 0, 0), new(10, 0, 0)),
+            (new(20, 0, 0), new(11, 0, 0)),
+        };
+        var linkage = RunLinker.Link(ends);
+
+        Assert.Equal(new LinkedRun(0, false), linkage.Order[0]);
+        Assert.Equal(new LinkedRun(1, true), linkage.Order[1]);
+        Assert.Equal(1.0, linkage.TravelLength, 12);
+        Assert.Equal(10.0, linkage.SourceOrderTravelLength, 12);
+    }
+
+    [Fact]
+    public void TheTHINNESTFeatureSeesANeckThePerPieceRefusalCannot()
+    {
+        // A dumbbell: two fat pads joined by a 2-wide bar. The erosion leaves ONE connected
+        // piece and the curve reaches it, so both refusals stay silent — and the coverage
+        // fraction alone does not say WHERE. This does.
+        var dumbbell = Sketch.Start(0, 0)
+            .LineTo(20, 0).LineTo(20, 9).LineTo(40, 9).LineTo(40, 0).LineTo(60, 0)
+            .LineTo(60, 20).LineTo(40, 20).LineTo(40, 11).LineTo(20, 11).LineTo(20, 20)
+            .LineTo(0, 20).Close();
+
+        var fill = SpaceFillingInfill.Fill(dumbbell, 4.0, clearance: 0.5);
+        var thickness = fill.ThinnestFeature(samplesPerEdge: 4);
+
+        Assert.Equal(2.0, thickness.Minimum, 9);
+        Assert.InRange(thickness.ThinnestAt.X, 20, 40);
+        // The neck cannot hold a pass at this spacing and clearance, and the two numbers say so
+        // together: 2 of room against a pass wanting Spacing + 2 x Clearance.
+        Assert.True(thickness.Minimum < fill.Spacing + 2 * fill.Clearance);
+    }
 }
