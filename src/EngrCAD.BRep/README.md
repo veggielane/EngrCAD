@@ -394,6 +394,15 @@ operations. Depends only on `EngrCAD.Core`.
   arbitrary in-plane point and a circular loop's face-frame origin is its seam vertex, so
   both read the rim), since an off-by-one in a parent array leaves the count right and the
   meaning wrong.
+  **Edges carry provenance too, as a DERIVED query** — `BrepQueries.Provenance(edge)` /
+  `DescendsFrom(edge, tag)` / `solid.EdgesTagged(tag)` — the **UNION** of the (up to two)
+  faces the edge borders. Union is the decision the note left open, settled by the motivating
+  query: "fillet the edges of the boss" wants the boss's BASE rim, which borders a boss face
+  and a non-boss one, and an INTERSECTION would drop exactly it. Nothing is stored — the
+  union is walked on demand from `edge.Uses` → `Loop.Face` → `Provenance` — so it stays
+  correct through every rebuild with no second table, and it inherits the same one-sided
+  safety (a step that tagged no face contributes no edge). `EdgeProvenanceTests` measures the
+  union decision by tagging two adjacent faces and asserting their shared edge reports BOTH.
 - **`BrepQueries` / `BrepSelection`** — the LINQ selection vocabulary over topology.
   `BrepQueries` classifies and measures: `IsPlanar` (incl. extruded straight lines) /
   `IsCylindrical` (incl. extruded circles and axis-parallel revolved lines) / `IsLinear` /

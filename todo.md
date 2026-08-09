@@ -1389,11 +1389,14 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   rebuild is where two of the six live and neither `Draft.cs` nor `Shelling.cs` mentions
   provenance at all; and `Shelling`'s `Dictionary<BrepFace,int>` was never needed, since
   every one of these sites already iterates its parent array positionally and the index map
-  would have been a second spelling of the loop counter.) What remains:
-  - [ ] **EDGE provenance.** Only faces carry tags today. An edge could report the tags of
-    its two faces, which is enough for "fillet the edges of the boss" without a new store —
-    but the sense in which an edge *belongs* to a step when its two faces disagree wants a
-    decision (both? either?) before it is API.
+  would have been a second spelling of the loop counter. **EDGE provenance ✅ landed** as a
+  DERIVED query — `BrepQueries.Provenance(edge)` / `DescendsFrom(edge, tag)` /
+  `solid.EdgesTagged(tag)`, the UNION of the edge's two faces' tags (an edge is "of" a step
+  whenever it touches a face of that step). The decision the note left open was settled as
+  union by the motivating query: "the edges of the boss" wants the boss's BASE rim, which
+  borders a boss face and a non-boss one, and an intersection would drop exactly it. No new
+  store (walked on demand from `edge.Uses` → `Loop.Face` → `Provenance`), the same one-sided
+  safety inherited (a step that tagged no face contributes no edge).) What remains:
   - [ ] **A tag cannot be attached to an existing `Part`'s geometry after the fact**, only
     written into the graph. A UI that lets a user click a face and name it would need a
     tag-by-selection form, which is a different (and much weaker) guarantee — the tag would

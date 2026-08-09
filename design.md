@@ -4717,6 +4717,18 @@ Design decisions:
   asserting *which* output face carries it, located by `Bounds().Center` (`IsPlanar`'s origin
   is an arbitrary in-plane point and a circular loop's face-frame origin is its seam vertex;
   both read the rim, and both would make the assertion agree with a wrong answer).
+  **Edges inherit face provenance as a DERIVED query, and the open decision was UNION.**
+  `BrepQueries.Provenance(edge)` / `DescendsFrom(edge, tag)` / `solid.EdgesTagged(tag)` report
+  the union of the (up to two) faces an edge borders — "an edge is *of* a step whenever it
+  touches a face of that step." The note left "both? either?" open, and the motivating query
+  settles it as EITHER: "fillet the edges of the boss" wants the boss's BASE rim, where its
+  cylinder meets the plate it stands on, and that rim borders a boss face and a non-boss one —
+  an INTERSECTION would drop precisely the edge a caller most wants to blend. Nothing new is
+  stored (decision (a)'s set-valued tag is walked on demand from `edge.Uses` → `Loop.Face` →
+  `Provenance`), so it stays correct through every rebuild with no second table, and it inherits
+  the same one-sided safety — a step that tagged no face contributes no edge. `EdgeProvenanceTests`
+  measures the decision by tagging two adjacent faces and asserting their shared edge reports BOTH,
+  which an intersection could not.
   **(c) A tag is REFUSED, not sanitized, when the descriptor grammar cannot spell it.** The
   descriptor is the cache key and the serialized form, and it is parsed back through
   `RefLexer.ReadIdentifier` — so a tag containing a space or a comma cannot survive its own
