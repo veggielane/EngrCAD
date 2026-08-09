@@ -1119,10 +1119,12 @@ candidate it saw but did not accept, and both solvers' refusals name which case 
 diagonalise C: `phi' C phi = diag(alpha + beta·omega_n²)`, so the equations separate and
 `zeta_n = alpha/(2·omega_n) + beta·omega_n/2` is the whole of what any consumer needs. Forming
 `C` in order to project it back down to those numbers would be arithmetic with nothing to show
-for it, so this project has no damping matrix and that is a design statement. (This paragraph
-used to carry a prediction that direct time integration would be "the one future consumer that
-genuinely wants the matrix". It landed, and it does not — §3g says why, and the statement above
-now holds without qualification.)
+for it, so the MODAL route needs no damping matrix and that is a design statement. (This
+paragraph used to carry a prediction that direct time integration would be "the one future
+consumer that genuinely wants the matrix". For the proportional RUN OPTION it does not — §3g
+says why. But the non-proportional damping a MODEL carries has no per-mode form, so it is a
+matrix wherever it is consumed: `FeaAssembly.Damping` is the one place it is built, now factored
+by §3f's direct harmonic solve AND folded into §3g's transient effective stiffness.)
 
 **What proportional damping excludes is stated precisely rather than implied away**: a discrete
 dashpot, two materials with different loss factors in one model, viscoelasticity, joint friction
@@ -1238,13 +1240,35 @@ is one of exactly two things, and neither wants the matrix:
   `[a0 + (1+alpha)·a1·alpha_R]·M + [(1+alpha)(1 + a1·beta_R)]·K` — one `FeaAssembly.Combine`
   with two coefficients, which is why that overload exists.
 
-So forming `C` would cost a third sparse matrix to buy a slower operation. Under proportional
-damping no matrix is ever formed — the one damping matrix that has since arrived
-(`FeaAssembly.Damping`, for §3f's direct per-frequency harmonic solve) is the case whose
-factorization consumes VALUES rather than products, the exception that proves this finding
-rather than a reversal of it. The general shape is worth keeping: **a prediction about what a
+So forming `C` for the proportional RUN OPTION would cost a third sparse matrix to buy a slower
+operation, and it never is. The general shape is worth keeping: **a prediction about what a
 future consumer will need is a hypothesis, and the consumer arriving is the experiment.** Four
 agents in a row have found a filed diagnosis wrong; this is the fifth.
+
+### But model-carried damping IS the matrix, and the transient now integrates it
+
+The finding above is about the proportional run option. **Non-proportional damping the MODEL
+carries — a discrete dashpot, per-region coefficients that differ — has no product form**, so
+it is exactly the case that wants the matrix, and the transient assembles it (`FeaAssembly.Damping`,
+the one place a `C` is built, now with two consumers: this solver and §3f's direct harmonic).
+The total damping is `C = alpha·M + beta·K + C_model` and the two halves are handled differently
+on purpose: the proportional halves stay products, while `C_model` folds into the effective
+stiffness as `(1+alpha)·a1·C_model` and enters each step's right-hand side and the reaction as
+the one `C_model·x` product there is no way around. A model that states no damping assembles
+nothing, so the common Rayleigh path is bit-identical to what it always was — the transient's
+own refusal of model-carried damping is gone, replaced by integration.
+
+**The verification is the single-degree-of-freedom fixture again, and it earns its keep because
+the two paths are different arithmetic.** A grounded dashpot along the one free axis puts `c` on
+that DOF alone, so the reduced 1×1 damping is exactly `[c]` and the modal ratio is
+`zeta = c/(2·m·omega)` with no fitting; the free-vibration decay lands on the damped closed form
+to the trapezoidal rule's own predicted phase error (0.1513% measured against 0.1513% predicted)
+and the energy-balance identity — the dissipation `∫v'Cv dt` equalling the energy that left the
+system — reads **9.6e-14** with an assembled `C` in it rather than products. The check with the
+most teeth is that a UNIFORM Rayleigh damping stated on the MODEL (which assembles the matrix)
+reproduces the same statement on the OPTIONS (which takes products) to **2.2e-13** relative:
+the general assembled path IS the special product path by another route, which is what makes
+the non-proportional feature trustworthy rather than merely plausible.
 
 ### The initial acceleration is a solve against M, and assuming it away is a modelling error
 

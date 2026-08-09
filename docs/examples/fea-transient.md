@@ -185,16 +185,32 @@ if (damping.RatioAtFrequency(50_000) < 0.05)
     throw new Exception("a stiffness-proportional term over-damps the high end");
 ```
 
-**No damping matrix is ever assembled**, here or anywhere in this project. Every appearance of
+For this proportional **run option** no damping matrix is assembled. Every appearance of
 `C` is either a product `C·x = alpha·(M·x) + beta·(K·x)` — two matrix-vector products the
 solver already performs — or a scalar multiple that folds into the effective stiffness as
 `(…)·M + (…)·K`. Forming `C` would cost a third sparse matrix with the *stiffness's* sparsity
 and buy an operation more expensive than the two products it replaces.
 
-Damping that is **not** proportional — a discrete dashpot, two materials with different loss
-factors, viscoelasticity, joint friction — is a genuinely different problem: the undamped
-modes stop diagonalising `C`, the eigenproblem becomes quadratic, and its solution is a
-`2n`-dimensional non-symmetric state-space problem. Nothing here attempts it.
+Damping that is **not** proportional — a discrete dashpot, per-region coefficients that differ
+— is carried on the **model** rather than the run option, because it is geometry-attached data:
+
+```csharp
+model.Dashpot(nodeIndex, new Vector3d(0, 0, 1), coefficient: 5.0);  // grounded viscous damper
+```
+
+When a model carries damping the transient assembles `C` once (the one matrix the project
+builds, shared with the direct harmonic solver) and folds it into the effective stiffness and
+every step's right-hand side. It composes additively with the proportional run option, and a
+model that states no damping assembles nothing — so the common Rayleigh path is unchanged.
+**Hysteretic (structural) damping** is a different model still — frequency-domain by definition
+(`i·eta·K`, a complex modulus) with no causal time-domain form — and belongs to the direct
+harmonic solve rather than to time integration.
+
+What none of these routes gives is the damped **natural modes** of a non-proportionally damped
+system: that is the quadratic eigenproblem `(lambda²M + lambda·C + K)phi = 0`, a
+`2n`-dimensional non-symmetric state-space problem whose modes are complex. Nothing here
+attempts it — but the steady-state RESPONSE (`DirectHarmonicSolver`) and the transient RESPONSE
+(here) both need no such modes.
 
 ## Initial conditions
 
@@ -391,7 +407,7 @@ Named rather than approximated:
   because the corner row sums are `-V/20`, a negative mass. An explicit step over a consistent
   mass matrix would still solve a linear system, which is what explicit integration exists to
   avoid.
-- **Non-proportional damping**, per above.
+- **Hysteretic (structural) damping**, per above — it has no time-domain form.
 - **Adaptive time stepping** — it would refactor at every change.
 - **Base excitation** (a support whose motion is a history) and **several load patterns with
   independent histories**. A prescribed displacement is held constant and is *not* scaled by

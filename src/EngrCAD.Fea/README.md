@@ -2224,12 +2224,12 @@ puts a spurious half-step into the answer whose symptom - a startup wobble that 
 exactly like physics. It is skipped only when that right-hand side is EXACTLY zero, and
 `TransientSolveReport.Factorizations` reports which happened.
 
-## The damping matrix is never assembled - and the backlog entry said it would be
+## Two damping paths, and only one assembles a matrix
 
-todo.md filed this solver as "the ONE consumer that genuinely wants `C` as a matrix rather than
-as per-mode ratios, so it is where `RayleighDamping` would first be assembled". **That is
-wrong, and the correction is worth keeping.** Proportional damping means every appearance of C
-is one of two things:
+The run option `TransientSolveOptions.Damping` is PROPORTIONAL (Rayleigh) and never assembles a
+matrix - the backlog filed this solver as "the ONE consumer that genuinely wants `C` as a matrix
+rather than as per-mode ratios", and for the proportional case that is **wrong**, because every
+appearance of C is one of two things:
 
 - a PRODUCT, `C.x = alpha.(M.x) + beta.(K.x)` - two matrix-vector products this solver already
   performs, and cheaper than one product against an assembled C would be, because the mass
@@ -2238,9 +2238,18 @@ is one of two things:
 - a scalar MULTIPLE folded into the effective stiffness, which collects as `(...)M + (...)K`
   through `FeaAssembly.Combine`'s two-coefficient form.
 
-So no damping matrix exists anywhere in this project, and `ModalDamping`'s claim that none does
-stands unqualified. A NON-proportional model would genuinely need one - and would also need a
-vocabulary for stating one, which does not exist here either.
+**Model-carried damping is the other path, and it IS the matrix.** A discrete dashpot
+(`StructuralModel.Dashpot`) or per-region coefficients that differ (`SetDamping(region, ...)`)
+are non-proportional in general, so they have no product form: `FeaAssembly.Damping` assembles
+`C` once - the same matrix `DirectHarmonicSolver` factors - and it folds into the effective
+stiffness as `(1+alpha).a1.C` and into every step's right-hand side as one `C.x` product, the
+one there is no way around. A model that states no damping assembles nothing, so the common
+Rayleigh path stays bit-identical to what it always was, and `ModalDamping`'s "the one place a
+damping matrix exists is `FeaAssembly.Damping`" now has two consumers rather than one. The two
+paths compose additively: `C = alpha.M + beta.K + C_model`, and the assembled-matrix path
+reproduces the products path to round-off on a uniform Rayleigh model (measured worst relative
+disagreement **2.2e-13**), which is what makes the general path trustworthy - it is the special
+case by another route.
 
 ## An unrestrained body is ACCEPTED, and that is a decision
 
@@ -2306,6 +2315,9 @@ arithmetic.
 | damped step response, worst error | 0.06051% | **0.06058%** |
 | damped free vibration, worst error | 0.1513% | **0.1513%** |
 | harmonic drive, closed form / `HarmonicSolver` | - | **0.027%** / **0.027%** |
+| grounded dashpot decay, worst error (zeta = 2%) | 0.1513% | **0.1513%**, energy balance **9.6e-14** |
+| grounded dashpot step, damped DAF (zeta = 5%) | 1.8544679 | **1.8544825** |
+| model-carried vs option Rayleigh (matrix vs products) | - | **2.2e-13** relative |
 | time order: Newmark / HHT / gamma = 0.6 / real mesh | 2 / 2 / **1** / 2 | **2.000 / 2.000 / 0.9925 / 2.000** |
 | single-mode seed: leak out of mode 1 / mode 2 | 0 | **8.5e-11** / **7.9e-11** |
 | measured vs predicted algorithmic frequency ratio | - | **eleven digits** |

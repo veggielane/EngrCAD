@@ -865,14 +865,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   precisely what is and is not covered. Note the steady-state RESPONSE under such damping no
   longer waits on this: `DirectHarmonicSolver` factors the full complex system per frequency
   with the model's own damping assembled — what remains open here is the damped NATURAL MODES.
-- [ ] **FEA: transient integration of model-carried damping.** `StructuralModel` now carries a
-  damping vocabulary (`SetDamping` per region, `Dashpot`) that only `DirectHarmonicSolver`
-  consumes; `TransientSolver` REFUSES a model carrying it rather than silently ignoring it.
-  Landing it there is mechanical — the effective stiffness gains `(1+alpha)·a1·C` with C from
-  `FeaAssembly.Damping`, and the right-hand-side C·x products become matrix products against
-  the assembled C — but it needs its own verification (a dashpot's decay envelope against the
-  2-DOF closed form, and the energy-balance identity re-derived with the C term), so it is
-  filed rather than bolted on.
 - [ ] **FEA: hysteretic (structural) damping for the direct harmonic solve.** A loss factor
   eta enters the steady state as a frequency-INDEPENDENT imaginary stiffness `i·eta·K` (the
   complex modulus), not as `i·omega·C` — at the direct solve's seam that is one more term in

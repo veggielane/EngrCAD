@@ -438,7 +438,7 @@ public class DirectHarmonicTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void ThePrescribedOffsetAndTheModalAndTransientRoutesRefuseByName()
+    public void ThePrescribedOffsetIsRefusedAndTheModalRouteRefusesModelDamping()
     {
         // A prescribed non-zero support offset is refused by the direct solve.
         var offsetModel = TransientFixtures.SingleDof(out int free);
@@ -449,7 +449,7 @@ public class DirectHarmonicTests(ITestOutputHelper output)
         Assert.Contains("base excitation", ex1.Message);
 
         // A model carrying its own damping is refused by the MODAL harmonic route (it
-        // cannot integrate a model-carried C, and two damping statements would conflict)…
+        // cannot integrate a model-carried C, and two damping statements would conflict).
         var damped = TransientFixtures.SingleDof(out free);
         damped.NodalForce(free, new Vector3d(1, 0, 0));
         damped.Dashpot(free, new Vector3d(1, 0, 0), 0.01);
@@ -462,10 +462,10 @@ public class DirectHarmonicTests(ITestOutputHelper output)
             }));
         Assert.Contains("DirectHarmonicSolver", ex2.Message);
 
-        // …and by the transient, which would silently ignore it.
-        var ex3 = Assert.Throws<FeaException>(() => TransientSolver.Solve(
-            damped, new TransientSolveOptions(1e-6, 2)));
-        Assert.Contains("DirectHarmonicSolver", ex3.Message);
+        // The TRANSIENT no longer refuses it: it assembles and integrates the model's own C
+        // (see TransientDashpotTests for the verification). A short run just has to complete.
+        var results = TransientSolver.Solve(damped, new TransientSolveOptions(1e-6, 2));
+        Assert.Contains("dashpot", results.Report.Damping);
     }
 
     [Fact]
