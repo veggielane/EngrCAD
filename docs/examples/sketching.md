@@ -169,7 +169,8 @@ FAILED in 6 iterations; worst residual 1; 1 of 8 DOF constrained (7 free); 1 red
 Entities address the sketch's normalized segment order, holes included — a washer is
 `cs.Concentric(cs.Arc(0), cs.HoleArc(0, 0))` plus two diameters. Full circles carry
 center + radius only (constrain them via `CenterOf`); bézier and elliptical-arc segments
-ride along with their endpoints in v1.
+carry no shape variables and ride the *similarity* of their two endpoints, which is what
+`cs.Curve(i)` addresses.
 
 **Point-on-object** — `cs.PointOn(point, line)` and `cs.PointOn(point, arc)` — pins a
 point to another entity's *carrier*, which is the sketcher's usual way of saying "this
@@ -190,6 +191,33 @@ that residual is the signed offset, so it passes smoothly through zero, where th
 point-to-*point* distance's zero is a cone point and is refused in favour of
 `Coincident`. A point drawn exactly at an arc's centre is refused by name, since
 `|p − c| − r` has no gradient direction there.
+
+The two *curved* carriers — a cubic bézier and an elliptical arc — take the same
+`PointOn`, addressed through `cs.Curve(i)`, and they need **different residuals for a
+reason worth knowing**. An ellipse is a conic, so membership is closed form: with the
+centre C and semi-axis vectors A and B, `|M⁻¹(p − C)| − 1` is the arc's own
+`|p − c| − r` with the radius replaced by a matrix, and it costs one row and no new
+unknown. A cubic has no such form, so the foot parameter joins the system as its own
+variable and the residual is the vector equation `B(t) − p = 0` — two rows against one
+unknown, which removes exactly the one degree of freedom "the point is on the curve"
+means. The drawn foot is the seed *and* the branch selector, since a cubic can pass a
+point three times.
+
+The same two carriers can have their **end tangent** held parallel (or perpendicular)
+to a line, which is what the vocabulary lacked for them:
+
+```csharp
+var cs = drawn.Constrain();
+cs.PointOn(cs.Point(0), cs.Curve(2));                          // on the bézier's carrier
+cs.Tangent(cs.Curve(2), SketchCurveEnd.End, cs.Line(0));       // leaving along line 0
+```
+
+Because both carriers ride their chord, their end tangent is a *fixed multiple of the
+live chord* (a cubic leaves its start along `3(C₁ − P₀)`), so this is the ordinary
+two-direction row with the curve's constant folded in. Note the consequence: on a loop
+where the curve and the line share **both** joints, that relation is a constant no
+motion can change, and the solver correctly reports a stationary configuration rather
+than converging to something arbitrary.
 
 ## Placing sketches in 3D
 
