@@ -1076,21 +1076,26 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   - [ ] **Guide curves / spine** constraining the skin between stations — does NOT fall
     out of the cardinal basis (a guide constrains the blend *between* interpolation
     stations, which the collocation solve never sees); needs a constrained surface fit.
-- [ ] Boolean extras: *section* (curve-only result), fuzzy tolerance, modification
-  history. Assessed (task #11): **section** is the cheap one — `BrepBoolean` already
-  runs per-face-pair `SurfaceIntersection` behind the bounds prefilter, so a
-  `Section(a, b)` is that loop with the curves clipped to both faces' trims
-  (`FaceGeometry.Contains` at `ExactSampleParameters`) instead of being fed to the
-  splitter; the honest hard part is clipping ANALYTIC curves to a trim boundary
-  exactly (a tracer polyline clips at vertices, a circle needs its crossing phases
-  solved) — without that the section's endpoints are sampling-resolution, which is
-  fine for display and wrong for downstream modelling, so the API should say which it
-  returns. **Fuzzy tolerance** is NOT a parameter to add but a rewrite of every
-  coincidence decision in the splitter (OCCT threads it through BOPAlgo wholesale);
-  the existing near-tangency rejections are the honest substitute. **Modification
-  history** (which output face came from which input) is cheap to RECORD in
-  `BrepBoolean` (fragments know their host face) and belongs with the topological
-  naming item below — record at the boolean, resolve at the Shape layer.
+- [ ] Boolean extras: fuzzy tolerance, modification history (*section* ✅ landed).
+  **`BrepBoolean.Section(a, b)`** (OCCT `BRepAlgoAPI_Section`) ✅ landed: the same
+  per-face-pair `SurfaceIntersection` loop, but each curve is clipped to the region
+  inside BOTH trims (`ClipToBothTrims`, the symmetric twin of the boolean's asymmetric
+  `ClipToFace`, over the same `ClipBreakpoints`/`InsideForClip`) and RETURNED rather than
+  fed to the splitter — a curve-only result that consumes nothing. The honest-endpoint
+  caveat is stated in the API rather than hidden: analytic pairs (plane∩cylinder circle,
+  plane∩plane line) give EXACT endpoints, tracer pairs give sampling-resolution ones, so
+  it is a display/query answer, not sealed topology. Oracle (`BrepSectionTests`): a
+  drilled-through plate's section is TWO circles, each sampled point on the radius-5 circle
+  to the weld tier (proving it is the analytic circle, not a chorded polyline) at z = 0 and
+  10, total length the closed-form 2·2π·5, disjoint solids section to nothing, and the
+  inputs are not consumed. **Filed follow-up**: a `Shape.Section3d(other)` (curve-only) at
+  the Modeling layer, and coincident/coplanar faces (a shared AREA, needing the
+  coplanar-fusion rim machinery). **Fuzzy tolerance** is NOT a parameter to add but a
+  rewrite of every coincidence decision in the splitter (OCCT threads it through BOPAlgo
+  wholesale); the existing near-tangency rejections are the honest substitute.
+  **Modification history** (which output face came from which input) is cheap to RECORD in
+  `BrepBoolean` (fragments know their host face) and belongs with the topological naming
+  item below — record at the boolean, resolve at the Shape layer.
 - [ ] **Fillet follow-ups** (sharp-corner miters, edge sets, chamfer angles and
   whole-solid `FilletAllEdges` ✅ landed) — all of these are refused loudly today, so
   they are additions, not bug fixes:

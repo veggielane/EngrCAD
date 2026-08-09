@@ -3857,6 +3857,20 @@ partner**. Keeping the stretches that lie outside this face costs nothing (the s
 them by loop parity) and restores the crossing, so the clip removes exactly the over-split it
 exists to remove and nothing else.
 
+The SYMMETRIC rule the boolean rejects is exactly what `BrepBoolean.Section` wants — and that
+is not a contradiction, because a section asks a different question. A section is a WIRE, the
+shared boundary of the two bodies, so a stretch outside either face is not on it; there is no
+splitter to hand a dangling endpoint to, so the tangential-touch failure the asymmetric rule
+exists to avoid cannot arise. `ClipToBothTrims` is therefore `ClipToFace`'s twin over the same
+breakpoints and the same err-toward-INSIDE containment test, keeping `inside(fa) AND
+inside(fb)` where the boolean keeps `inside(fa) AND NOT inside(fb)`. It consumes nothing (the
+inputs are only measured) and its honesty is stated in the API rather than hidden: analytic
+pairs give EXACT endpoints (a plane∩cylinder circle comes back as one closed curve), tracer
+pairs sampling-resolution ones, so a section is a display/query answer, not sealed topology.
+The oracle is a closed form where the curve is analytic — a drilled-through plate sections to
+its two bore-rim circles, each sample on the radius to the weld tier (proving the wire is the
+circle, not a chorded polyline) at the two cap heights, total length the closed-form `2·2πr`.
+
 Two properties keep the two solids welding. The **breakpoints are shared**: one list per face
 pair, the union of both faces' exact `CrossingParameters`, so wherever the pair genuinely
 shares a stretch the two sides cut it at identical parameters. And a **curve that survives
