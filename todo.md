@@ -1154,24 +1154,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     scalar overloads' shape: hand the edge selector to
     `Filleting.FilletEdges(solid, edges, law)` (which now resolves rims AND runs) —
     a few lines in `Shape.cs`/`RimShape`, out of the B-Rep agent's fence.
-- [ ] **`StepReader`: trim closed NON-circular generators** — circles ✅ landed (meridian
-  arcs trim a closed circular revolve generator; congruent translated end arcs trim a
-  closed circular extrusion generator; both closed form, so `FilletAllEdges` output now
-  round-trips manifold with zero diagnostics). **The recorded residual was wrong in both
-  halves, verified by construction**: a partial revolve of a SINGLE closed NURBS profile
-  (an elbow with a one-curve tube section) IS exportable — it builds, tessellates and
-  writes — and what it hit was not "the honest non-manifold diagnostic" but a SILENT
-  full turn: a one-curve profile has no segment junctions, so the sweep traces no
-  axis-centered rail arc anywhere, the angle recovery found nothing, and a 1.2 rad elbow
-  came back at 2π with zero diagnostics (the tessellator's full-domain gate then refused
-  it three stages later). ✅ Landed: `TryAngleFromRotatedCopy` reads the angle in closed
-  form as the azimuthal rotation between corresponding samples of the generator and its
-  rotated boundary copy (congruence checked in (radius, axial) profile coordinates), and
-  the closed-generator diagnostic is exempted for this case since the face genuinely
-  covers the whole generator. What REMAINS unreachable is a closed NURBS generator used
-  PARTIALLY under a partial sweep with no rims — that would need the projection-style
-  trim the old entry described, and nothing exports one (the boolean would have to split
-  such a face, and those faces refuse tessellation before any boolean sees them).
 - [ ] **Traced-curve residuals after the band-crossing fix** (`SnapTracerEnds` ✅ landed —
   a traced polyline is extended onto the EXACT solution of E(t) = S(u, v) once, on the
   curve object both faces share, and `SplitByCurve`'s interior probe ✅ now takes an exact

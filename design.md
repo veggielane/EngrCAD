@@ -2758,7 +2758,19 @@ and is filed.
   closed-form phase angles for conic arcs, Newton with exact NURBS derivatives for
   B-spline trims, and revolve trims recovered by bisection on the exact (radius, axial)
   profile residuals — root solving, never distance minimization, which stalls at
-  √ε ≈ 1e-8, past the 1e-9 weld tolerance.
+  √ε ≈ 1e-8, past the 1e-9 weld tolerance. A partial revolve of a SINGLE closed NURBS
+  profile (an elbow with a one-curve tube section) has no segment junctions, so the sweep
+  traces no axis-centred rail arc anywhere and the multi-segment angle recovery finds
+  nothing — this used to come back SILENTLY as a full turn (2π for a 1.2 rad sweep, zero
+  diagnostics), refused by the tessellator's full-domain gate three stages later.
+  `TryAngleFromRotatedCopy` reads the angle in closed form as the azimuthal rotation between
+  corresponding samples of the two congruent boundary curves (the generator and its rotated
+  copy), and the closed-generator diagnostic is exempted there since the face genuinely
+  covers the whole generator. **What remains unreachable is a closed NURBS generator used
+  PARTIALLY under a partial sweep with no rims** — nothing exports one (the boolean would
+  have to split such a face, and those faces refuse tessellation before any boolean sees
+  them), so it is a documented boundary of the `TrimmedFaceRefusalTests` pattern rather than
+  open work.
 - **The exactly-collinear boundary run forces the ear clipper into a fan, and that is
   the normal case rather than a pathology.** A cross-drilled bore wall is a periodic band
   with two hole loops, so it routes to the band-with-holes tier and gets ear-clipped -
