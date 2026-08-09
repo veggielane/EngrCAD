@@ -737,6 +737,11 @@
       "live": true
     },
     {
+      "id": "smooth-fair",
+      "page": "examples/remeshing.md",
+      "live": true
+    },
+    {
       "id": "solid-infill",
       "page": "examples/infill.md",
       "live": true
