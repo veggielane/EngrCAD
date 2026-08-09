@@ -100,6 +100,15 @@ public sealed class PackedSparseMatrix
     }
 
     /// <summary>
+    /// The raw stored value array, in row-major CSR order — the flat layout
+    /// <see cref="RowValues"/> spans into. A pure function of the matrix's PATTERN for the
+    /// values' positions, so two matrices with an identical pattern share this layout; that is
+    /// what lets <see cref="SparseCholeskySymbolic"/> gather one matrix's values by an index
+    /// map built against another.
+    /// </summary>
+    internal ReadOnlySpan<double> StoredValues => _values;
+
+    /// <summary>
     /// Writes the main diagonal into <paramref name="diagonal"/> (missing entries are 0).
     /// The Jacobi preconditioner's input.
     /// </summary>

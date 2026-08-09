@@ -688,6 +688,23 @@ chain's parity is consistent across every joint.
     are a constant fraction of all the work and form a *chain*. Tree parallelism cannot pay;
     the same table's longest column (1 400–3 748 entries under AMD) says the work is in a
     few nearly-dense columns, which is what a supernodal BLAS-3 kernel exists for.
+  - **`SparseCholesky.AnalyzePattern` → `SparseCholeskySymbolic`** — a symbolic factorization
+    analysed ONCE and reused to factorize any family of matrices sharing the pattern, only
+    their values differing. The consumer is the topology-optimisation loop, whose reduced
+    stiffness has an identical sparsity pattern every iteration (mesh connectivity and
+    eliminated DOFs are fixed; the per-element scales change), so the ordering, elimination
+    tree and column-count pass run once and each `symbolic.Factorize` then runs only the
+    numeric pass — the part `Analyze`'s own table says the time is in.
+    <br>**It is bit-identical to a fresh `Factorize` of the same matrix by construction, not by
+    hope**: the reuse GATHERS the new matrix's values into exactly the slots `Factorize` would
+    place them (a pure copy of each double — the value-gather map is `UpperCsc` and
+    `SymmetricPermute` mirrored in INDEX rather than in value), then runs the SAME numeric pass,
+    so the arithmetic and its order are identical. Asserted through `DoubleToInt64Bits` on L's
+    own values over a family of same-pattern matrices under both orderings
+    (`SparseCholeskyReuseTests`). The saving is real and BOUNDED — it is the symbolic fraction
+    of a factorization, so it shrinks as the numeric pass grows: **1.50x** on a 2D grid
+    Laplacian (symbolic-dominated) down to **1.02–1.03x** on a 3D FEA stiffness
+    (numeric-dominated), measured in `SparseOrderingBenchmark`.
   - **`SparseLdlt`** — the symmetric-INDEFINITE factorization A = L·D·Lᵀ (L unit lower,
     D diagonal), real or complex symmetric, for exactly the systems `SparseCholesky`
     correctly refuses. The consumer it unblocks is the direct per-frequency harmonic solve

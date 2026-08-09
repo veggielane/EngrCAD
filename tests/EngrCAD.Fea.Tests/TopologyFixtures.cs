@@ -207,6 +207,35 @@ internal static class TopologyFixtures
         return sum;
     }
 
+    /// <summary>
+    /// A starting design biased along one axis — material graded from 0.05 to 0.95 along +X
+    /// (<paramref name="axis"/> 0), +Z (1) or −Z (2). The volume constraint is met by the first
+    /// optimality-criteria step regardless, so what a biased start does is bias which local
+    /// minimum a non-convex run falls into — the whole point of the continuation fixture.
+    /// </summary>
+    public static double[] BiasedSeed(AnalysisMesh mesh, int axis)
+    {
+        var cs = new Vector3d[mesh.ElementCount];
+        var min = new Vector3d(double.MaxValue, double.MaxValue, double.MaxValue);
+        var max = new Vector3d(double.MinValue, double.MinValue, double.MinValue);
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            var n = mesh.Element(e);
+            cs[e] = 0.25 * (mesh.Position(n[0]) + mesh.Position(n[1]) + mesh.Position(n[2]) + mesh.Position(n[3]));
+            min = Vector3d.Min(min, cs[e]);
+            max = Vector3d.Max(max, cs[e]);
+        }
+        var seed = new double[mesh.ElementCount];
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            double tx = (cs[e].X - min.X) / (max.X - min.X + 1e-12);
+            double tz = (cs[e].Z - min.Z) / (max.Z - min.Z + 1e-12);
+            double t = axis switch { 0 => tx, 1 => tz, _ => 1 - tz };
+            seed[e] = Math.Clamp(0.05 + 0.9 * t, 1e-3, 1.0);
+        }
+        return seed;
+    }
+
     /// <summary>A binned field mirrored left-to-right (about the mid-span plane).</summary>
     public static double[] MirrorX(double[] binned, int bx = 16, int by = 6)
     {

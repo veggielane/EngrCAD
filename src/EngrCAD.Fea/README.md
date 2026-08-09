@@ -2960,3 +2960,59 @@ optimising ALONE into an asymmetric structure, combine equally-weighted into a m
 one — the two-case mirror difference drops to **18%** of a single case's, a bug that dropped or
 mis-weighted a case could not (the residual is the Kuhn mesh's own asymmetry, not the solver);
 an unequal 3:1 weighting leans the mass toward the heavier case.
+
+## Penalty continuation (opt-in, and it moves the answer)
+
+At `p = 1` the compliance problem is CONVEX (a half-dense element is exactly as efficient per
+unit volume as a solid one), so it has a unique optimum that does not depend on the starting
+design. `PenaltyContinuation` starts there and steps the penalty up — 1 → 1.5 → … → the target,
+**holding `PenaltyHoldIterations` (20) at each level** — which carries that start-independence
+into the non-convex regime, the standard way to keep a run out of an arbitrary local minimum.
+The change-tolerance stop is deferred until the target penalty is reached, so a run cannot
+freeze at a low, blurred penalty.
+
+**The dwell is what makes it work, measured.** A ramp with no dwell (increase `p` a little
+every iteration) reduces start dependence *not at all* — the convex phase never settles, so
+there is no start-independent state to carry forward. It is OFF by default because it makes the
+answer, and every committed number, different, so it is a deliberate choice with a
+before/after; with it off, `EffectivePenalty` returns the target at every iteration and the run
+is bit-identical to the incumbent path (asserted through `DoubleToInt64Bits` on the density
+field).
+
+Verified on the MBB beam at volume fraction 0.3, filter radius 5 — a multimodal fixture where
+fixed-`p` optimisation IS start-dependent (`TopologyContinuationTests`):
+
+| | top-biased start | bottom-biased start | two-start spread |
+| --- | ---: | ---: | ---: |
+| fixed `p = 3` | compliance **85.99** (trapped) | **46.63** | **0.202** |
+| continuation 1→3 | **46.70** | **46.68** | **0.001** (193× less) |
+
+Continuation escapes the bad basin the top-biased fixed run fell into (85.99 → 46.70) and
+reaches essentially one structure from both starts.
+
+## Cost, and reusing the symbolic factorization
+
+One factorization per iteration, and the numeric pass is where the time is (win-x64): 288
+elements converge in 0.43 s, 1 152 in 2.5 s, 10 800 in about 50 s at 60 iterations. AMD
+ordering is the default on this path — the argument that makes it opt-in elsewhere (a
+permutation is not bit-identical arithmetic, and committed numbers were measured natural) does
+not apply to numbers a run produces for the first time.
+
+**The sparsity pattern is IDENTICAL every iteration** (the mesh connectivity and the eliminated
+DOFs are fixed; only the per-element stiffness scales change), so the loop analyses the pattern
+ONCE with `SparseCholesky.AnalyzePattern` and every iteration reuses that one
+`SparseCholeskySymbolic` — the ordering, elimination tree and column-count pass are skipped and
+only the numeric pass runs. It is a pure speedup: `symbolic.Factorize` is **bit-identical** to a
+fresh `SparseCholesky.Factorize` of the same matrix (a value gather into the same slots, then
+the same arithmetic), so it moves no number and every topology test passes unchanged.
+
+The saving is real and BOUNDED, shrinking as the numeric pass grows — exactly what `Analyze`'s
+own table predicts (`TopologyReuseBenchmark`, win-x64, per-factorization on the loop's own
+reduced stiffness):
+
+| elements | free DOF | analyze once | fresh factor | reuse factor | per-factorization |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 152 | 840 | 1.8 ms | 8.69 ms | 7.73 ms | **1.13×** |
+| 10 800 | 6 600 | 19.7 ms | 1 204.9 ms | 1 176.2 ms | **1.02×** |
+
+The remaining lever is a preconditioned CG warm-started from the previous iterate (filed).

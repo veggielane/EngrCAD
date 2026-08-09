@@ -467,7 +467,21 @@ while this solves 3D elasticity on tetrahedra. What is asserted instead:
   measured natural — does not apply to numbers a run produces for the first time, and a
   topology run pays for one factorization per iteration.
 - **Cost is one factorization per iteration.** Measured on win-x64: 288 elements converge in
-  0.43 s, 1 152 in 2.5 s, 10 800 in about 50 s at 60 iterations.
+  0.43 s, 1 152 in 2.5 s, 10 800 in about 50 s at 60 iterations. The reduced stiffness has an
+  *identical* sparsity pattern every iteration — mesh connectivity and eliminated DOFs are
+  fixed, only the per-element scales change — so the loop analyses the ordering and elimination
+  tree **once** (`SparseCholesky.AnalyzePattern`) and each iteration runs only the numeric pass.
+  It is a pure speedup (`symbolic.Factorize` is bit-identical to a fresh factorization), but a
+  bounded one: it removes the symbolic pass, which is a meaningful slice of a small factorization
+  (**1.13×** at 1 152 elements) and almost nothing of a large one (**1.02×** at 10 800), because
+  the numeric pass is the floor.
+- **`PenaltyContinuation`** ramps the penalty from 1 up to `Penalty` — holding at each level so
+  the convex `p = 1` problem settles first — rather than penalising from the start. The convex
+  problem has a *unique* optimum, so starting there and stepping up reduces how much the answer
+  depends on the starting design: on a multimodal MBB fixture, two very different starts land
+  0.202 apart under fixed `p = 3` (one of them trapped at nearly twice the compliance) and
+  **0.001 apart** with continuation. It is off by default because it changes the answer — a
+  deliberate choice, not a silent improvement.
 - `TopologyResult.MeanNeighbours` says how much neighbourhood the radius found in *this* mesh.
   A value near 1 means the radius is smaller than an element, and a radius that small is
   refused by name.
