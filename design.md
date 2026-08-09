@@ -6866,14 +6866,83 @@ keep-out names and the fixed header date do not, because IDF has no field for th
 stated: straight-segment outlines/keep-outs (a nonzero arc angle is flattened to a chord, reported),
 outline cutout loops dropped, the `.emp` library accepted but not modelled.
 
-### Not in stage 2
+### Stage 3 — placement constraints (`ConstrainedLayout`, `PcbConstraintSolver`)
 
-PCB positioning constraints (over the landed sketch-constraint/`MateSolver`), copper DRC (a
-region-offset clearance query — grow each net's copper by half the clearance, require disjoint —
-over the exact 2D machinery), autorouting, panel cutouts and enclosure fit, thermal coupling, and
-MID/LDS 3D routing are later stages over this one graph; each reads the netlist↔copper identity
-stage 2 establishes. The richer interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies)
-follows IDF. A drawn schematic SHEET is still a VIEW of the graph and a later deliverable.
+Stage 3 places components by CONSTRAINT rather than by typed coordinates: a rough drawn layout is
+the SEED, and `layout.Constrain()` builds a `ConstrainedLayout` whose `Solve()` returns a NEW
+`PcbLayout` at the poses satisfying the relations. The one-declaration rule carries over verbatim —
+the copper, drills, nets and 3D bodies all DERIVE from the moved placements, so `Solved.Check()`
+still passes and `Solved.PadsOfNet` returns the moved copper.
+
+**The load-bearing decision is to build a FOCUSED solver rather than reuse the Modeling one, and
+the reasoning is about the VARIABLE MODEL, not effort.** The prompt's instruction was to prefer
+reusing an existing LM seam — but the sketch and mate LM engines are internal/private to
+`EngrCAD.Modeling` and each is bound to its own variable model: `MateSolver`'s `Solver` is a private
+partial class over `Occurrence`/`Frame3d` with 3D 6-DOF rigid perturbations, and `SketchLevenberg`
+is internal over free 2D POINT coordinates (a sketch's joints, arc centres and radii). A PCB
+placement is a rigid 2D pose `(x, y, θ)` whose rotation moves the WHOLE footprint about the
+placement origin — which is neither: not free points (the footprint is rigid, its pads are not
+independent variables), and not 3D 6-DOF (wrong dimension, different rotation encoding). Neither
+engine exposes a reusable generic LM core, so `PcbConstraintSolver` is that core rebuilt at 2D,
+following the MateSolver doctrine EXACTLY: an analytic Jacobian; every residual a LENGTH (angular
+residuals scaled by the board diagonal, and the rotation variable divided by it, so one linear
+tolerance covers the system and every Jacobian column is O(1)); rank and DOF from a diagonally
+pivoted Cholesky of JᵀJ at the **1e-6 relative floor** (the sketch-constraint floor, not the mate
+1e-8 — at layout sizes 1e-8² sits below pivoted elimination's own round-off, the recorded lesson);
+the drawn layout as seed AND branch selector; an under-constrained layout reported with its
+remaining DOF; contradictions and stationary configurations NAMED; a failed solve leaving the
+source layout bit-identically unchanged (a fresh layout is produced only on success). No Modeling
+solver was touched. **A shared generic 2D-rigid LM core could be factored later** if a third
+consumer appears — but there is none today, and factoring one now would risk the two Modeling
+solvers' bit-identity for no gain, so it is FILED rather than built.
+
+**The rigid-body model is what makes `Group` a theorem rather than a special case.** Each placement
+belongs to one rigid BODY — a singleton by default, or several placements a `Group`/`Cluster` ties
+together — carrying three variables (its pose); each member carries a FIXED offset from the body
+frame captured off the drawn layout, so a singleton reproduces the placement's own pose exactly
+(bit-identical seed) and a group moves as one through both translation AND rotation (verified: a
+group rotated 90° carries a member's (5,0) offset to (0,5), preserving the relative pose exactly).
+`Lock`/`Fix` grounds a body (its members stay at drawn poses); a placement no constraint mentions is
+left where drawn and reported. Body creation order is a pure function of the layout, so the whole
+solve is deterministic — asserted by two identical solves producing byte-identical solved layouts.
+
+**Inequalities are handled honestly, as active-set residuals — not fake equalities.** `InsideRegion`
+and `ClearOf`/`ClearOfRegion` want `g ≥ 0` (a footprint's bounding circle inside a zone, or a
+distance clear of another footprint / a keep-out polygon), so their residual is `min(g, 0)`: it
+pushes only when violated and its Jacobian is the constraint's gradient only while active. A
+converged solve reports feasibility (no violation past the tolerance), and an inactive inequality
+adds no rank, so it leaves DOF free — which is the honest report. A footprint's extent is modelled
+by the smallest circle about its origin enclosing its pads (rotation-invariant, so proximity
+residuals see translation only; conservative, so keeping the circle clear keeps the copper clear —
+verified against the true pad regions). `ClearOf`/`InsideRegion` use one point-to-polygon signed
+distance (nearest boundary point plus an even-odd inside test) that works for any simple polygon.
+
+**Verification is the deliverable, and higher than usual because ECAD fails plausibly.** A satisfied
+set converges to the weld tier with the DOF reported (a Distance leaves 2 of 3 free, named); an
+`AlignEdge` makes the two edges EXACTLY parallel (cross → 0) and collinear (the component point on
+the board edge line) — geometric assertions, not "close"; a stated `Spacing` between two pads is met
+exactly; a `ClearOfRegion` leaves every pad disjoint from the keep-out with the footprint standing
+the full clearance clear (measured against an independent point-to-polygon distance); a contradiction
+(two Distances) is NAMED and the layout untouched (asserted through the serializer); a stationary
+start (`Perpendicular` on already-parallel edges) is NAMED rather than nudged; the solve is
+deterministic to the bit; the one-declaration identity survives (Check passes, PadsOfNet returns the
+moved copper); and the whole thing is scale-invariant (a 1000× board solves to relative 1e-9).
+
+**Persistence extends the stage-2 seam.** `ConstrainedLayout.Save`/`Load` adds a `constraints` array
+to the layout JSON, write-only-when-stated: a layout with NO constraints saves byte-identically to a
+stage-2 file, and a constrained one is a `save → load → save` byte-identical fixed point. Every value
+a constraint captured — a signed `PointOnLine` offset, an `AlignEdge` side read off the drawing —
+rides as DATA (the branch selector, not a rule to re-run), and a stored direction is kept VERBATIM
+rather than re-normalized (the `AxisRef` ulp rule), so a reload reproduces the exact constraint.
+
+### Not in stages 1–3
+
+Copper DRC (a region-offset clearance query — grow each net's copper by half the clearance, require
+disjoint — over the exact 2D machinery), autorouting, panel cutouts and enclosure fit, thermal
+coupling, and MID/LDS 3D routing are later stages over this one graph; each reads the netlist↔copper
+identity stage 2 establishes. The richer interchange (KiCad `.kicad_pcb`, STEP AP214 board
+assemblies) follows IDF. A drawn schematic SHEET is still a VIEW of the graph and a later
+deliverable.
 
 ## 7. Query layer
 
