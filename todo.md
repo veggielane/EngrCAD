@@ -2911,63 +2911,143 @@ from what was already understood rather than from scratch.
     half-verified CFD solver is worse than none because its output is persuasive. Worth
     doing — but as its own campaign, staged as above, not as a fourth item in a sweep.
 
-- [ ] **ECAD — and the sharp line between the part of it this kernel should touch and the
-  part it should not.** "Add ECAD" reads as one thing and is really two, with very
-  different verdicts.
-  - **What this project should NOT build**: schematic capture, netlist management,
-    autorouting, copper DRC, signal integrity, SPICE. Not because they are hard, but
-    because they are a *different product* on a different data model — a connectivity
-    graph, not a geometry kernel — and every one of them is served by mature free tools.
-    Building them badly is worse than not building them, and building them well is a
-    second company.
-  - **What genuinely fits, and is where mechanical engineers actually lose time**: the
-    **MCAD–ECAD boundary**. Does the board fit the enclosure, do the connectors line up
-    with their panel cutouts, do the tall parts clear the lid, and where does the heat go?
-    Every one of those is a question this kernel is already equipped to answer, and none
-    of them needs a netlist.
-  - **The reuse story is unusually strong, which is the argument for doing it at all**:
-    - A **board is a plate with holes and a thickness** — `Sketch` outline, `Drill` for
-      mounting holes and vias, exact in B-Rep today with nothing new.
-    - A **component is a `HardwareComponent`**. That abstraction is already "a body + a
-      seating convention + a **host preparation**", and a panel-mount connector needing a
-      cutout in the enclosure wall is *precisely* that pattern — `ComponentAssembly.Place`
-      cutting the host while recording the occurrence is the behaviour, already built and
-      tested.
-    - **Keep-outs are volumes**, so the implicit engine and the existing boolean both
-      apply directly, and a violated keep-out is an ordinary interference query.
-    - **Enclosure fit** is `Bvh.QueryOverlap` + `MeshIntersection.Crosses` + the mechanism
-      sweep's clash reporting — landed, and it already knows that a *seated* part is not a
-      clash, which is the exact subtlety a board sitting on standoffs would otherwise trip.
-    - **Thermal coupling is the one that would be genuinely novel**: per-component power
-      dissipation as a volumetric `Generation` load into the landed thermal solver,
-      conducting through board and standoffs into an enclosure with convective outer
-      faces. That is a real engineering question, it is verifiable, and almost nothing in
-      the hobby/prosumer tool space answers it.
-    - **Drawings and BOM already exist** — an assembly drawing with the board in place, and
-      a parts list that distinguishes bought-in from manufactured, come for free.
-  - **Interchange, in value order** (this is the actual first deliverable, since without
-    import there is nothing to fit):
-    - **IDF 4.0** first — board outline, component placements, keep-outs; plain text, still
-      spoken by nearly every ECAD tool, and it carries *exactly* the subset above and
-      nothing this kernel would have to discard. The classic MCAD/ECAD exchange for the
-      classic MCAD/ECAD question.
-    - **KiCad `.kicad_pcb`** as the pragmatic modern target: open, documented, S-expression,
-      and its component 3D models are already STEP — which this kernel reads.
-    - **STEP AP214 board assemblies** — already have the writer, the reader and assemblies,
-      so this is mostly a mapping decision.
-    - **IPC-2581** (the modern XML successor) and **ODB++** are richer and heavier; file
-      them behind the first two.
-    - **Gerber/Excellon are FABRICATION formats** and are the wrong layer for this entirely
-      — they describe copper artwork for a photoplotter, not a solid model. Named here so
-      nobody reaches for them thinking "PCB format".
-  - **Verification bar**, in the house style: an IDF round trip that is a fixed point;
-    a board-in-enclosure case with a *known* clash that must be found and a near-miss that
-    must not be; and a thermal case with an analytic answer (a uniformly dissipating board
-    conducting to a fixed-temperature edge) before any pretty picture of a real design.
-  - **Honest sequencing**: IDF import → board + components as an `Assembly` → fit and
-    keep-out checking → panel cutouts via the component-preparation machinery → thermal
-    coupling. Each step is independently useful, which is the test of whether a domain
-    belongs here at all. Stop at any point and what exists still earns its keep.
+- [ ] **ECAD — code-defined schematics, PCB layout, and MID/LDS 3D routing, as a
+  first-class campaign** (re-scoped 2026-08-09 at Chris's request: the earlier entry drew a
+  line that kept the connectivity side out as "a second company", and that line is now
+  deliberately crossed — this kernel builds the whole stack, schematic through routing
+  through 3D placement, with DRC on both 2D and 3D boards). It is large, it is staged, and
+  the argument for doing it HERE rather than reaching for KiCad is that a surprising amount
+  of it is geometry this kernel already does — copper clearance IS a region offset, a
+  keep-out IS a boolean, and a trace on a moulded surface IS the tamper-mesh's conductive
+  serpentine, already built.
+  - **The one genuinely new thing is a CONNECTIVITY DATA MODEL beside the geometry, and
+    keeping the two coherent is the whole discipline.** A netlist is a graph — components,
+    pins, nets — and it is NOT a signed distance field or a topology. The failure mode of
+    every ECAD/MCAD bridge is the two models drifting (a net the copper does not connect, a
+    part the schematic does not place), so the rule from day one is that ONE declaration
+    produces both: the code that declares a component and its connections IS the source,
+    and the netlist, the footprint placement and the 3D body are all derived from it — the
+    same "the declaration is the model" doctrine `SheetMetalBody` and `FeatureHistory`
+    already enforce. A DRC or a routing result that disagrees with the netlist is then a
+    bug in one derivation, not an unresolvable difference between two hand-kept files.
+  - **Code-defined schematics** — the first deliverable, and the one that fits this repo's
+    code-first philosophy exactly (the `Scene`, `Shape` and `Sketch` APIs are all
+    code-first, and a schematic is one more). A `Schematic` is C# that declares `Component`s
+    (each an instance of a `PartDefinition` carrying pins, a footprint and a 3D body) and
+    connects their pins into `Net`s; the object graph IS the netlist, so there is no
+    capture/netlist round-trip to keep in step. Verification is combinatorial and exact:
+    every pin belongs to exactly one net or is explicitly no-connect (a counting identity),
+    no net is a single pin (a floating-net check), and a `save → load → save` of the
+    schematic is a byte fixed point through the same JSON seam the document model uses. A
+    rendered schematic SHEET (symbols, wires, labels) is a 2D drawing — the `DrawingSheet`/
+    `SheetAnnotation` machinery already draws to SVG/DXF/PDF — so a human-readable diagram
+    is nearly free once the graph exists, and is deliberately a VIEW of the graph rather
+    than a second editable thing.
+  - **The board and its parts are geometry this kernel already builds.** A board is a plate
+    with holes and a thickness (`Sketch` outline + `Drill` for mounting holes and vias,
+    exact B-Rep today). A component is a `HardwareComponent` — a body + a seating convention
+    + a host preparation — so a panel-mount connector that needs a wall cutout is precisely
+    `ComponentAssembly.Place` cutting the host while recording the occurrence, already built
+    and tested. Placing the footprints on the board is `LocationSet`/`Pattern` with a pose
+    per part.
+  - **PCB positioning constraints** — component placement subject to constraints (align to a
+    board edge, keep a spacing, sit inside a region, stay clear of a keep-out, group by
+    function). This is the SKETCH-CONSTRAINT SOLVER's problem one layer up: the variational
+    LM solver behind `ConstrainedSketch`/`SketchConstraintSolver` already does
+    coincident/parallel/distance/point-on with an analytic Jacobian and a rank-revealing
+    DOF report, and a 2D placement constraint (a component's origin and rotation against a
+    board datum) is the same residual family. The 3D analog — a part constrained against an
+    enclosure feature — is the `MateSolver`, also landed. So the constraint engine exists;
+    what is new is the placement vocabulary that feeds it, and the verification is the
+    solver's own (a satisfied set converges to residual ≤ weld tier, an over-constrained
+    one is reported, a contradiction is named, the drawn layout is the seed).
+  - **Copper DRC is a GEOMETRY problem this kernel is unusually well-equipped for, which is
+    the correction to the old entry's "should not build".** The core rules are region
+    queries the exact 2D machinery answers without a tolerance: trace-to-trace clearance is
+    "grow each net's copper by half the clearance and require the grown regions disjoint" —
+    the exact `Region2dOffset` + `CurvedRegion2dBoolean` construction the tamper mesh and
+    the packer already use, where an empty intersection PROVES the clearance; trace width,
+    annular ring, drill-to-copper and copper-to-edge are all offset-and-overlap; an
+    acute-angle or acid-trap check is an arrangement-angle query. A short (two nets touching)
+    is a connectivity check against the netlist — which is exactly why the one-declaration
+    rule matters, since the geometry and the netlist must agree on what SHOULD connect.
+    Verification is exact: a board with a KNOWN violation at a stated clearance must be
+    found and a near-miss at clearance + ε must not, measured the way the tamper mesh's
+    guarantee is (the largest inscribed empty gap against the closed form), and a rule set
+    that passes must still pass after a uniform scale of the board (relative, not absolute,
+    tolerances — the epsilon-ladder rule).
+  - **Auto-routing — the genuinely hard one, and staged honestly.** Routing is a SEARCH
+    problem (maze/A* per net, then rip-up-and-retry for congestion), not a closed form, and
+    a bad autorouter is worse than hand routing — so v1 is a DRC-AWARE grid/maze router with
+    the clearance rules above as the cost function and obstacles read from the arrangement,
+    verified by "every routed net connects its pins AND passes DRC" (both asserted, since a
+    router that connects while violating clearance is the classic silent failure). Multi-
+    layer with vias, then topological/shove routing, are later stages filed with that
+    framing. The space-filling curves already landed are the fill/pour primitive (a ground
+    plane is a hatched or solid region with thermal-relief clearances — a region boolean),
+    and the `RunLinker` from the infill work is the same net-of-segments linking a router
+    produces.
+  - **3D component placement for MID/LDS — the novel capability, and it fits because the
+    kernel ALREADY routes conductors on a moulded surface.** Moulded Interconnect Devices /
+    Laser Direct Structuring put conductive traces directly on a 3D moulded plastic part,
+    so the "board" is a doubly-curved surface rather than a plate. The two pieces this needs
+    both exist: the tamper mesh lays an exact conductive serpentine on a surface, and the
+    space-filling SURFACE-DECORATION consumer lays a curve on a doubly-curved surface via
+    `MeshLocalParam`'s discrete exp map — which carries a STATED distortion (exact on planes,
+    ≤2% on a developable tube, ≤5% radially on a 35° sphere cap) that a trace's width and
+    clearance inherit and that MUST be reported, never averaged away, because on a MID part
+    the clearance guarantee is only as good as the parameterization. So MID routing is
+    2D routing in the surface's exp-map parameter space, lifted onto the moulded body, with
+    the distortion reported per trace; a 3D component (an LGA, a connector) is seated on the
+    surface by its `HardwareComponent` seating convention transported into the local frame.
+    The trace's exported form is a thin conductive `Shape` on the surface (extrude along the
+    surface normal), so it round-trips through STL/STEP and renders like any other part.
+  - **3D DRC** is the 2D rules run in the surface's exp-map parameters with the distortion
+    folded into the clearance: a trace-to-trace clearance on a MID part is the geodesic
+    distance on the surface, which the exp map approximates to its stated bound, so the DRC
+    reports its own uncertainty band rather than a false-precise pass/fail near the tolerance
+    — the honest failure mode is a conservative refusal in the band where the
+    parameterization cannot certify the clearance, exactly the tamper mesh's near-tangency
+    rule. Verified against a developable surface (a cylinder, where the exp map is EXACT and
+    the 3D DRC must agree with the unrolled 2D DRC bit for bit) before any doubly-curved
+    part.
+  - **The MCAD/ECAD boundary is still where mechanical engineers lose time, and it comes
+    almost free once the board exists**: does the board fit the enclosure, do the connectors
+    line up with their panel cutouts, do the tall parts clear the lid, where does the heat
+    go? Enclosure fit is `Bvh.QueryOverlap` + `MeshIntersection.Crosses` + the mechanism
+    sweep's clash reporting, already landed and already knowing a SEATED part (a board on
+    standoffs) is not a clash. Keep-outs are volumes, so the implicit engine and the boolean
+    apply directly. Thermal coupling is the genuinely novel MCAD answer: per-component power
+    dissipation as a volumetric `Generation` load into the landed thermal solver, conducting
+    through board and standoffs into an enclosure with convective faces — verifiable against
+    a uniformly-dissipating board conducting to a fixed-temperature edge before any real
+    design. Drawings and BOM already exist.
+  - **Interchange, in value order** (import first, since without it there is nothing to fit):
+    **IDF 4.0** (board outline, placements, keep-outs; plain text, spoken by nearly every
+    ECAD tool, and it carries exactly the geometry subset) → **KiCad `.kicad_pcb`** (open,
+    S-expression, and its 3D models are already STEP, which this kernel reads) → **STEP
+    AP214 board assemblies** (the writer, reader and assemblies exist, so mostly a mapping)
+    → IPC-2581 and ODB++ (richer, heavier; filed behind the first two). And for the
+    connectivity side, a **KiCad schematic/netlist** import so a code-defined schematic can
+    ingest an existing design. **Gerber/Excellon are FABRICATION formats** — copper artwork
+    for a photoplotter, not a solid model — named here so nobody reaches for them thinking
+    "PCB format"; the AUTOROUTER's output, however, does export to them, since that is what
+    a fab house consumes.
+  - **Verification bar, in the house style and higher than usual because ECAD fails
+    plausibly**: an IDF round trip that is a byte fixed point; a schematic save→load→save
+    fixed point with the pin-to-net counting identity; a DRC with a known violation found
+    and a near-miss passed, measured against the closed-form gap; a routed net asserted to
+    connect AND pass DRC; a MID 3D DRC on a cylinder agreeing bit-for-bit with the unrolled
+    2D DRC; a board-in-enclosure clash found and a near-miss not; and a thermal case with an
+    analytic answer. Every number in the design record, as the structural and thermal
+    solvers did.
+  - **Honest sequencing, each step independently useful** (the test of whether a domain
+    belongs here): code-defined schematic + netlist → board + components as an `Assembly`
+    (IDF/KiCad import feeds it) → PCB positioning constraints over the landed solver → 2D
+    copper DRC → grid autorouter with DRC costs → panel cutouts and enclosure fit → thermal
+    coupling → MID/LDS surface routing and 3D DRC. Stop at any point and what exists earns
+    its keep. The load-bearing early decision is the one-declaration-produces-both rule; get
+    that wrong and every later stage inherits two drifting sources of truth.
 
 ## Not worth adopting (deliberate)
 
