@@ -93,6 +93,68 @@ public class BooleanFailureTests
         Assert.Equal(exact, mesh.Volume(), 1e-3 * exact);
     }
 
+    /// <summary>
+    /// The other named curved refusal: two EQUAL-RADIUS perpendicular cylinders through one
+    /// axis point. Their intersection is the degenerate Steinmetz — two ellipses meeting at
+    /// the two points where the surfaces are TANGENT — and the tracer finds it correctly
+    /// (<c>SurfaceIntersectionTests.Marching_CrossingCylinders_TwoClosedBranches</c> asserts
+    /// two closed branches lying on both surfaces to 1e-8). What has no answer is the SOLID:
+    /// each cut wraps its partner's band and its v-range overlaps the band's own rim rather
+    /// than sitting cleanly to one side, so there is no side to send each boundary loop to.
+    ///
+    /// <para>Refused BY NAME in all three operations, which is the claim worth making: a
+    /// tangency is a property of the PAIR, so it cannot be a union-only or a
+    /// difference-only limitation, and a refusal measured in one operation would leave that
+    /// open. Nudging either radius by a working clearance is the modelling answer and the
+    /// implicit route is the other; both are exercised below.</para>
+    /// </summary>
+    [Fact]
+    public void TangentBicylinder_IsRefusedByNameInEveryOperation()
+    {
+        var alongZ = Shape.Cylinder(10, 40);
+        var alongX = Shape.Cylinder(10, 60).RotateY(Math.PI / 2);
+        foreach (var pair in (Shape[])[alongZ - alongX, alongZ | alongX, alongZ & alongX,
+            Shape.Box(44, 44, 30) - alongZ - alongX])
+        {
+            var error = Assert.ThrowsAny<Exception>(pair.ToBrep);
+            Assert.Contains("wrapping cut overlaps a boundary loop's v-range", error.Message);
+            Assert.Contains("tangent or mutually intersecting cuts", error.Message);
+        }
+    }
+
+    [Fact]
+    public void UnequalRadiiOfTheSamePair_AreOrdinaryTransversalInput()
+    {
+        // The complement that makes the refusal a statement about TANGENCY rather than about
+        // crossing cylinders: shrink one radius and the same construction is exact. The
+        // Steinmetz volume of unequal cylinders has no elementary closed form, so the oracle
+        // is the inclusion-exclusion identity the boolean must satisfy whatever it does
+        // internally — and it is a real check, since the intersection is the piece both
+        // routes have to agree about.
+        var alongZ = Shape.Cylinder(10, 40);
+        var alongX = Shape.Cylinder(6, 60).RotateY(Math.PI / 2);
+
+        double union = (alongZ | alongX).ToMesh().Volume();
+        double intersection = (alongZ & alongX).ToMesh().Volume();
+        double a = alongZ.ToMesh().Volume(), b = alongX.ToMesh().Volume();
+
+        Assert.Equal(a + b - intersection, union, 2e-2 * union);
+    }
+
+    [Fact]
+    public void TheTangentBicylindersImplicitRouteProducesTheSteinmetzSolid()
+    {
+        // A workaround named in an error message is only honest if it works — and here the
+        // exact answer is the classical bicylinder volume 16 r^3 / 3, which is what makes
+        // this a verification rather than a smoke test.
+        var pair = Shape.Cylinder(10, 40) & Shape.Cylinder(10, 60).RotateY(Math.PI / 2);
+
+        var mesh = Shape.From(pair.ToImplicit()).ToMesh();
+
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(16 * 1000 / 3.0, mesh.Volume(), 2e-2 * (16 * 1000 / 3.0));
+    }
+
     [Fact]
     public void CoplanarCross_FusesExactly()
     {
