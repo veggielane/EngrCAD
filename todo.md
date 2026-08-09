@@ -2869,11 +2869,25 @@ from what was already understood rather than from scratch.
   one unknown field, `SparseCholesky`/CG, and a verification bar of analytic solutions.
   Incompressible flow breaks every one of those, and the backlog should say so before
   anyone budgets it as a third solver.
+  - **✅ STAGE 1 (non-symmetric solvers) HAS LANDED in `EngrCAD.Core.Solvers`** — `Gmres`
+    (restarted GMRES(m), right-preconditioned so the tracked residual is the ORIGINAL
+    system's), `BiCgStab`, an `Ilu0` preconditioner behind the shared `IPreconditioner`
+    seam (also on `CgOptions.Preconditioner` for symmetric PCG), all verified against a
+    dense partial-pivoting reference on random non-symmetric, upwind and high-Péclet
+    convection–diffusion, the GMRES-converges-in-≤n theorem, the ILU-is-exact-LU-with-no-fill
+    identity, breakdown honesty (no silent NaN) and determinism. **No new matrix type was
+    needed** — `PackedSparseMatrix` was already general — and **AMD does NOT apply to ILU(0)**
+    (zero fill means no fill to reduce; see design.md §2 and the `Ilu0` class doc; RCM/
+    multicolour ordering is for the ILU(p)/ILUT tier, filed there when that tier exists). So
+    the substrate below "the matrix is not symmetric" now exists; stages 2+ (the flow physics)
+    remain open.
   - **The matrix is not symmetric.** Advection makes it non-symmetric and, at any
     interesting Reynolds number, non-diagonally-dominant. `SparseSymmetricCG` and
     `SparseCholesky` do not apply; this needs **GMRES or BiCGSTAB with a real
-    preconditioner** (ILU at minimum). That is a genuine addition to `Core.Solvers`, and
-    it is the first thing to build — it is also independently useful.
+    preconditioner** (ILU at minimum) — now BUILT (see the stage-1 note above). Remaining
+    non-symmetric-solver work for later stages, if wanted: ILU(p)/ILUT with a fill-reducing
+    reorder (RCM/multicolour), block/Schur preconditioners for the saddle system, and a
+    flexible GMRES that admits an iterative inner preconditioner.
   - **It is a saddle-point problem.** Velocity and pressure are coupled and the pressure
     has no equation of its own. Either a segregated scheme (SIMPLE/PISO) or a monolithic
     solve with a block preconditioner; and equal-order velocity/pressure elements are

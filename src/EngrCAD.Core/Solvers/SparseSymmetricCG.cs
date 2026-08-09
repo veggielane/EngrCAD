@@ -20,9 +20,21 @@ public sealed record CgOptions
     /// <summary>
     /// Jacobi (diagonal) preconditioning, on by default. Costs one divide per unknown
     /// per iteration and repairs the badly scaled diagonals that mixed-stiffness systems
-    /// (soft-constraint rows next to Laplacian rows) otherwise stall on.
+    /// (soft-constraint rows next to Laplacian rows) otherwise stall on. Ignored when
+    /// <see cref="Preconditioner"/> is supplied.
     /// </summary>
     public bool UseJacobiPreconditioner { get; init; } = true;
+
+    /// <summary>
+    /// An explicit preconditioner (the incomplete-Cholesky-strength <see cref="Ilu0"/>, say),
+    /// replacing the built-in Jacobi when present. It must be SYMMETRIC POSITIVE DEFINITE for
+    /// CG's convergence theory to hold — which <see cref="Ilu0"/> of a symmetric matrix is,
+    /// since its dropped fill is symmetric so <c>M = L·U = L·D·Lᵀ</c>. A non-symmetric
+    /// preconditioner would make the recurrence chase a moving target; use <see cref="Gmres"/>
+    /// or <see cref="BiCgStab"/> for a genuinely non-symmetric system instead. Null (the
+    /// default) leaves the Jacobi path exactly as it was.
+    /// </summary>
+    public IPreconditioner? Preconditioner { get; init; }
 }
 
 /// <summary>
@@ -100,12 +112,21 @@ public static class SparseSymmetricCG
         }
         double threshold = options.RelativeTolerance * rhsNorm;
 
+        // An explicit preconditioner replaces the built-in Jacobi. When absent, the Jacobi
+        // path below is byte-for-byte the incumbent one, so every existing consumer's numbers
+        // are unchanged.
+        IPreconditioner? preconditioner = options.Preconditioner;
+        if (preconditioner is not null && preconditioner.Rows != n)
+            throw new ArgumentException(
+                $"Preconditioner dimension {preconditioner.Rows} does not match matrix order {n}.",
+                nameof(options));
+
         // Jacobi preconditioner: invDiag[i] = 1 / a_ii. An SPD matrix has strictly
         // positive diagonals, so a nonpositive entry means the caller's matrix is not
         // SPD there; scaling that row by 1 keeps the preconditioner positive definite
         // (a sign test, deliberately not a Tolerance comparison).
         double[]? invDiag = null;
-        if (options.UseJacobiPreconditioner)
+        if (preconditioner is null && options.UseJacobiPreconditioner)
         {
             invDiag = new double[n];
             a.Diagonal(invDiag);
@@ -127,7 +148,7 @@ public static class SparseSymmetricCG
         if (residualNorm <= threshold)
             return new SparseSolveReport(true, 0, residualNorm, rhsNorm);
 
-        ApplyPreconditioner(invDiag, r, z);
+        ApplyPreconditioner(preconditioner, invDiag, r, z);
         z.AsSpan().CopyTo(p);
         double rz = Dot(r, z);
 
@@ -156,7 +177,7 @@ public static class SparseSymmetricCG
             if (residualNorm <= threshold)
                 return new SparseSolveReport(true, iteration, residualNorm, rhsNorm);
 
-            ApplyPreconditioner(invDiag, r, z);
+            ApplyPreconditioner(preconditioner, invDiag, r, z);
             double rzNext = Dot(r, z);
             double beta = rzNext / rz;
             rz = rzNext;
@@ -167,8 +188,13 @@ public static class SparseSymmetricCG
         return new SparseSolveReport(false, iteration, residualNorm, rhsNorm);
     }
 
-    private static void ApplyPreconditioner(double[]? invDiag, double[] r, double[] z)
+    private static void ApplyPreconditioner(IPreconditioner? preconditioner, double[]? invDiag, double[] r, double[] z)
     {
+        if (preconditioner is not null)
+        {
+            preconditioner.Apply(r, z);
+            return;
+        }
         if (invDiag is null)
         {
             r.AsSpan().CopyTo(z);

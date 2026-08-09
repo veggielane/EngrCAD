@@ -183,6 +183,51 @@ Each engine uses the data structure its mathematics wants:
   recorded above, a project of a different order — so it is not started speculatively. The
   interim half-step if a consumer does appear is one round of iterative refinement on the
   caller's side, which `SmallestPivotMagnitude` already supports deciding.
+- **The general NON-symmetric solvers (`Gmres`, `BiCgStab`, `Ilu0`) are the CFD campaign's
+  stage 1, and three decisions shaped them — each is a place the obvious answer was wrong.**
+  Advection makes a flow operator non-symmetric (and non-diagonally-dominant at any
+  interesting Reynolds number), so `SparseCholesky` and `SparseSymmetricCG` do not apply and
+  a Krylov method with a real preconditioner is the first thing to build; it is also
+  independently useful. **(a) No new matrix type.** The obvious reading of "a non-symmetric
+  solver needs the full matrix" is that a general CSR type must sit beside the symmetric-upper
+  one — but `PackedSparseMatrix` was ALREADY general: `SparseMatrixBuilder.ToMatrix()` stores
+  full CSR with rows sorted by column, `Multiply` already handles the non-symmetric case, and
+  the assembly carries the counting-sort/packing lessons. So the storage decision is to reuse
+  it in its general form; the only expand-to-full step is `Ilu0.Factorize` calling `ToGeneral()`
+  (a no-op on an already-general matrix), because ILU walks both triangles while a symmetric-
+  upper matrix only stores one. **(b) GMRES is RIGHT-preconditioned, and the reason is the
+  verification bar rather than convenience.** The Krylov subspace is built on `A·M⁻¹` from
+  `r₀ = b − A·x₀`, so the residual the Givens rotations track is the residual of the ORIGINAL
+  system, not of a left-preconditioned one — which means the number the solver watches is the
+  number a caller can recompute, and "converged on the wrong residual" (the classic silent CFD
+  failure) cannot happen. It is not left to the reader's trust: the report recomputes
+  `‖b − A·x‖` exactly at the close of every restart cycle, and a test asserts the reported
+  residual equals an independently recomputed one. Happy breakdown (a near-zero new Arnoldi
+  vector) is treated as convergence, not divided by; the un-restarted "converges in ≤ n steps"
+  theorem is asserted (measured 12/35 at 2.7e-13). BiCGSTAB is the cheaper-per-iteration
+  partner (constant storage, oscillating residual) because which of the two wins is
+  problem-dependent and a flow code carries both; its two breakdowns (ρ≈0, ω≈0) are caught
+  before the division and reported as `Converged=false`, never a silent NaN — the CG
+  "report the non-SPD direction rather than divide by it" convention. **(c) `Ilu0` has NO
+  ordering parameter, and that contradicts the staging note's guess that "AMD reduces fill for
+  the ILU exactly as it does for Cholesky".** ILU(0) has zero fill BY DEFINITION — L and U
+  carry exactly A's pattern and every fill is dropped — so a fill-reducing permutation has
+  nothing to reduce; it would spend a symbolic pass to move round-off around for no saving AND
+  break the "no fill ⇒ ILU(0) IS the exact LU" identity that verifies the factorization. A
+  permutation there changes only WHICH entries are dropped, i.e. preconditioner ACCURACY, a
+  different question wanting a different ordering (RCM for bandwidth, a multicolour ordering for
+  parallelism) that only earns its keep once fill is admitted (ILU(p > 0), ILUT) — filed for
+  that tier. So AMD does not apply; ILU(0) stays natural-ordered, hence deterministic. The one
+  thing that DID transfer for free is that ILU(0) of a symmetric matrix with a symmetric pattern
+  is itself symmetric (`M = L·U = L·D·Lᵀ`, since the dropped fill is symmetric too), so it is a
+  legitimate conjugate-gradient preconditioner — added to `CgOptions.Preconditioner` additively,
+  leaving the Jacobi path bit-identical when null — and it cut CG from 87 to 32 iterations on a
+  Dirichlet grid Laplacian, GMRES 40→10 and BiCGSTAB 37→7 on a convection–diffusion operator.
+  Verified against a dense partial-pivoting solve on a random non-symmetric matrix, an upwind
+  and a high-Péclet central-difference convection–diffusion (the oscillatory, non-diagonally-
+  dominant regime), the ILU-vs-exact-LU identity, and determinism bit for bit. What is NOT built
+  is the rest of the campaign (Stokes, Navier–Stokes, stabilisation, turbulence) — a separate,
+  larger project, staged in todo.md.
 - **Space-filling curves (`Geometry2.SpaceFillingCurve`) — the name overpromises, so the
   API is built around saying what it really is.** A true space-filling curve is the LIMIT
   of a sequence and has infinite length; what exists is one finite member and the ORDER is
