@@ -253,6 +253,23 @@ inventing a material property. `ModalDamping.None` is allowed and says so explic
 undamped mode driven at exactly its own frequency then returns a non-finite modal coordinate,
 left alone rather than clamped to a large number nobody chose.
 
+**Base (support) excitation** — a shaker or seismic input — drives the model through its
+supports instead of by a nodal force. Set `HarmonicSolveOptions.BaseExcitation`:
+
+```csharp
+BaseExcitation = new BaseExcitation(new Vector3d(0, 0, 1), BaseMotionKind.Acceleration, 9810),
+```
+
+It needs no new mathematics — in relative coordinates the modal force is exactly `-Gamma_d·a_g`,
+the participation factor the modal results already carry. `BaseMotionKind` says whether the
+constant amplitude is an acceleration (frequency-independent), a velocity (`a_g = omega·v_g`) or
+a displacement (`a_g = omega²·u_g`, so the modal force scales with the sweep). The response is
+the **relative** displacement (`HarmonicResponse.IsRelativeToBase`), which is the right quantity
+for stress because a rigid ground motion carries none; the absolute displacement is that plus the
+rigid ground field. The whole base moves *together* — independent support-group motion is a
+per-group static solve, stated as v1's boundary — and a model that also carries nodal forces, or
+a base excitation combined with a static correction, is refused by name.
+
 ### Truncation is a correction, not a caveat
 
 Modal superposition keeps only the modes that were extracted, so it misses the static
@@ -388,6 +405,6 @@ solver this one deliberately is not.
   under a sustained sine; an arbitrary load history needs
   [direct time integration](fea-transient.md), which is a different stepping loop and needs no
   modes at all.
-- **Nodal-force excitation only.** Base acceleration would ride the participation factors the
-  modal results already carry.
+- **Base excitation is uniform-support only.** The whole base moves together; supports on
+  independent foundations need a quasi-static solve per group, which this does not do.
 - **Multiplicity three and above** inherits the [modal solver's](fea-modal.md) limitation.

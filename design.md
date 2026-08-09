@@ -1225,6 +1225,27 @@ missing modes' static flexibility rides along at every other frequency. It costs
 solve the caller has usually already done. `TruncationError` is NaN without one — because then
 it is not small, it is unknown.
 
+**Base (support) excitation is a load-vector spelling, not new mathematics.** A shaker or
+seismic input drives the model through its supports, and in RELATIVE coordinates the equation is
+`M·u'' + C·u' + K·u = -M·iota_d·a_g`, whose modal force is exactly `-phi_n'·M·iota_d·a_g =
+-Gamma_d·a_g` — the participation factor `VibrationMode.ParticipationFactor` already carries. So
+`HarmonicSolveOptions.BaseExcitation` reuses the whole modal machinery, replacing the nodal
+projection `phi'f` with `-Gamma_d·a_g` and nothing else. Three decisions the item flagged were
+all real. **The answer is RELATIVE displacement** (measured from the moving support), which is
+the right quantity for STRESS since a rigid ground motion carries none — so `IsRelativeToBase`
+names it apart rather than silently changing what `Displacement` means, the absolute value being
+the relative one plus the rigid ground field. **The whole base moves TOGETHER** — `iota_d` is a
+rigid translation only for a single foundation, so v1 takes the uniform case and states it
+(independent support-group motion needs a quasi-static solve per group, which this does not do)
+rather than detecting a grouping the model does not carry. And **which quantity is held constant
+matters** — an acceleration input has a frequency-independent modal force, a velocity one scales
+by `omega` and a displacement one by `omega²` (`a_g = omega·v_g`, `omega²·u_g`), so `BaseMotionKind`
+states it and the sweep carries the scaling. The oracle is the SDOF fixture's exact equivalence:
+a base acceleration `a_g` produces the same relative response as the inertial nodal force `m·a_g`
+(both project to one modal force), measured to 2.2e-16, with the resonant relative displacement
+on the closed form `a_g/(2·zeta·omega_n²)`. A model with both nodal forces and base excitation,
+or base excitation with a static correction, refuse by name.
+
 Three smaller decisions worth recording. **The load comes from the modal model's own applied
 forces**, since every load type reduces to consistent nodal forces when applied, so there is no
 second place for a load to be specified and forgotten (a thermal load is refused by name,

@@ -2212,8 +2212,21 @@ resonance, larger above — a viscous term in disguise could not produce it); an
   express but which have no vocabulary here yet.
 - **Harmonic (steady-state) response only** on this path. Direct time integration is a separate
   solver - see [Transient dynamics](#transient-dynamics-direct-time-integration) below.
-- **Nodal-force excitation only.** Base acceleration would ride the participation factors the
-  modal results already carry.
+- **Base (support) excitation landed** (`HarmonicSolveOptions.BaseExcitation`): a shaker or
+  seismic input driving the model through its supports rather than by a nodal force. It needs no
+  new mathematics — in relative coordinates the modal force is exactly `-Gamma_d·a_g`, the
+  participation factor the modal results already carry — so it is a load-vector spelling.
+  `BaseMotionKind` states whether the constant amplitude is an ACCELERATION (frequency-
+  independent modal force), a VELOCITY (`a_g = omega·v_g`) or a DISPLACEMENT (`a_g = omega²·u_g`,
+  the sweep carrying the scaling). The response is RELATIVE displacement
+  (`HarmonicResponse.IsRelativeToBase`), the right quantity for stress since a rigid ground
+  motion carries none; the absolute displacement is that plus the rigid ground field, a caller
+  addition. The whole base moves TOGETHER (independent support-group motion is a per-group
+  static solve, stated as v1's boundary); a model with nodal forces AND base excitation, or a
+  base excitation with a static correction, refuse by name. Verified three ways: the modal force
+  is exactly `-Gamma_d·a_g`, the resonant relative displacement matches the closed form
+  `a_g/(2·zeta·omega_n²)` to 6 digits, and a base acceleration `a_g` equals an inertial nodal
+  force `m·a_g` to **2.2e-16** (two runs sharing no code beyond assembly).
 - **No residual-vector basis augmentation.** The mode-acceleration correction handles the
   static part of what the truncated modes miss, which is most of it; a residual VECTOR (the
   static response orthogonalised against the kept modes, added to the basis) would handle the

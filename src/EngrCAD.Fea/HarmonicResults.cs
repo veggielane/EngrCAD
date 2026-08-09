@@ -36,7 +36,8 @@ public sealed class HarmonicResponse
         Complex[][] coordinates,
         Vector3d[]? staticDisplacement,
         double truncationError,
-        string dampingDescription)
+        string dampingDescription,
+        bool relativeToBase = false)
     {
         Modes = modes;
         _frequencies = frequencies;
@@ -46,7 +47,17 @@ public sealed class HarmonicResponse
         _static = staticDisplacement;
         TruncationError = truncationError;
         DampingDescription = dampingDescription;
+        IsRelativeToBase = relativeToBase;
     }
+
+    /// <summary>
+    /// True when the response is a base (support) excitation's, so the displacement is measured
+    /// RELATIVE to the moving support rather than absolutely. That is the right quantity for
+    /// STRESS (a rigid ground motion carries none); the absolute displacement is this plus the
+    /// rigid ground field, which a caller adds if they need it. False for the ordinary
+    /// nodal-force response, whose displacement is absolute.
+    /// </summary>
+    public bool IsRelativeToBase { get; }
 
     /// <summary>The modal basis the response was built on.</summary>
     public ModalResults Modes { get; }

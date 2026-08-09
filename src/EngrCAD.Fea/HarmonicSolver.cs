@@ -57,11 +57,67 @@ public static class HarmonicSweep
     }
 }
 
+/// <summary>Which quantity a <see cref="BaseExcitation"/> states a constant amplitude of.
+/// Acceleration is named as the primary because its modal force is frequency-independent; the
+/// other two are the same excitation with the amplitude held at a constant velocity or
+/// displacement instead, so the acceleration — and therefore the response — scales with the
+/// frequency.</summary>
+public enum BaseMotionKind
+{
+    /// <summary>A constant base ACCELERATION amplitude (e.g. in g or mm/s²). The modal force is
+    /// frequency-independent, <c>-Gamma_d·a_g</c>.</summary>
+    Acceleration,
+
+    /// <summary>A constant base VELOCITY amplitude. The acceleration it implies is
+    /// <c>omega·v_g</c>, so the modal force scales with frequency.</summary>
+    Velocity,
+
+    /// <summary>A constant base DISPLACEMENT amplitude. The acceleration it implies is
+    /// <c>omega²·u_g</c>, so the modal force scales with the square of the frequency.</summary>
+    Displacement,
+}
+
+/// <summary>
+/// A harmonic BASE (support) motion: the whole set of supports oscillating together along one
+/// direction — a shaker table, a seismic input. The excitation is the ground motion rather than
+/// a nodal force, and the response it produces is the RELATIVE displacement (measured from the
+/// moving support), which is the right quantity for STRESS because a rigid ground motion carries
+/// none.
+///
+/// <para><b>It needs no new mathematics.</b> In relative coordinates the equation is
+/// <c>M·u'' + C·u' + K·u = -M·iota_d·a_g</c>, and the modal force is exactly
+/// <c>-phi_n'·M·iota_d·a_g = -Gamma_d·a_g</c> — the participation factor the modal results
+/// already carry (<see cref="VibrationMode.ParticipationFactor"/>). So base excitation is a
+/// load-vector spelling over the existing modal machinery.</para>
+///
+/// <para><b>The whole base moves TOGETHER.</b> The influence vector <c>iota_d</c> is a rigid
+/// translation only when every support shares one motion; supports on independent foundations
+/// need a quasi-static response per group, which is a different (and larger) construction, so
+/// v1 takes the uniform case and that assumption is stated rather than detected.</para>
+/// </summary>
+/// <param name="Direction">The direction the base oscillates along (normalized at use).</param>
+/// <param name="Kind">Which quantity <paramref name="Amplitude"/> states.</param>
+/// <param name="Amplitude">The constant peak amplitude of that quantity across the sweep.</param>
+public readonly record struct BaseExcitation(
+    Vector3d Direction, BaseMotionKind Kind, double Amplitude);
+
 /// <summary>Options for <see cref="HarmonicSolver.Solve"/>.</summary>
 public sealed record HarmonicSolveOptions
 {
     /// <summary>The frequencies to evaluate, in Hz. See <see cref="HarmonicSweep"/>.</summary>
     public required IReadOnlyList<double> Frequencies { get; init; }
+
+    /// <summary>
+    /// A harmonic base (support) motion instead of the model's nodal forces — a shaker or
+    /// seismic input. Null (the default) uses the model's applied forces, the incumbent
+    /// behaviour. See <see cref="BaseExcitation"/>: the response is then RELATIVE displacement
+    /// (<see cref="HarmonicResponse.IsRelativeToBase"/>), which is the right quantity for stress.
+    ///
+    /// <para>A model carrying its own applied forces AND a base excitation is refused (two
+    /// excitations, and no rule for adding them), as is combining base excitation with a
+    /// <see cref="StaticCorrection"/> (whose static solve is the nodal-force one).</para>
+    /// </summary>
+    public BaseExcitation? BaseExcitation { get; init; }
 
     /// <summary>
     /// How much each mode is damped. Required rather than defaulted: a default would be this
@@ -154,15 +210,37 @@ public static class HarmonicSolver
         }
 
         var model = modes.Model;
-        RequireLoad(model);
         RequireNoModelDamping(model);
         RequireNoRigidModes(modes);
         var correction = options.StaticCorrection;
-        if (correction is not null)
-            RequireMatchingStatic(model, correction);
+        var baseExcitation = options.BaseExcitation;
+        Vector3d baseDirection = default;
+        bool relative = baseExcitation.HasValue;
+        if (relative)
+        {
+            if (!baseExcitation!.Value.Direction.TryNormalize(Tolerance.Default, out baseDirection))
+                throw new FeaException(
+                    "A base excitation needs a non-zero direction to oscillate along.");
+            RequireNoNodalLoad(model);
+            if (correction is not null)
+                throw new FeaException(
+                    "A base excitation and a static correction cannot be combined: the "
+                    + "correction's static solve is the NODAL-force response, and there is none "
+                    + "here (the excitation is the ground motion). The base-excitation response "
+                    + "carries its own truncation only through more modes, not a static solve.");
+        }
+        else
+        {
+            RequireLoad(model);
+            if (correction is not null)
+                RequireMatchingStatic(model, correction);
+        }
 
         int modeCount = modes.Modes.Count;
         var ratios = new double[modeCount];
+        // The frequency-INDEPENDENT part of each mode's force: the nodal projection phi'f, or the
+        // base factor -Gamma_d·amplitude. The frequency scaling for a velocity/displacement base
+        // input is applied per frequency below.
         var modalForces = new double[modeCount];
         for (int i = 0; i < modeCount; i++)
         {
@@ -176,26 +254,44 @@ public static class HarmonicSolver
                     + "if this came from RayleighDamping, its coefficients were built by hand "
                     + "rather than through FromRatios, which refuses the same thing up front.");
 
-            // F_n = phi_n' f. The shape is zero at every restrained degree of freedom by
-            // construction, so a load applied at a support contributes nothing - which is
-            // correct, since a support does no work.
-            double f = 0;
-            for (int node = 0; node < model.Mesh.NodeCount; node++)
+            if (relative)
             {
-                var force = model.ForceOf(node);
-                // Exact-zero skip: most nodes carry no load at all.
-                if (force.X == 0 && force.Y == 0 && force.Z == 0)
-                    continue;
-                var shape = mode.ShapeAt(node);
-                f += shape.X * force.X + shape.Y * force.Y + shape.Z * force.Z;
+                // F_n = -Gamma_d·a_g, the participation factor along the base direction. The
+                // amplitude and the frequency scaling ride below; this is the a_g = 1 factor.
+                double gamma = mode.ParticipationFactor.Dot(baseDirection);
+                modalForces[i] = -gamma * baseExcitation!.Value.Amplitude;
             }
-            modalForces[i] = f;
+            else
+            {
+                // F_n = phi_n' f. The shape is zero at every restrained degree of freedom by
+                // construction, so a load applied at a support contributes nothing - which is
+                // correct, since a support does no work.
+                double f = 0;
+                for (int node = 0; node < model.Mesh.NodeCount; node++)
+                {
+                    var force = model.ForceOf(node);
+                    // Exact-zero skip: most nodes carry no load at all.
+                    if (force.X == 0 && force.Y == 0 && force.Z == 0)
+                        continue;
+                    var shape = mode.ShapeAt(node);
+                    f += shape.X * force.X + shape.Y * force.Y + shape.Z * force.Z;
+                }
+                modalForces[i] = f;
+            }
         }
 
         var coordinates = new Complex[options.Frequencies.Count][];
         for (int k = 0; k < options.Frequencies.Count; k++)
         {
             double omega = 2.0 * Math.PI * options.Frequencies[k];
+            // A velocity base input scales the modal force by omega, a displacement one by omega²
+            // (a_g = omega·v_g, a_g = omega²·u_g); an acceleration input and a nodal load are
+            // frequency-independent (power 1.0).
+            double omegaScale = !relative || baseExcitation!.Value.Kind == BaseMotionKind.Acceleration
+                ? 1.0
+                : baseExcitation.Value.Kind == BaseMotionKind.Velocity
+                    ? omega
+                    : omega * omega;
             var row = new Complex[modeCount];
             for (int i = 0; i < modeCount; i++)
             {
@@ -209,7 +305,7 @@ public static class HarmonicSolver
                 // value (.NET's complex division returns NaN for a finite numerator over an
                 // exactly zero denominator, not an infinity), and clamping it to a large
                 // number nobody chose would be a quiet claim that a steady state exists.
-                row[i] = modalForces[i] / denominator;
+                row[i] = (modalForces[i] * omegaScale) / denominator;
             }
             coordinates[k] = row;
         }
@@ -222,9 +318,11 @@ public static class HarmonicSolver
             truncation = TruncationError(modes, modalForces, staticDisplacement);
         }
 
+        string description = options.Damping.Describe()
+            + (relative ? $"; base {baseExcitation!.Value.Kind} along {baseDirection}, relative response" : "");
         return new HarmonicResponse(
             modes, [.. options.Frequencies], ratios, modalForces, coordinates,
-            staticDisplacement, truncation, options.Damping.Describe());
+            staticDisplacement, truncation, description, relative);
     }
 
     /// <summary>
@@ -288,6 +386,29 @@ public static class HarmonicSolver
             + "structure - so a model built for one often has none; apply the excitation "
             + "(Force, Pressure, Traction or NodalForce) to the SAME model, which is the model "
             + "this response reads its load from.");
+    }
+
+    /// <summary>Refuses a model carrying nodal forces when a base excitation is stated: the two
+    /// are competing excitations with no rule for adding them, and a thermal load has no place
+    /// in either.</summary>
+    private static void RequireNoNodalLoad(StructuralModel model)
+    {
+        if (model.ThermalDeltaT is not null)
+            throw new FeaException(
+                "A base excitation cannot be combined with a thermal load: a thermal strain is "
+                + "an element integral, not a nodal force, and it is a steady load rather than an "
+                + "oscillating one.");
+        for (int node = 0; node < model.Mesh.NodeCount; node++)
+        {
+            var force = model.ForceOf(node);
+            if (force.X != 0 || force.Y != 0 || force.Z != 0)
+                throw new FeaException(
+                    $"The model carries an applied force (node {node}) AND a base excitation was "
+                    + "stated, which are two competing excitations with no rule for adding them. "
+                    + "Base excitation drives the model through its supports, so its model should "
+                    + "carry the supports and the mass but no applied force. (Superpose a "
+                    + "nodal-force sweep separately if both act at once.)");
+        }
     }
 
     /// <summary>

@@ -820,25 +820,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   — 3.079% → 1.8e-16 at zero frequency on the cantilever. The remainder wants the static
   response orthogonalised against the kept modes and added to the basis as a pseudo-mode, which
   also improves the response at non-zero frequencies rather than only at DC.
-- [ ] **FEA: base-acceleration (support motion) excitation for the harmonic sweep.** The
-  central claim was CHECKED and holds: `VibrationMode.ParticipationFactor` is documented and
-  computed as `Gamma_d = phi' M iota_d` over the free degrees of freedom, and the modal force
-  of a unit base acceleration in RELATIVE coordinates is exactly `-Gamma_d`, so the sweep needs
-  a load-vector spelling and no new mathematics. Three things the entry did not say, all of
-  which have to be decided rather than discovered:
-  - **The answer is RELATIVE displacement, not absolute.** `M u'' + C u' + K u = -M·iota·a_g`
-    is written in coordinates measured from the moving support, which is the right quantity for
-    STRESS (a rigid ground motion carries none) and the wrong one for a plotted displacement.
-    Absolute is relative plus the rigid ground field, so both are available — but a
-    `HarmonicResponse` whose displacement silently changed meaning would be the worst outcome,
-    so the two must be named apart.
-  - **The influence vector is a rigid translation only when every support moves TOGETHER.**
-    With supports on different foundations it is the quasi-static response to a unit motion of
-    one support group, which is a static solve per group rather than a constant vector. v1
-    should take the uniform case and refuse the other by name.
-  - **A displacement-stated input scales as omega²**, so the vocabulary has to say whether the
-    caller is giving an acceleration, a velocity or a displacement amplitude; naming the method
-    after the acceleration and offering the other two as conversions is the honest shape.
 - [ ] **FEA: adaptive block shrink on Lanczos QR rank deficiency.** Block Lanczos landed
   (`ModalSolveOptions.BlockSize`/`BucklingSolveOptions.BlockSize`; design.md §3e carries the
   three measured findings) and treats a rank-deficient residual block as a BREAKDOWN — return
