@@ -1898,8 +1898,8 @@ exactly.
 `TopologyResult.Release` turns the density field into a usable, exportable solid, and the whole
 of it is the decision to REPORT what each stage costs rather than return one opaque "cleaned up"
 mesh. The extracted iso-surface is the exact level set and a poor part — thresholded on
-tetrahedra, so stair-stepped at element scale, with every triangle shape (the MBB beam: 3 888
-faces, 2 916 slivers, smallest angle ≈ 0). Two stages fix it, and both MOVE the surface, so both
+tetrahedra, so stair-stepped at element scale, with every triangle shape (the MBB beam: 3 908
+faces, 2 950 slivers, smallest angle ≈ 0). Two stages fix it, and both MOVE the surface, so both
 are measured: (1) **smoothing** fairs the stair-steps (`LaplacianMeshSmoother`, implicit
 fairing) and (2) **remeshing** re-triangulates to a uniform edge length (`Remesher`).
 
@@ -1907,14 +1907,14 @@ fairing) and (2) **remeshing** re-triangulates to a uniform edge length (`Remesh
 the convex side of the mid-surface, so fairing a THIN optimised structure necessarily removes
 some — and a full step at the smoother's own "visible" strength of 1 melts thin members
 (measured −42% of the volume in three steps on the docs beam). The default is three steps at
-strength 0.1, which fairs the steps for a reported ≈−6% and moves the farthest vertex ≈0.72 mm.
+strength 0.1, which fairs the steps for a reported ≈−6% and moves the farthest vertex ≈0.73 mm.
 A smoothing that shrinks the part silently is the thing to avoid, so the volume delta and the
 max/mean displacement come back as values (`SmoothingVolumeDelta`, `SmoothingMaxDisplacement`).
 
 **Remeshing REDISTRIBUTES rather than moves**, which is what makes it the stage that makes the
 part usable without spending more of the shape. Its projection target is the SMOOTHED mesh, so
-the remeshed vertices sit on that surface to round-off (measured within 8e-13 of it) and the
-whole benefit is triangle SHAPE: the sliver count drops 2 916 → 69 and the mean smallest-angle
+the remeshed vertices sit on that surface to round-off (measured within 2e-14 of it) and the
+whole benefit is triangle SHAPE: the sliver count drops 2 950 → 73 and the mean smallest-angle
 rises 21° → 48° (`TriangleQuality`, before/after via `IsoSurfaceQuality`/`FinalQuality`), with
 the volume barely changed (−2%). Feature-angle detection is OFF by default here, per the
 recorded "feature detection reads the mesh you give it, not the surface you meant" lesson: an

@@ -132,11 +132,12 @@ internal static class TopologyFixtures
     /// <summary>MBB beam span (X).</summary>
     public const double MbbSpan = 80;
 
-    /// <summary>MBB beam depth (Y, vertical).</summary>
-    public const double MbbDepth = 24;
-
-    /// <summary>MBB beam thickness (Z).</summary>
+    /// <summary>MBB beam thickness (Y, out-of-plane).</summary>
     public const double MbbThickness = 12;
+
+    /// <summary>MBB beam depth (Z, the vertical the arch stands in — so it renders upright in
+    /// the Z-up viewer).</summary>
+    public const double MbbDepth = 24;
 
     /// <summary>
     /// The MBB (Messerschmitt-Bölkow-Blohm) beam — the canonical topology-optimisation problem:
@@ -157,30 +158,32 @@ internal static class TopologyFixtures
     /// </summary>
     public static StructuralModel MbbBeam(int level, out AnalysisMesh mesh)
     {
+        // Span along X, thickness along Y, DEPTH along Z — so the arch stands in the world's
+        // own vertical and renders upright, and the load points down the world's -Z.
         var tets = StructuredTetMesh.Box(
-            Vector3d.Zero, new Vector3d(MbbSpan, MbbDepth, MbbThickness),
-            20 + 10 * level, 6 + 3 * level, 3);
+            Vector3d.Zero, new Vector3d(MbbSpan, MbbThickness, MbbDepth),
+            20 + 10 * level, 3, 6 + 3 * level);
         mesh = AnalysisMesh.Of(tets);
         var model = new StructuralModel(mesh, Materials.Steel);
 
-        double support = 0.12 * MbbSpan, load = 0.10 * MbbSpan, zHi = MbbThickness + 1;
-        // Bottom rollers, left and right: resist vertical (Y) and out-of-plane (Z).
-        model.Fix(Facets.And(Facets.Tag(StructuredTetMesh.YMin),
-            Facets.InBox(new Aabb((-1, -1, -1), (support, 1, zHi)))), Dof.Y | Dof.Z);
-        model.Fix(Facets.And(Facets.Tag(StructuredTetMesh.YMin),
-            Facets.InBox(new Aabb((MbbSpan - support, -1, -1), (MbbSpan + 1, 1, zHi)))), Dof.Y | Dof.Z);
+        double support = 0.12 * MbbSpan, load = 0.10 * MbbSpan, yHi = MbbThickness + 1;
+        // Bottom rollers, left and right: resist vertical (Z) and out-of-plane (Y).
+        model.Fix(Facets.And(Facets.Tag(StructuredTetMesh.ZMin),
+            Facets.InBox(new Aabb((-1, -1, -1), (support, yHi, 1)))), Dof.Y | Dof.Z);
+        model.Fix(Facets.And(Facets.Tag(StructuredTetMesh.ZMin),
+            Facets.InBox(new Aabb((MbbSpan - support, -1, -1), (MbbSpan + 1, yHi, 1)))), Dof.Y | Dof.Z);
         // Base-centre X pin: removes horizontal drift symmetrically.
-        model.Fix(Facets.And(Facets.Tag(StructuredTetMesh.YMin),
-            Facets.InBox(new Aabb((MbbSpan / 2 - load, -1, -1), (MbbSpan / 2 + load, 1, zHi)))), Dof.X);
+        model.Fix(Facets.And(Facets.Tag(StructuredTetMesh.ZMin),
+            Facets.InBox(new Aabb((MbbSpan / 2 - load, -1, -1), (MbbSpan / 2 + load, yHi, 1)))), Dof.X);
         // Downward load at the top centre.
-        model.Force(Facets.And(Facets.Tag(StructuredTetMesh.YMax),
-            Facets.InBox(new Aabb((MbbSpan / 2 - load, MbbDepth - 1, -1), (MbbSpan / 2 + load, MbbDepth + 1, zHi)))),
-            new Vector3d(0, -3000, 0));
+        model.Force(Facets.And(Facets.Tag(StructuredTetMesh.ZMax),
+            Facets.InBox(new Aabb((MbbSpan / 2 - load, -1, MbbDepth - 1), (MbbSpan / 2 + load, yHi, MbbDepth + 1)))),
+            new Vector3d(0, 0, -3000));
         return model;
     }
 
-    /// <summary>The MBB density averaged into a fixed grid of bins over span × depth, so two
-    /// meshes (and a field and its mirror) are compared in one representation.</summary>
+    /// <summary>The MBB density averaged into a fixed grid of bins over span (X) × depth (Z), so
+    /// two meshes (and a field and its mirror) are compared in one representation.</summary>
     public static double[] MbbBinned(AnalysisMesh mesh, IReadOnlyList<double> density, int bx = 16, int by = 6)
     {
         var sum = new double[bx * by];
@@ -191,7 +194,7 @@ internal static class TopologyFixtures
             var centre = 0.25 * (mesh.Position(nodes[0]) + mesh.Position(nodes[1])
                 + mesh.Position(nodes[2]) + mesh.Position(nodes[3]));
             int i = Math.Clamp((int)(centre.X / MbbSpan * bx), 0, bx - 1);
-            int j = Math.Clamp((int)(centre.Y / MbbDepth * by), 0, by - 1);
+            int j = Math.Clamp((int)(centre.Z / MbbDepth * by), 0, by - 1);
             double v = mesh.ElementVolume(e);
             sum[i + j * bx] += v * density[e];
             weight[i + j * bx] += v;

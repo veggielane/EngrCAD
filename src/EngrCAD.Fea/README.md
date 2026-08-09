@@ -2689,18 +2689,18 @@ var solid = Shape.From(released.Mesh);  // one line back into the modelling grap
 
 The extracted iso-surface is the exact level set and a **poor part**: thresholded on
 tetrahedra, so stair-stepped at element scale, and marching them produces every triangle shape
-(the docs MBB beam: 3 888 faces, **2 916 slivers**, smallest angle ≈ 0). So:
+(the docs MBB beam: 3 908 faces, **2 950 slivers**, smallest angle ≈ 0). So:
 
 1. **Smoothing** fairs the stair-steps (`LaplacianMeshSmoother`, implicit fairing). It **moves
    the surface**, so it is no longer the exact iso-surface — and because a stair-step is
    material on the convex side of the mid-surface, fairing a thin structure shrinks it. The
    default is deliberately GENTLE (three steps at strength 0.1): a full step at strength 1 melts
    thin members (measured **−42%** of the volume in three steps), where the default costs about
-   **−6%** and moves the farthest vertex ≈ 0.72 mm. The volume it spends is returned
+   **−6%** and moves the farthest vertex ≈ 0.73 mm. The volume it spends is returned
    (`SmoothingVolumeDelta`, `SmoothingMaxDisplacement`), not hidden.
 2. **Remeshing** re-triangulates to a uniform edge length (`Remesher`, projecting onto the
    smoothed mesh, so it **redistributes vertices without moving the surface** — it stays within
-   `8e-13` of it). This is what makes the part usable: sliver count **2 916 → 69** and mean
+   `2e-14` of it). This is what makes the part usable: sliver count **2 950 → 73** and mean
    smallest-angle **21° → 48°** (`TriangleQuality`, before via `IsoSurfaceQuality`, after via
    `FinalQuality`), volume barely changed (**−2%**).
 

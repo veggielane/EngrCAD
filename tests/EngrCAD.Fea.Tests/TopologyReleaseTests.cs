@@ -81,10 +81,10 @@ public sealed class TopologyReleaseTests(TopologyReleaseTests.OptimisedMbb fixtu
         // The mutation: an off-centre load is not the MBB, and its answer is visibly asymmetric.
         var skewed = TopologyFixtures.MbbBeam(1, out var skewMesh);
         // Add a second load off to one side, breaking the symmetry of the problem.
-        skewed.Force(Facets.And(Facets.Tag(StructuredTetMesh.YMax),
-            Facets.InBox(new Aabb((TopologyFixtures.MbbSpan * 0.7, TopologyFixtures.MbbDepth - 1, -1),
-                (TopologyFixtures.MbbSpan * 0.9, TopologyFixtures.MbbDepth + 1, TopologyFixtures.MbbThickness + 1)))),
-            new Vector3d(0, -3000, 0));
+        skewed.Force(Facets.And(Facets.Tag(StructuredTetMesh.ZMax),
+            Facets.InBox(new Aabb((TopologyFixtures.MbbSpan * 0.7, -1, TopologyFixtures.MbbDepth - 1),
+                (TopologyFixtures.MbbSpan * 0.9, TopologyFixtures.MbbThickness + 1, TopologyFixtures.MbbDepth + 1)))),
+            new Vector3d(0, 0, -3000));
         var skewResult = TopologyOptimizer.Minimize(skewed, new TopologyOptions
         {
             VolumeFraction = 0.5, FilterRadius = 6.0, Filter = TopologyFilter.Sensitivity, MaxIterations = 60,

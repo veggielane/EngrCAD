@@ -80,11 +80,13 @@ out symmetric, which is the one property that makes "it looks right" checkable (
 breaks the symmetry, and the tests assert exactly that).
 
 ```csharp render:fea-topology-mbb
-var space = Shape.Box(80, 24, 12);        // span x depth x thickness
+// Span along X, thickness along Y, DEPTH along Z — so the arch stands in the viewer's own
+// vertical and reads upright, with the load pointing straight down the world's -Z.
+var space = Shape.Box(80, 12, 24);        // span x thickness x depth
 var tets = TetMesher.Mesh(space.ToMesh(), new TetMeshOptions
 {
     RefineQuality = true,
-    MaxElementSize = 6,                   // ~6900 elements: a picture, not a study
+    MaxElementSize = 6,                   // ~7000 elements: a picture, not a study
 });
 
 var model = new StructuralModel(AnalysisMesh.Of(tets), Materials.Steel);
@@ -93,17 +95,17 @@ var model = new StructuralModel(AnalysisMesh.Of(tets), Materials.Steel);
 // slide; a single base-centre pin removes the last horizontal drift. The supports are
 // SYMMETRIC, so the arch is symmetric — and because a purely vertical load has zero horizontal
 // reaction, the structure still forms its own tension tie rather than leaning on a support.
-var bottom = Facets.FacingAlong(new Vector3d(0, -1, 0));
+var bottom = Facets.FacingAlong(new Vector3d(0, 0, -1));
 model.Fix(Facets.And(bottom, Facets.InBox(
-    new Aabb(new Vector3d(-41, -13, -7), new Vector3d(-30, -11, 7)))), Dof.Y | Dof.Z);
+    new Aabb(new Vector3d(-41, -7, -13), new Vector3d(-30, 7, -11)))), Dof.Y | Dof.Z);
 model.Fix(Facets.And(bottom, Facets.InBox(
-    new Aabb(new Vector3d(30, -13, -7), new Vector3d(41, -11, 7)))), Dof.Y | Dof.Z);
+    new Aabb(new Vector3d(30, -7, -13), new Vector3d(41, 7, -11)))), Dof.Y | Dof.Z);
 model.Fix(Facets.And(bottom, Facets.InBox(
-    new Aabb(new Vector3d(-5, -13, -7), new Vector3d(5, -11, 7)))), Dof.X);
+    new Aabb(new Vector3d(-5, -7, -13), new Vector3d(5, 7, -11)))), Dof.X);
 model.Force(Facets.And(
-    Facets.FacingAlong(new Vector3d(0, 1, 0)),
-    Facets.InBox(new Aabb(new Vector3d(-5, 11, -7), new Vector3d(5, 13, 7)))),
-    new Vector3d(0, -3000, 0));
+    Facets.FacingAlong(new Vector3d(0, 0, 1)),
+    Facets.InBox(new Aabb(new Vector3d(-5, -7, 11), new Vector3d(5, 7, 13)))),
+    new Vector3d(0, 0, -3000));
 
 var result = TopologyOptimizer.Minimize(model, new TopologyOptions
 {
@@ -141,7 +143,7 @@ why the release reports what it costs.
 The extracted iso-surface is the exact level set of the density field, and it is a **poor
 part**: the field is thresholded on tetrahedra, so the boundary is stair-stepped at element
 scale, and marching those tetrahedra produces triangles of every shape — the MBB's raw surface
-is **3 888 faces with 2 916 slivers** and a smallest angle of essentially zero. Turning it into
+is **3 908 faces with 2 950 slivers** and a smallest angle of essentially zero. Turning it into
 something printable and re-meshable is two stages, and `TopologyResult.Release` runs both while
 **measuring what each one costs** rather than hiding it behind a "cleaned up" result:
 
@@ -150,11 +152,11 @@ something printable and re-meshable is two stages, and `TopologyResult.Release` 
    stair-step is material on the convex side of the mid-surface, fairing a thin structure
    *shrinks* it. The default is deliberately gentle (three steps at strength 0.1): a full step
    would melt the thin members (measured **−42%** of the volume), where the default costs about
-   **−6%** and moves the farthest vertex **0.72 mm** — a stated trade, not a silent one.
+   **−6%** and moves the farthest vertex **0.73 mm** — a stated trade, not a silent one.
 2. **Remeshing** re-triangulates the faired surface to a uniform edge length (`Remesher`,
    projecting onto the smoothed mesh so it **redistributes vertices without moving the
-   surface** — it stays within `8e-13` of it). This is the stage that makes the part *usable*:
-   the sliver count drops **2 916 → 69** and the mean smallest-angle rises **21° → 48°**, while
+   surface** — it stays within `2e-14` of it). This is the stage that makes the part *usable*:
+   the sliver count drops **2 950 → 73** and the mean smallest-angle rises **21° → 48°**, while
    the volume barely changes (**−2%**).
 
 The order is smooth-then-remesh on purpose: fair the surface first, then redistribute vertices
@@ -162,24 +164,24 @@ onto the faired surface. Doing it the other way round would remesh the stair-ste
 to fair the uniform result, fighting the resolution the remesh just established.
 
 ```csharp render:fea-topology-mbb-released
-var space = Shape.Box(80, 24, 12);
+var space = Shape.Box(80, 12, 24);        // span x thickness x depth (the arch stands in Z)
 var tets = TetMesher.Mesh(space.ToMesh(), new TetMeshOptions
 {
     RefineQuality = true,
     MaxElementSize = 6,
 });
 var model = new StructuralModel(AnalysisMesh.Of(tets), Materials.Steel);
-var bottom = Facets.FacingAlong(new Vector3d(0, -1, 0));
+var bottom = Facets.FacingAlong(new Vector3d(0, 0, -1));
 model.Fix(Facets.And(bottom, Facets.InBox(
-    new Aabb(new Vector3d(-41, -13, -7), new Vector3d(-30, -11, 7)))), Dof.Y | Dof.Z);
+    new Aabb(new Vector3d(-41, -7, -13), new Vector3d(-30, 7, -11)))), Dof.Y | Dof.Z);
 model.Fix(Facets.And(bottom, Facets.InBox(
-    new Aabb(new Vector3d(30, -13, -7), new Vector3d(41, -11, 7)))), Dof.Y | Dof.Z);
+    new Aabb(new Vector3d(30, -7, -13), new Vector3d(41, 7, -11)))), Dof.Y | Dof.Z);
 model.Fix(Facets.And(bottom, Facets.InBox(
-    new Aabb(new Vector3d(-5, -13, -7), new Vector3d(5, -11, 7)))), Dof.X);
+    new Aabb(new Vector3d(-5, -7, -13), new Vector3d(5, 7, -11)))), Dof.X);
 model.Force(Facets.And(
-    Facets.FacingAlong(new Vector3d(0, 1, 0)),
-    Facets.InBox(new Aabb(new Vector3d(-5, 11, -7), new Vector3d(5, 13, 7)))),
-    new Vector3d(0, -3000, 0));
+    Facets.FacingAlong(new Vector3d(0, 0, 1)),
+    Facets.InBox(new Aabb(new Vector3d(-5, -7, 11), new Vector3d(5, 7, 13)))),
+    new Vector3d(0, 0, -3000));
 var result = TopologyOptimizer.Minimize(model, new TopologyOptions
 {
     VolumeFraction = 0.5, FilterRadius = 4.0, Filter = TopologyFilter.Sensitivity,
@@ -188,10 +190,10 @@ var result = TopologyOptimizer.Minimize(model, new TopologyOptions
 // Extract, fair, remesh — the whole account of what each stage cost comes back as a value.
 var released = result.Release();          // TopologyReleaseStage.Remeshed by default
 Console.WriteLine(released.ToText());
-//   iso-surface   vol 11991.9 (52.05%), 3888 faces, 1 component(s), ... 2916 slivers
-//   smoothed      vol 11274.7 (delta -6.0%), moved max 0.7157 / mean 0.233
-//   remeshed      vol 11043.1 (delta -1.9%), edge target 1.879, 3454 faces ...
-//                 slivers 2916 -> 69, stays within 8.027E-13 of the faired surface
+//   iso-surface   vol 11994.2 (52.06%), 3908 faces, 1 component(s), ... 2950 slivers
+//   smoothed      vol 11280.3 (delta -6.0%), moved max 0.7326 / mean 0.232
+//   remeshed      vol 11046.0 (delta -2.1%), edge target 1.892, 3422 faces ...
+//                 slivers 2950 -> 73, stays within 1.9E-14 of the faired surface
 
 // A HalfEdgeMesh crosses back into the modelling graph in one call — from there the released
 // part flows through --export (STL / 3MF / OBJ) and EngrCad.Show unchanged.
@@ -408,8 +410,8 @@ while this solves 3D elasticity on tetrahedra. What is asserted instead:
 | extraction of a uniform field | exactly the body's own volume |
 | extraction of a linear field | exactly the analytic slab, to 8 decimals |
 | the MBB optimum is left–right symmetric | mean `\|density − mirror\|` at round-off; an off-centre load breaks it by 3× |
-| smoothing moves the surface within a band | volume **−6%**, farthest vertex **0.72 mm** — measured, and asserted inside a band |
-| remeshing improves triangle shape | slivers **2 916 → 69**, mean smallest-angle **21° → 48°**, surface unmoved to `8e-13` |
+| smoothing moves the surface within a band | volume **−6%**, farthest vertex **0.73 mm** — measured, and asserted inside a band |
+| remeshing improves triangle shape | slivers **2 950 → 73**, mean smallest-angle **21° → 48°**, surface unmoved to `2e-14` |
 | the released solid round-trips through STL | signed-tetrahedral volume matches the delivered volume to float precision; `Validate`-clean and closed |
 
 ## Practical notes
