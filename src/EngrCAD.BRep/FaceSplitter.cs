@@ -455,6 +455,7 @@ public static class FaceSplitter
             return false;
         List<List<Vector2d>>? loops = null;
         double period = FaceGeometry.PeriodU(face.Surface);
+        bool rayDown = FaceGeometry.ParityRayPointsDown(face.Surface);
         for (int i = 0; i < curves.Count; i++)
         {
             var curve = curves[i].Curve;
@@ -466,7 +467,7 @@ public static class FaceSplitter
                 if (!face.Surface.TryProjectPoint(p, out var uv, FaceGeometry.InverseEvaluationTolerance))
                     continue;
                 loops ??= FaceGeometry.PullLoops(face);
-                if (!ParityContains(loops, uv, period))
+                if (!ParityContains(loops, uv, period, rayDown))
                     continue;
                 if (FaceGeometry.DistanceToBoundary(face, p) <= FaceGeometry.SeamTolerance)
                     continue;
@@ -509,6 +510,7 @@ public static class FaceSplitter
     {
         var surface = face.Surface;
         double period = FaceGeometry.PeriodU(surface);
+        bool rayDown = FaceGeometry.ParityRayPointsDown(surface);
         var runs = PullCurveRuns(curve, surface, out bool fullyOnSurface);
         if (runs.Count == 0)
             return [face]; // the curve does not lie on this face's surface
@@ -548,6 +550,17 @@ public static class FaceSplitter
                     return SplitBandByWrapCurve(face, curve, pulledCurve, drift > 0);
                 }
 
+                // The UPWARD ray, deliberately, where every other site here casts the ray
+                // the pole-aware way. On a face whose pole sits at v = max it under-reads,
+                // and correcting it changes which STRUCTURE the split produces rather than
+                // merely which points read as inside: a sphere's cap then takes an interior
+                // bore circle as a HOLE, where the incumbent reading sends the same cut
+                // down the band path — and a pole-bounded face carrying a hole is a trimmed
+                // tier that does not exist, so the tessellator refuses the result by name
+                // (measured on `Shape.Sphere − Box − Cylinder`, three of
+                // TrimmedFaceRefusalTests' rows). An algorithm that can only trade one
+                // refusal for another is not reached at all, so this waits on that tier;
+                // see FaceGeometry.Contains, which stays upward for the same reason.
                 if (ParityContains(rawLoops, pulledCurve[0].Uv, period))
                     return SplitByInteriorClosedCurve(face, curve, pulledCurve, mandatoryBreaks);
             }
@@ -565,7 +578,7 @@ public static class FaceSplitter
                     continue;
                 // Endpoints off the surface are trivially outside the face.
                 if (surface.TryProjectPoint(curve.PointAt(endParam), out var uv, FaceGeometry.InverseEvaluationTolerance) &&
-                    ParityContains(rawLoops, uv, period))
+                    ParityContains(rawLoops, uv, period, rayDown))
                     throw new NotSupportedException(
                         $"Open splitting curves must start and end outside the face: a {curve.GetType().Name} " +
                         $"on a {surface.GetType().Name} ends at {curve.PointAt(endParam)} (uv {uv}), " +
@@ -583,7 +596,7 @@ public static class FaceSplitter
                 continue;
             if (!surface.TryProjectPoint(curve.PointAt(s), out var uv, FaceGeometry.InverseEvaluationTolerance))
                 continue; // off this face's surface — the break belongs elsewhere
-            if (!ParityContains(rawLoops, uv, period))
+            if (!ParityContains(rawLoops, uv, period, rayDown))
                 continue;
             crossings.Add(new Crossing(null, 0, s) { Vertex = new BrepVertex(curve.PointAt(s)) });
         }
@@ -639,7 +652,7 @@ public static class FaceSplitter
             double mid = InteriorProbeParameter(curve, s0, s1);
             if (!surface.TryProjectPoint(curve.PointAt(WrapParam(curve, mid)), out var midUv, FaceGeometry.InverseEvaluationTolerance))
                 continue; // this stretch of the curve leaves the surface entirely
-            if (!ParityContains(rawLoops, midUv, period))
+            if (!ParityContains(rawLoops, midUv, period, rayDown))
                 continue; // this stretch of the curve lies outside the face
 
             // CurveSegment wraps s past the domain end for closed curves.
@@ -692,6 +705,7 @@ public static class FaceSplitter
     {
         var surface = face.Surface;
         double period = FaceGeometry.PeriodU(surface);
+        bool rayDown = FaceGeometry.ParityRayPointsDown(surface);
         var rawLoops = FaceGeometry.PullLoops(face);
 
         // Curves that lie on this face's surface at all.
@@ -783,7 +797,7 @@ public static class FaceSplitter
                 var point = curves[i].PointAt(s);
                 if (!surface.TryProjectPoint(point, out var uv, FaceGeometry.InverseEvaluationTolerance))
                     continue; // off this face's surface — the break belongs elsewhere
-                if (!ParityContains(rawLoops, uv, period))
+                if (!ParityContains(rawLoops, uv, period, rayDown))
                     continue;
                 AddCurveParam(NodeAt(point), i, s);
             }
@@ -878,7 +892,7 @@ public static class FaceSplitter
                 if (!surface.TryProjectPoint(
                         curve.PointAt(WrapParam(curve, mid)), out var midUv, FaceGeometry.InverseEvaluationTolerance))
                     continue; // this stretch leaves the surface entirely
-                if (!ParityContains(rawLoops, midUv, period))
+                if (!ParityContains(rawLoops, midUv, period, rayDown))
                     continue; // this stretch lies outside the face
 
                 var edge = new BrepEdge(new CurveSegment(curve, s0, s1), Interval.Unit, from.Node.Vertex!, to.Node.Vertex!);
@@ -905,12 +919,13 @@ public static class FaceSplitter
         BrepFace face, Surface surface, List<List<Vector2d>> rawLoops, double period,
         Curve3d curve, double s0, double s1, double terminusParam, int curveCount)
     {
+        bool rayDown = FaceGeometry.ParityRayPointsDown(surface);
         double endEpsilon = Math.Max(1e-9, curve.Domain.Length * 1e-7);
         if (s1 - s0 <= endEpsilon)
             return;
         double probe = InteriorProbeParameter(curve, s0, s1);
         if (!surface.TryProjectPoint(curve.PointAt(probe), out var uv, FaceGeometry.InverseEvaluationTolerance) ||
-            !ParityContains(rawLoops, uv, period))
+            !ParityContains(rawLoops, uv, period, rayDown))
             return;
         var terminus = curve.PointAt(terminusParam);
         throw new NotSupportedException(
@@ -1569,7 +1584,18 @@ public static class FaceSplitter
         return false;
     }
 
-    private static bool ParityContains(List<List<Vector2d>> loops, Vector2d uv, double period)
+    /// <summary>
+    /// The arrangement's own even-odd test, casting the ray in the direction
+    /// <see cref="FaceGeometry.ParityRayPointsDown"/> chooses — the SAME rule
+    /// <see cref="FaceGeometry.Contains"/> asks, restated nowhere, because the two deciding
+    /// a point differently is what routes a closed curve into a face that then refuses it.
+    /// <para>It stays one-sided rather than becoming
+    /// <see cref="FaceGeometry.ContainsTwoSided"/>: that spelling errs toward INSIDE, which
+    /// is right for a keep-or-drop decision and wrong for an arrangement, where accepting a
+    /// segment that should have been dropped puts a phantom edge into the trace.</para>
+    /// </summary>
+    private static bool ParityContains(
+        List<List<Vector2d>> loops, Vector2d uv, double period, bool downward = false)
     {
         int crossings = 0;
         foreach (var loop in loops)
@@ -1588,7 +1614,8 @@ public static class FaceSplitter
                 if (a.X <= uv.X == b.X <= uv.X)
                     continue;
                 double t = (uv.X - a.X) / (b.X - a.X);
-                if (a.Y + t * (b.Y - a.Y) > uv.Y)
+                double height = a.Y + t * (b.Y - a.Y);
+                if (downward ? height < uv.Y : height > uv.Y)
                     crossings++;
             }
         }
@@ -1600,6 +1627,7 @@ public static class FaceSplitter
     private static IReadOnlyList<BrepFace> TraceFaces(BrepFace face, List<BrepCoedge> segmentCoedges, double period)
     {
         var surface = face.Surface;
+        bool rayDown = FaceGeometry.ParityRayPointsDown(surface);
 
         // All directed half-edges of the arrangement: boundary coedges once (their loop
         // direction), interior segments in both directions.
@@ -1811,7 +1839,7 @@ public static class FaceSplitter
             (List<BrepCoedge> Coedges, double Area)? bestOuter = null;
             foreach (var outer in outers)
             {
-                if (ParityContains([outer.Polyline], probe, period) &&
+                if (ParityContains([outer.Polyline], probe, period, rayDown) &&
                     (bestOuter is null || outer.Area < bestOuter.Value.Area))
                     bestOuter = (outer.Coedges, outer.Area);
             }
@@ -1820,7 +1848,7 @@ public static class FaceSplitter
                 assignedHoles[bestOuter.Value.Coedges].Add(hole.Coedges);
                 continue;
             }
-            int band = bandRegions.FindIndex(r => r.Polylines.Count == 2 && ParityContains(r.Polylines, probe, period));
+            int band = bandRegions.FindIndex(r => r.Polylines.Count == 2 && ParityContains(r.Polylines, probe, period, rayDown));
             if (band < 0)
                 throw new InvalidOperationException("Hole loop is not contained in any sub-face.");
             bandHoles[band].Add(hole.Coedges);

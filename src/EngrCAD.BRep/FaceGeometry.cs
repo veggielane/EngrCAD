@@ -325,14 +325,64 @@ public static class FaceGeometry
     /// by parity of an upward-v ray against all pulled-back loops. Periodic u is handled
     /// by shifting each segment into the test point's period.
     /// <para><b>One-sided, and that is a real blind spot</b>: an upward ray cannot see a rim
-    /// that lies BELOW the probe, so this calls every point of a pole-bounded face outside.
-    /// Callers for whom that is the wrong error — anything deciding what to KEEP — should ask
-    /// <see cref="ContainsTwoSided"/>. This spelling stays because it is what the face
-    /// splitter's arrangement and the boolean's fragment classification have always used, and
-    /// both handle poles by their own structural routes.</para>
+    /// that lies BELOW the probe, so this calls every point of a pole-bounded face outside
+    /// whenever the pole sits at v = max (<see cref="ParityRayPointsDown"/> is the test for
+    /// that, and the face splitter's own arrangement asks it). Callers for whom that is the
+    /// wrong error — anything deciding what to KEEP — should ask
+    /// <see cref="ContainsTwoSided"/>.</para>
+    /// <para><b>This spelling deliberately does NOT choose its side</b>, though the rule to
+    /// do so exists beside it. Making it pole-aware was built and measured, and it changes
+    /// which structures a boolean produces rather than merely which points read as inside: a
+    /// sphere's cap then accepts an interior bore circle as a HOLE, where the incumbent
+    /// reading sends the same cut down the band path — and a pole-bounded face with a hole
+    /// is a trimmed tier that does not exist, so the tessellator refuses the result by name.
+    /// Correcting it therefore waits on that tier, and until then the upward ray is
+    /// load-bearing rather than merely incumbent.</para>
     /// </summary>
     public static bool Contains(BrepFace face, in Vector3d point, int samplesPerCurve = 32) =>
         CountCrossings(face, point, samplesPerCurve, out int above, out _) && (above & 1) == 1;
+
+    /// <summary>
+    /// Whether a one-sided parity ray must be cast DOWNWARD in v — true exactly when the
+    /// surface's v = max boundary is a degenerate POINT (a pole) and its v = min boundary is
+    /// not, so the closed side of the trim is below the probe rather than above it.
+    ///
+    /// <para>Which way this breaks is decided by the GENERATOR'S DIRECTION and by nothing
+    /// else. A profile leaving the axis puts the rim at v = max, so the upward ray crosses
+    /// it and every drill tool's cap has always behaved; one returning to the axis puts the
+    /// rim at v = min, the upward ray crosses nothing, and the identical cap reads as having
+    /// no interior at all. Measured on a cylinder built as ONE full-turn revolve, whose two
+    /// caps differ in exactly that: <see cref="FaceSplitter.SplitByCurve"/> returned a
+    /// single fragment for 56 of 112 (offset, azimuth, curve-kind) chords, and they were
+    /// precisely the 56 on the cap whose generator ends on the axis.</para>
+    ///
+    /// <para>The test is on the SURFACE rather than on the loops, because it is the domain
+    /// that does or does not close; and it is asked by <see cref="Contains"/> and by the
+    /// face splitter's own parity alike, so the two cannot disagree about where a point
+    /// is — which they did, briefly, and the disagreement surfaced as a closed bore curve
+    /// being routed into a face that then refused to accept it.</para>
+    /// </summary>
+    public static bool ParityRayPointsDown(Surface surface) =>
+        IsDegenerateAt(surface, surface.DomainV.End) && !IsDegenerateAt(surface, surface.DomainV.Start);
+
+    /// <summary>Whether a whole v = const boundary of the surface collapses to one point.</summary>
+    private static bool IsDegenerateAt(Surface surface, double v)
+    {
+        if (!double.IsFinite(v))
+            return false;
+        var domainU = surface.DomainU;
+        if (!double.IsFinite(domainU.Start) || !double.IsFinite(domainU.End))
+            return false;
+        var first = surface.PointAt(domainU.Start, v);
+        for (int i = 1; i <= 4; i++)
+        {
+            // Weld tier: a pole is CONSTRUCTED exactly on the axis, so anything looser
+            // would call a hair-thin rim degenerate.
+            if (surface.PointAt(domainU.ParameterAt(i / 4.0), v).DistanceTo(first) > Tolerance.Default.Linear)
+                return false;
+        }
+        return true;
+    }
 
     /// <summary>
     /// Whether a 3D point lies within a face, deciding a POLE-BOUNDED face correctly: the same
