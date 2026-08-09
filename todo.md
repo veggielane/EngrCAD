@@ -449,22 +449,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     option rather than a change: it gives the SAME order, so it costs nothing, and it suits
     a caller sizing a bead more than a caller reproducing a phase. Recorded with the
     finding rather than built, since nothing in the repo asks for it yet.
-- [ ] **`Region2dOffset.Stroke` drops the outer corner fill at every CLOCKWISE turn** — a
-  real defect, measured while cross-checking the tamper mesh's boolean-free ribbon against
-  it. `Stroke` offers the join on both sides as `AddCornerJoin(v, left0, left1)` and
-  `AddCornerJoin(v, -left0, -left1)`, but **negating both normals does not flip the turn's
-  sign** (`cross(-a, -b) == cross(a, b)`), so `AddCornerJoin`'s `if (cross < 0) return` gate
-  either admits both wedges or refuses both — and at a clockwise corner the one it refuses is
-  the genuine outer gap. The fix is one line, `AddCornerJoin(v, -left1, -left0, …)`: swapping
-  the order as well as negating flips the cross product. The loop-offset path
-  (`AddLoopPrimitives`) is INNOCENT — it passes one side's outward normals, where the gate is
-  the correct reflex-corner test. Confirmed exactly rather than approximately: the area
-  deficit is `(clockwise corners) × w²/4` and nothing else, matching on six paths (all-left U
-  0, all-right U 2 corners, Z 1, S 1, left spiral 0, right spiral 4). It is not a wrong-shape
-  bug, only a missing wedge, so `InfillPath.Footprint` keeps its documented one-sided
-  under-estimate — but the footprint carries a notch at roughly half a Hilbert route's
-  corners, which is wrong for a caller using it as a real toolpath footprint. **Not fixed
-  here**: the fix moves `infill-hilbert.png`, so it wants to land with the re-take.
 - [ ] **A PIVOTED real sparse symmetric-indefinite factorization, if a consumer ever needs
   one.** `SparseLdlt` ✅ landed the symmetric-indefinite family (real + complex symmetric
   L·D·Lᵀ over `SparseCholesky`'s shared symbolic pass — see design.md §2(d) for the
