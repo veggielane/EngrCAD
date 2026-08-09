@@ -54,7 +54,7 @@ public class TessellationCorpusQualityTests
         "variable fillet",
         "rounded box", "rounded tetrahedron", "partial fillet run", "variable fillet run",
         "revolved vase", "partial revolve", "swept tube", "torus", "cone",
-        "sketch pocket", "engraved plate", "wedge", "side-wall breakout",
+        "sketch pocket", "engraved plate", "wedge", "side-wall breakout", "drilled breakout",
     ];
 
     internal static BrepSolid Build(string name)
@@ -289,9 +289,16 @@ public class TessellationCorpusQualityTests
                 // the boolean, ProbePoint's pole path having measured the wrapping loop by
                 // its average v rather than by its closest approach to the pole.
                 //
-                // NOT a Corpus member: it is structurally clean but does not clear the
-                // normal-agreement floor at any density -- see
-                // DrilledBreakout_IsCleanButBelowTheAgreementFloor.
+                // It spent a while OUT of the Corpus, structurally clean (no folds, no
+                // slivers, volume converging) and below the normal-agreement floor at every
+                // density -- 0.107 / 0.694 / 0.840 against 0.383 / 0.924 / 0.981, where
+                // `side-wall breakout`, the SAME cut by a Shape.Cylinder, read 0.9992 /
+                // 0.9999 / 0.99998. The comparison said which face was at fault (the tool's,
+                // not the breakout's) and the cause was that a plane PARALLEL to a revolve's
+                // axis had no analytic arm, so the two breakout lines arrived as a
+                // 49-sample tracer polyline whatever the density. SurfaceIntersection's
+                // TryCylindricalBand closed it: 0.994 / 0.957 / 0.989 on 92 / 220 / 424
+                // facets against 374 / 1 008 / 3 682.
                 return Shape.Extrude(Sketch.Rectangle(40, 30), 10)
                     .Drill(HoleSpec.Simple(6), [new(0, 0)], 15,
                         SketchPlane.At((0, -15, 9), Vector3d.UnitX, Vector3d.UnitZ))
@@ -563,47 +570,34 @@ public class TessellationCorpusQualityTests
     }
 
     /// <summary>
-    /// The second member below the gate's floor, and the interesting part is WHICH half of
-    /// it is below: a blind <see cref="Shape.Drill"/> whose flat pole cap breaks out of the
-    /// top face is structurally CLEAN — no folds and no degenerate slivers at any density —
-    /// while the worst facet-vs-surface agreement on its bore wall runs 0.107 / 0.694 /
-    /// 0.840 at 16/8, 48/24 and 96/48, under floors of 0.383 / 0.924 / 0.981.
+    /// The drilled breakout's bore wall against the SAME cut made by a
+    /// <see cref="Shape.Cylinder"/>, which is what said where its residual lived while it
+    /// had one and is worth keeping now that it does not.
     ///
-    /// <para>The comparison that says what it is about is <c>side-wall breakout</c>, a
-    /// Corpus member: the SAME cut made by a <see cref="Shape.Cylinder"/> reads 0.9992 /
-    /// 0.9999 / 0.99998. Both differ only in the tool, so this is the drill tool's
-    /// <c>RevolvedSurface</c> bore wall rather than the breakout — and it is the recorded
-    /// traced-rim density residual (a traced rim keeps whatever sample count the tracer's
-    /// arc-length step gave it however fine the grid around it becomes), located here at
-    /// the junction where the bore's rim meets the face it breaks out of. A plain drilled
-    /// THROUGH hole is a Corpus member and passes, so a drill's revolve band is fine in
-    /// general; the breakout junction is what degrades it.</para>
-    ///
-    /// <para>Committed baselines rather than tolerances, the rule the sphere-piercing test
-    /// states: a move in EITHER direction wants understanding before the numbers change.</para>
+    /// <para>The two solids differ in exactly one variable — the tool — so a gap between
+    /// them is a statement about the tool's surface family and nothing else. It used to be
+    /// enormous (0.107 / 0.694 / 0.840 against 0.9992 / 0.9999 / 0.99998, the drill route
+    /// carrying 374 / 1 008 / 3 682 facets against 160-odd) because a plane PARALLEL to a
+    /// revolve's axis reached no analytic arm and the breakout cut arrived as a 49-sample
+    /// tracer polyline at every density. With <c>TryCylindricalBand</c> in place both are
+    /// Corpus members and the comparison becomes a REGRESSION guard: the drill route may
+    /// not carry materially more facets than the cylinder route for the same solid, which
+    /// is the cheapest available statement that the exact tier is still being reached.</para>
     /// </summary>
     [Fact]
-    public void DrilledBreakout_IsCleanButBelowTheAgreementFloor()
+    public void TheDrilledAndCylinderBreakouts_TessellateAtTheSameGrade()
     {
-        var solid = Build("drilled breakout");
-        foreach (var (segmentsPerCircle, curveSamples, worstFloor) in
-            (ReadOnlySpan<(int, int, double)>)[(16, 8, 0.10), (48, 24, 0.69), (96, 48, 0.83)])
+        var drilled = Build("drilled breakout");
+        var cut = Build("side-wall breakout");
+        foreach (var (segmentsPerCircle, curveSamples) in Densities)
         {
-            var report = TessellationQuality.Audit(solid, segmentsPerCircle, curveSamples);
-            string where = $"at {segmentsPerCircle}/{curveSamples}: {report.Describe()}";
-            Assert.True(report.Folds == 0, $"facets face inward — {where}");
-            Assert.Equal(0, report.Slivers);
-            Assert.Equal(0, report.Unprojectable);
-            Assert.True(report.WorstDot >= worstFloor, $"worst agreement regressed — {where}");
-            // The half that IS at corpus grade, and the half a fix has to move: every
-            // planar family stays exact, so nothing but the revolve band is in question.
-            Assert.True(
-                report.WorstDot < NormalAgreementFloor(segmentsPerCircle),
-                $"this now CLEARS the floor — promote it into Corpus and delete this test: {where}");
-
-            var mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples);
-            mesh.Validate();
-            Assert.True(mesh.IsClosed, $"welded open — {where}");
+            var a = TessellationQuality.Audit(drilled, segmentsPerCircle, curveSamples);
+            var b = TessellationQuality.Audit(cut, segmentsPerCircle, curveSamples);
+            // The cylinder route cuts the plate right through and the drill route only half
+            // way, so the drill's mesh is legitimately the smaller of the two; a factor of
+            // two either way is loose enough to be about the ROUTE rather than the shape,
+            // and a tracer polyline put it at 3 682 against 424.
+            Assert.InRange(a.Triangles, b.Triangles / 2, b.Triangles * 2);
         }
     }
 }

@@ -114,12 +114,121 @@ public class CoaxialDiskIntersectionTests
         // The complementary half of the same guard: an axial spread beside the radial one
         // is what makes a profile a cone or a cylinder rather than a disk, so a bore wall
         // (a full-turn revolve of an axis-PARALLEL line) must not be read as one.
+        //
+        // What separates them is asserted GEOMETRICALLY rather than by curve type, and the
+        // distinction is worth spelling out because both answers are now straight: a disk's
+        // chord lies IN the disk, perpendicular to the axis and at one axial height, while a
+        // band's cut runs ALONG the axis, two of them, one either side of the plane's foot.
+        // The type test this used to make was a proxy — right only for as long as the band
+        // had no closed form and came back as a tracer polyline — and it is exactly the kind
+        // of proxy that starts refusing correct answers the moment the tier it stands in for
+        // is built (see SurfaceIntersection.TryCylindricalBand).
         var wall = new RevolvedSurface(
             new Line3d((Radius, 0, 0), (Radius, 0, 10)), Vector3d.Zero, Vector3d.UnitZ);
-        var curves = SurfaceIntersection.Intersect(CuttingAt(1.5), wall, Region);
+        const double offset = 1.5;
+        var curves = SurfaceIntersection.Intersect(CuttingAt(offset), wall, Region);
 
-        Assert.NotEmpty(curves);
-        Assert.All(curves, c => Assert.IsNotType<Line3d>(c));
+        Assert.Equal(2, curves.Count);
+        double halfChord = Math.Sqrt(Radius * Radius - offset * offset);
+        foreach (var curve in curves)
+        {
+            var (a, b) = Ends(Assert.IsType<Line3d>(curve));
+            // ALONG the axis, and spanning the band's own generator extent — not a chord
+            // at one height, which is the only thing a disk could have returned.
+            Assert.Equal(1.0, Math.Abs((b - a).Normalized().Dot(Vector3d.UnitZ)), 12);
+            Assert.Equal(0.0, Math.Min(a.Z, b.Z), 12);
+            Assert.Equal(10.0, Math.Max(a.Z, b.Z), 12);
+            Assert.Equal(offset, a.Y, 12);
+            Assert.Equal(halfChord, Math.Abs(a.X), 12);
+        }
+        Assert.True(curves.Select(c => Ends(c).Start.X).Aggregate((x, y) => x * y) < 0,
+            "the two lines must lie on opposite sides of the plane's foot");
+    }
+
+    [Fact]
+    public void ACoaxialBandTallerThanTheRegion_StillEndsOnItsOwnGenerator()
+    {
+        // The band's extent is the restriction that matters, and it is the band's OWN
+        // rather than the query region's: PlaneRevolved's "no circle is invented above a
+        // blind bore's end" rule, in the parallel-line member of the same family. Here the
+        // region is the wider of the two, so a result clipped only to the region would
+        // overshoot the generator by 10 in each direction.
+        var wall = new RevolvedSurface(
+            new Line3d((Radius, 0, 2), (Radius, 0, 6)), Vector3d.Zero, Vector3d.UnitZ);
+        foreach (var curve in SurfaceIntersection.Intersect(CuttingAt(0), wall, Region))
+        {
+            var (a, b) = Ends(curve);
+            Assert.Equal(2.0, Math.Min(a.Z, b.Z), 12);
+            Assert.Equal(6.0, Math.Max(a.Z, b.Z), 12);
+        }
+    }
+
+    [Fact]
+    public void APartialRevolveIsNotABand()
+    {
+        // "Lies on the carrier" is not "IS the carrier": every point of a half-turn revolve
+        // lies on the full cylinder, so promoting one would report a cut on 180 degrees of
+        // surface the face does not carry — the recorded quarter-arc-corner trap. The
+        // tracer's answer is whatever it is; what this pins is that the exact tier declines.
+        var half = new RevolvedSurface(
+            new Line3d((Radius, 0, 0), (Radius, 0, 10)), Vector3d.Zero, Vector3d.UnitZ, Math.PI);
+        Assert.All(
+            SurfaceIntersection.Intersect(CuttingAt(1.5), half, Region),
+            c => Assert.IsNotType<Line3d>(c));
+    }
+
+    [Fact]
+    public void AConeIsNotABand()
+    {
+        // The other side of the same partition: a slanted generator has a radial spread as
+        // well as an axial one, so it is neither disk nor band and must reach neither exact
+        // arm. (A cone cut by a plane containing its axis is a hyperbola, which this tier
+        // does not carry.)
+        var cone = new RevolvedSurface(
+            new Line3d((1, 0, 0), (Radius, 0, 10)), Vector3d.Zero, Vector3d.UnitZ);
+        Assert.All(
+            SurfaceIntersection.Intersect(CuttingAt(0.5), cone, Region),
+            c => Assert.IsNotType<Line3d>(c));
+    }
+
+    [Fact]
+    public void ABandCutObliquelyIsTheExactEllipseWhileItFits_AndTheTracersOtherwise()
+    {
+        // The oblique member is accepted only when the whole conic lies inside the band, the
+        // wholly-inside rule TryPatchQuadric applies to a bounded patch — one comparison,
+        // since the axial coordinate along a conic ranges over centre +/- hypot of the two
+        // semi-axis components. A tall band admits the ellipse; a short one does not, and
+        // falls through rather than being clipped by this tier.
+        var tilted = new PlaneSurface((0, 0, 6), Vector3d.UnitX, new Vector3d(0, 1, 1).Normalized());
+        var tall = new RevolvedSurface(
+            new Line3d((Radius, 0, -20), (Radius, 0, 20)), Vector3d.Zero, Vector3d.UnitZ);
+        var ellipse = Assert.IsType<Ellipse3d>(Assert.Single(
+            SurfaceIntersection.Intersect(tilted, tall, Region)));
+        Assert.Equal(Radius, Math.Min(ellipse.SemiAxisX.Length, ellipse.SemiAxisY.Length), 12);
+        Assert.Equal(Radius * Math.Sqrt(2), Math.Max(ellipse.SemiAxisX.Length, ellipse.SemiAxisY.Length), 12);
+
+        var shallow = new RevolvedSurface(
+            new Line3d((Radius, 0, 5), (Radius, 0, 7)), Vector3d.Zero, Vector3d.UnitZ);
+        Assert.All(
+            SurfaceIntersection.Intersect(tilted, shallow, Region),
+            c => Assert.IsNotType<Ellipse3d>(c));
+    }
+
+    [Fact]
+    public void APlanePerpendicularToABandKeepsItsIncumbentCircle()
+    {
+        // The perpendicular arm is claimed EARLIER in the switch, so a drilled cap's rim
+        // keeps PlaneRevolved's arithmetic and its phase alignment with u = 0 rather than
+        // being re-derived through the band. Asserted as a value, since "unchanged" is the
+        // whole claim.
+        var wall = new RevolvedSurface(
+            new Line3d((Radius, 0, 0), (Radius, 0, 10)), Vector3d.Zero, Vector3d.UnitZ);
+        var flat = new PlaneSurface((0, 0, 4), Vector3d.UnitX, Vector3d.UnitY);
+        var circle = Assert.IsType<Circle3d>(Assert.Single(
+            SurfaceIntersection.Intersect(flat, wall, Region)));
+        Assert.Equal(Radius, circle.Radius, 12);
+        Assert.Equal(new Vector3d(0, 0, 4), circle.Center);
+        Assert.Equal(Vector3d.UnitX, circle.XDirection);
     }
 
     [Fact]

@@ -139,6 +139,14 @@ public static class SurfaceIntersection
             // clips curves to a face's surface itself (partial pullback runs).
             (PlaneSurface p, RevolvedSurface r) when TrySphereCarrier(r, out var sphere) => PlaneSphere(p, sphere),
             (RevolvedSurface r, PlaneSurface p) when TrySphereCarrier(r, out var sphere) => PlaneSphere(p, sphere),
+            // A bore WALL — a full-turn revolve of an axis-parallel straight generator — is
+            // a cylindrical BAND, so a plane cuts it in the same exact conics a real
+            // CylinderSurface gives, bounded by the band's own axial extent. Placed AFTER
+            // the perpendicular arm above so every circle a drilled cap already produced
+            // keeps PlaneRevolved's arithmetic bit-for-bit; what this adds is the parallel
+            // and oblique cases, which fell to the marching tracer.
+            (PlaneSurface p, RevolvedSurface r) when TryCylindricalBand(p, r, region, out var band) => band,
+            (RevolvedSurface r, PlaneSurface p) when TryCylindricalBand(p, r, region, out var band) => band,
             (PlaneSurface p, HelicalSurface h) when IsPerpendicularToHelicalAxis(p, h) => PlaneHelical(p, h),
             (HelicalSurface h, PlaneSurface p) when IsPerpendicularToHelicalAxis(p, h) => PlaneHelical(p, h),
             // A coaxial ANNULUS is the axis-perpendicular plane restricted to its own
@@ -203,6 +211,131 @@ public static class SurfaceIntersection
                 return false;
         }
         sphere = new SphereSurface(revolved.AxisOrigin + axis * t, radius);
+        return true;
+    }
+
+    /// <summary>
+    /// Recognizes a full-turn revolve whose generator is a straight line PARALLEL to the
+    /// axis — a cylindrical BAND. It is every bore WALL a <c>Shape.Drill</c> tool presents,
+    /// where a <c>Shape.Cylinder</c> presents a <see cref="CylinderSurface"/>, and it is
+    /// the b = 0 member of <see cref="TryCoaxialProfileLine"/>'s radius = a + b·axial
+    /// family exactly as <see cref="TryRevolvedDisk"/> is its b = ∞ one.
+    ///
+    /// <para><b>The test is on the radial VECTOR, not on the radius</b>, and that one
+    /// choice carries two conditions at once: a constant radius makes the swept set a
+    /// cylinder, while a constant radial DIRECTION makes the generator a straight
+    /// axis-parallel line, so the band's own u is the returned cylinder's azimuth about
+    /// that direction and nothing is re-phased. A generator merely at constant radius — a
+    /// helix — sweeps the same point set with a different parameterization, which is
+    /// precisely the "lies on the carrier is not IS the carrier" trap; requiring the
+    /// direction too refuses it with no separate guard.</para>
+    ///
+    /// <para>A nonzero axial spread is the scale-free complement of
+    /// <see cref="TryRevolvedDisk"/>'s guard, so a disk can never be read as a band of zero
+    /// height and the two recognizers partition the straight-generator family.</para>
+    /// </summary>
+    private static bool TryCylinderCarrier(
+        RevolvedSurface revolved, out CylinderSurface cylinder, out Interval axialSpan)
+    {
+        cylinder = null!;
+        axialSpan = default;
+        if (!revolved.IsFullTurn)
+            return false;
+
+        var axis = revolved.AxisDirection.Normalized();
+        var generator = revolved.Generator;
+        var domain = generator.Domain;
+        var first = generator.PointAt(domain.Start) - revolved.AxisOrigin;
+        double firstAxial = first.Dot(axis);
+        var radial = first - axis * firstAxial;
+        double radius = radial.Length;
+        if (radius < Tolerance.Default.Linear)
+            return false; // the generator starts on the axis: a pole, not a band
+
+        double axialLo = firstAxial, axialHi = firstAxial;
+        // Weld tier scaled by the radius: a bore wall's generator is CONSTRUCTED at a
+        // constant offset from the axis, so anything looser would admit a taper.
+        double tolerance = Math.Max(Tolerance.Default.Linear, radius * 1e-12);
+        for (int i = 1; i <= CoaxialSamples; i++)
+        {
+            var offset = generator.PointAt(domain.ParameterAt((double)i / CoaxialSamples))
+                - revolved.AxisOrigin;
+            double axial = offset.Dot(axis);
+            if ((offset - axis * axial - radial).Length > tolerance)
+                return false;
+            axialLo = Math.Min(axialLo, axial);
+            axialHi = Math.Max(axialHi, axial);
+        }
+        if (axialHi - axialLo <= Math.Max(axialHi - axialLo, radius) * 1e-12)
+            return false; // no axial spread: a disk, which TryRevolvedDisk owns
+
+        var x = radial / radius;
+        cylinder = new CylinderSurface(revolved.AxisOrigin, x, axis.Cross(x), radius);
+        axialSpan = new Interval(axialLo, axialHi);
+        return true;
+    }
+
+    /// <summary>
+    /// A plane meeting a cylindrical band: the SAME exact conics
+    /// <see cref="PlaneCylinder"/> gives a real cylinder, restricted to the extent the
+    /// band actually carries — the mirror of <see cref="PlaneRevolved"/>'s rule that no
+    /// circle is invented above a blind bore's end.
+    ///
+    /// <para>Two shapes of answer and two clips. The axis-PARALLEL pair are lines along the
+    /// axis, so the restriction is an exact interval clip on their own parameter and both
+    /// ends land on the band's rim in closed form; that is the case the tracer could only
+    /// reach as a fixed-sample polyline, and it is what a bore breaking out through a face
+    /// parallel to its axis is made of. An OBLIQUE plane's conic is accepted only when it
+    /// lies WHOLLY within the axial extent — one comparison, since the axial coordinate
+    /// along a conic is c + a·cos θ + b·sin θ and so ranges over c ± hypot(a, b) — and
+    /// otherwise falls through to the tracer rather than being clipped here, the same
+    /// wholly-inside rule <see cref="TryPatchQuadric"/> applies to a bounded patch.</para>
+    ///
+    /// <para>The axis-PERPENDICULAR case never arrives: <see cref="IsPerpendicularFullTurn"/>
+    /// claims it earlier in the switch, so every circle a drilled cap already produced keeps
+    /// its incumbent arithmetic bit-for-bit.</para>
+    /// </summary>
+    private static bool TryCylindricalBand(
+        PlaneSurface plane, RevolvedSurface revolved, in Aabb region, out List<Curve3d> curves)
+    {
+        curves = [];
+        if (!TryCylinderCarrier(revolved, out var cylinder, out var axialSpan))
+            return false;
+
+        var axis = cylinder.Axis;
+        var origin = cylinder.Origin;
+        foreach (var curve in PlaneCylinder(plane, cylinder, region))
+        {
+            switch (curve)
+            {
+                case Line3d line:
+                {
+                    // The line runs along the axis, so its own parameter IS the axial
+                    // coordinate up to the origin offset: clip exactly.
+                    var start = line.PointAt(line.Domain.Start);
+                    double lo = Math.Max((start - origin).Dot(axis), axialSpan.Start);
+                    double hi = Math.Min((line.PointAt(line.Domain.End) - origin).Dot(axis), axialSpan.End);
+                    if (hi - lo > Tolerance.Default.Linear)
+                    {
+                        var foot = start - axis * (start - origin).Dot(axis);
+                        curves.Add(new Line3d(foot + axis * lo, foot + axis * hi));
+                    }
+                    break;
+                }
+                case Ellipse3d ellipse:
+                {
+                    double centre = (ellipse.Center - origin).Dot(axis);
+                    double reach = Math.Sqrt(
+                        Math.Pow(ellipse.SemiAxisX.Dot(axis), 2) + Math.Pow(ellipse.SemiAxisY.Dot(axis), 2));
+                    if (centre - reach < axialSpan.Start || centre + reach > axialSpan.End)
+                        return false; // pokes out of the band: the tracer's case, not this one
+                    curves.Add(ellipse);
+                    break;
+                }
+                default:
+                    return false;
+            }
+        }
         return true;
     }
 
