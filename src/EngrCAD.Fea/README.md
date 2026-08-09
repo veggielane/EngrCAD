@@ -2511,10 +2511,36 @@ two-anchor re-fit through the pristine line's own 10³-cycle point (Basquin's va
 floor, where the factors classically do not apply) and `k·S_e` at the unchanged knee:
 Shigley's construction with the curve's own low-cycle value as the anchor rather than a
 second transcribed constant. S_ut and the knee are untouched, exactly-1 returns the
-pristine curve verbatim, and the refusals are named: aluminium (no limit to anchor on),
-a knee at or below the pivot, out-of-data diameters, off-table reliabilities. The
-derived curve is an ordinary `SnCurve`, so the safety-factor and life machinery — and
-the rainflow path below — consume it with nothing special-cased.
+pristine curve verbatim, and the refusals are named: a knee at or below the pivot,
+out-of-data diameters, off-table reliabilities. The derived curve is an ordinary
+`SnCurve`, so the safety-factor and life machinery — and the rainflow path below —
+consume it with nothing special-cased.
+
+**The knee-less (aluminium) correction is `WithEnduranceFactorAt(factor, referenceLife)` /
+`WithFactorsAt(finish, referenceLife, …)`**, a separate overload because a knee-less line falls
+forever, so "the endurance strength" is only meaningful at a STATED reference life (5×10⁸ cycles
+is the rotating-beam convention) — required, not defaulted, because the reference life IS the
+claim. The factor knocks down the strength AT that life, re-fitting through the same 10³ pivot,
+and the line stays knee-less (no endurance limit is invented). Verified as an identity: at the
+reference life the corrected strength is exactly `factor·(pristine strength there)`, the pivot
+is unchanged, `HasEnduranceLimit` stays false, and a knee'd curve is refused by name (its
+reference IS its knee — use `WithEnduranceFactor`).
+
+## Miner–Haibach: the sloped line past the knee
+
+`SnCurve.WithHaibachSlope()` is the variable-amplitude S-N mode: continue the line past the
+endurance knee at a shallower slope `b' = b/(2 + b)` (the classical `k' = 2k − 1`) instead of
+leaving it flat. The flat line is a CONSTANT-amplitude idea — a sub-limit amplitude arrests
+small cracks and does no damage — but under a spectrum the larger cycles start cracks and the
+small cycles then grow them, so the flat line understates the damage. Two consequences, both
+verified: a stress below the endurance limit now has a FINITE life (measured 1.125e-4 damage on
+a 0.9·limit spectrum where the flat line reads exactly 0 — the STEP in the damage function
+becomes continuous, a cycle just under the limit carrying a small damage rather than none), and
+the endurance PLATEAU is gone, so `HasEnduranceLimit` is false and the infinite-life safety
+factor no longer exists — the fatigue machinery then requires a design life, exactly the rule a
+knee-less aluminium curve earns (one rule, not two). It is a DERIVED curve (the transcribed row
+stays pristine), continuous at the knee to round-off, identical to the flat curve BELOW the
+knee, and refuses a knee-less material (nothing to slope) or a doubled continuation.
 
 ## Variable amplitude: rainflow over `TransientResults`
 

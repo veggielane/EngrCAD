@@ -145,6 +145,78 @@ public class MarinFactorTests(ITestOutputHelper output)
         AssertRelative(derived.EnduranceLimit!.Value, strength, 1e-12);
     }
 
+    // ---- the knee-less (aluminium) correction at a stated reference life --------------
+
+    [Fact]
+    public void TheAluminiumCurvePivotsAtTenCubedAndScalesTheReferenceStrengthExactly()
+    {
+        // 6061-T6 has no endurance limit, so the factor is applied at a stated reference life
+        // (5e8 is the rotating-beam convention) and the line stays knee-less.
+        var pristine = FatigueMaterials.Aluminium6061T6;
+        const double factor = 0.7;
+        const double referenceLife = 5e8;
+        var derived = pristine.WithEnduranceFactorAt(factor, referenceLife, "test");
+
+        // The pivot is unchanged (to round-off of the re-fit).
+        AssertRelative(pristine.StressAt(1e3), derived.StressAt(1e3), 1e-12);
+        // At the reference life the strength is EXACTLY the factor times the pristine one —
+        // the defining property of the construction.
+        AssertRelative(
+            factor * pristine.StressAt(referenceLife), derived.StressAt(referenceLife), 1e-12);
+        // The line stays knee-less: no endurance limit was invented.
+        Assert.False(derived.HasEnduranceLimit);
+        Assert.Null(derived.EnduranceLife);
+        // The static anchor is untouched.
+        Assert.Equal(pristine.UltimateStrength, derived.UltimateStrength);
+        // Between the anchors the corrected line sits below the pristine one, and lives shorten.
+        foreach (double cycles in new[] { 1e5, 1e7, 1e8 })
+            Assert.True(derived.StressAt(cycles) < pristine.StressAt(cycles));
+        output.WriteLine(pristine.ToString());
+        output.WriteLine(derived.ToString());
+    }
+
+    [Fact]
+    public void TheAluminiumFullStackMatchesTheFactorAtTheReferenceLife()
+    {
+        var pristine = FatigueMaterials.Aluminium6061T6;
+        const double referenceLife = 5e8;
+        var derived = pristine.WithFactorsAt(
+            SurfaceFinish.Machined, referenceLife, diameterMm: 20, reliability: 0.99);
+        double factor = MarinFactors.Surface(SurfaceFinish.Machined, pristine.UltimateStrength)
+            * MarinFactors.Size(20) * MarinFactors.Reliability(0.99);
+        output.WriteLine($"combined factor {factor:F4}; {derived}");
+        AssertRelative(
+            factor * pristine.StressAt(referenceLife), derived.StressAt(referenceLife), 1e-12);
+        Assert.Contains("Machined", derived.Name);
+        Assert.False(derived.HasEnduranceLimit);
+    }
+
+    [Fact]
+    public void AnAluminiumFactorOfExactlyOneReturnsThePristineCurveVerbatim()
+    {
+        var pristine = FatigueMaterials.Aluminium2024T351;
+        Assert.Same(pristine, pristine.WithEnduranceFactorAt(1.0, 5e8));
+    }
+
+    [Fact]
+    public void TheKneeLessCorrectionRefusesTheContradictions()
+    {
+        var aluminium = FatigueMaterials.Aluminium6061T6;
+
+        // A knee'd curve has its own reference (the knee) — use WithEnduranceFactor.
+        var kneed = Assert.Throws<FeaException>(() =>
+            FatigueMaterials.Steel1045.WithEnduranceFactorAt(0.8, 5e8));
+        Assert.Contains("endurance knee", kneed.Message);
+
+        // A reference life at or below the pivot tilts the low-cycle regime.
+        var lowRef = Assert.Throws<FeaException>(() => aluminium.WithEnduranceFactorAt(0.8, 500));
+        Assert.Contains("pivot", lowRef.Message);
+
+        // Factors outside (0, 1].
+        Assert.Throws<FeaException>(() => aluminium.WithEnduranceFactorAt(0.0, 5e8));
+        Assert.Throws<FeaException>(() => aluminium.WithEnduranceFactorAt(1.2, 5e8));
+    }
+
     // ---- refusals ---------------------------------------------------------------------
 
     [Fact]

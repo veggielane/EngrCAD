@@ -325,13 +325,19 @@ through `k·S_e` at the unchanged knee — Shigley's two-anchor construction wit
 curve's own low-cycle value as the anchor rather than a second transcribed constant.
 The ultimate strength is untouched (a finish does not change a static failure), a
 factor of exactly 1 returns the pristine curve verbatim, and the correlations refuse
-what they cannot answer by name: aluminium (no endurance limit to anchor on — a
-knee-less material needs a stated reference life, a different construction), diameters
-past the 254 mm data, and reliabilities off the standard table (interpolating a
-quantile through it would invent precision the 8%-scatter assumption does not have).
-The correlations themselves are transcribed **verify-against-datasheet** like every
-constant table here — the classic worked values (machined at 690 MPa → 0.798, 32 mm →
-0.858, 99% → 0.814) are the transcription tests.
+what they cannot answer by name: a knee at or below the pivot, diameters past the
+254 mm data, and reliabilities off the standard table (interpolating a quantile through
+it would invent precision the 8%-scatter assumption does not have). The correlations
+themselves are transcribed **verify-against-datasheet** like every constant table here —
+the classic worked values (machined at 690 MPa → 0.798, 32 mm → 0.858, 99% → 0.814) are
+the transcription tests.
+
+**For aluminium the reference life must be stated.** A knee-less line falls forever, so
+there is no endurance knee for `WithFactors` to anchor on — use `WithFactorsAt(finish,
+referenceLife, …)` (or `WithEnduranceFactorAt(factor, referenceLife)`), which knocks the
+strength down AT that life (5e8 cycles is the rotating-beam convention) and re-fits
+through the same 10³ pivot, leaving the line knee-less. The reference life is required
+rather than defaulted because it *is* the claim being made.
 
 ## Variable amplitude: rainflow over a transient run
 
@@ -469,8 +475,12 @@ static pair's field is built from, so a one-cycle spectrum answers **bit-identic
 > goes from contributing nothing to contributing `count/10⁶`, so `D(k) = target` has no
 > solution when the target lands inside a step. The factor reported is then the crossing
 > itself — the smallest multiplier at which the target is reached — and that step is the
-> flat-line S-N model's own artefact, not this solve's. The standard remedy
-> (Miner–Haibach: continue the line past the knee at a shallower slope) is filed.
+> flat-line S-N model's own artefact, not this solve's. The standard remedy is
+> `SnCurve.WithHaibachSlope()` — continue the line past the knee at the shallower slope
+> `b' = b/(2 + b)`, so a sub-limit cycle carries a small finite damage and `D(k)` becomes
+> continuous (a target inside the old step then has a solution). It removes the endurance
+> *plateau*, so the resulting curve has no infinite-life strength and `DesignRepetitions`
+> becomes required — the same rule aluminium earns.
 
 A material with **no endurance limit** has no infinite life to measure against, so there
 `DesignRepetitions` is **required** and its absence is refused by name — verbatim the

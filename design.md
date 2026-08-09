@@ -1765,17 +1765,42 @@ curve's own low-cycle point as the anchor rather than a second transcribed const
 (`f·S_ut` would be one more datasheet number to verify). S_ut is untouched because a
 finish does not change a static failure; a factor of exactly 1 returns the pristine
 object verbatim (re-deriving would move the coefficients by ulps for nothing — the
-exact-zero-semantic-test tier); and the refusals are named: aluminium (no limit to
-anchor on — a knee-less material needs a stated reference life, a different
-construction), a knee at or below the pivot, diameters past the correlation's 254 mm
-data (the classical 0.6 floor is an assumption, not a fit, and this library does not
-assume it silently), and reliabilities off the standard table, since interpolating a
-normal quantile through it would invent precision the underlying 8%-scatter assumption
-does not have. The transcription tests are the textbook's own worked values (0.798 /
-0.858 / 0.814), not the formulas re-typed — a re-typed formula agrees with its own
-transcription mistake — and the first run caught exactly that: three hand-approximated
-expected values were off in the third decimal and the worked-value anchors (690 MPa
-machined, 32 mm) were not.
+exact-zero-semantic-test tier); and the refusals are named: a knee at or below the
+pivot, diameters past the correlation's 254 mm data (the classical 0.6 floor is an
+assumption, not a fit, and this library does not assume it silently), and reliabilities
+off the standard table, since interpolating a normal quantile through it would invent
+precision the underlying 8%-scatter assumption does not have. The transcription tests are
+the textbook's own worked values (0.798 / 0.858 / 0.814), not the formulas re-typed — a
+re-typed formula agrees with its own transcription mistake — and the first run caught
+exactly that: three hand-approximated expected values were off in the third decimal and
+the worked-value anchors (690 MPa machined, 32 mm) were not.
+
+**The knee-less (aluminium) correction landed as a SEPARATE overload, and the separation
+IS the design.** `WithEnduranceFactor` anchors on the endurance limit, which aluminium does
+not have — so `WithEnduranceFactorAt(factor, referenceLife)` / `WithFactorsAt(finish,
+referenceLife, …)` apply the factor at a STATED reference life instead, re-fitting through
+the same 10³ pivot. The reference life is REQUIRED rather than defaulted, because a
+knee-less line falls forever so "the endurance strength" only exists at a stated life (5×10⁸
+is the rotating-beam convention), and the reference life IS the claim being made — defaulting
+it would put a number the user did not state into the answer. The corrected line stays
+knee-less (the correction does not invent an endurance limit the material lacks), and the
+oracle is the defining identity: at the reference life the corrected strength is exactly
+`factor·(pristine there)`, the pivot is untouched, and a knee'd curve is refused by name (its
+reference IS its knee).
+
+**Miner–Haibach landed as an S-N MODE** (`WithHaibachSlope`), a derived curve leaving the
+transcribed row pristine, and the design turns on what removing the flat line does to the rest
+of the machinery. The flat endurance line is a constant-amplitude idea — a sub-limit amplitude
+arrests small cracks and does no damage — so `D(k)` has a STEP where a cycle crosses the limit,
+which the spectrum factor (§below) reports as a crossing rather than a solution. Haibach
+continues the line past the knee at the shallower slope `b' = b/(2+b)` (the classical
+`k' = 2k−1` for the Wöhler slope `k = -1/b`), so a sub-limit cycle carries a small finite
+damage and `D(k)` becomes continuous (measured 1.125e-4 on a 0.9·limit spectrum where the flat
+line reads exactly 0; identical to the flat curve BELOW the knee). The load-bearing consequence
+is that the endurance PLATEAU is gone, so a Haibach curve reports `HasEnduranceLimit = false` —
+and that makes the infinite-life refusal ONE rule rather than two: the fatigue machinery already
+refuses an infinite-life factor for a knee-less material and requires a design life, so a
+Haibach curve reuses that path verbatim (the "one rule instead of two" the backlog predicted).
 
 ### Rainflow over a transient run, and the two design questions it answered in code
 
@@ -1878,8 +1903,10 @@ over), and the factor is exactly inverse in the load scale.
 the damage function — a crossing cycle goes from contributing nothing to contributing
 `count/10^6` — so `D(k) = target` has no solution when the target lands inside a step; what
 is reported is then the crossing itself (the smallest multiplier at which the target is
-reached), and the step belongs to the flat-line S-N model rather than to this solve, with
-Miner–Haibach filed as the standard remedy. And a node whose history never MOVES carries no
+reached), and the step belongs to the flat-line S-N model rather than to this solve — and
+`SnCurve.WithHaibachSlope` is the standard remedy that removes it (a sloped continuation past
+the knee makes `D(k)` continuous, so a target inside the old step now has a solution; see the
+Miner–Haibach subsection above). And a node whose history never MOVES carries no
 counted cycle at all, so it reads NaN however large its steady stress: rainflow measures
 cycles, and a steady load is a static-strength question — the static pair answers it, since
 two identical cases still carry a mean and report the `S_ut/sigma_m` margin. The refusals
