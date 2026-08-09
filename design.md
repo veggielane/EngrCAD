@@ -2913,6 +2913,89 @@ exists to hold. The 45° arithmetic stays on its own exact-1 branch so every thr
 already in the repository is bit-identical (`a * InvSqrt2` and `a / Math.Sqrt(2)` are not
 the same double).
 
+##### The clearance profile, and why the generator had to learn arcs
+
+A printing CLEARANCE was the one thread feature with no exact B-Rep counterpart, and the
+reason is worth stating precisely because it is not "the geometry is hard": a clearance is
+a **distance-field offset** of the (radius, axial) profile — that is what `Sdf.Thread`'s
+own clearance is — and eroding the material MITERS its crest corners while ROUNDING its
+root corners into arcs of the clearance radius. So the eroded solid is still ONE
+boolean-free helical sweep; its generator simply mixes straight pieces and circular arcs.
+
+**The miter-only alternative was refused rather than unexplored.** Offsetting every flat
+and flank perpendicular to itself and mitering all four corners needs no arcs at all and is
+a perfectly reasonable clearance convention — and it would make the B-Rep and the implicit
+route two geometries, which is the one thing this kernel does not do. Either both change
+together or neither does, and there is no reason for the field to change.
+
+`HelicalSurface` therefore takes either generator, and the design decision was to EXTEND it
+rather than add a sibling. The alternative reads safer (a sibling simply would not match
+`TryCoaxialProfileLine`'s pattern, so the coaxial family would decline it and fall to the
+tracer) and is worse where it counts: `IsFullHelicalBand`, `NaturalSteps`, `BrepSelection`,
+`BrepArchive` and `GeometryTransform` all switch on the TYPE to reach helical-specific
+machinery, and a sibling missing from any one of them falls silently into a generic path.
+Extending puts the question where it belongs — `IsStraightGenerator` is an exact-zero test
+on the arc radius, and the two consumers whose own derivation assumes straightness ask it
+by name.
+
+**The refusal `HelicalSurface` gained is the correctness condition of the cut, not
+caution.** An arc generator's axial coordinate must be strictly monotone — equivalently
+cos φ keeps one sign over the sweep. Substituting the arc into a coaxial carrier
+α·r + β·Z = γ gives `ρ·cos(φ − ψ) = D + slope·u`, whose two arc-cosine branches separate
+exactly when the arc stays inside one half-turn about ψ; a cap plane's ψ is π/2, so
+"single-branch cap cut" and "z monotone" are one statement. It is also the contract
+`MakeThreadedRod` already stated for its corners, read along the piece rather than only at
+its ends. The branch itself is read off the arc's own angular range against the
+representative of ψ nearest it, because an arc ending exactly at δ = ±π — its extreme
+radius, which is where a coaxial cylinder meets it — merely touches that boundary, while an
+arc reaching δ = 0 or ±π in its INTERIOR is tangent to the carrier there and is declined.
+
+`SolidFactory.OffsetPitchProfile` is the erosion, and its corner rule is one expression:
+`offset × turn` decides miter versus arc, so eroding an external thread and growing the tool
+that cuts an internal one are the same code with opposite signs rather than two cases.
+
+**A flat can vanish, and treating that as ordinary rather than as an error is what makes
+the feature usable.** A 60° crest flat loses `|offset|/tan(30°)` of width per side, so an
+M6×1's 0.125 mm crest is gone by a clearance of 0.108 — inside the 0.1–0.25 mm an FDM
+printer wants — and the eroded thread is correctly a POINTED ridge where the two offset
+flanks cross. That segment's offset half-plane has become redundant, which is exactly what
+"its offset length went non-positive" measures, so it is dropped and its neighbours mitered
+directly. The drop is sound only where both of its corners miter (the region is locally
+convex there, so the erosion really is the intersection of the offset half-planes), and
+anything else refuses by name.
+
+**Two things the verification caught that a shape comparison would not.** The oracle is the
+field: every lateral tessellation vertex of an eroded M6×1 rod reads |sdf| ≤ 2.0e-15 against
+`Sdf.Thread`'s own clearance field at clearances 0.02 through 0.25, while the SAME vertices
+read up to 0.2495 against the uncleared one — the control is what makes the first number
+mean something, since a bound alone would pass a rod that had never been eroded. And the
+*tessellation* had a real defect that only a facet-quality audit sees: **v is not linear in
+u on an arc band**, so sampling the cap cut at uniform u — which every other curve here
+wants — and pairing those samples with grid rows at uniform v shears every quad against the
+cap it neighbours. Measured on a 0.05 clearance rod at 16 segments per circle: 308 folded
+facets, worst normal agreement −0.366, and a residual that GREW with density (0.230 at 32,
+0.529 at 48, 0.801 at 96) instead of converging. Sampling at uniform generator ANGLE
+instead — `HelicalArcCut3d.ParameterAtAngle`, with the two ends taken from the domain
+verbatim so the shared rail vertices stay bit-exact — fixes it, and the same rod then reads
+0.365 / 0.690 / 0.916 and the corpus member (a 0.2 clearance) 0.457 / 0.979 / 0.995 against
+floors of 0.383 / 0.924 / 0.981.
+
+The band grid's interior shear needed the matching correction and it is the same fact from
+the other side: the incumbent lerp between the two rails IS the exact shear for a straight
+generator (u_left(v) is affine there) and a CHORD for an arc, whose sagitta measurably
+exceeds one column, so the first interior column would land outside the cap it neighbours
+and the mesh would poke past the end face. The arc path uses the exact axial form
+`u(v) = u(0) + (z(0) − z(v))/rate`; the straight path keeps the lerp verbatim, so every
+threaded rod already in the repository tessellates bit-identically.
+
+**One residual is stated rather than filed**, because it is a property of the density a
+caller asks for rather than a defect: a band's u chord sagitta must not exceed the band's
+own height, or the facet normals are dominated by the sagitta. At radius r and n segments
+per circle that is `r(1 − cos(π/n)) < ρ·|sweep|`, so a 0.05 clearance on a P = 1.25 thread
+(ρ|sweep| = 0.052 mm at r ≈ 3.3) needs n > 18 and folds at 16. The default is 32 and every
+figure in the docs uses 48 or more; a small clearance at a very coarse density is the one
+configuration that does not hold, and it converges rather than sitting on a floor.
+
 ##### Terminating a traced branch on a bounded band's rail
 
 The *non*-coaxial pairs — a cross-hole, a tilted face — are genuinely transcendental and

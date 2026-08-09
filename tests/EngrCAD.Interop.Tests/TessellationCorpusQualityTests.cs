@@ -47,7 +47,7 @@ public class TessellationCorpusQualityTests
     [
         "drilled plate", "cross-drilled housing", "cross-drilled cylinder band",
         "spherical cavity", "drilled sphere",
-        "threaded rod", "threaded hole",
+        "threaded rod", "threaded hole", "clearance thread",
         "loft", "shelled tray", "shelled cup", "shelled cone", "shelled elbow",
         "drafted boss", "drafted cylinder",
         "filleted box", "filleted L", "filleted hexagon", "chamfered box", "variable chamfer",
@@ -109,6 +109,13 @@ public class TessellationCorpusQualityTests
                 return (Shape.Sphere(10) - Shape.Cylinder(3, 40)).ToBrep();
             case "threaded rod":
                 return SolidFactory.MakeThreadedRod(ThreadProfile(), ThreadPitch, 6);
+            // The same rod eroded by a printing clearance: its root corners are ARC
+            // generators, so half its bands are the arc family and both cap loops chain
+            // HelicalArcCut3d beside SpiralArc3d.
+            case "clearance thread":
+                return SolidFactory.MakeThreadedRod(
+                    SolidFactory.OffsetPitchProfile(ThreadProfile(), ThreadPitch, -0.2),
+                    ThreadPitch, 6);
             case "threaded hole":
                 return Shape.Box(30, 30, 12)
                     .ThreadedHole(StandardThreads.Metric(8), [new(0, 0)], 8, At(6))

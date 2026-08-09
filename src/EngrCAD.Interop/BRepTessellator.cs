@@ -306,8 +306,24 @@ public static class BRepTessellator
         {
             int n = AngularSegments(TurningAngle(edge.Curve, domain), segmentsPerCircle);
             var points = new List<Vector3d>(n + 1);
+            // An arc-generator cut is sampled at uniform GENERATOR ANGLE rather than at
+            // uniform u, because v is linear in the angle and NOT in u: the band grid pairs
+            // these samples with interior rows at uniform v, and sampling the other way
+            // shears every quad against the cap it neighbours (measured: 308 folded facets
+            // on a 0.05 clearance rod at 16 segments, and a residual that grew with
+            // density). The two ends are taken from the domain verbatim, so the shared
+            // rail vertices stay bit-exact.
+            var arcCut = edge.Curve as HelicalArcCut3d;
+            double startAngle = arcCut?.AngleAt(domain.Start) ?? 0;
+            double endAngle = arcCut?.AngleAt(domain.End) ?? 0;
             for (int i = 0; i <= n; i++)
-                points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
+            {
+                double fraction = (double)i / n;
+                double t = arcCut is null || i == 0 || i == n
+                    ? domain.ParameterAt(fraction)
+                    : arcCut.ParameterAtAngle(startAngle + (endAngle - startAngle) * fraction);
+                points.Add(edge.Curve.PointAt(t));
+            }
             return points;
         }
 

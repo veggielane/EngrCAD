@@ -24,10 +24,12 @@ public class ThreadShapeTests
         Assert.True(plain.Explain(TargetRep.Brep).IsConvertible);
         Assert.All(plain.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
 
-        // Printing clearance reshapes the profile as a distance field — honest Impossible.
+        // Printing clearance reshapes the profile as a distance field — and that is
+        // B-Rep-Native too, because the eroded profile's rounded root corners are ARC
+        // generators, which a helical band now takes. The report names the mechanism.
         var cleared = Shape.ExternalThread(M8, 12, clearance: 0.2, chamferEnds: false);
-        Assert.False(cleared.Explain(TargetRep.Brep).IsConvertible);
-        Assert.Contains(cleared.Explain(TargetRep.Brep).Entries, e => e.Detail?.Contains("clearance") == true);
+        Assert.True(cleared.Explain(TargetRep.Brep).IsConvertible);
+        Assert.Contains(cleared.Explain(TargetRep.Brep).Entries, e => e.Detail?.Contains("ARC") == true);
 
         // Implicit is native for all variants.
         var implicitReport = chamfered.Explain(TargetRep.Implicit);
@@ -162,12 +164,12 @@ public class ThreadShapeTests
         var plate = Shape.Box(20, 20, 8);
         var tapped = plate.ThreadedHole(spec, [new(0, 0)], depth: 10, top);
 
-        // Zero-clearance threaded holes are B-Rep-Native (one clipped-profile tool per
-        // point); nonzero clearance reports the distance-field blocker truthfully.
+        // Threaded holes are B-Rep-Native (one clipped-profile tool per point) with or
+        // without clearance: the clearance GROWS the same tool by the distance-field
+        // offset, whose rounded corners are arc generators the band takes.
         Assert.True(tapped.Explain(TargetRep.Brep).IsConvertible);
         var cleared = plate.ThreadedHole(spec, [new(0, 0)], 10, top, clearance: 0.2);
-        Assert.False(cleared.Explain(TargetRep.Brep).IsConvertible);
-        Assert.Contains(cleared.Explain(TargetRep.Brep).Entries, e => e.Detail?.Contains("clearance") == true);
+        Assert.True(cleared.Explain(TargetRep.Brep).IsConvertible);
         Assert.True(tapped.Explain(TargetRep.Implicit).IsConvertible);
 
         var mesh = tapped.ToMesh(new MeshQuality { SdfResolution = 128 });

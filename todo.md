@@ -535,39 +535,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
-- [ ] **Clearance profiles in B-Rep — arc-generator helical bands.** The one thread
-  feature with no exact B-Rep counterpart, and the geometry is fully derived; what is
-  missing is machinery, listed here so the next attempt starts from the maths.
-  A printing clearance is a DISTANCE-FIELD offset of the (radius, axial) profile, so on an
-  external thread (erode by c) the material's CONVEX corners — the two ends of each crest
-  flat — miter to a sharp intersection of the offset lines, while its REFLEX corners — the
-  two ends of each root flat — round into a circular ARC of radius c centred on the
-  original corner. (An internal thread's void dilates and the roles swap.) So the eroded
-  profile per pitch is: crest flat at `major − c`, sharp corner, perpendicular-offset
-  flank, ARC, root flat at `minor − c`, ARC, flank, sharp corner. Every piece but the two
-  arcs is already expressible.
-  - The **miter alternative is refused rather than unexplored**: offsetting each flat and
-    flank perpendicular to itself and mitering the root corners needs no new machinery at
-    all and is a legitimate clearance convention — but `ThreadSdf`'s clearance is the
-    distance-field offset, so the two representations would stop being one geometry, which
-    is the property `ChamferedThreadTests.TheBrepChamferAgreesWithTheImplicitFieldAtEveryVertex`
-    exists to hold. Changing the SDF to match would move committed renders and every
-    printed-fit figure. Either both change together or neither does.
-  - What has to be built: `HelicalSurface` (or a sibling) over a CIRCULAR-ARC generator in
-    the (r, z) plane, with exact `PointAt`/`NormalAt`/`TryProjectPoint`; a new cap-cut
-    CURVE, because substituting an arc generator `(r, z) = C + ρ(cos φ, sin φ)` into
-    `z(v) + rate·u = z_cap` gives `φ(u) = asin((z_cap − C_z − rate·u)/ρ)` — closed form, but
-    `r(u) = C_r ± √(ρ² − (z_cap − C_z − rate·u)²)` is not linear in u, so it is NOT a
-    `SpiralArc3d`; the coaxial intersection family (whose whole derivation rests on v being
-    linear in u for a STRAIGHT generator); `MakeThreadedRod` taking arc segments in its
-    profile; and `BRepTessellator`'s `NaturalSteps`, whose v gets an INFINITE step today on
-    the stated ground that the generator is straight and a v-chord therefore lies exactly on
-    the surface — flatly wrong for an arc, so leaving it would be a silent fidelity
-    regression rather than a refusal. Plus `BrepArchive`, `GeometryTransform` and
-    `BrepSelection`.
-  - Note `SurfaceOffset` does NOT help: it keeps each carrier in its own family and has no
-    `HelicalSurface` case, and a helical band's offset is a helical band on an OFFSET
-    GENERATOR, which is exactly the arc-generator work.
 - [ ] **A traced branch that stops at a FOLD still ends inside its face.** The
   termination half of the non-coaxial helical work ✅ landed (`TryLandOnDomain` — see the
   BRep README), taking a cross-drilled M8×1.25 rod from refusing at 13 of 13 bores between

@@ -559,6 +559,21 @@ public sealed class HelicalArcCut3d : Curve3d
         return _psi + Branch * Math.Acos(g);
     }
 
+    /// <summary>
+    /// The parameter at which the generator angle is <paramref name="angle"/> — the
+    /// carrier relation read the other way round, <c>u = (ρ·cos(φ − ψ) − D)/slope</c>.
+    /// <para>It exists because <b>the band's v is NOT linear in u here</b>, which is the
+    /// whole difference from <see cref="SpiralArc3d"/>: a consumer that samples this curve
+    /// at uniform u and pairs the samples with rows at uniform v — which is exactly what a
+    /// helical band's grid does — shears every quad against the cap it neighbours. Measured
+    /// on a 0.05 clearance rod at 16 segments per circle: 308 folded facets, worst normal
+    /// agreement −0.366, and the residual GREW with density rather than converging.</para>
+    /// </summary>
+    public double ParameterAtAngle(double angle) =>
+        // Exact-zero test: a bit-zero slope is the coaxial cylinder carrier, whose angle
+        // never moves, so no parameter is named by one.
+        _slope == 0 ? _domain.Start : (ArcRadius * Math.Cos(angle - _psi) - _offset) / _slope;
+
     /// <summary>Radius at <paramref name="t"/>; exact for a coaxial cylinder carrier.</summary>
     public double RadiusAt(double t) => CarrierAxial == 0
         ? CarrierOffset / CarrierRadial
@@ -660,18 +675,36 @@ public sealed class HelicalArcCut3d : Curve3d
         double d = offset - radial * band.ArcCenter.X - axial * band.ArcCenter.Y;
         double slope = -axial * band.AxialRate;
 
-        // The branch is whichever side of psi the generator arc sits on. Both ends must
-        // agree strictly: an arc reaching delta = 0 or delta = pi touches the carrier
-        // tangentially there, where acos has a square-root singularity and the cut is not
-        // a single arc-cosine branch at all.
-        double delta0 = Principal(band.ArcStartAngle - psi);
-        double delta1 = Principal(band.ArcAngleAt(1) - psi);
-        if (!(delta0 * delta1 > 0))
-            return false;
-        int branch = delta0 > 0 ? 1 : -1;
-        if (Math.Abs(delta0) >= Math.PI || Math.Abs(delta1) >= Math.PI)
-            return false;
-
+        // The branch is which side of psi the generator arc sits on, and it is decided
+        // against the representative of psi NEAREST the arc rather than through a principal
+        // wrap: an arc ending exactly at delta = +-pi (its own extreme radius, which is
+        // where a coaxial cylinder carrier meets it) would otherwise have that end wrapped
+        // to the far side and be refused for a boundary it merely touches. An arc reaching
+        // delta = 0 or +-pi in its INTERIOR is a different matter — the carrier is tangent
+        // to it there, acos has a square-root singularity, and the cut is not one branch.
+        //
+        // The slack is an absolute ANGULAR floor, which the epsilon ladder admits because
+        // radians are dimensionless; it only decides which of two labels an endpoint
+        // tangency takes, and at such a point the two branches agree.
+        const double angleFloor = 1e-9;
+        double phiLo = Math.Min(band.ArcStartAngle, band.ArcAngleAt(1));
+        double phiHi = Math.Max(band.ArcStartAngle, band.ArcAngleAt(1));
+        double turns = Math.Round(((phiLo + phiHi) / 2 - psi) / (2 * Math.PI));
+        double near = psi + 2 * Math.PI * turns;
+        double deltaLo = phiLo - near, deltaHi = phiHi - near;
+        int branch;
+        if (deltaLo + deltaHi >= 0)
+        {
+            if (!(deltaLo >= -angleFloor && deltaHi <= Math.PI + angleFloor))
+                return false;
+            branch = 1;
+        }
+        else
+        {
+            if (!(deltaHi <= angleFloor && deltaLo >= -Math.PI - angleFloor))
+                return false;
+            branch = -1;
+        }
         // The generator angles the cut may reach: the arc's own ends, narrowed by the
         // carrier's radial extent when it has one.
         double phiA = band.ArcStartAngle, phiB = band.ArcAngleAt(1);
@@ -681,14 +714,15 @@ public sealed class HelicalArcCut3d : Curve3d
             if (Math.Max(rA, rB) < radii.Start || Math.Min(rA, rB) > radii.End)
                 return false;
             if (radii.Start > Math.Min(rA, rB) &&
-                TryAngleForRadius(band, radii.Start, out double phiLo))
-                (phiA, phiB) = NarrowTo(phiA, phiB, phiLo, rA < rB);
+                TryAngleForRadius(band, radii.Start, out double atLow))
+                (phiA, phiB) = NarrowTo(phiA, phiB, atLow, rA < rB);
             if (radii.End < Math.Max(rA, rB) &&
-                TryAngleForRadius(band, radii.End, out double phiHi))
-                (phiA, phiB) = NarrowTo(phiA, phiB, phiHi, rA > rB);
+                TryAngleForRadius(band, radii.End, out double atHigh))
+                (phiA, phiB) = NarrowTo(phiA, phiB, atHigh, rA > rB);
         }
-        delta0 = Principal(phiA - psi);
-        delta1 = Principal(phiB - psi);
+        // Measured against the SAME representative of psi the branch was chosen against,
+        // so the cosines below are the ones that branch's own acos inverts.
+        double delta0 = phiA - near, delta1 = phiB - near;
 
         double lo = clip.Start, hi = clip.End;
         // Deliberate exact-zero test: a bit-zero slope is the coaxial CYLINDER carrier,
@@ -715,10 +749,6 @@ public sealed class HelicalArcCut3d : Curve3d
             radial, axial, offset, branch, new Interval(lo, hi));
         return true;
     }
-
-    /// <summary>Wraps an angle into (−π, π].</summary>
-    private static double Principal(double angle) =>
-        angle - 2 * Math.PI * Math.Floor((angle + Math.PI) / (2 * Math.PI));
 
     /// <summary>
     /// The generator angle at which the arc reaches <paramref name="radius"/>. The arc

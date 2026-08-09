@@ -55,6 +55,26 @@ operations. Depends only on `EngrCAD.Core`.
   that omits the axial term entirely needs the *stricter* "in the frame's own X/Y plane",
   because adding a zero VECTOR is not a no-op on a −0.0 coordinate and every threaded
   rod's cap loop must stay bit-identical.
+  `HelicalArcCut3d` is the same family one generator up — what a coaxial straight-profile
+  carrier cuts from an **arc-generator** `HelicalSurface`, i.e. from a clearance thread's
+  rounded root band. Write the carrier as α·r + β·Z = γ (α = 0 is a plane ⊥ the axis,
+  β = 0 a coaxial cylinder, both nonzero a cone) and substitute the band's
+  r = C_r + ρ·cos φ, Z = C_z + ρ·sin φ + rate·u: collecting gives
+  ρ·cos(φ − ψ) = D + slope·u with ψ = atan2(β, α), so where a straight generator makes v
+  LINEAR in u, an arc makes the generator ANGLE a shifted arc-cosine of an affine function
+  of it, and the radius and axial coordinate follow. Which acos BRANCH is a property of the
+  arc rather than a parameter to guess, and `TryBuild` reads it off the generator's own
+  angular range against the representative of ψ nearest it — an arc ending exactly at
+  δ = ±π (its extreme radius, where a cylinder carrier meets it) merely touches that
+  boundary, while one reaching δ = 0 or ±π in its INTERIOR is tangent to the carrier there
+  and is declined rather than half-answered. The two degenerate carriers keep their own
+  coordinate verbatim (a cap plane returns γ for the axial coordinate, a cylinder γ for the
+  radius), because those are the numbers a cap loop and a runout rim weld against.
+  `ParameterAtAngle` inverts the relation, and it exists for a measured reason: v is not
+  linear in u here, so sampling the cut at uniform u and pairing the samples with band-grid
+  rows at uniform v shears every quad against the cap it neighbours (measured on a 0.05
+  clearance rod at 16 segments per circle: 308 folded facets, worst normal agreement
+  −0.366, and a residual that GREW with density instead of converging).
   `LoftRailCurve` is the curve a fixed section parameter traces across a `LoftedSurface`
   (the loft analogue of `SweptRailCurve`); it evaluates the surface itself rather than
   re-interpolating the junction points, so a rail edge and the face's u = 0 grid column are
@@ -453,6 +473,26 @@ operations. Depends only on `EngrCAD.Core`.
     phases). V = 2K, E = 3K, F = L = K + 2 ⇒
     Euler–Poincaré 0 at genus 0. Exact volume for ANY length:
     L·(2π/P)·∫₀^P ½R(s)² ds (the full angular sweep at each z washes out the phase).
+
+    **A generator piece may be a circular ARC** (`MakeThreadedRod(IReadOnlyList<ThreadProfilePiece>, …)`,
+    the general form the corner overload delegates to), which is what makes a printing
+    CLEARANCE exact rather than approximated: `OffsetPitchProfile(corners, pitch, offset)`
+    is the distance-field offset `Sdf.Thread`'s clearance already is, and its corner rule is
+    ONE expression — `offset × turn` decides MITER versus ARC, so eroding an external thread
+    (mitered crest, rounded roots) and growing the tool that cuts an internal one (the exact
+    reverse) are the same code with opposite signs. An arc piece's band is an arc-generator
+    `HelicalSurface` and its cap cut a `HelicalArcCut3d`; nothing else about the rod changes.
+    A flat whose offset half-plane goes REDUNDANT is dropped and its neighbours mitered — an
+    M6×1's crest flat is gone by a clearance of 0.108 mm, well inside the 0.1–0.25 an FDM
+    printer wants, and the eroded thread is correctly a pointed ridge — with the drop allowed
+    only where both of that flat's corners miter, which is exactly the statement that the
+    region is locally convex there; anything else is refused BY NAME. Verified as one
+    geometry rather than by shape: every lateral tessellation vertex of an eroded M6×1 rod
+    reads |sdf| ≤ 2.0e-15 against `Sdf.Thread`'s own clearance field at clearances 0.02
+    through 0.25, where the SAME vertices read up to 0.2495 against the uncleared field, and
+    the volume converges quadratically (6.007e-3 / 1.512e-3 / 3.783e-4 / 9.562e-5 at
+    32/64/128/256 segments, ratios 0.2517 / 0.2502 / 0.2528) onto the Pappus integral of its
+    own generator.
 
     **`leftHand: true`** winds the same profile the other way. It is not a second
     construction: the axial rate becomes −P/2π and every formula here already carries the
