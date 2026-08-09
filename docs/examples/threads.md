@@ -181,6 +181,38 @@ and for any clearance, take `ToImplicit()`/`ToMesh()`.
 > segments-per-circle its facets are coarser than the rest of the model. Raise the mesh
 > quality if a lead-in renders faceted.
 
+### Thread runout
+
+A thread cut by a die or rolled by a head does not stop in a full-form crest: over a
+pitch or two before the shank the tool withdraws, the crests get shorter, and the thread
+*washes out*. `runoutLength` models that, and it needed no new geometry — the 45° lead-in
+was never a special shape, only the **equal-drop member of a family of coaxial cones**, and
+every member of that family cuts a helical band in the same exact conical spiral. So a
+shallow cone stretched over two pitches is exactly as native as a short steep one:
+
+```csharp render:thread-runout
+// A stud with a lead-in chamfer at its free end and a two-pitch runout at its shank
+// end: the crests are truncated progressively from the major diameter down to the
+// pitch diameter. Native in B-Rep AND in the implicit field.
+var stud = Shape.ExternalThread(8, length: 16, chamferLength: 0.5, runoutLength: 2.5);
+stud.ToBrep().Validate();
+
+var scene = new Scene();
+scene.Add(new Part("M8 stud with a runout", stud, Palette.Steel));
+
+// Side-on: the runout is a change of crest height along the rod, which an iso view
+// foreshortens away.
+var camera = new CameraState(0.6, 0.08, 29, (0, 0, 8));
+```
+
+![An M8 threaded stud whose lower crests taper away into a runout](images/thread-runout.png)
+
+The runout drops to the **pitch** diameter rather than the minor one, and that is what
+keeps it exact: a cone reaching the minor diameter is tangent to every root band along the
+end plane — the same coincident-surface input a full-depth chamfer earns a refusal for. It
+also *replaces* that end's lead-in chamfer, because a stud has a lead-in at its free end
+and a runout at its shank end, not both at once.
+
 **Threaded holes are B-Rep-native too** (at zero clearance): the B-Rep path never
 drills the pilot separately — the pilot bore wall and the thread tool's root band
 would be coaxial (tangent, unsupported boolean input) — and instead subtracts ONE
@@ -197,6 +229,35 @@ var brep = tapped.ToBrep();                       // B-Rep-native threaded hole
 if (!tapped.CanConvertTo(TargetRep.Brep))
     throw new Exception("zero-clearance threaded holes are B-Rep-native");
 ```
+
+## Calling a thread out
+
+A modelled thread should still say what it *is* — a reader of a drawing wants "M8×1.25",
+not a helix to measure. `ThreadAnnotations` attaches that callout, and the interesting
+decision is where each half comes from: the **spec** from the construction graph, the
+**anchor** from the geometry, matched on the two numbers a thread is — its major diameter
+and its pitch, read off the helical bands the lowering produced.
+
+```csharp run:thread-callout
+var stud = new Part("stud", Shape.ExternalThread(8, length: 20, chamferLength: 0.4));
+foreach (var site in ThreadAnnotations.Sites(stud))
+    Console.WriteLine($"{site.Callout} at {site.Anchor}");   // M8x1.25, on its own crest
+
+ThreadAnnotations.AutoAttach(stud);                          // one LeaderNote per thread
+
+// Threaded holes carry their depth, as a drawing's callout does.
+var plate = new Part("plate", Shape.Box(40, 30, 12)
+    .ThreadedHole(StandardThreads.Metric(6), [new(0, 0), new(12, 0)], depth: 8));
+if (ThreadAnnotations.AutoAttach(plate) != 2)
+    throw new Exception("one callout per tapped hole");
+```
+
+Pairing the n-th thread in the graph with the n-th group of faces would be free to put a
+correct-looking M6 callout on an M10 thread — the one failure a naming scheme must not
+have — so it is not done that way. Matching on the geometry can only find *nothing*, and
+then nothing is attached. This is also the first callout an **external** thread has ever
+had here: [the hole table](drawings.md) structurally cannot carry one, a stud not being a
+hole.
 
 ## Left-hand threads
 

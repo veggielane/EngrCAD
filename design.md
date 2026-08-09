@@ -2844,11 +2844,75 @@ wrong.
 
 Two consequences worth stating. First, an end chamfer needs no traced curve at all, so the
 `CornerPolicy.ExactOnly`/`AllowTraced` question that governs curved corners simply does not
-arise for it. Second, the *non*-coaxial pairs — a cross-hole, a tilted face — are genuinely
-transcendental and stay with the tracer, which at thread scale under-seeds them: an M8 rod's
-crest flat is a 13-turn band 0.16 mm tall, and the (u, v) seed grid returns one branch of
-five with every branch stopping short of the rails. That is a seeding-density problem, not a
-trimming one, and it is filed as such.
+arise for it. Second, **a thread RUNOUT is a member of this family rather than a new shape**:
+a runout is what an incomplete (washed-out) thread is — the crests truncated progressively
+toward the shank — which is a coaxial cone at a shallow angle, and nothing in the derivation
+above mentions the angle. So `MakeThreadEndConeTool` takes the radial drop and the axial
+length separately and `MakeThreadEndChamferTool` is it at equal drop; the runout needed a
+parameter, not a surface. Two details carry it. The overshoot that keeps every OTHER face
+of the tool clear of the rod is taken as a quarter of each extent SEPARATELY, which is the
+same number twice at 45° and therefore leaves a chamfer tool bit-for-bit what it was. And
+the cone drops to the **pitch** diameter rather than the minor one, because a cone reaching
+the minor diameter is tangent to every root band along the end plane — the coincident
+curved-surface input the full-depth chamfer default is already refused for.
+
+`Sdf.Thread` learned the same cone SLOPE in the same pass, and that is the point rather
+than a side effect: a runout modelled in one representation and not the other would make
+one `ThreadShape` two geometries, which is exactly what the vertex-against-the-field check
+exists to hold. The 45° arithmetic stays on its own exact-1 branch so every thread field
+already in the repository is bit-identical (`a * InvSqrt2` and `a / Math.Sqrt(2)` are not
+the same double).
+
+##### Terminating a traced branch on a bounded band's rail
+
+The *non*-coaxial pairs — a cross-hole, a tilted face — are genuinely transcendental and
+stay with the tracer. Two things had to be fixed for that to be usable at thread scale and
+they are different mechanisms: **finding** the branches (the anisotropic second seed pass,
+recorded in the performance mandates) and **terminating** them.
+
+The march breaks its step only AFTER the corrector's parameters leave the domain, so an
+open branch always stops up to one whole step short of the rail it was running into. On
+ordinary geometry that shortfall is cosmetic. Here it is not, because the step is scaled to
+the QUERY REGION while the band is not: an M8 crest flat is 0.156 mm tall against a
+0.161 mm step over a 24 mm box, so ONE step crosses the whole band. Measured, branches came
+back spanning v = [0.481, 0.819] of a band whose rails are v = 0 and v = 1 — reaching
+NEITHER — while others were discarded outright by the three-point minimum. A curve that
+reaches neither rail cannot split the face it lies on, which is why a cross-drilled thread
+refused at every bore.
+
+`TryLandOnDomain` solves the terminus rather than extrapolating to it: the tracer's own
+Newton with one coordinate PINNED at its boundary value — three unknowns against the three
+components of S_a − S_b = 0, spelled as `Solve4` with the plane row replaced by
+`delta[k] = 0`, so the pinned coordinate keeps the boundary value bit for bit and the
+landing lies ON the rail rather than near it. The seed usually cannot come from the
+corrected parameters, because the corrector usually **refused** the step: `Eval` clamps a
+non-periodic parameter, so a step past a rail evaluates the rail's own point, the partials
+across it collapse to zero, and the corrector fails on a singular pivot without the domain
+test ever running.
+
+**The scope is the surface PAIR, not the seed**, and that is the decision rather than a
+detail. Scoping by seed is the tidier reading of the additive contract the second seed pass
+carries, and it leaves the isotropic grid's OWN branches on an anisotropic band ending
+strictly inside the face: a cross-drilled M8 flank band still refused with six of them. The
+condition that hides a branch from the isotropic grid and the condition that makes the
+region-scaled step exceed the surface's width are the same condition, and it is a property
+of the surface. Measured on an M8×1.25 6 mm rod: cross-drilling refused at 13 of 13 bores
+from 0.6 to 3.0 and now builds Validate-clean, closed, converging solids at 8 of them.
+
+Two riders. `BrepBoolean.SnapTracerEnds` must refuse a candidate landing **behind** the
+trace: on a thread band the two rails are a fraction of a millimetre apart, well inside its
+two-step reach, so a curve that now terminates exactly on one rail is within reach of the
+other, and appending that doubled the polyline back over itself (domain [0, 0.479] whose
+second half retraced the first). The incumbent "it is already on the boundary" test cannot
+cover it, because it reads the MINIMUM over candidates and is therefore silent whenever the
+true landing's own Newton misses — a rail helix seeded from 32 samples over five turns can
+converge to another root entirely. And **halving the step and retrying a refused interior
+step was built, measured and reverted**: it takes cross-drilling to 10 of 13, and it also
+reaches whole-solid FILLET bands, which are anisotropic too (long, and only r·π/2 wide),
+where it broke seven tests and took the tilted-plane family from 1 of 4 to 0 of 4. An
+algorithm that can only trade one refusal for another should not be reached at all; what
+remains — a branch stopping at a FOLD rather than at a boundary — is filed as the different
+mechanism it is.
 
 ##### A refusal that named the wrong stage
 

@@ -60,7 +60,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Scale(x, y, z)` / `Resized(newSize, auto?)` (OpenSCAD `scale`/`resize`; resize measures `Shape.Bounds(quality)` eagerly and scales about the origin) | per the affine row below | 🔶 bridged unless factors equal | ✅ / 🔶 |
 | `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) + revolve (axis negated: F·Rot(d,φ)·F = Rot(−F·d,φ), the LH-thread identity) + sweep (RMF transport is intrinsic — no fix needed) + rim/drill (isometry-commuting surgery/tools) + draft/shell/round-edges/loft/taper (each defined by LENGTHS and ANGLES alone, which every isometry preserves; draft takes the pull direction's linear image, un-negated — a pull is transported, not conjugated like a revolve's axis) · ❌ `SheetMetalBody` (a flange tree is ordered and edge-quoted, so a reflection would need it rebuilt the other way round, not re-placed) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
-| `ExternalThread` (no clearance, chamfer &lt; thread depth) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; a sub-depth lead-in chamfer is one difference against `SolidFactory.MakeThreadEndChamferTool`, whose cone cuts every band in an exact conical `SpiralArc3d`; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |
+| `ExternalThread` (no clearance, chamfer &lt; thread depth, any `runoutLength`) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; a sub-depth lead-in chamfer and a runout are each one difference against `SolidFactory.MakeThreadEndConeTool`, whose cone cuts every band in an exact conical `SpiralArc3d`; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |
 | `ThreadedHole` (no clearance) | ✅ **native** (pilot + thread as ONE clipped-profile helical tool; spiral-arc chains split the drilled faces) | ✅ native | ✅ native (B-Rep tessellation) |
 | `ExternalThread` (chamfer ≥ thread depth — the `chamferEnds: true` default) / either with clearance | ❌ reported per cause — a full-depth chamfer puts the cone's base exactly on the minor diameter, tangent to every root band along the end plane (coincident curved-surface boolean input); clearance is a distance-field profile offset whose rounded reflex corners have no exact counterpart | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
 | `Heightmap(heights, cellSize)` (OpenSCAD `surface()`; grids, `.dat`, grayscale PNG via `Heightmap.ReadDat/ReadPng`) | ❌ mesh construction | ✅ exact mesh SDF | ✅ native (manifold-by-construction terrain solid) |
@@ -1453,6 +1453,17 @@ truncating the internal crests as tapping does) plus a modeled thread void per p
 offsets perpendicular to its own boundary): the external thread *shrinks*, the internal
 void *grows*; default 0, typical FDM 0.1–0.25 mm, capped at half the thread depth.
 
+**Runout** (`runoutLength`) is the incomplete thread a die or a rolling head leaves where
+the thread meets its shank: over that axial length at the **z = 0** end the crests are
+truncated by a coaxial cone running from the major diameter down to the **pitch** diameter,
+so the thread washes out rather than ending in a full-form crest. It replaces that end's
+lead-in chamfer (a stud has a lead-in at its free end and a runout at its shank end) and is
+**Native in both B-Rep and implicit**: the cone is the general member of the family a 45°
+chamfer belongs to, so its cut on every helical band is the same exact conical
+`SpiralArc3d`, and `Sdf.Thread` takes the same cone SLOPE so one `ThreadShape` stays one
+geometry. The pitch diameter rather than the minor is what keeps it exact — a cone reaching
+the minor diameter is tangent to every root band along the end plane.
+
 **Left-hand threads**: `spec.LeftHanded()` (or `WithHandedness(bool)`) winds the same
 profile the other way — every diameter is shared, so handedness is not a different
 thread — and the designation becomes `M8×1.25-LH`, which `ThreadCallout` picks up
@@ -2160,6 +2171,16 @@ var plate = new Part("plate", plateShape)
   at each call's first hole). Deliberately explicit methods rather than a flag on
   `Drill`: annotations belong to the PART, and a graph node cannot know which part
   will carry it.
+- **Thread callouts** (`ThreadAnnotations.cs`). `Sites(part)` / `AutoAttach(part)` label
+  a part's modelled threads with the designation a drawing carries. The **spec** comes
+  from the construction graph and the **anchor** from the geometry — a point on the
+  thread's own crest — and the two are matched by MEASUREMENT rather than by index: a
+  thread's major diameter and its pitch, read off the `HelicalSurface` bands the lowering
+  produced. Pairing the n-th graph node with the n-th group of faces is free to put a
+  correct-looking M6 callout on an M10 thread, which is the one failure a naming scheme
+  must not have; matching on geometry can only find *nothing*, and then nothing is
+  attached. It is also the only callout an **external** thread has: `HoleTable` already
+  tables threaded holes by call, and a stud is not a hole.
 
 ## Saving a document (`DocumentFile.cs`)
 
