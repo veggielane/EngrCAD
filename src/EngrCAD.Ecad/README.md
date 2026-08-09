@@ -1,10 +1,10 @@
 # EngrCAD.Ecad
 
-Code-defined **schematics** and the **connectivity data model** — the first stage of the
-ECAD campaign (schematic → board → placement constraints → copper DRC → routing → MID/LDS
-3D routing; see `todo.md`). This project is connectivity only: the graph and its exact
-verification. It builds on `EngrCAD.Core` (math) and `EngrCAD.Modeling` (the optional 3D
-body hook), and — being kernel-tier — has **no viewer/Avalonia dependency**.
+Code-defined **schematics**, the **connectivity data model**, and the **PCB board + placement**
+that derives from them — the first two stages of the ECAD campaign (schematic → board →
+placement constraints → copper DRC → routing → MID/LDS 3D routing; see `todo.md`). It builds on
+`EngrCAD.Core` (math) and `EngrCAD.Modeling` (the `Shape`/`Assembly`/`Bom` API the board lowers
+to), and — being kernel-tier — has **no viewer/Avalonia dependency**.
 
 ## The one load-bearing rule: the object graph IS the netlist
 
@@ -83,9 +83,59 @@ structurally identical graphs. What does not travel is the `Body` (it is code); 
 file does not contain, or a net referencing a component or pin that does not exist, is refused
 **by name** at load (the definition is the source — an instance without one is not loadable).
 
-## Not in stage 1 (later campaign stages)
+## Stage 2 — the board and its parts
 
-Board geometry, footprint placement, PCB positioning constraints, copper DRC, routing, MID/LDS
-3D routing and interchange (IDF/KiCad/STEP) — each a later stage over this one graph. A drawn
-schematic **sheet** (symbols and wires to SVG/DXF/PDF via the `DrawingSheet` machinery) is a
-VIEW of the graph and a later deliverable; `Netlist.ToText()` is the stage-1 textual view.
+Stage 2 turns a schematic into a **board** (`PcbBoard`, `PcbLayout`, `PcbAssembly` via
+`ToAssembly`) — and keeps the one rule: **one declaration produces both**. The schematic graph is
+the single source; the board copper, the footprint placement and the 3D bodies all *derive* from
+it, so a pin and its pad are one identity (pin `1` ↔ pad `1`).
+
+| Type | What it is |
+| --- | --- |
+| `Pad` (extended) | Now carries a `PadKind` (`Smd`/`ThroughHole`) and, for a through-hole pad, a `DrillDiameter` (the annular ring derives). Backward-compatible: a stage-1 SMD footprint saves byte-identically. |
+| `PcbBoard` / `PcbStackup` / `CopperLayerSpec` | A polygon outline + thickness + copper stackup (two-layer default, N-layer via `Layers`) + its own `BoardHole`s (mounting/via) and `KeepOut`s. `Plate()` builds the exact B-Rep (outline extruded, holes drilled); `ExpectedPlateVolume()` is the closed-form oracle (area × thickness − Σ πr² × thickness). |
+| `PcbPlacement` | A component at `(x, y, rotation, side)` on a board face, naming a schematic component. |
+| `PcbLayout` | Schematic + board + placements. Derives `PlacedPads`/`CopperLayers` (pin↔pad → copper), `Plate` (board holes + through-hole pads drilled), `ToAssembly` (board + one occurrence per placed body), and `Check` (the identity check). |
+| `PlacedPad` / `CopperLayer` | A footprint pad projected onto the board (world position + the `PinRef` it realises); the placed pad regions per copper layer. |
+| `PcbImport` / `IdfReader` / `IdfWriter` | IDF 3.0/4.0 board (`.emn`) import (outline, thickness, holes, placements, keep-outs; units honoured) and a canonical writer for the round trip. |
+
+### Placement geometry
+
+A placement's world transform is exactly the assembly's own `PartInstance.World`
+(`WorldOf(placement)` is bit-identical to the flattened occurrence). A **bottom-side** placement
+is a genuine reflection on the component's part transform (`Mirror(Mirror(x)) == x`), so the body
+hangs below the board and its through-holes keep the same world `(x, y)`, while the board's own
++Z — world up — is never touched (the *FlipX-not-FlipZ* doctrine). A through-hole component drills
+the plate by exactly its hole cylinders; an SMD component drills nothing (the plate is
+bit-identical to the bare board).
+
+### The one-declaration identity check
+
+`PcbLayout.Check()` is the geometric lift of the schematic's pin-counting identity: every pin of
+every placed component resolves to **exactly one** placed pad at a known copper location
+(`PlacedPinCount == PlacedPadCount`, every pin covered once). It names its offenders — a pad with
+no pin, a pin with no pad, a pad off the board outline, a hole in a keep-out, a component with no
+footprint — while placing an unknown reference or a component twice is refused by name at `Place`.
+`PadsOfNet(net)` resolves a net's pins to their copper regions, the seam later stages consume.
+
+### Persistence
+
+`PcbLayout.Save`/`Load` extends the schematic seam: the schematic travels **embedded** (the
+source, not a copy), the board and placements ride alongside, write-only-when-stated throughout,
+so `save → load → save` is a **byte-identical fixed point**. Bodies re-attach from a `PartLibrary`.
+
+### IDF interchange
+
+`IdfReader.Read(emn, emp?)` imports an IDF board into a `PcbImport`, honouring the header unit
+(MM/THOU → mm, recorded in `Diagnostics`) and refusing a malformed section structure by name.
+IDF carries no connectivity, so `ToLayout()` synthesizes a data-only schematic (a component per
+placement). `IdfWriter.Write` closes the loop — `read → write → read → write` is a byte fixed
+point for the geometry IDF carries.
+
+## Not yet (later campaign stages)
+
+PCB positioning constraints, copper DRC (a region-offset clearance query over the placed pads),
+autorouting, panel cutouts, thermal coupling, MID/LDS 3D routing, and the richer interchange
+(KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one graph. A
+drawn schematic **sheet** (symbols and wires to SVG/DXF/PDF via the `DrawingSheet` machinery) is a
+VIEW of the graph; `Netlist.ToText()` is the stage-1 textual view.

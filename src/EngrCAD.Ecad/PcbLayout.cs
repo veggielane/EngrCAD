@@ -1,0 +1,320 @@
+using EngrCAD.Core;
+using EngrCAD.Modeling;
+
+namespace EngrCAD.Ecad;
+
+/// <summary>A component placed on a board: a reference designator naming a
+/// <see cref="Component"/> of the layout's <see cref="Schematic"/>, a 2D pose on the board
+/// (mm and degrees, about the board Z), and which face it sits on.</summary>
+/// <param name="Reference">The reference designator (<c>R1</c>), a component of the schematic.</param>
+/// <param name="X">The placement X (mm, board coordinates).</param>
+/// <param name="Y">The placement Y (mm, board coordinates).</param>
+/// <param name="RotationDegrees">Rotation about the board Z axis (degrees, CCW).</param>
+/// <param name="Side">The board face the component is placed on.</param>
+public readonly record struct PcbPlacement(
+    string Reference, double X, double Y, double RotationDegrees, CopperSide Side);
+
+/// <summary>One footprint pad projected onto the board — the geometric lift of a pin. It ties a
+/// schematic <see cref="Pin"/> (as a <see cref="PinRef"/>) to a copper location, which is the
+/// seam DRC and routing consume.</summary>
+/// <param name="Reference">The owning component's reference designator.</param>
+/// <param name="PadNumber">The pad number (equals the pin number by the pin↔pad identity).</param>
+/// <param name="World">The pad centre in board-assembly world coordinates (mm).</param>
+/// <param name="Kind">Surface-mount or through-hole.</param>
+/// <param name="DrillDiameter">The drill through the board (mm) for a through-hole pad, else 0.</param>
+/// <param name="Width">The pad width (mm).</param>
+/// <param name="Height">The pad height (mm).</param>
+/// <param name="Shape">The copper shape.</param>
+/// <param name="Pin">The schematic pin this pad realises, or null when the definition has no
+/// pin of this number (a pad without a pin — a check violation).</param>
+public readonly record struct PlacedPad(
+    string Reference, string PadNumber, Vector2d World, PadKind Kind, double DrillDiameter,
+    double Width, double Height, PadShape Shape, PinRef? Pin)
+{
+    /// <summary>The canonical <c>"R1.1"</c> spelling.</summary>
+    public string Name => $"{Reference}.{PadNumber}";
+}
+
+/// <summary>The placed pad regions of one copper layer — the model the routing and DRC stages
+/// consume. Copper thickness is not modelled, so a layer is its z-plane and the pads on it.</summary>
+public sealed class CopperLayer
+{
+    internal CopperLayer(string name, double z, IReadOnlyList<PlacedPad> pads)
+    {
+        Name = name;
+        Z = z;
+        Pads = pads;
+    }
+
+    /// <summary>The layer name (<c>"Top"</c>, <c>"Bottom"</c>).</summary>
+    public string Name { get; }
+
+    /// <summary>The layer's z-height (mm).</summary>
+    public double Z { get; }
+
+    /// <summary>The pads on this layer (SMD pads of components placed on this side, plus every
+    /// through-hole pad, which appears on all copper layers).</summary>
+    public IReadOnlyList<PlacedPad> Pads { get; }
+}
+
+/// <summary>
+/// A board layout: a <see cref="Schematic"/> (the single source), a <see cref="PcbBoard"/>, and
+/// a list of component <see cref="PcbPlacement"/>s. Everything else DERIVES from these — the
+/// board is one declaration and the copper, the footprint placement and the 3D bodies all read
+/// this one graph, which is the campaign's load-bearing rule.
+///
+/// <para><b>What a placement derives</b> (the "one declaration produces both"): its footprint
+/// pads projected onto the correct copper layer at the placed pose (<see cref="PlacedPads"/> /
+/// <see cref="CopperLayers"/>), its through-hole pads drilled into the plate
+/// (<see cref="Plate"/>), and — for a component whose definition carries a 3D body — its body
+/// posed into the assembly (<see cref="ToAssembly"/>). A bottom-side placement is reflected
+/// across the board plane so its body hangs below and its through-hole pads keep the same world
+/// (x, y) (a hole serves both faces); the reflection is a genuine <c>Mirror</c> (its square is
+/// the identity), and it lives on the component's <see cref="Part.Transform"/>, so the board's
+/// own +Z axis — world up — is never touched (the FlipX-not-FlipZ doctrine: the reflection is
+/// spent on the part, the pose stays a proper frame).</para>
+///
+/// <para><b>The one-declaration identity check</b> (<see cref="Check"/>) is the geometric lift
+/// of the schematic's pin-counting identity: every pin of every placed component resolves to
+/// exactly one placed pad at a known copper location.</para>
+/// </summary>
+public sealed partial class PcbLayout
+{
+    private readonly List<PcbPlacement> _placements = [];
+    private readonly HashSet<string> _placed = new(StringComparer.Ordinal);
+
+    /// <summary>Builds a layout over a schematic and a board (no placements yet).</summary>
+    /// <param name="schematic">The connectivity source.</param>
+    /// <param name="board">The board.</param>
+    /// <param name="boardFrame">Where the board sits in the assembly; null = world XY.</param>
+    public PcbLayout(Schematic schematic, PcbBoard board, Frame3d? boardFrame = null)
+    {
+        ArgumentNullException.ThrowIfNull(schematic);
+        ArgumentNullException.ThrowIfNull(board);
+        Schematic = schematic;
+        Board = board;
+        BoardFrame = boardFrame ?? Frame3d.WorldXY;
+    }
+
+    /// <summary>The connectivity source.</summary>
+    public Schematic Schematic { get; }
+
+    /// <summary>The board.</summary>
+    public PcbBoard Board { get; }
+
+    /// <summary>Where the board sits in the assembly (default world XY).</summary>
+    public Frame3d BoardFrame { get; }
+
+    /// <summary>The placements, in declaration order.</summary>
+    public IReadOnlyList<PcbPlacement> Placements => _placements;
+
+    // ---- declaring placements ------------------------------------------------
+
+    /// <summary>Places a component at a pose on a board face. The reference designator must name
+    /// a component of the schematic and must not already be placed.</summary>
+    /// <exception cref="ArgumentException">The reference designator is not a component of the
+    /// schematic, or is already placed (both refused by name).</exception>
+    public PcbLayout Place(string reference, double x, double y,
+        double rotationDegrees = 0, CopperSide side = CopperSide.Top)
+    {
+        if (string.IsNullOrEmpty(reference))
+            throw new ArgumentException("A placement needs a reference designator.", nameof(reference));
+        if (Schematic.Find(reference) is null)
+            throw new ArgumentException(
+                $"'{reference}' is not a component in the schematic — a placement must name a "
+                + "component the schematic declares (the schematic is the source).", nameof(reference));
+        if (!_placed.Add(reference))
+            throw new ArgumentException(
+                $"'{reference}' is already placed; a component is placed at most once.",
+                nameof(reference));
+        _placements.Add(new PcbPlacement(reference, x, y, rotationDegrees, side));
+        return this;
+    }
+
+    // Used by the loader to reconstruct placements verbatim (same validation).
+    internal void AddLoadedPlacement(PcbPlacement placement)
+    {
+        if (Schematic.Find(placement.Reference) is null)
+            throw new FormatException(
+                $"Placement '{placement.Reference}' names a component the schematic does not contain.");
+        if (!_placed.Add(placement.Reference))
+            throw new FormatException($"Component '{placement.Reference}' is placed more than once.");
+        _placements.Add(placement);
+    }
+
+    // ---- placement transforms (the seam ToAssembly and the oracles share) ----
+
+    /// <summary>The board-local rigid pose of a placement (translation + rotation about Z,
+    /// seated on its face at z = thickness for top, 0 for bottom). The reflection for a bottom
+    /// placement is NOT here — it is on the part transform, so this stays a proper frame.</summary>
+    public Frame3d PlacementPose(PcbPlacement placement)
+    {
+        double rot = placement.RotationDegrees * Math.PI / 180.0;
+        double c = Math.Cos(rot), s = Math.Sin(rot);
+        double seatZ = placement.Side == CopperSide.Top ? Board.Thickness : 0;
+        return Frame3d.FromOrthonormal(
+            new Vector3d(placement.X, placement.Y, seatZ),
+            new Vector3d(c, s, 0),
+            new Vector3d(-s, c, 0));
+    }
+
+    /// <summary>The frame handed to <see cref="Assembly.Add(Part, Frame3d?, string?)"/> — the
+    /// board-local pose composed onto <see cref="BoardFrame"/>.</summary>
+    public Frame3d OccurrenceFrame(PcbPlacement placement) => PlacementPose(placement).Then(BoardFrame);
+
+    /// <summary>The part transform for a placement side: identity on top, a reflection across the
+    /// board plane on the bottom (so the body hangs below and the footprint's through-holes keep
+    /// the same world x, y). Its square is the identity — <c>Mirror(Mirror(x)) == x</c>.</summary>
+    public static Matrix4d PartTransform(CopperSide side) =>
+        side == CopperSide.Top ? Matrix4d.Identity : Matrix4d.CreateScale(new Vector3d(1, 1, -1));
+
+    /// <summary>The full world transform of a placed component's body — exactly the
+    /// <see cref="PartInstance.World"/> the assembly produces for it
+    /// (<c>occurrenceFrame.Then(worldXY).ToMatrix() * partTransform</c>), so a body posed here is
+    /// bit-identical to the assembly transform math.</summary>
+    public Matrix4d WorldOf(PcbPlacement placement) =>
+        OccurrenceFrame(placement).Then(Frame3d.WorldXY).ToMatrix() * PartTransform(placement.Side);
+
+    // ---- derived copper -----------------------------------------------------
+
+    /// <summary>Every footprint pad projected onto the board, in placement then pad order. Each
+    /// pad carries its world (x, y) and the schematic pin it realises (or null if the definition
+    /// has no pin of that number).</summary>
+    public IReadOnlyList<PlacedPad> PlacedPads()
+    {
+        var pads = new List<PlacedPad>();
+        foreach (var placement in _placements)
+        {
+            var component = Schematic.Find(placement.Reference)!;
+            var footprint = component.Definition.Footprint;
+            if (footprint is null)
+                continue;
+            var world = WorldOf(placement);
+            foreach (var pad in footprint.Pads)
+            {
+                var w = world.TransformPoint(new Vector3d(pad.Center.X, pad.Center.Y, 0));
+                var pin = component.Definition.HasPin(pad.Number)
+                    ? new PinRef(component, pad.Number)
+                    : (PinRef?)null;
+                pads.Add(new PlacedPad(
+                    placement.Reference, pad.Number, new Vector2d(w.X, w.Y),
+                    pad.Kind, pad.DrillDiameter, pad.Width, pad.Height, pad.Shape, pin));
+            }
+        }
+        return pads;
+    }
+
+    /// <summary>The placed pad regions per copper layer: an SMD pad lands on its placement side's
+    /// outer copper, a through-hole pad on every layer (a plated hole spans them all).</summary>
+    public IReadOnlyList<CopperLayer> CopperLayers()
+    {
+        var placed = PlacedPads();
+        var placementByRef = _placements.ToDictionary(p => p.Reference, StringComparer.Ordinal);
+        var layers = new List<CopperLayer>();
+        foreach (var spec in Board.Stackup.Coppers)
+        {
+            var onLayer = new List<PlacedPad>();
+            foreach (var pad in placed)
+            {
+                if (pad.Kind == PadKind.ThroughHole)
+                {
+                    onLayer.Add(pad);   // through-hole pads are on every copper layer
+                }
+                else if (placementByRef.TryGetValue(pad.Reference, out var placement)
+                    && Board.Stackup.Outer(placement.Side).Z.Equals(spec.Z))
+                {
+                    onLayer.Add(pad);   // SMD pad on its placement side's outer copper
+                }
+            }
+            layers.Add(new CopperLayer(spec.Name, spec.Z, onLayer));
+        }
+        return layers;
+    }
+
+    /// <summary>The placed pads realising a net's pins — the net's copper. Each pin resolves to
+    /// its one placed pad (empty for pins whose components are unplaced or have no footprint).</summary>
+    public IReadOnlyList<PlacedPad> PadsOfNet(Net net)
+    {
+        ArgumentNullException.ThrowIfNull(net);
+        var byPin = PlacedPads().Where(p => p.Pin is not null).ToLookup(p => p.Pin!.Value);
+        return net.Pins.SelectMany(pin => byPin[pin]).ToList();
+    }
+
+    // ---- the plate (board holes + this layout's through-hole pads) ----------
+
+    /// <summary>The board-local (x, y) of every through hole drilled through the plate — the
+    /// board's own mounting holes and vias, plus each placement's through-hole pads at their
+    /// placed positions (top and bottom placements share a hole, so this is a set of xy).</summary>
+    private IEnumerable<(Vector2d Center, double Diameter)> ThroughHoles()
+    {
+        foreach (var hole in Board.Holes)
+            yield return (hole.Center, hole.Diameter);
+        foreach (var placement in _placements)
+        {
+            var footprint = Schematic.Find(placement.Reference)!.Definition.Footprint;
+            if (footprint is null)
+                continue;
+            var pose = PlacementPose(placement).ToMatrix();
+            foreach (var pad in footprint.Pads)
+                if (pad.IsDrilled)
+                {
+                    var p = pose.TransformPoint(new Vector3d(pad.Center.X, pad.Center.Y, 0));
+                    yield return (new Vector2d(p.X, p.Y), pad.DrillDiameter);
+                }
+        }
+    }
+
+    /// <summary>The board plate as an exact B-Rep <see cref="Shape"/>: the outline extruded to
+    /// the thickness, then every through hole drilled — the board's own holes AND this layout's
+    /// through-hole pads.</summary>
+    public Shape Plate() =>
+        PcbGeometry.BuildPlate(Board.OutlinePoints, Board.Thickness, ThroughHoles());
+
+    /// <summary>The closed-form volume of <see cref="Plate"/>: outline area × thickness less each
+    /// through hole's cylinder πr² × thickness (board holes and through-hole pads).</summary>
+    public double ExpectedPlateVolume() =>
+        PcbGeometry.ExpectedPlateVolume(Board.OutlineArea(), Board.Thickness,
+            ThroughHoles().Select(h => h.Diameter));
+
+    // ---- the assembly -------------------------------------------------------
+
+    /// <summary>Builds the board and its placed components as an
+    /// <see cref="EngrCAD.Modeling.Assembly"/>: the drilled plate as the base part, plus one
+    /// occurrence per placed component whose definition carries a 3D body (a body-less component
+    /// still places its pads; it just has no 3D occurrence). Bottom-side components share a
+    /// reflected part; identical components on one side share a part (N occurrences), so a
+    /// <c>Bom.For</c> over the flattened instances counts them correctly.</summary>
+    public Assembly ToAssembly(string? name = null)
+    {
+        var assembly = new Assembly(
+            string.IsNullOrEmpty(name) ? (Schematic.Name.Length > 0 ? Schematic.Name : "PCB") : name);
+        assembly.Add(new Part("board", Plate()), BoardFrame, "board");
+
+        // One part per (definition, side): identical components share it, so occurrences of one
+        // part is exactly the "one product, N occurrences" the BOM counts.
+        var cache = new Dictionary<(PartDefinition, CopperSide), Part>();
+        foreach (var placement in _placements)
+        {
+            var definition = Schematic.Find(placement.Reference)!.Definition;
+            if (definition.Body is null)
+                continue;
+            var key = (definition, placement.Side);
+            if (!cache.TryGetValue(key, out var part))
+            {
+                part = new Part(definition.Name, definition.Body())
+                {
+                    Transform = PartTransform(placement.Side),
+                };
+                cache[key] = part;
+            }
+            assembly.Add(part, OccurrenceFrame(placement), placement.Reference);
+        }
+        return assembly;
+    }
+
+    // ---- verification -------------------------------------------------------
+
+    /// <summary>Runs the one-declaration identity check — the geometric lift of the schematic's
+    /// pin-counting identity. See <see cref="PcbLayoutCheckResult"/>.</summary>
+    public PcbLayoutCheckResult Check() => PcbLayoutChecker.Check(this);
+}

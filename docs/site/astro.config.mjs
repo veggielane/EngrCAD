@@ -227,6 +227,7 @@ document.addEventListener('click', function (event) {
           collapsed: true,
           items: [
             { label: 'Code-defined schematics', slug: 'examples/ecad-schematics' },
+            { label: 'The board and its parts', slug: 'examples/ecad-pcb' },
           ],
         },
         { label: 'Writing examples', slug: 'writing-examples' },

@@ -84,11 +84,49 @@ public sealed class PartLibrary
 internal static class EcadJson
 {
     internal static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
+
+    // ---- typed JSON accessors shared across the ECAD readers ----------------
+    // (a missing or mistyped field is a structural error, refused by name)
+
+    internal static string String(JsonObject o, string key) =>
+        o[key]?.GetValue<string>()
+        ?? throw new FormatException($"Missing string field '{key}'.");
+
+    internal static int Int(JsonObject o, string key) =>
+        o[key]?.GetValue<int>()
+        ?? throw new FormatException($"Missing integer field '{key}'.");
+
+    internal static double Double(JsonObject o, string key) =>
+        o[key]?.GetValue<double>()
+        ?? throw new FormatException($"Missing number field '{key}'.");
+
+    internal static JsonArray Array(JsonObject o, string key) =>
+        o[key] as JsonArray
+        ?? throw new FormatException($"Missing array field '{key}'.");
+
+    internal static JsonObject Object(JsonNode? node, string what) =>
+        node as JsonObject
+        ?? throw new FormatException($"Expected {what} to be a JSON object.");
+
+    internal static T Enum<T>(string? value, string what) where T : struct, Enum
+    {
+        if (value is not null && System.Enum.TryParse<T>(value, ignoreCase: true, out var parsed))
+            return parsed;
+        throw new FormatException(
+            $"'{value}' is not a valid {typeof(T).Name} for {what} "
+            + $"(expected one of: {string.Join(", ", System.Enum.GetNames<T>())}).");
+    }
 }
 
 internal static class SchematicWriter
 {
-    internal static string Write(Schematic schematic)
+    internal static string Write(Schematic schematic) =>
+        BuildRoot(schematic).ToJsonString(EcadJson.Options);
+
+    /// <summary>Builds the schematic's JSON object (with its own <c>format</c>/<c>version</c>
+    /// markers) — the seam a containing document (a <c>PcbLayout</c>) embeds so the schematic
+    /// travels as the board's single source of truth rather than being copied.</summary>
+    internal static JsonObject BuildRoot(Schematic schematic)
     {
         // Definitions are SHARED (one type instanced by many components), so they are written
         // once under an id and referenced. The walk is deterministic — components in
@@ -142,7 +180,7 @@ internal static class SchematicWriter
         }
         root["nets"] = nets;
 
-        return root.ToJsonString(EcadJson.Options);
+        return root;
     }
 
     private static JsonObject SaveDefinition(PartDefinition definition, string id)
@@ -175,7 +213,8 @@ internal static class SchematicWriter
     {
         var pads = new JsonArray();
         foreach (var pad in footprint.Pads)
-            pads.Add(new JsonObject
+        {
+            var record = new JsonObject
             {
                 ["number"] = pad.Number,
                 ["x"] = pad.Center.X,
@@ -183,7 +222,15 @@ internal static class SchematicWriter
                 ["w"] = pad.Width,
                 ["h"] = pad.Height,
                 ["shape"] = pad.Shape.ToString(),
-            });
+            };
+            // write-only-when-stated: an SMD pad with no drill (the stage-1 default) omits
+            // both, so a stage-1 footprint saves byte-identically.
+            if (pad.Kind != PadKind.Smd)
+                record["kind"] = pad.Kind.ToString();
+            if (pad.DrillDiameter != 0)
+                record["drill"] = pad.DrillDiameter;
+            pads.Add(record);
+        }
         return new JsonObject { ["name"] = footprint.Name, ["pads"] = pads };
     }
 }
@@ -194,7 +241,13 @@ internal static class SchematicReader
     {
         JsonObject root = (JsonNode.Parse(json) as JsonObject)
             ?? throw new FormatException("A saved schematic is a JSON object.");
+        return ReadObject(root, library);
+    }
 
+    /// <summary>Rebuilds a schematic from its JSON object — the seam a containing document
+    /// (a <c>PcbLayout</c>) reads back from the embedded schematic.</summary>
+    internal static Schematic ReadObject(JsonObject root, PartLibrary? library)
+    {
         string format = String(root, "format");
         if (format != Schematic.Format)
             throw new FormatException(
@@ -285,44 +338,28 @@ internal static class SchematicReader
         foreach (var node in Array(footprint, "pads"))
         {
             var record = Object(node, $"a pad of footprint '{name}'");
+            var kind = record.TryGetPropertyValue("kind", out var kindNode)
+                ? ParseEnum<PadKind>(kindNode?.GetValue<string>(), $"a pad kind of footprint '{name}'")
+                : PadKind.Smd;
+            double drill = record["drill"]?.GetValue<double>() ?? 0;
             pads.Add(new Pad(
                 String(record, "number"),
                 new Vector2d(Double(record, "x"), Double(record, "y")),
                 Double(record, "w"),
                 Double(record, "h"),
-                ParseEnum<PadShape>(String(record, "shape"), $"a pad shape of footprint '{name}'")));
+                ParseEnum<PadShape>(String(record, "shape"), $"a pad shape of footprint '{name}'"),
+                kind, drill));
         }
         return new Footprint(name, pads);
     }
 
-    // ---- typed JSON accessors (a missing/mistyped field is a structural error) ----
+    // ---- typed JSON accessors (delegate to the shared EcadJson helpers) ----
 
-    private static string String(JsonObject o, string key) =>
-        o[key]?.GetValue<string>()
-        ?? throw new FormatException($"Missing string field '{key}' in the saved schematic.");
-
-    private static int Int(JsonObject o, string key) =>
-        o[key]?.GetValue<int>()
-        ?? throw new FormatException($"Missing integer field '{key}' in the saved schematic.");
-
-    private static double Double(JsonObject o, string key) =>
-        o[key]?.GetValue<double>()
-        ?? throw new FormatException($"Missing number field '{key}' in the saved schematic.");
-
-    private static JsonArray Array(JsonObject o, string key) =>
-        o[key] as JsonArray
-        ?? throw new FormatException($"Missing array field '{key}' in the saved schematic.");
-
-    private static JsonObject Object(JsonNode? node, string what) =>
-        node as JsonObject
-        ?? throw new FormatException($"Expected {what} to be a JSON object.");
-
-    private static T ParseEnum<T>(string? value, string what) where T : struct, Enum
-    {
-        if (value is not null && Enum.TryParse<T>(value, ignoreCase: true, out var parsed))
-            return parsed;
-        throw new FormatException(
-            $"'{value}' is not a valid {typeof(T).Name} for {what} "
-            + $"(expected one of: {string.Join(", ", Enum.GetNames<T>())}).");
-    }
+    private static string String(JsonObject o, string key) => EcadJson.String(o, key);
+    private static int Int(JsonObject o, string key) => EcadJson.Int(o, key);
+    private static double Double(JsonObject o, string key) => EcadJson.Double(o, key);
+    private static JsonArray Array(JsonObject o, string key) => EcadJson.Array(o, key);
+    private static JsonObject Object(JsonNode? node, string what) => EcadJson.Object(node, what);
+    private static T ParseEnum<T>(string? value, string what) where T : struct, Enum =>
+        EcadJson.Enum<T>(value, what);
 }
