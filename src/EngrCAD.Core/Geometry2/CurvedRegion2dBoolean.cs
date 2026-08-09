@@ -125,12 +125,14 @@ public static class CurvedRegion2dBoolean
             return [];
 
         var index = new EdgeIndex(arrangement);
+        var parityA = ParityIndex.For(a);
+        var parityB = ParityIndex.For(b);
         var kept = new HashSet<int>();
         foreach (var cell in arrangement.ExtractCells())
         {
             var sample = InteriorSample(arrangement, index, cell);
-            bool inA = ParityInside(a, sample);
-            bool inB = ParityInside(b, sample);
+            bool inA = parityA.Inside(sample);
+            bool inB = parityB.Inside(sample);
             bool keep = op switch
             {
                 Op.Union => inA || inB,
@@ -188,6 +190,139 @@ public static class CurvedRegion2dBoolean
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Set to false to make cell classification walk every operand edge per cell — the
+    /// unindexed form, kept as an A/B seam so <c>CurvedRegion2dBooleanBenchmark</c> can
+    /// measure the index rather than assert it. Output is identical either way (see
+    /// <see cref="ParityIndex"/>).
+    /// </summary>
+    internal static bool UseParityIndex { get; set; } = true;
+
+    /// <summary>
+    /// A <see cref="Bvh"/> over ONE operand set's boundary edges, built once per boolean, so
+    /// classifying a cell costs O(log n + crossing candidates) rather than a walk over every
+    /// edge of every region.
+    ///
+    /// <para><b>It is result-identical by construction, not by tolerance.</b> Parity is a
+    /// COUNT of +x ray crossings, and an edge whose tight box does not reach the query ray
+    /// contributes exactly zero to it — so restricting the sum to the box query's candidates
+    /// removes only terms that are zero. The count is also order-free (integers), so the
+    /// summation order the tree visits in cannot move the answer by an ulp the way a float
+    /// sum could.</para>
+    ///
+    /// <para><b>Why it exists here when the polygonal twin's was declined.</b> The polygonal
+    /// index measured 1.0× on a bulk union, because an overlap-heavy union's balanced fold
+    /// keeps the CELL count tiny exactly where the operand edge counts grow. The workload
+    /// that carries the product is one whose result KEEPS many cells against many-edge
+    /// operands — see <c>CurvedRegion2dBooleanBenchmark</c>, which builds it deliberately
+    /// (N horizontal stadiums intersected with N vertical ones, so cells grow as N² against
+    /// O(N) edges) and reports the ratio.</para>
+    /// </summary>
+    private sealed class ParityIndex
+    {
+        private readonly IReadOnlyList<CurvedRegion2d> _regions;
+        private readonly CurvedEdge2d[] _edges;
+        private readonly int[] _regionOf;
+        private readonly Bvh? _bvh;
+        private readonly double _maxX;
+        private readonly int[] _crossings;
+        private readonly int[] _stamp;
+        private readonly List<int> _candidates = [];
+        private int _query;
+
+        /// <summary>Edge count below which the walk beats building a tree — the same
+        /// threshold, and the same reason, as <c>Region2dValidation.BruteForceLimit</c>.</summary>
+        private const int MinIndexedEdges = 24;
+
+        private ParityIndex(
+            IReadOnlyList<CurvedRegion2d> regions, CurvedEdge2d[] edges, int[] regionOf,
+            Bvh? bvh, double maxX)
+        {
+            _regions = regions;
+            _edges = edges;
+            _regionOf = regionOf;
+            _bvh = bvh;
+            _maxX = maxX;
+            _crossings = new int[regions.Count];
+            _stamp = new int[regions.Count];
+        }
+
+        public static ParityIndex For(IReadOnlyList<CurvedRegion2d> regions)
+        {
+            int count = 0;
+            foreach (var region in regions)
+            {
+                foreach (var loop in region.AllLoops())
+                    count += loop.Count;
+            }
+            if (!UseParityIndex || count < MinIndexedEdges)
+                return new ParityIndex(regions, [], [], null, 0);
+
+            var edges = new CurvedEdge2d[count];
+            var regionOf = new int[count];
+            var boxes = new Aabb[count];
+            double maxX = double.NegativeInfinity;
+            int next = 0;
+            for (int r = 0; r < regions.Count; r++)
+            {
+                foreach (var loop in regions[r].AllLoops())
+                {
+                    foreach (var edge in loop)
+                    {
+                        edges[next] = edge;
+                        regionOf[next] = r;
+                        boxes[next] = edge.Bounds();
+                        maxX = Math.Max(maxX, boxes[next].Max.X);
+                        next++;
+                    }
+                }
+            }
+            return new ParityIndex(regions, edges, regionOf, Bvh.Build(boxes), maxX);
+        }
+
+        /// <summary>
+        /// Is the point inside ANY member region? Parity is accumulated PER REGION, never
+        /// across the whole set: two members of one operand list may legitimately overlap,
+        /// and a combined count would XOR their interiors where the set union does not.
+        /// </summary>
+        public bool Inside(in Vector2d point)
+        {
+            if (_bvh is null)
+                return ParityInside(_regions, point);
+            // The ray is +x from the point, so only edges reaching past it in x and
+            // straddling its y can cross it; everything else contributes exactly 0 — which
+            // is why restricting the sum cannot change it.
+            var query = new Aabb(
+                new Vector3d(point.X, point.Y, 0),
+                new Vector3d(Math.Max(_maxX, point.X), point.Y, 0));
+            _candidates.Clear();
+            _bvh.Query(query, _candidates);
+
+            int stamp = ++_query;
+            bool inside = false;
+            foreach (int index in _candidates)
+            {
+                int region = _regionOf[index];
+                if (_stamp[region] != stamp)
+                {
+                    _stamp[region] = stamp;
+                    _crossings[region] = 0;
+                }
+                _crossings[region] += _edges[index].RayCrossings(point);
+            }
+            foreach (int index in _candidates)
+            {
+                int region = _regionOf[index];
+                if ((_crossings[region] & 1) != 0)
+                {
+                    inside = true;
+                    break;
+                }
+            }
+            return inside;
+        }
     }
 
     /// <summary>
@@ -256,8 +391,13 @@ public static class CurvedRegion2dBoolean
         in CurvedEdge2d first, in CurvedEdge2d second, double tolerance, out CurvedEdge2d fused)
     {
         fused = default;
-        if (first.IsArc != second.IsArc)
+        if (first.Kind != second.Kind)
             return false;
+        // Two consecutive pieces of one cubic are NOT restrictions of one another, so
+        // SameCarrier cannot answer for them; TryFuseCubics carries its own verification and
+        // it is the stronger one (a full control-polygon comparison).
+        if (first.IsBezier)
+            return TryFuseCubics(first, second, tolerance, out fused);
         if (!CurveIntersection2d.SameCarrier(first, second, tolerance))
             return false;
         // Same direction of travel, so a 180-degree reversal (a slit) is never fused away.
@@ -283,6 +423,57 @@ public static class CurvedRegion2dBoolean
     }
 
     /// <summary>
+    /// Fuses two consecutive cubic pieces of ONE cubic back into it.
+    ///
+    /// <para>The split point's parameter on the fused curve is recoverable in closed form:
+    /// a restriction to [0, u] scales the end derivative by u and one to [u, 1] scales it by
+    /// (1 − u), so <c>u = |first′(1)| / (|first′(1)| + |second′(0)|)</c> — no search and no
+    /// second tolerance. Extrapolating <paramref name="first"/> from [0, u] back to [0, 1] is
+    /// then the ordinary Hermite construction, and the candidate is ACCEPTED only if its own
+    /// restriction to [u, 1] reproduces <paramref name="second"/>'s control polygon within
+    /// <paramref name="tolerance"/>. So a fuse can never quietly change the curve: the
+    /// verification is a comparison of POINTS, and a pair that is merely nearly collinear in
+    /// parameter simply fails it and stays two edges.</para>
+    /// </summary>
+    private static bool TryFuseCubics(
+        in CurvedEdge2d first, in CurvedEdge2d second, double tolerance, out CurvedEdge2d fused)
+    {
+        fused = default;
+        double d1 = first.DerivativeAt(1).Length;
+        double d2 = second.DerivativeAt(0).Length;
+        double total = d1 + d2;
+        // Exact-zero guard: a cusp at the joint carries no parameter ratio.
+        if (!(total > 0) || !(d1 > 0) || !(d2 > 0))
+            return false;
+        double u = d1 / total;
+
+        // first = F|[0, u], so F is first re-parameterized by tau -> tau/u: same start, same
+        // start derivative scaled by 1/u, and the far end read off second.
+        var candidate = CurvedEdge2d.Bezier(
+            first.Start,
+            first.Start + first.DerivativeAt(0) / (3 * u),
+            second.End - second.DerivativeAt(1) / (3 * (1 - u)),
+            second.End);
+
+        var (q0, q1, q2, q3) = candidate.Sub(0, u).ControlPoints;
+        var (p0, p1, p2, p3) = first.ControlPoints;
+        if (q0.DistanceTo(p0) > tolerance || q1.DistanceTo(p1) > tolerance
+            || q2.DistanceTo(p2) > tolerance || q3.DistanceTo(p3) > tolerance)
+        {
+            return false;
+        }
+        var (r0, r1, r2, r3) = candidate.Sub(u, 1).ControlPoints;
+        var (s0, s1, s2, s3) = second.ControlPoints;
+        if (r0.DistanceTo(s0) > tolerance || r1.DistanceTo(s1) > tolerance
+            || r2.DistanceTo(s2) > tolerance || r3.DistanceTo(s3) > tolerance)
+        {
+            return false;
+        }
+        fused = candidate;
+        return true;
+    }
+
+    /// <summary>
     /// A point strictly inside a cell: the outer-chain edge midpoint with the greatest
     /// usable push, moved half that push along the inward (left) normal. The push is
     /// <c>min(clearance to any other edge, the edge's own curvature radius)</c> — see the
@@ -303,7 +494,10 @@ public static class CurvedRegion2dBoolean
             double clearance = index.NearestDistance(midpoint, directed >> 1);
             if (double.IsInfinity(clearance))
                 continue;
-            double reach = edge.IsArc ? Math.Min(clearance, edge.Radius) : clearance;
+            // The curvature cap is asked as ONE rule: it is +infinity for a straight edge (so
+            // the push is the straight case's, bit for bit), the arc's own radius, and 1/|κ|
+            // at the midpoint of a cubic.
+            double reach = Math.Min(clearance, edge.CurvatureRadiusAt(0.5));
             double step = 0.5 * reach;
             if (!(step > bestStep))
                 continue;

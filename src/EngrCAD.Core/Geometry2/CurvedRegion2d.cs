@@ -62,7 +62,9 @@ public sealed class CurvedRegion2d
     /// each hole lies inside the outer loop, and that no two edges cross transversally at
     /// interior points (tangential contact is legal — for lines and arcs a tangency is
     /// always a touch, never a crossing, since two distinct circles tangent at a point stay
-    /// on one side of each other there).
+    /// on one side of each other there). The crossing check is
+    /// <see cref="CurvedRegion2dValidation"/>, whose exact contract — and whose
+    /// <c>Bvh</c> broad phase — is documented there.
     /// </summary>
     public CurvedRegion2d(
         IReadOnlyList<CurvedEdge2d> outer,
@@ -74,7 +76,10 @@ public sealed class CurvedRegion2d
         for (int i = 0; i < holeLoops.Count; i++)
             RequireClosed(holeLoops[i], $"Hole chain {i}");
 
-        RequireNoCrossings([outer, .. holeLoops]);
+        CurvedRegion2dValidation.Require(
+            [outer, .. holeLoops],
+            index => index == 0 ? "The region's outer chain" : $"Hole chain {index - 1}",
+            holeLoops.Count > 0 ? nameof(holes) : nameof(outer));
 
         double outerArea = SignedArea(outer);
         if (outerArea == 0)
@@ -181,13 +186,22 @@ public sealed class CurvedRegion2d
     }
 
     /// <summary>Even–odd parity of a +x ray against every loop, ignoring the boundary case.</summary>
+    /// <remarks>
+    /// The walk is written out rather than routed through <see cref="AllLoops"/> because that
+    /// is a <c>yield</c> iterator and this is the innermost loop of every boolean's cell
+    /// classification — one allocation per region per cell. Same terms, same order, same
+    /// answer bit for bit.
+    /// </remarks>
     public bool ParityInside(in Vector2d point)
     {
         int crossings = 0;
-        foreach (var loop in AllLoops())
+        for (int i = 0; i < Outer.Count; i++)
+            crossings += Outer[i].RayCrossings(point);
+        for (int h = 0; h < Holes.Count; h++)
         {
-            foreach (var edge in loop)
-                crossings += edge.RayCrossings(point);
+            var hole = Holes[h];
+            for (int i = 0; i < hole.Count; i++)
+                crossings += hole[i].RayCrossings(point);
         }
         return (crossings & 1) != 0;
     }
@@ -333,102 +347,6 @@ public sealed class CurvedRegion2d
                 throw new ArgumentException($"{what} is not closed: edge {i} ends at {end} but the next starts at {next}.");
         }
     }
-
-    /// <summary>
-    /// Refuses a chain set in which two edges cross transversally away from a shared
-    /// endpoint. Tangential contact is accepted deliberately: for lines and arcs a tangency
-    /// is always a TOUCH — two distinct circles tangent at a point, or a line tangent to a
-    /// circle, stay on one side of each other locally — so a tangential contact never
-    /// separates the boundary into interior and exterior the way a crossing does.
-    /// </summary>
-    private static void RequireNoCrossings(IReadOnlyList<IReadOnlyList<CurvedEdge2d>> loops)
-    {
-        var flat = new List<(int Loop, int Index, CurvedEdge2d Edge)>();
-        for (int l = 0; l < loops.Count; l++)
-        {
-            for (int i = 0; i < loops[l].Count; i++)
-                flat.Add((l, i, loops[l][i]));
-        }
-
-        var contacts = new List<CurveIntersection2d.Contact>();
-        foreach (var (i, j) in CandidatePairs(flat))
-        {
-            var (li, ii, a) = flat[i];
-            var (lj, ij, b) = flat[j];
-            if (li == lj)
-            {
-                int count = loops[li].Count;
-                if ((ii + 1) % count == ij || (ij + 1) % count == ii)
-                    continue;   // adjacent in the chain: they share a joint by construction
-            }
-            contacts.Clear();
-            CurveIntersection2d.Intersect(a, b, BoundaryTolerance, contacts);
-            foreach (var contact in contacts)
-            {
-                if (IsEndpoint(a, contact.Point) || IsEndpoint(b, contact.Point))
-                    continue;
-                // Unit tangents; a dimensionless angular guard (radians carry no model
-                // units) separates a genuine crossing from a tangential touch.
-                double turn = a.TangentAt(contact.Ta).Cross(b.TangentAt(contact.Tb));
-                if (Math.Abs(turn) > 1e-9)
-                {
-                    throw new ArgumentException(
-                        $"Curved region boundary crosses itself near {contact.Point}.");
-                }
-            }
-        }
-
-        static bool IsEndpoint(in CurvedEdge2d edge, in Vector2d point) =>
-            edge.Start.DistanceTo(point) <= BoundaryTolerance || edge.End.DistanceTo(point) <= BoundaryTolerance;
-    }
-
-    /// <summary>
-    /// Edge index pairs whose tight boxes overlap in x — a one-dimensional sweep, which is
-    /// all the broad phase this check needs: a crossing requires a shared point, so it
-    /// requires overlapping boxes. Below <see cref="BruteForceLimit"/> edges the all-pairs
-    /// scan beats sorting, exactly as <see cref="Region2dValidation"/> decides.
-    /// </summary>
-    private static IEnumerable<(int, int)> CandidatePairs(
-        List<(int Loop, int Index, CurvedEdge2d Edge)> flat)
-    {
-        int n = flat.Count;
-        if (n <= BruteForceLimit)
-        {
-            for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
-                yield return (i, j);
-            yield break;
-        }
-
-        var boxes = new Aabb[n];
-        var order = new int[n];
-        var keys = new double[n];
-        for (int i = 0; i < n; i++)
-        {
-            boxes[i] = flat[i].Edge.Bounds();
-            order[i] = i;
-            keys[i] = boxes[i].Min.X;
-        }
-        Array.Sort(keys, order);
-
-        for (int a = 0; a < n; a++)
-        {
-            int i = order[a];
-            double reach = boxes[i].Max.X + BoundaryTolerance;
-            for (int b = a + 1; b < n && keys[b] <= reach; b++)
-            {
-                int j = order[b];
-                if (boxes[i].Min.Y - BoundaryTolerance <= boxes[j].Max.Y
-                    && boxes[j].Min.Y - BoundaryTolerance <= boxes[i].Max.Y)
-                {
-                    yield return i < j ? (i, j) : (j, i);
-                }
-            }
-        }
-    }
-
-    /// <summary>Edge count below which all-pairs crossing testing beats sorting.</summary>
-    private const int BruteForceLimit = 24;
 
     private static IReadOnlyList<CurvedEdge2d> Reverse(IReadOnlyList<CurvedEdge2d> loop)
     {
