@@ -591,6 +591,44 @@ the surface", which was backwards for the input that most often reached it — `
 n-gon caps triangulate as a one-corner fan at 3.74°, and every remesh of it tried lands between
 0.013° and 7.7°. Remeshing was *creating* the slivers it was being recommended as the cure for.
 
+**`MaxElementSize` is a *minimum* element size, not a bound on the element count — and the
+report field is the honest small change, not a refusal.** Filed as a hypothesis (a coarse
+`MaxElementSize` might not bound the mesh in the presence of a fine curved feature) and
+measured on the exact fixture that raised it, `Box(60,20,8) − Cylinder(4,40)` with the bore
+held fixed and `MaxElementSize` swept: the element count is *non-monotone* (84 k → 68 k →
+143 k → 90 k → 102 k for h = 20…6) where a size-bounded mesh has count ∝ h⁻³, so `count·h³`
+FALLS from 671 M to 22 M rather than staying flat, and even the coarsest request (h = 20) gives
+84 k elements — 66× a uniform edge-20 mesh. The cause is that `RefineBoundaryToSize` only
+**splits** a boundary facet larger than the target and never coarsens a finer one, so where the
+Ø8 bore is tessellated to ~0.5 mm facets the *surface*, not `MaxElementSize`, sets the local
+element size; the count is boundary refinement (`bSteiner` = 152 k against `qSteiner` = 1.4 k at
+h = 4), whose density the surface fixes. The two duties the todo named settle differently. A
+**refusal is wrong** — the mesh is correct, merely finer than a "coarse" request implies — so
+the change is a report field, `TetMeshDiagnostics.MinBoundaryFacetSize` (the finest boundary
+facet's circumradius: the surface's own floor), which a caller compares to its request and, when
+the gap is large, coarsens the *surface tessellation* rather than raising `MaxElementSize`. And
+the **observability half was already met**: every mesh and solve entry point takes a
+`ProgressCancel`, honoured down to the Delaunay build and the refinement loops, so "40 silent
+minutes" is a caller passing no deadline rather than a missing seam.
+
+**Feeding the mesher from the model, not just from a mesh — provenance is a by-product of
+tessellation, not a second pass.** `TetMesher` takes a `HalfEdgeMesh`, so B-Rep face identity
+reaches its boundary-condition tags (`TetMeshOptions.FacetTags`, keyed by `TetFacet.SourceTriangle`)
+only if the caller threads a per-triangle tag array through — the "which triangle is on which
+face" bookkeeping the selector vocabulary exists to avoid. `BRepTessellator` knows the answer,
+and exposing it cost no change to the tessellation: `MeshWelder.WeldPolygons` gained a tagged
+overload that rides a per-polygon tag onto the surviving faces (welding drops no non-degenerate
+polygon and reorders no face), so `TessellateWithProvenance().Mesh` is **bit-for-bit**
+`Tessellate`'s output and `FaceProvenance[f]` names the B-Rep face mesh-face `f` came from.
+`TessellateForTetMesh` is the whole bridge to a tet mesher — a triangulated mesh plus
+per-triangle tags, the triangle-per-face count read from the welded faces' DEGREES alone
+(diagonal choice irrelevant, both triangles of a quad sharing a face), so the mesh is all
+triangles and the mesher's own `Triangulated()` keeps the tags lined up with `SourceTriangle`.
+The oracle is bit-identity twice over: the mesh equals a plain `Tessellate`, and a structural
+solve whose support and load are named by `Facets.Tag(faceId)` is bit-for-bit the same solve
+named by a geometric selector, because the two resolve to the same facet set (asserted, plus a
+drilled-plate test that the bore wall tags to the cylindrical face and the caps to their planes).
+
 ### Anisotropic boundary layers, and the three decisions in them
 
 A boundary layer is a graded stack of very flat elements marched inward from a wall selected

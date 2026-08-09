@@ -39,7 +39,100 @@ public static class BRepTessellator
     /// </param>
     public static HalfEdgeMesh Tessellate(
         BrepSolid solid, int segmentsPerCircle = 32, int curveSamples = 24,
+        ProgressCancel? progress = null, Microsoft.Extensions.Logging.ILogger? logger = null) =>
+        TessellateCore(solid, segmentsPerCircle, curveSamples, progress, logger,
+            faceProvenance: null, out _);
+
+    /// <summary>
+    /// A B-Rep face and the tessellated <see cref="HalfEdgeMesh"/> it lies on, plus a
+    /// per-face map back to the solid's faces.
+    /// </summary>
+    /// <param name="Mesh">The welded mesh — <b>bit-for-bit</b> what <see cref="Tessellate"/>
+    /// returns on the same inputs.</param>
+    /// <param name="FaceProvenance"><paramref name="Mesh"/>-face-count array: entry <c>f</c>
+    /// is the index, in <c>solid.Faces</c> enumeration order, of the <see cref="BrepFace"/>
+    /// mesh face <c>f</c> came from.</param>
+    public readonly record struct TessellationProvenance(
+        HalfEdgeMesh Mesh, IReadOnlyList<int> FaceProvenance);
+
+    /// <summary>
+    /// Tessellates <paramref name="solid"/> and, beside the mesh, reports which B-Rep face
+    /// each mesh face came from — the seam <see cref="TessellateForTetMesh"/> uses to populate
+    /// a tet mesher's boundary-condition tags automatically instead of the caller matching
+    /// triangles to faces by hand.
+    /// <para>The mesh is bit-for-bit <see cref="Tessellate"/>'s output; provenance is a
+    /// by-product carried through welding, which drops no non-degenerate polygon and
+    /// reorders no face, so face <c>f</c> of the mesh came from the B-Rep face whose index
+    /// is <c>result.FaceProvenance[f]</c> (in <c>solid.Faces</c> order — materialise that
+    /// same enumeration to turn a <see cref="BrepFace"/> from a query into its tag).</para>
+    /// </summary>
+    public static TessellationProvenance TessellateWithProvenance(
+        BrepSolid solid, int segmentsPerCircle = 32, int curveSamples = 24,
         ProgressCancel? progress = null, Microsoft.Extensions.Logging.ILogger? logger = null)
+    {
+        var faceProvenance = new List<int>();
+        var mesh = TessellateCore(solid, segmentsPerCircle, curveSamples, progress, logger,
+            faceProvenance, out var perFaceTags);
+        return new TessellationProvenance(mesh, perFaceTags!);
+    }
+
+    /// <summary>
+    /// Lowers <paramref name="solid"/> to a <b>triangulated</b> surface mesh plus the
+    /// per-triangle B-Rep-face tags a tet mesher wants — the whole bridge from a B-Rep to a
+    /// <c>TetMesher.Mesh(mesh, new TetMeshOptions { FacetTags = tags })</c> call, so a
+    /// boundary condition can be named with the <c>BrepQueries</c>/selection vocabulary
+    /// instead of by matching triangles to faces by hand.
+    /// <para><paramref name="Mesh"/> is all triangles, so a tet mesher's own
+    /// <c>Triangulated()</c> is a no-op that preserves order, and <paramref name="FacetTags"/>
+    /// is indexed by the mesh's own triangle order — i.e. it lines up with
+    /// <c>surface.Triangulated().ToIndexed()</c>, which is exactly what <c>TetFacet.SourceTriangle</c>
+    /// indexes into. Each tag is the index, in <c>solid.Faces</c> enumeration order, of the
+    /// face the triangle lies on; materialise that same enumeration
+    /// (<c>solid.Faces.ToList()</c>) to turn a <see cref="BrepFace"/> from a query into the
+    /// tag that selects its facets.</para>
+    /// </summary>
+    /// <returns>A triangulated surface mesh and one tag per triangle, in the mesh's face order.</returns>
+    public static (HalfEdgeMesh Mesh, int[] FacetTags) TessellateForTetMesh(
+        BrepSolid solid, int segmentsPerCircle = 32, int curveSamples = 24,
+        ProgressCancel? progress = null, Microsoft.Extensions.Logging.ILogger? logger = null)
+    {
+        var (welded, faceProvenance) =
+            TessellateWithProvenance(solid, segmentsPerCircle, curveSamples, progress, logger);
+
+        // Triangulating fans each welded face f into (degree(f) − 2) triangles, in face order
+        // (HalfEdgeMesh.Triangulated walks ToIndexed()'s faces and Build preserves order), so
+        // the per-triangle tags are the per-face tag repeated (degree − 2) times — computed
+        // from the face DEGREES alone, without reproducing PolygonFan's diagonal choice, which
+        // does not affect the tag (both triangles of a quad share their face).
+        var (_, faces) = welded.ToIndexed();
+        var triangulated = welded.Triangulated();
+        var tags = new int[triangulated.FaceCount];
+        int t = 0;
+        for (int f = 0; f < faces.Count; f++)
+        {
+            int triangles = faces[f].Length - 2;
+            for (int k = 0; k < triangles; k++)
+                tags[t++] = faceProvenance[f];
+        }
+        if (t != tags.Length)
+            throw new InvalidOperationException(
+                $"Triangulation produced {tags.Length} triangles but tagging expected {t}; " +
+                "the face-degree-to-triangle-count identity was violated.");
+        return (triangulated, tags);
+    }
+
+    /// <summary>
+    /// The shared body of <see cref="Tessellate"/> and <see cref="TessellateWithProvenance"/>.
+    /// When <paramref name="faceProvenance"/> is non-null it collects, per polygon, the index
+    /// of the B-Rep face (in <c>solid.Faces</c> order) that produced it, and the weld carries
+    /// those onto the surviving faces (<paramref name="perFaceProvenance"/>). With it null the
+    /// arithmetic is identical bar the untagged weld overload, so the incumbent path is
+    /// bit-for-bit unchanged.
+    /// </summary>
+    private static HalfEdgeMesh TessellateCore(
+        BrepSolid solid, int segmentsPerCircle, int curveSamples,
+        ProgressCancel? progress, Microsoft.Extensions.Logging.ILogger? logger,
+        List<int>? faceProvenance, out int[]? perFaceProvenance)
     {
         if (segmentsPerCircle < 3) throw new ArgumentOutOfRangeException(nameof(segmentsPerCircle));
         if (curveSamples < 2) throw new ArgumentOutOfRangeException(nameof(curveSamples));
@@ -64,10 +157,16 @@ public static class BRepTessellator
         var polygons = new List<IReadOnlyList<Vector3d>>();
         int faceCount = solid.Faces.Count();
         int facesDone = 0;
+        int faceIndex = -1;
         foreach (var face in solid.Faces)
         {
+            faceIndex++;
             progress?.ThrowIfCancelled();
+            int before = polygons.Count;
             TessellateFace(face, edgePolylines, segmentsPerCircle, curveSamples, polygons);
+            // Each face appends a contiguous run of polygons; record which face made each.
+            for (int i = before; i < polygons.Count; i++)
+                faceProvenance?.Add(faceIndex);
             progress?.Report(EdgePhase + FacePhase * ++facesDone / Math.Max(1, faceCount));
         }
 
@@ -77,7 +176,17 @@ public static class BRepTessellator
         // reinserts the missing vertices so the mesh closes.
         // 1e-9 = Tolerance.Default.Linear: the absolute weld tolerance — geometry that
         // must weld is constructed exactly, so this must NOT be loosened to hide cracks.
-        var mesh = MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
+        HalfEdgeMesh mesh;
+        if (faceProvenance is null)
+        {
+            perFaceProvenance = null;
+            mesh = MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
+        }
+        else
+        {
+            mesh = MeshWelder.WeldPolygons(
+                polygons, faceProvenance, out perFaceProvenance, tolerance: 1e-9, zipSeams: true);
+        }
         progress?.Report(1);
         if (logger is not null)
             KernelLog.TessellationCompleted(logger, solid.Faces.Count(), mesh.FaceCount,

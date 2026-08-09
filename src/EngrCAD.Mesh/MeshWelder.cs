@@ -16,7 +16,46 @@ public static class MeshWelder
     public static HalfEdgeMesh WeldPolygons(
         IEnumerable<IReadOnlyList<Vector3d>> polygons,
         double tolerance = 1e-8,
+        bool zipSeams = false) =>
+        WeldCore(polygons, polygonTags: null, tolerance, zipSeams, out _);
+
+    /// <summary>
+    /// <see cref="WeldPolygons(IEnumerable{IReadOnlyList{Vector3d}}, double, bool)"/> that
+    /// carries a per-polygon tag onto the surviving faces — the seam a caller uses to trace
+    /// provenance through welding (which face of the finished mesh came from which polygon).
+    /// <para>The output mesh is bit-for-bit what the untagged overload produces on the same
+    /// polygons: welding, zipping and building are indifferent to the tags. Faces come back
+    /// in surviving-polygon order (welding drops a polygon that collapses to fewer than three
+    /// vertices or pinches, and nothing after that reorders faces), so
+    /// <paramref name="faceTags"/>[f] is the tag of the polygon face f came from.</para>
+    /// </summary>
+    /// <param name="polygons">The polygon soup, indexed to align with <paramref name="polygonTags"/>.</param>
+    /// <param name="polygonTags">One tag per polygon, in the same order.</param>
+    /// <param name="faceTags">One tag per output face, in face order.</param>
+    public static HalfEdgeMesh WeldPolygons(
+        IReadOnlyList<IReadOnlyList<Vector3d>> polygons,
+        IReadOnlyList<int> polygonTags,
+        out int[] faceTags,
+        double tolerance = 1e-8,
         bool zipSeams = false)
+    {
+        ArgumentNullException.ThrowIfNull(polygons);
+        ArgumentNullException.ThrowIfNull(polygonTags);
+        if (polygonTags.Count != polygons.Count)
+            throw new ArgumentException(
+                $"polygonTags ({polygonTags.Count}) must carry one entry per polygon ({polygons.Count}).",
+                nameof(polygonTags));
+        var mesh = WeldCore(polygons, polygonTags, tolerance, zipSeams, out var survivingTags);
+        faceTags = survivingTags!;
+        return mesh;
+    }
+
+    private static HalfEdgeMesh WeldCore(
+        IEnumerable<IReadOnlyList<Vector3d>> polygons,
+        IReadOnlyList<int>? polygonTags,
+        double tolerance,
+        bool zipSeams,
+        out int[]? faceTags)
     {
         if (tolerance <= 0)
             throw new ArgumentOutOfRangeException(nameof(tolerance));
@@ -55,8 +94,11 @@ public static class MeshWelder
         }
 
         var faces = new List<List<int>>();
+        var survivingTags = polygonTags is null ? null : new List<int>();
+        int polygonIndex = -1;
         foreach (var polygon in polygons)
         {
+            polygonIndex++;
             var loop = new List<int>();
             foreach (var v in polygon)
             {
@@ -73,10 +115,12 @@ public static class MeshWelder
             if (loop.Distinct().Count() != loop.Count)
                 continue;
             faces.Add(loop);
+            survivingTags?.Add(polygonTags![polygonIndex]);
         }
 
         if (zipSeams)
-            ZipSeams(welded, faces);
+            ZipSeams(welded, faces);   // inserts seam vertices in place; face count is unchanged
+        faceTags = survivingTags?.ToArray();
         return HalfEdgeMesh.Build(welded, faces.Select(f => (IReadOnlyList<int>)f));
     }
 

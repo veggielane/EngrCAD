@@ -161,6 +161,17 @@ scene.Add(new Part("graded mesh", cutaway) { Color = new PartColor(0.85f, 0.62f,
 
 `MaxElementSize` is the uniform form of the same idea; supply both and the smaller wins.
 
+> **`MaxElementSize` is a *minimum* element size — it only refines facets larger than the
+> target and never coarsens a finely tessellated feature.** So a coarse request does **not**
+> give a coarse mesh where the surface is already fine: measured on `Box(60,20,8) −
+> Cylinder(4,40)` at the default tessellation, the element count barely moved (84 000 →
+> 143 000) as `MaxElementSize` swept 20 down to 8, because the Ø8 bore's ~0.5 mm wall facets
+> floored it — a size-bounded mesher would have answered that with a ~15× rise. The count is
+> boundary refinement, whose density the surface sets. `TetMeshDiagnostics.MinBoundaryFacetSize`
+> reports that floor (the finest boundary facet), so a caller can compare it to the requested
+> size; when it is far smaller, **coarsen the surface tessellation** (fewer segments/circle),
+> which is the only thing that makes the mesh coarser there.
+
 ## Anisotropic boundary layers
 
 A sizing field refines a region *isotropically* — smaller elements in every direction at
@@ -463,6 +474,45 @@ foreach (var facet in tets.BoundaryFacets)
 if (Math.Abs(topArea - 30 * 20) > 1e-9)
     throw new Exception($"top face area came back as {topArea}");
 ```
+
+### From the model, not by hand
+
+The tags above were built by hand from triangle centroids. When the surface comes from a
+B-Rep, its faces already carry that meaning, and `BRepTessellator.TessellateForTetMesh` hands
+back the triangulated mesh **and** the per-triangle tags in one call — each tag the index, in
+`solid.Faces` order, of the face the triangle lies on. A boundary condition is then named with
+the `BrepQueries` selection vocabulary (`IsCylindrical`, `IsPlanar`, …) instead of a coordinate
+test, and it re-selects the right facets whether the mesh is coarse or fine.
+
+```csharp run:model-fed-facet-tags
+var solid = Shape.Box(60, 20, 8).Subtract(Shape.Cylinder(4, 40)).ToBrep();
+var (mesh, tags) = BRepTessellator.TessellateForTetMesh(solid, segmentsPerCircle: 12);
+
+// The Ø8 bore is the one cylindrical face — no geometry test, just a query.
+var faces = solid.Faces.ToList();
+int bore = faces.FindIndex(f => f.IsCylindrical(out _, out _, out _));
+
+var tets = TetMesher.Mesh(mesh, new TetMeshOptions { FacetTags = tags });
+
+// A pressure on the bore wall is now just "the facets tagged `bore`" — the same seam a
+// coordinate test fed, but named by the model.
+double boreArea = 0;
+foreach (var facet in tets.BoundaryFacets)
+{
+    if (facet.SourceTriangle != bore) continue;
+    var a = tets.Position(facet.V0);
+    var b = tets.Position(facet.V1);
+    var c = tets.Position(facet.V2);
+    boreArea += 0.5 * (b - a).Cross(c - a).Length;
+}
+
+// 2·π·r·h = 2·π·4·8 ≈ 201, less the 12-gon deficit at this tessellation.
+if (!(boreArea > 190 && boreArea < 201))
+    throw new Exception($"bore wall area came back as {boreArea}");
+```
+
+The [structural page](fea-structural.md) uses the same seam to name a support and a load by
+face and solves on the tagged mesh.
 
 ## Multiple bodies, one mesh
 
