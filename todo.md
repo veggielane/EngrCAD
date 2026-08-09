@@ -518,19 +518,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   refinement is to drop the collapsed column and continue with a narrower block, which saves
   the restart's re-convergence; deliberately not built until a fixture wants it, since no
   case in the suite reaches the breakdown path other than by exhausting a small space.
-- [ ] **FEA: transient dynamics — base excitation (support motion as a history).** A prescribed
-  displacement is currently HELD constant for the run and is deliberately not scaled by the load
-  factor (a support that has been moved stays moved). A seismic or shaker input needs `u_c(t)`
-  with its own `v_c(t)` and `a_c(t)`, which changes the right-hand side from one constant
-  correction to a per-step one — `TransientSolver` already forms it as a full-vector product
-  against the effective operator for exactly that reason, so it is a change of one line plus the
-  vocabulary for stating the history. The alternative formulation (relative coordinates plus a
-  `-M·1·a_ground` load) needs no new plumbing at all and is worth measuring against it first.
-- [ ] **FEA: transient dynamics — adaptive time stepping.** The step is constant so ONE
-  factorization serves the run, which is the whole performance argument. Adaptive stepping
-  refactors at every change, so it is only worth it where the response has widely separated
-  scales (an impact followed by a ring-down); the honest form is a small set of step sizes with
-  a factorization cached per size, not a continuously varying one.
 - [ ] **FEA: nonlinear transient (contact, plasticity, large deformation).** Each makes the
   problem a nonlinear solve WRAPPING the linear stepper, with a Newton residual iteration inside
   every step — the stiffness is re-evaluated about the current configuration rather than once

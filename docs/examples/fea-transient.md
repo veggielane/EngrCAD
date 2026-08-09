@@ -239,7 +239,114 @@ stepping matrix `a0·M + (1+alpha)·a1·C + (1+alpha)·K` depends on the step, t
 model and on nothing else, so it is factored once before the loop and every step after that is
 a back-substitution. `TransientSolveReport.Factorizations` reports the count — one for the
 stepping matrix, plus one for the mass matrix when the initial acceleration has to be solved.
-Adaptive stepping would refactor at every change, which is the entire cost of the method.
+A continuously varying step would refactor at every change, which is the entire cost of the
+method — so [adaptive stepping](#adaptive-time-stepping), when you want it, uses a small fixed
+set of sizes and factors each once.
+
+## Base excitation (support motion)
+
+A shaker table or a seismic input drives the model through its supports, not by a nodal force.
+`TransientSolveOptions.BaseMotion` states it as a ground ACCELERATION `a_g(t)` along a
+direction, and the answer is RELATIVE displacement — measured from the moving base, which is the
+right quantity for stress because a rigid ground motion carries none. In relative coordinates the
+equation is `M·u'' + C·u' + K·u = -M·iota_d·a_g(t)`, so it is one more inertial load pattern over
+the supports left fixed — no per-step operator change, and it takes the acceleration a seismic
+record already is:
+
+```csharp run:fea-transient-base
+var tets = TetMesher.Mesh(Shape.Box(60, 12, 8).ToMesh(), new TetMeshOptions
+{
+    RefineQuality = true,
+    MaxElementSize = 12,
+});
+var mesh = AnalysisMesh.Of(tets);
+var model = new StructuralModel(mesh, Materials.Steel)
+    .Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX))
+    .Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -200));
+
+// A shaker table: the whole base accelerates as a_g(t) along Z. It COMPOSES with the model's
+// own load (the tip force), so this is gravity-held-while-shaken in one run.
+var options = new TransientSolveOptions(2e-6, 200)
+{
+    Damping = RayleighDamping.StiffnessProportional(30000, 0.05),
+    LoadFactor = t => 1.0,
+    BaseMotion = new BaseMotion(Vector3d.UnitZ, t => 9810 * Math.Sin(2 * Math.PI * 20000 * t)),
+};
+var shaken = TransientSolver.Solve(model, options);
+if (!shaken.IsRelativeToBase)
+    throw new Exception("a base-motion run reports RELATIVE displacement");
+
+// A ZERO base motion is the plain force-driven run, bit for bit - the feature is off by default.
+var still = TransientSolver.Solve(
+    model, options with { BaseMotion = new BaseMotion(Vector3d.UnitZ, _ => 0.0) });
+var plain = TransientSolver.Solve(
+    model, new TransientSolveOptions(2e-6, 200) { Damping = options.Damping, LoadFactor = t => 1.0 });
+for (int i = 0; i < plain.States.Count; i++)
+    for (int n = 0; n < mesh.NodeCount; n++)
+        if (BitConverter.DoubleToInt64Bits(still.States[i].DisplacementAt(n).Z)
+            != BitConverter.DoubleToInt64Bits(plain.States[i].DisplacementAt(n).Z))
+            throw new Exception("a zero base motion must match a plain run bit for bit");
+```
+
+The relative form is kept over prescribing the absolute support motion because it is measured to
+be the same physics and cleaner (design.md §3g): the two agree to **6.1e-12** on an undamped
+problem, and the relative response matches the transmissibility amplification
+`1/sqrt((1-r²)² + (2·zeta·r)²)` to **0.075%** and the resonant `1/(2·zeta)` to **0.062%**. The
+whole base moves together (independent foundations are a larger construction, stated not
+detected).
+
+## Adaptive time stepping
+
+The constant step is what lets one factorization serve the run, so the adaptive form must not
+give that away. `SolveAdaptive` draws its step from a small DYADIC set — `TimeStep / 2^L` for `L`
+in `0..Levels-1` — and factors each size at most ONCE, cached, so a multi-scale run (a sharp
+start then a long ring-down) spends the fine step only where a local-error estimate demands it
+while paying for at most `Levels` factorizations, not one per step change:
+
+```csharp run:fea-transient-adaptive
+var tets = TetMesher.Mesh(Shape.Box(60, 12, 8).ToMesh(), new TetMeshOptions
+{
+    RefineQuality = true,
+    MaxElementSize = 12,
+});
+var mesh = AnalysisMesh.Of(tets);
+var model = new StructuralModel(mesh, Materials.Steel)
+    .Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX))
+    .Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -200));
+var transient = new TransientSolveOptions(2e-6, 200)
+{
+    Damping = RayleighDamping.StiffnessProportional(30000, 0.1),
+    LoadFactor = t => 1.0,
+};
+
+// Levels == 1 is the constant-step Solve reproduced bit for bit through the SAME step
+// arithmetic, with the same factorization count - the seam that pins it as a strict extension.
+var constant = TransientSolver.Solve(model, transient);
+var oneSize = TransientSolver.SolveAdaptive(
+    model, transient, new TransientAdaptiveOptions { Levels = 1, Tolerance = 1e9 });
+if (oneSize.Report.Factorizations != constant.Report.Factorizations)
+    throw new Exception("a single-size adaptive run factors the same matrices");
+for (int i = 0; i < constant.States.Count; i++)
+    for (int n = 0; n < mesh.NodeCount; n++)
+        if (BitConverter.DoubleToInt64Bits(oneSize.States[i].DisplacementAt(n).Z)
+            != BitConverter.DoubleToInt64Bits(constant.States[i].DisplacementAt(n).Z))
+            throw new Exception("Levels == 1 must reproduce the constant run bit for bit");
+
+// Three sizes {dt, dt/2, dt/4}: at most one factorization per size (plus the mass solve),
+// NOT the ~thousand a continuously varying step would do.
+var adaptive = TransientSolver.SolveAdaptive(
+    model, transient, new TransientAdaptiveOptions { Levels = 3, Tolerance = 5e-6 });
+if (adaptive.Report.Factorizations > 3 + 1)
+    throw new Exception("adaptive factors at most one matrix per size, not one per step change");
+_ = adaptive.Report.AdaptiveSteps;    // total steps taken
+_ = adaptive.Report.StepsPerLevel;    // the split between the sharp start and the ring-down
+```
+
+Measured on the verification suite, a damped free decay whose amplitude falls ~1000x is matched
+to the uniform-fine reference to **0.008%** while taking **816 steps against the fine grid's
+1920 (58% fewer)** and factoring **4 matrices** (three sizes plus the mass solve). The tolerance
+is absolute, so set it to the response's own scale; the split is dramatic only when the ring-down
+genuinely goes quiet (an under-damped run oscillates the whole time at the natural frequency).
 
 ## The energy balance is an identity, not a diagnostic
 
@@ -408,9 +515,13 @@ Named rather than approximated:
   mass matrix would still solve a linear system, which is what explicit integration exists to
   avoid.
 - **Hysteretic (structural) damping**, per above — it has no time-domain form.
-- **Adaptive time stepping** — it would refactor at every change.
-- **Base excitation** (a support whose motion is a history). A prescribed displacement is held
-  constant and is *not* scaled by the load factor: a support that has been moved stays moved.
+- **A CONTINUOUSLY varying adaptive step** — it would refactor at every change. The supported
+  form ([above](#adaptive-time-stepping)) is a small fixed set of sizes, factored once each; a
+  prescribed support motion and an iterative solve are refused on that path.
+- **A general moving support** (an absolute prescribed motion, a history on individual degrees
+  of freedom). The stress-correct base-excitation case ([above](#base-excitation-support-motion))
+  is the relative formulation, an inertial load over fixed supports; the absolute one is an
+  internal seam only, filed as a larger feature.
 
 **Several load patterns with independent histories** — gravity held constant while a shaker runs,
 `f(t) = Σ g_i(t)·f_i` — are `TransientSolveOptions.LoadPatterns`, a `(model, law)` list whose

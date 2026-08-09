@@ -2279,6 +2279,60 @@ single-pattern runs added, at every step, to **7e-14** relative — a bug that d
 mis-scaled a pattern could not survive it — and a one-pattern list is bit-identical to the
 single-model form.
 
+## Base excitation (support motion as a history)
+
+A shaker or seismic input drives the model through its supports, and
+`TransientSolveOptions.BaseMotion` states it as a `BaseMotion(Direction, GroundAcceleration)` —
+the ground ACCELERATION `a_g(t)` along a direction. It is the RELATIVE-coordinate formulation:
+in relative coordinates the equation is `M.u'' + C.u' + K.u = -M.iota_d.a_g(t)` with `iota_d`
+the rigid translation along the base direction, so the excitation is one more load pattern
+(`-M.iota_d` scaled by `a_g`) over fixed supports, and the answer is RELATIVE displacement
+(`TransientResults.IsRelativeToBase`), which is the right quantity for stress because a rigid
+ground motion carries none. It COMPOSES with the model's own loads and with `LoadPatterns`
+(gravity held while a shaker runs), since it is a superposed pattern.
+
+**The relative form is kept over prescribing the absolute support motion, and the measurement
+is why** (design.md §3g). The absolute formulation — prescribe `iota_d.u_g(t)` at the supports,
+solve for total motion — recomputes a `-Aeff.u_c` correction each step, needs the input
+double-integrated to displacement, and gives absolute displacement that is only relative +
+ground; the relative form needs no per-step operator change and takes the acceleration a seismic
+record already is. The two are proved EQUAL through the internal `AbsolutePrescribedMotion` seam:
+for an undamped body under average acceleration the change of variables
+`u_absolute = u_relative + iota_d.u_g` is exact at the discrete level, and the two integrations
+agree to **6.1e-12** relative. Verified against the transmissibility closed form as an
+AMPLIFICATION (so the fixture's participation factor cancels): a single-degree-of-freedom
+oscillator's steady relative response over its static base deflection is
+`1/sqrt((1-r^2)^2 + (2.zeta.r)^2)`, measured **1.94403 against 1.94257** (r = 0.7, zeta = 0.05,
+error 0.075%) and the resonant amplification **9.9938 against 1/(2.zeta) = 10** (0.062%); and a
+ZERO base motion reproduces a plain run bit for bit (0 differing bits across 401 states). The
+whole base moves TOGETHER (independent-foundation motion is a larger construction, stated rather
+than detected).
+
+## Adaptive time stepping (a small dyadic set, factored per size)
+
+The constant step is what lets ONE factorization serve the run, so adaptivity must not throw
+that away. `SolveAdaptive` draws its step from a SMALL DYADIC set — `TimeStep / 2^L` for `L` in
+`0..Levels-1` — and factors each size at most ONCE, cached, so a genuinely multi-scale run — a
+sharp start then a long ring-down — spends the fine step only where the local error demands it
+while paying for at most `Levels` factorizations, NOT one per step change (which a continuously
+varying step would do). The base `TimeStep` is the coarsest size and `Steps` counts coarsest
+steps; the times land on the finest dyadic grid, which is what lets the coarse and fine steps
+interleave and still reach the endpoint exactly.
+
+The step is chosen from a local displacement-error estimate — `dt^2.|a(n+1) - a(n)|`, the
+third-order local error read from the change in acceleration — against
+`TransientAdaptiveOptions.Tolerance`: over-tolerance and not yet finest, the step is REJECTED and
+retaken at the next finer size; comfortably under it, the next step tries a coarser size. **The
+oracle is fuzzier than a closed form, so it is pinned in two exact parts and one measured one**:
+a single-element size-set (`Levels == 1`) reproduces the constant-step `Solve` run BIT for bit
+through the shared step arithmetic (the whole per-step body is one `NewmarkStep` both call), with
+the same factorization count; and a damped free decay whose amplitude falls ~1000x is matched to
+the uniform-fine reference to **0.008%** while taking **816 steps against the fine grid's 1920
+(58% fewer)** and factoring **4 matrices** (three sizes plus the initial-acceleration mass solve)
+where a continuously varying step would factor ~a thousand. A prescribed support motion and an
+iterative solve are refused by name (the first fights per-size caching, the second has no
+factorization to reuse).
+
 ## Two damping paths, and only one assembles a matrix
 
 The run option `TransientSolveOptions.Damping` is PROPORTIONAL (Rayleigh) and never assembles a
@@ -2413,15 +2467,13 @@ offset to six digits. The formula was right; the estimator was not.
   updated, so contact, plasticity, large deformation and follower loads are outside it. Each
   makes the problem a nonlinear solve WRAPPING this one, with a residual iteration inside every
   step - a different solver rather than an option.
-- **Constant step.** Adaptive stepping would refactor at every change, which is the entire cost
-  of the method.
-- **One spatial load pattern** scaled by one scalar history. A superposition of patterns with
-  independent histories needs a LIST proven to share one stiffness matrix, which is exactly
-  `StructuralSolver.SolveAll`'s contract, and is filed.
-- **No base excitation.** A prescribed displacement is held CONSTANT for the run and is not
-  scaled by the load factor; a support whose motion is a history of its own is a different
-  feature.
-- **Proportional damping only**, as everywhere here.
+- **Adaptive stepping is a small fixed dyadic set, not a continuously varying step** — see
+  `SolveAdaptive` above; the size-set exists precisely so each size is factored once. A
+  prescribed support motion and an iterative solve are refused on that path.
+- **Base excitation is the RELATIVE formulation** (`BaseMotion`, above): a ground acceleration
+  applied as an inertial load over fixed supports, giving relative displacement. A general
+  moving support (absolute prescribed motion, a history on individual DOFs) is the internal
+  seam only, filed as a larger feature.
 - **Consistent mass only.** `MassLumping` exists for the modal solver, where consistent and
   lumped bracket the truth; a diagonal M buys nothing on this path because the effective
   stiffness carries K and has to be factored whatever M looks like.
