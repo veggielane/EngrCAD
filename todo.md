@@ -321,24 +321,28 @@ implementing. Ordered roughly by value-for-effort within each section.
 The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
 `SparseSymmetricCG` / `SparseCholesky`; mesh engine: `LaplacianMeshSmoother`,
 `LaplacianMeshDeformer`, `MeshLocalParam`, `MeshIsoCurves`, `DijkstraGraphDistance`,
-`MeshIcp`). Residuals:
+`MeshIcp`). Since then the Shape API grew **`Shape.Smoothed(step, passes)`** (Laplacian
+fairing as a graph node — mesh-Native, implicit-Bridged via `MeshSdf`, B-Rep-Impossible,
+the `Remeshed` precedent; docs `remeshing.md` §Fairing) and the exp map grew its decal
+consumer **`SurfaceDecoration.Wrap`** (a flat polyline / space-filling curve / `Sketch`
+outline laid onto a doubly-curved surface, with the distortion MEASURED on the laid curve;
+design.md §2). Residuals:
 
 - [ ] **A supernodal/left-looking numeric factorization** is the next lever, not a
   better ordering. AMD takes 3D 40³ (64k unknowns) from 125 s to 26 s, which is a real
   4.8× and still unusable — the fill is 20.6M entries and the up-looking scalar loop
   touches them one at a time. BLAS-3 dense blocks over the supernodes are the standard
-  answer and the only thing that closes that gap.
-- [ ] **Nothing consumes `SparseOrdering.Amd` yet.** `LaplacianMeshSmoother`/
-  `LaplacianMeshDeformer`/`MeshIcp` still factor natural, deliberately: their committed
-  outputs are pinned bit-for-bit and switching would move them. Whoever wires FEA
-  assembly should pass `Amd` from the start and pin its own baselines.
-- [ ] **Shape-level exposure of smoothing/deformation** — the tools are kernel-only
-  (`EngrCAD.Mesh`); a `Shape.Smoothed(...)` graph node (mesh-Native, implicit-Bridged
-  via `MeshSdf`, B-Rep-Impossible — the `Remeshed` precedent) plus docs-site example
-  pages is the user-facing follow-up, owed when it lands per the docs rule.
-- [ ] **Decal/engraving pipeline over the exp map** — `MeshLocalParam` gives per-vertex
-  (u, v); wrapping a `Sketch`/glyph outline through it onto a curved surface (project
-  curves into uv, map back, imprint) is the feature it was built to enable.
+  answer and the only thing that closes that gap. (Core.Solvers work — product-sized, and
+  the AMD-vs-natural default is settled: FEA assembly consumes AMD, the mesh deformers
+  stay natural to keep their bit-pinned outputs.)
+- [ ] **Surface ENGRAVING — cutting a groove INTO the solid, not laying a curve ON it.**
+  `SurfaceDecoration.Wrap` lands a `Sketch`/glyph outline on the surface (the exp-map
+  wrapping the pipeline was built to enable); turning that laid `SurfaceCurve` into a
+  removed groove (or a raised emboss) is a separate, larger operation — it needs the curve
+  stroked to a bead and offset/booleaned against the body, or an SDF engraving field, and
+  the distortion the wrapping reports feeds directly into the bead width. File a consumer
+  before building: today the honest answer is that the wrapping produces the runs and the
+  caller strokes/booleans them.
 
 ## Mechanisms (kinematics)
 
@@ -514,65 +518,6 @@ Remaining follow-ups:
   deep occurrence whose owning sub-assembly is placed more than once is refused (one
   shared frame). A mechanism inside a twice-placed sub-assembly needs per-placement
   frame overlays first. See the assessment under "Assemblies follow-ups".
-- [ ] **Deliberately out of scope**: forces, masses, friction, contact dynamics.
-  That is multibody *dynamics* and belongs with Simulation below — mechanisms answer
-  "where does it go", not "what does it take". Mass properties already exist
-  (`MeshMassProperties`/`BrepMassProperties` return inertia tensors about the centre of
-  mass), so dynamics has its inputs waiting whenever it comes.
-
-## Animation and motion export (follow-ups)
-
-The v1 landed (`Animation`/tracks/`AnimationPlayback` in Viewer.Core, APNG + GIF +
-frame-sequence export in Viewer, the SceneHost transport, DocsGen `animate:` fences +
-`docs/examples/animation.md`) — the load-bearing rule held: an animation moves poses
-and the camera only, `Animation.At(t)` is pure, and one evaluation path serves
-scrubbing, playback, export and docs. **Batched export + stills landed** since:
-`OffscreenRenderer.RenderSequence` holds ONE EGL context, one set of programs and one
-set of uploaded buffers for a whole clip (24 frames at 480x360, win-x64: **1069 ms ->
-165 ms, 6.5x**, with the batched pixels asserted byte-identical to one `Render` per
-frame), and `EngrCad.RenderToImage(scene, animation, t, ...)` + the MCP `screenshot`
-`t` parameter both pose through the one `EngrCad.PoseAt` seam. **`DeformationTrack`
-landed** too, and the interesting part is that it did not weaken the rule: a deformed
-result looked like the exception (new vertex positions per frame) and became a THIRD kind
-of answer from `Animation.At` — a scalar — because the displacement now rides as a vertex
-attribute and the whole clip is one uniform per frame (design.md §6b). What remains:
-
-- [ ] **Web viewport transport** — the whole machine (`Animation`, `AnimationPlayback`)
-  is UI-free in `Viewer.Core` precisely so the Blazor viewport can reuse it: a
-  play/pause/scrub row driving the same per-instance matrices the desktop sends via
-  `SetInstancePoses`. Needs only widgets and a `requestAnimationFrame` clock; no new
-  evaluation code.
-- [ ] **Pose-track composition** — an `Animation` deliberately takes at most ONE pose
-  track (two full-instance-list producers cannot compose; whose matrices win?).
-  Composing *relative displacement* tracks (mechanism pose ∘ explode displacement on
-  top) is the principled extension — displacements compose where absolute pose lists do
-  not. **Assessed while the explode PATH landed; the shape and the one hard part.** The
-  extension is a `DisplacementTrack` returning a per-instance DELTA (matched by
-  occurrence path, like everything else here) that `Animation.At` post-multiplies onto
-  whatever the pose track produced, with N of them allowed because deltas compose. Two
-  of the three current tracks convert cleanly — `ExplodeTrack` already computes a
-  displacement per occurrence (`Occurrence.ExplodeDisplacement`) and merely adds it to a
-  frame, so it *is* a displacement track wearing an absolute-pose interface. The hard
-  one is `MechanismTrack`: its "delta" is only meaningful against the assembled pose it
-  was swept from, so composing an explode on top of a running mechanism displaces parts
-  along axes the mechanism has already rotated — which is either exactly right (the
-  exploded view of a posed mechanism) or exactly wrong (the offsets were designed in the
-  assembled configuration), and the answer is a product decision, not a derivation. Do
-  not build it until a concrete clip needs it and can settle that question; the honest
-  interim is that `ExplodeTrack.Stagger` already sequences within one track, which is
-  what most assembly animations actually want.
-- [x] **Explode motion along the explode PATH** — `Occurrence.ExplodePath` carries dogleg
-  waypoints (out, then over), with the factor mapped to ARC LENGTH so a part crosses the
-  corner at constant speed; `ExplodeDisplacement(factor)` is the one rule the flatten
-  walk, `ExplodeTrack` and a future explode-path renderer all read. Paths persist in the
-  document format and are written only when set, so existing files stay byte-identical.
-  The renderer half (the dashed leader lines drafting standards draw between an exploded
-  part and its seat) is still open under Assemblies follow-ups — and now has a path to
-  draw rather than a straight line to assume.
-- [ ] **WebP animation** needs a VP8/VP8L encoder — not something to hand-roll; it
-  means taking a dependency (libwebp or a managed port). Worth it only if the payload
-  difference matters for the docs site (the committed APNGs are the size pressure to
-  watch).
 
 ## Simulation
 
@@ -2115,19 +2060,6 @@ honest no) is recorded in design.md §6b with the comparison committed as
   - **Free rotation** proper — a no-fit polygon per part pair per angle, or a
     deterministic optimiser over the angle with a stated stopping rule (`DesignStudy`'s
     Hooke–Jeeves is the precedent for the stopping rule bounding the ANSWER).
-- [ ] **Exporter breadth** — 3MF/AMF/OFF ✅ and DXF/SVG v1 ✅ landed (`ThreeMfWriter`/
-  `AmfWriter`/`OffWriter` + `--export`/MCP wiring; `DxfDocument`/`SvgDrawing` with
-  build123d's edge-classification line types) and **VTK/VTU** ✅ (`VtuWriter` +
-  `--export .vtu`, geometry plus simulation results as point data) and **glTF 2.0** ✅
-  (`GltfWriter` + `GltfScene`, `.glb`/`.gltf`, hierarchy-preserving with per-part PBR
-  materials and `COLOR_0` result colours); remaining: VRML.
-- [ ] **Deliberately NOT taking**: string selectors (type-unsafe, and LINQ is strictly
-  better in C#), Python-style implicit "pending" state carried between builder calls
-  (hard to reason about and worse without context managers — confirmed by the builder
-  prototype, design.md §6b), and the `Workplane` stack's history/rollback semantics
-  (our `FeatureHistory` already covers regeneration properly and with typed
-  parameters).
-
 ## Viewer
 
 - [ ] **3D-annotation (PMI) residuals** (angular dimensions incl. `BetweenFaces`
@@ -3003,3 +2935,27 @@ from what was already understood rather than from scratch.
 - Skeletal-*field* convolution blends (`SkeletalBlend3d`/`SkeletalRicciBlend3d`) —
   they operate on 0..1 skeletal fields, not signed distances, and would break the
   implicit engine's sign-exactness contract.
+- **Multibody DYNAMICS in the mechanisms layer** — forces, masses, friction and contact
+  dynamics. Mechanisms answer "where does it go", not "what does it take", so that is a
+  Simulation-layer problem and a different solver; the kinematic layer deliberately stops
+  at pose. Mass properties already exist (`MeshMassProperties`/`BrepMassProperties` return
+  inertia tensors about the centre of mass), so dynamics has its inputs waiting whenever
+  it comes.
+- **WebP animation export** — the committed animations ship as APNG (and GIF), which are
+  hand-rolled over the shared `PngWriter` internals. WebP would want a VP8/VP8L encoder,
+  which is not something to hand-roll: it means a dependency (libwebp or a managed port),
+  and the payload win over APNG does not justify one for the docs site. Revisit only if
+  APNG size becomes the pressure point.
+- **VRML mesh export** — the last format the build123d "exporter breadth" survey named,
+  and superseded by what already landed: VRML97's capability is a textured mesh scene, and
+  **glTF 2.0** (`GltfWriter`, hierarchy-preserving, per-part PBR materials, `COLOR_0`
+  result colours) covers all of it and is the format the ecosystem moved to. A VRML writer
+  would be a few dozen lines and buy nothing glTF does not, so it is declined rather than
+  filed. (STL/OBJ/OFF/3MF/AMF/VTU/STEP/glTF are the shipped set.)
+- **build123d string selectors** (`">Z"`, `"|Z and >Y"`) — type-unsafe, and C# LINQ over
+  `BrepQueries`/`BrepSelection` gives the same `sort_by`/`group_by`/`filter_by` power
+  type-safely (that is what `BrepSelection` IS). Also declined from the same survey:
+  build123d/CadQuery's Python-style implicit "pending" state carried between builder calls
+  (confirmed worse without context managers by the builder prototype — design.md §6b), and
+  the `Workplane` stack's history/rollback semantics (`FeatureHistory` already covers
+  regeneration properly and with typed parameters).

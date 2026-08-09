@@ -6413,7 +6413,19 @@ geometry kernel building *that* model in the reader's tab. The pieces are
     explode stays exploded), and `ExplodeTrack.Stagger` gives per-occurrence windows
     over the new `Flatten(Func<Occurrence, double>)` overload (same walk as the
     scalar factor; exactly 0 leaves a frame bit-identical). Composing relative
-    displacement tracks is future work, not half-supported.
+    displacement tracks is future work, not half-supported — and the shape is settled
+    even though it is not built: a `DisplacementTrack` returns a per-instance DELTA
+    (matched by occurrence path) that `Animation.At` post-multiplies onto whatever the
+    pose track produced, N of them allowed because deltas compose where absolute pose
+    lists do not. `ExplodeTrack` already IS one (it computes `Occurrence.ExplodeDisplacement`
+    and adds it to a frame), so it converts cleanly. The hard one is `MechanismTrack`,
+    and it is a PRODUCT question rather than a derivation: its delta is meaningful only
+    against the assembled pose it was swept from, so an explode composed on top of a
+    running mechanism displaces parts along axes the mechanism has already rotated —
+    either exactly right (the exploded view of a posed mechanism) or exactly wrong (the
+    offsets were designed in the assembled configuration). Do not build it until a
+    concrete clip needs it and can settle that; the honest interim is `ExplodeTrack.Stagger`,
+    which sequences within one track and is what most assembly animations actually want.
   - **A `MotionStudy` is already the animation input format** — recorded pure poses —
     and `MechanismTrack` plays one back rather than re-solving, because a solve at
     arbitrary t from an arbitrary seed is the branch-flipping trap the sweep's

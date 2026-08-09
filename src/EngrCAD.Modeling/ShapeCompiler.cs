@@ -56,6 +56,8 @@ internal static class ShapeCompiler
             "quickhull over the operands' tessellated mesh vertices",
         _ when node.StartsWith("Remeshed(", StringComparison.Ordinal) =>
             "isotropic remesh of the child's mesh lowering, projected back onto it",
+        _ when node.StartsWith("Smoothed(", StringComparison.Ordinal) =>
+            "Laplacian fairing of the child's mesh lowering",
         _ when node.StartsWith("Extrude(twist", StringComparison.Ordinal) =>
             "section rings swept through the twist, caps triangulated once and shared by index",
         _ => "polygonized from the signed distance field (Surface Nets)",
@@ -247,6 +249,11 @@ internal static class ShapeCompiler
                     "a remesh is defined on a triangulation, so its result is a tessellation rather than a surface, and meshes cannot be imported into B-Rep"));
                 break;
 
+            case SmoothedShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                    "Laplacian fairing is defined on a triangulation, so its result is a tessellation rather than a surface, and meshes cannot be imported into B-Rep"));
+                break;
+
             case MotionSweepShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                     "a swept volume's outer envelope is not one of the kernel's surfaces — take the implicit route (union of the child's field over the sampled poses) or the mesh route"));
@@ -405,6 +412,11 @@ internal static class ShapeCompiler
             case RemeshShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "remeshed triangles wrapped in a mesh SDF, so the field carries the tessellation's chord error rather than the child's own"));
+                break;
+
+            case SmoothedShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
+                    "faired triangles wrapped in a mesh SDF, so the field carries the tessellation's chord error rather than the child's own"));
                 break;
 
             case MotionSweepShape sweep when rigid:
@@ -1140,6 +1152,11 @@ internal static class ShapeCompiler
                 // discard the very operation that was asked for.
                 return new MeshSdf(LowerMesh(shape, m, quality));
 
+            case SmoothedShape:
+                // Same as remesh: fairing moves triangles, so the honest field is one of the
+                // faired mesh, not the child's own (which carries the pre-fairing surface).
+                return new MeshSdf(LowerMesh(shape, m, quality));
+
             case DrillShape drill:
                 // Exact SDF subtraction has no coplanar-face degeneracy: no validation.
                 return LowerImplicit(drill.Expanded, m, quality);
@@ -1276,6 +1293,15 @@ internal static class ShapeCompiler
                 };
                 return Remesher.Remesh(source, options).Mesh;
             }
+
+            case SmoothedShape smoothed:
+                // TimeStep is dimensionless (λ = TimeStep·h̄²), so fairing is scale-free:
+                // lowering the child with the transform baked in and smoothing gives the same
+                // relative fairing at any scale, and the operator is intrinsic so it commutes
+                // with any rigid placement. A closed solid has no boundary, so the whole
+                // surface fairs — that is the operation (see Shape.Smoothed).
+                return LaplacianMeshSmoother.Smooth(
+                    LowerMesh(smoothed.Child, m, quality), smoothed.Options);
 
             case TwistExtrudeShape { IsTwisted: true } twisted:
             {
