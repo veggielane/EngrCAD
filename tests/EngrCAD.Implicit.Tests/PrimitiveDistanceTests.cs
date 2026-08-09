@@ -244,12 +244,19 @@ public class PrimitiveDistanceTests(ITestOutputHelper output)
     // ---- convex polyhedron ----
 
     /// <summary>
-    /// The documented split: exact INSIDE (for a convex body the nearest boundary point lies
-    /// on the nearest face plane) and a lower bound OUTSIDE. Both halves are asserted, because
-    /// claiming only the bound would let an inside-wrong implementation pass.
+    /// The default is EXACT everywhere, and the oracle shares no arithmetic with it: a cube's
+    /// distance is <see cref="Sdf.Box"/>'s closed form, which is a different expression
+    /// entirely from a minimum over twelve boundary triangles.
+    /// <para>
+    /// The companion half is what makes the comparison mean something —
+    /// <see cref="ConvexDistance.HalfSpaceBound"/> over the SAME planes is measurably short
+    /// outside, so a fixture where the two agreed would be proving nothing. Inside, both are
+    /// exact and agree to the BIT, since the exact path returns the half-space maximum
+    /// unchanged there.
+    /// </para>
     /// </summary>
     [Fact]
-    public void ConvexPolyhedron_IsExactInside_AndALowerBoundOutside()
+    public void ConvexPolyhedron_IsExactEverywhere_WhereTheHalfSpaceFormIsShortOutside()
     {
         // A cube, whose exact field this project can spell independently.
         var planes = new List<(Vector3d, double)>
@@ -259,30 +266,99 @@ public class PrimitiveDistanceTests(ITestOutputHelper output)
             ((0, 0, 1), 4), ((0, 0, -1), 4),
         };
         var solid = Sdf.ConvexPolyhedron(planes);
+        var bound = Sdf.ConvexPolyhedron(planes, ConvexDistance.HalfSpaceBound);
         var box = Sdf.Box(8, 8, 8);
 
-        int outsideStrictlyShort = 0;
+        int boundStrictlyShort = 0;
+        double worstExact = 0, worstShortfall = 0;
         foreach (var p in DomainOperatorTests.Probes(seed: 55, count: 20000, extent: 9))
         {
             double exact = box.Evaluate(p);
             double reported = solid.Evaluate(p);
+            double cheap = bound.Evaluate(p);
+            worstExact = Math.Max(worstExact, Math.Abs(reported - exact));
+
             if (exact <= 0)
             {
-                Assert.Equal(exact, reported, 12);
+                // Inside, the exact path IS the half-space path — bit for bit, not merely close.
+                Assert.Equal(
+                    BitConverter.DoubleToInt64Bits(cheap), BitConverter.DoubleToInt64Bits(reported));
             }
             else
             {
-                Assert.True(reported > 0, $"sign flipped at {p}");
-                Assert.True(reported <= exact + 1e-12,
-                    $"at {p}: reported {reported:R} exceeds the true distance {exact:R}");
-                if (reported < exact - 1e-9)
-                    outsideStrictlyShort++;
+                Assert.True(cheap > 0, $"sign flipped at {p}");
+                Assert.True(cheap <= exact + 1e-12,
+                    $"at {p}: the half-space bound {cheap:R} exceeds the true distance {exact:R}");
+                if (cheap < exact - 1e-9)
+                {
+                    boundStrictlyShort++;
+                    worstShortfall = Math.Max(worstShortfall, exact - cheap);
+                }
             }
         }
 
-        // The bound really is short somewhere — near an edge or a corner — or the test would
-        // be asserting nothing about the "lower bound" half.
-        Assert.True(outsideStrictlyShort > 0, "the outside bound was never strict; the fixture proves nothing");
+        output.WriteLine($"cube: exact form's worst error {worstExact:E3}; " +
+                         $"half-space form short at {boundStrictlyShort} probes, worst by {worstShortfall:0.###}");
+        Assert.True(worstExact < 1e-12,
+            $"the exact form disagrees with the closed-form box by {worstExact:R}");
+        Assert.True(boundStrictlyShort > 0,
+            "the half-space bound was never short; the fixture proves nothing");
+    }
+
+    /// <summary>
+    /// The same claim on a solid with no closed form to compare against, so the oracle is a
+    /// literal brute force: a dense sampling of the boundary, whose minimum distance converges
+    /// on the truth FROM ABOVE (a sample is a boundary point, so it can never be nearer than
+    /// the nearest one). Both directions are asserted — the field never exceeds a sample, and
+    /// it lands within the sampling's own resolution of the best one.
+    /// </summary>
+    [Fact]
+    public void ConvexPolyhedron_MatchesABruteForceMinimumOverItsBoundary()
+    {
+        Vector3d[] corners = [(1, 1, 1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1)];
+        var planes = new List<(Vector3d, double)>();
+        for (int skip = 0; skip < 4; skip++)
+        {
+            var used = corners.Where((_, i) => i != skip).ToArray();
+            var n = (used[1] - used[0]).Cross(used[2] - used[0]).Normalized();
+            if (n.Dot(corners[skip]) - n.Dot(used[0]) > 0)
+                n = -n;
+            planes.Add((n, n.Dot(used[0])));
+        }
+
+        var solid = Sdf.ConvexPolyhedron(planes);
+
+        // The boundary, sampled on each face's own barycentric grid — nothing in common with
+        // the node's Voronoi-region tests but the four triangles themselves.
+        var samples = new List<Vector3d>();
+        const int Steps = 220;
+        for (int skip = 0; skip < 4; skip++)
+        {
+            var f = corners.Where((_, i) => i != skip).ToArray();
+            for (int i = 0; i <= Steps; i++)
+                for (int j = 0; i + j <= Steps; j++)
+                    samples.Add(f[0] + (f[1] - f[0]) * (i / (double)Steps) + (f[2] - f[0]) * (j / (double)Steps));
+        }
+
+        double worstGap = 0;
+        foreach (var p in DomainOperatorTests.Probes(seed: 313, count: 400, extent: 3))
+        {
+            double reported = solid.Evaluate(p);
+            if (reported <= 0)
+                continue;
+            double brute = double.PositiveInfinity;
+            foreach (var s in samples)
+                brute = Math.Min(brute, (s - p).LengthSquared);
+            brute = Math.Sqrt(brute);
+
+            Assert.True(reported <= brute + 1e-12,
+                $"at {p}: reported {reported:R} exceeds a boundary sample's distance {brute:R}");
+            worstGap = Math.Max(worstGap, brute - reported);
+        }
+
+        output.WriteLine($"tetrahedron: worst (brute-force sample − reported) = {worstGap:E3}");
+        // The sampling's own resolution: a face is about 2.83 across at 220 steps.
+        Assert.True(worstGap < 0.02, $"the field is short of the brute-force minimum by {worstGap:R}");
     }
 
     [Fact]
@@ -422,8 +498,15 @@ public class PrimitiveDistanceTests(ITestOutputHelper output)
 
     /// <summary>
     /// The reported Lipschitz bound must actually cover the field, or the polygonizer's cull
-    /// widens by too little and drops geometry. Measured by secants away from the centre,
-    /// where the field is genuinely discontinuous and the node says so.
+    /// widens by too little and drops geometry.
+    /// <para>
+    /// The exclusion IS the derivation's own regime, <c>k0 ≥ ½</c>, rather than a proxy for it
+    /// — the earlier <c>|p| ≥ rmin/2</c> was a sufficient condition for a DIFFERENT statement
+    /// and admitted points the bound does not claim to cover (at aspect 10 it reaches down to
+    /// k0 = 0.05). The region it excludes is not left unexamined: the discontinuity that lives
+    /// there is measured by
+    /// <see cref="Ellipsoid_IsDiscontinuousAtItsCentre_WhichIsWhyTheBoundCarriesARegime"/>.
+    /// </para>
     /// </summary>
     [Fact]
     public void Ellipsoid_ReportedLipschitzBound_CoversTheMeasuredSecants()
@@ -444,8 +527,9 @@ public class PrimitiveDistanceTests(ITestOutputHelper output)
                     (rng.NextDouble() * 2 - 1) * 2.2 * a,
                     (rng.NextDouble() * 2 - 1) * 2.2 * b,
                     (rng.NextDouble() * 2 - 1) * 2.2 * c);
-                if (p.Length < 0.5 * smallest)
-                    continue;   // k0 < 1/2: the region the derivation excludes
+                double k0 = new Vector3d(p.X / a, p.Y / b, p.Z / c).Length;
+                if (k0 < 0.5)
+                    continue;   // the regime the derivation states, exactly
                 var d = new Vector3d(
                     rng.NextDouble() - 0.5, rng.NextDouble() - 0.5, rng.NextDouble() - 0.5)
                     .Normalized() * (1e-5 * smallest);
@@ -458,9 +542,63 @@ public class PrimitiveDistanceTests(ITestOutputHelper output)
                 $"ellipsoid {a}x{b}x{c}: measured slope {worst:R} exceeds the reported bound {reported:R}");
         }
 
-        // The bound's slack is real and documented; if this ever approaches 1 the derivation
-        // has become tight and the residual filed against it can be closed.
         output.WriteLine($"tightest measured/reported over the family: {tightest:0.##}");
+    }
+
+    /// <summary>
+    /// A SPHERE's bound is exactly 1, which is the whole point of deriving the bound per AXIS
+    /// rather than by a triangle inequality: the field there really is <c>|p| − r</c>, and the
+    /// earlier form reported 3 for it. Asserted with <c>==</c> because the derivation makes the
+    /// u-dependent term vanish IDENTICALLY (equal semi-axes give <c>μ = r²/r²</c>, the same
+    /// double divided by itself), not merely to round-off.
+    /// </summary>
+    [Fact]
+    public void Ellipsoid_WithEqualSemiAxes_ReportsALipschitzBoundOfExactlyOne()
+    {
+        foreach (double r in new[] { 1e-3, 1.0, 5.0, 1e3 })
+        {
+            var sphere = Sdf.Ellipsoid(r, r, r);
+            Assert.Equal(1.0, sphere.LipschitzBound(sphere.Bounds.Expanded(10 * r)));
+            Assert.Equal(1.0, sphere.LipschitzBound(new Aabb((-1e9, -1e9, -1e9), (1e9, 1e9, 1e9))));
+        }
+    }
+
+    /// <summary>
+    /// The region the bound's regime excludes, measured rather than asserted: a non-spherical
+    /// ellipsoid's field is <b>discontinuous at its centre</b>. Along direction d the value
+    /// tends to <c>−|Ad|/|A²d|</c>, which is −rmax down the longest axis and −rmin down the
+    /// shortest, so approaching the origin two ways gives two different limits and no finite
+    /// Lipschitz constant covers a region containing it.
+    /// <para>
+    /// That is why <c>LipschitzBound</c> caps <c>u = 1/k0</c> at the derivation's own regime
+    /// instead of reporting the arithmetic's own infinity, and what the consumers rest on
+    /// there is the weaker property the field does keep — its magnitude never exceeds a
+    /// bounded multiple of the true distance, which
+    /// <see cref="Ellipsoid_IsALowerBoundOutside_AndOverReportsDepthInside_Measured"/> measures.
+    /// A sphere has no such gap, and that half is asserted too.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Ellipsoid_IsDiscontinuousAtItsCentre_WhichIsWhyTheBoundCarriesARegime()
+    {
+        var ellipsoid = Sdf.Ellipsoid(10, 1, 1);
+        const double Tiny = 1e-9;
+        double alongLong = ellipsoid.Evaluate(new Vector3d(Tiny, 0, 0));
+        double alongShort = ellipsoid.Evaluate(new Vector3d(0, Tiny, 0));
+        output.WriteLine($"ellipsoid(10,1,1) at ±1e-9 from the centre: {alongLong:0.####} along x, " +
+                         $"{alongShort:0.####} along y");
+
+        Assert.Equal(-10.0, alongLong, 6);
+        Assert.Equal(-1.0, alongShort, 6);
+        // The secant over that chord, against a bound of 100 for this ellipsoid.
+        double secant = Math.Abs(alongLong - alongShort) / (Tiny * Math.Sqrt(2));
+        output.WriteLine($"secant across the centre = {secant:E3}, reported bound = " +
+                         $"{ellipsoid.LipschitzBound(ellipsoid.Bounds):0.##}");
+        Assert.True(secant > 1e9, "the discontinuity did not appear; the fixture proves nothing");
+
+        // A sphere is continuous there — the limit is the same from every direction.
+        var sphere = Sdf.Ellipsoid(4, 4, 4);
+        Assert.Equal(sphere.Evaluate(new Vector3d(Tiny, 0, 0)), sphere.Evaluate(new Vector3d(0, Tiny, 0)), 12);
     }
 
     private static IEnumerable<(double A, double B, double C)> Eccentricities() =>

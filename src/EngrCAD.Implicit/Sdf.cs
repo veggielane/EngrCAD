@@ -466,12 +466,14 @@ public abstract class Sdf
     /// <c>dot(normal, p) ≤ offset</c>) — the general plane-bounded convex primitive, and the
     /// escape hatch for shapes with no factory.
     /// <para>
-    /// Fidelity is the max-of-half-spaces field: <b>exact inside</b> (the distance to the
-    /// nearest face plane IS the distance to the boundary for a convex body) and a
-    /// <b>lower bound outside</b>, which understates near an edge or a corner because the
-    /// nearest feature is then an edge rather than a face. That is exactly the engine's
-    /// standing contract — correct sign everywhere, magnitude never nearer than the truth —
-    /// so it meshes, culls and offsets soundly.
+    /// <b>Exact distance</b> by default. Inside, the max over the half-spaces IS the distance
+    /// (for a convex body the nearest boundary point lies on the nearest face plane); outside,
+    /// that max understates wherever the nearest feature is an edge or a corner, so the field
+    /// takes the minimum over its own boundary TRIANGLES instead — <see cref="Pyramid"/>'s
+    /// route, using vertices this node already enumerates for <see cref="Bounds"/>.
+    /// <see cref="ConvexDistance.HalfSpaceBound"/> asks for the cheap form, which is a correct-
+    /// sign lower bound and costs one dot product per plane rather than a Voronoi-region test
+    /// per triangle.
     /// </para>
     /// <para>
     /// Unlike <c>Sdf.Intersection</c> over the same half-spaces, this reports <b>finite
@@ -480,8 +482,10 @@ public abstract class Sdf
     /// does not enclose a bounded region is refused by name.
     /// </para>
     /// </summary>
-    public static Sdf ConvexPolyhedron(IReadOnlyList<(Vector3d Normal, double Offset)> halfSpaces) =>
-        ConvexPolyhedronSdf.Create(halfSpaces);
+    public static Sdf ConvexPolyhedron(
+        IReadOnlyList<(Vector3d Normal, double Offset)> halfSpaces,
+        ConvexDistance distance = ConvexDistance.Exact) =>
+        ConvexPolyhedronSdf.Create(halfSpaces, distance);
 
     // ---- domain operations ----
 
@@ -582,16 +586,43 @@ public abstract class Sdf
     /// <b>This is the one operator here that is not a distance at all.</b> It adds a value
     /// rather than moving a point, so the solid it defines is exactly <c>{d + ripple &lt; 0}</c>
     /// — the sign is exact <em>for that solid</em> by definition — while the magnitude is
-    /// only a bound and the Lipschitz constant rises by <c>amplitude · |frequency|</c>.
-    /// Bounds grow by the amplitude, which is right wherever the child's magnitude is a true
-    /// distance; a child whose field under-reports far from its surface (a CSG difference
-    /// near the subtracted tool's fictitious faces) can have the ripple raise material
-    /// outside those bounds, so displace close to the geometry you mean.
+    /// only a bound and the Lipschitz constant rises by <c>amplitude · |frequency|</c>. Note
+    /// that the ripple is a PRODUCT of three sines, so a zero frequency component makes it
+    /// identically zero rather than two-dimensional.
+    /// </para>
+    /// <para>
+    /// <b>Bounds grow by the amplitude, and the condition for that being sound is a property
+    /// of the child that is narrower than it looks.</b> Material appears wherever the child
+    /// reads below the amplitude, so what is needed is <c>{child &lt; t} ⊆ Bounds.Expanded(t)</c>
+    /// — the child never reports LESS than the per-axis escape from its own bounds — which is
+    /// weaker than "the field is a true distance" and is what the CSG family satisfies by
+    /// induction: an exact primitive gives at least its own escape, a union's minimum is at
+    /// least the escape from the union of the boxes, and an intersection's maximum is the
+    /// per-axis maximum of the operands' escapes, which is exactly the escape from the
+    /// intersected box. So a difference near its tool's fictitious faces — the standing
+    /// example of an under-reporting field — is in fact covered.
+    /// </para>
+    /// <para>
+    /// What is <em>not</em> covered is a child whose own bounds were widened relative to the
+    /// field it reports, which is the non-isometric domain operators: measured on
+    /// <c>Sphere(1).Taper(1, 3)</c>, the field reads 0.667 at a point 1.0 outside its bounds,
+    /// so a ripple of amplitude 0.8 raises material the reported box does not contain. Use
+    /// <see cref="Displace(double, in Vector3d, in Aabb)"/> there and state the region.
     /// </para>
     /// <para>Scalar-only in the batch path (<see cref="Math.Sin"/>), like the gyroid; the
     /// child underneath still vectorizes.</para>
     /// </summary>
     public Sdf Displace(double amplitude, in Vector3d frequency) => new DisplaceSdf(this, amplitude, frequency);
+
+    /// <summary>
+    /// <see cref="Displace(double, in Vector3d)"/> with the bounds stated rather than derived —
+    /// the escape hatch for a child whose field can raise material outside
+    /// <c>Bounds.Expanded(amplitude)</c> (see that overload for exactly which children those
+    /// are). The region is used verbatim, so it is the caller's claim about where the rippled
+    /// solid lies.
+    /// </summary>
+    public Sdf Displace(double amplitude, in Vector3d frequency, in Aabb bounds) =>
+        new DisplaceSdf(this, amplitude, frequency, bounds);
 
     public static Sdf Capsule(in Vector3d a, in Vector3d b, double radius) => new CapsuleSdf(a, b, radius);
 

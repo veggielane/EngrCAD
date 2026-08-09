@@ -15,12 +15,37 @@ namespace EngrCAD.Implicit;
 // for any convex section, since the section distance and the axial distance are measured
 // along orthogonal directions.
 //
-// A general CONVEX POLYHEDRON is NOT, because that factoring is unavailable: max over the
-// face half-spaces gives the exact distance inside (for a convex body the nearest boundary
-// point lies on the nearest face plane) and a LOWER BOUND outside, understating wherever the
-// nearest feature is an edge or a vertex rather than a face interior. A lower bound with an
-// exact sign is precisely the engine's standing contract, so it meshes, culls and offsets
-// soundly; it is stated rather than glossed.
+// A general CONVEX POLYHEDRON does not factor that way, so it is answered in two halves and
+// the split is exactly where the arithmetic changes. INSIDE, the max over the face half-spaces
+// IS the distance — for a convex body the nearest boundary point lies on the nearest face
+// plane — so one dot product per plane is exact and nothing more is needed. OUTSIDE it is only
+// a lower bound, understating wherever the nearest feature is an edge or a vertex, so the node
+// takes the minimum over its own boundary TRIANGLES instead, which is Sdf.Pyramid's route and
+// exact for the same reason. The vertices were already being enumerated for Bounds; grouping
+// them per plane and fan-triangulating is what turns them into faces.
+//
+// The cheap form is still nameable (ConvexDistance.HalfSpaceBound) rather than deleted, since
+// the query then costs O(triangles) Voronoi-region tests instead of one dot product per plane
+// — 12 against 6 for a cube, and growing quadratically with the plane count for a polyhedron
+// with many faces. Two estimators answering one question must both be nameable.
+
+/// <summary>
+/// How <see cref="Sdf.ConvexPolyhedron"/> answers OUTSIDE the solid. Inside, both settings
+/// give the same exact value by the same arithmetic, so this names a cost/fidelity choice
+/// about one half of space rather than two different solids.
+/// </summary>
+public enum ConvexDistance
+{
+    /// <summary>The true distance, as the minimum over the solid's own boundary triangles.
+    /// Costs a Voronoi-region test per triangle.</summary>
+    Exact,
+
+    /// <summary>The maximum over the face half-spaces: a correct-sign <b>lower bound</b>,
+    /// short wherever the nearest feature is an edge or a corner, at one dot product per
+    /// plane. The engine's standing field contract, and the right choice for a polyhedron
+    /// with many faces.</summary>
+    HalfSpaceBound,
+}
 
 /// <summary>Which coordinate a <see cref="ConvexPrismSdf"/> extrudes along.</summary>
 internal enum PrismAxis
@@ -213,7 +238,8 @@ internal sealed class ConvexPrismSdf : Sdf
 
 /// <summary>
 /// The convex solid bounded by a set of half-spaces. See <see cref="Sdf.ConvexPolyhedron"/>
-/// for the fidelity contract; the only interesting machinery here is the bounds.
+/// for the fidelity contract and the file remarks for why the outside is answered by the
+/// boundary triangles rather than by the planes.
 /// </summary>
 internal sealed class ConvexPolyhedronSdf : Sdf
 {
@@ -221,14 +247,22 @@ internal sealed class ConvexPolyhedronSdf : Sdf
     private readonly double[] _offsets;
     private readonly Aabb _bounds;
 
-    private ConvexPolyhedronSdf(Vector3d[] normals, double[] offsets, in Aabb bounds)
+    /// <summary>The boundary triangulation, or empty under
+    /// <see cref="ConvexDistance.HalfSpaceBound"/>.</summary>
+    private readonly (Vector3d A, Vector3d B, Vector3d C)[] _triangles;
+
+    private ConvexPolyhedronSdf(
+        Vector3d[] normals, double[] offsets, in Aabb bounds,
+        (Vector3d, Vector3d, Vector3d)[] triangles)
     {
         _normals = normals;
         _offsets = offsets;
         _bounds = bounds;
+        _triangles = triangles;
     }
 
-    public static Sdf Create(IReadOnlyList<(Vector3d Normal, double Offset)> halfSpaces)
+    public static Sdf Create(
+        IReadOnlyList<(Vector3d Normal, double Offset)> halfSpaces, ConvexDistance distance)
     {
         ArgumentNullException.ThrowIfNull(halfSpaces);
         if (halfSpaces.Count < 4)
@@ -250,22 +284,35 @@ internal sealed class ConvexPolyhedronSdf : Sdf
             offsets[i] = d / length;
         }
 
-        return new ConvexPolyhedronSdf(normals, offsets, EnumerateBounds(normals, offsets));
+        var vertices = EnumerateVertices(normals, offsets);
+        var bounds = Aabb.Empty;
+        foreach (var v in vertices)
+            bounds = bounds.Union(v);
+        if (bounds.IsEmpty)
+            throw new ArgumentException(
+                "These half-spaces do not enclose a bounded solid: no point satisfies all of them " +
+                "while lying on three of the planes. Add the planes that close it off, or use " +
+                "Sdf.Intersection over half-spaces and supply the sampling region explicitly.");
+
+        var triangles = distance == ConvexDistance.Exact
+            ? Triangulate(normals, offsets, vertices, bounds)
+            : [];
+        return new ConvexPolyhedronSdf(normals, offsets, bounds, triangles);
     }
 
     /// <summary>
     /// The vertices of a bounded half-space intersection are exactly the points where three
     /// of its planes meet and every other plane is satisfied, so enumerating the triples
-    /// gives the AABB directly — O(n³) in the plane count, which is nothing at the handful of
+    /// gives them directly — O(n³) in the plane count, which is nothing at the handful of
     /// planes a primitive carries and is worth paying because it is what makes this node
     /// polygonizable where <c>Sdf.Intersection</c> over the same half-spaces reports infinity.
     /// <para>The containment test admits a point on a plane at the 1e-9 weld tier, since a
     /// vertex lies exactly ON the three planes that produced it and on any further plane
     /// through it (a pyramid's apex meets four).</para>
     /// </summary>
-    private static Aabb EnumerateBounds(Vector3d[] normals, double[] offsets)
+    private static List<Vector3d> EnumerateVertices(Vector3d[] normals, double[] offsets)
     {
-        var bounds = Aabb.Empty;
+        var vertices = new List<Vector3d>();
         int n = normals.Length;
         double slack = Tolerance.Default.Linear;
         for (int i = 0; i < n; i++)
@@ -281,17 +328,89 @@ internal sealed class ConvexPolyhedronSdf : Sdf
                     for (int m = 0; m < n && inside; m++)
                         inside = normals[m].Dot(p) - offsets[m] <= slack;
                     if (inside)
-                        bounds = bounds.Union(p);
+                        vertices.Add(p);
                 }
             }
         }
+        return vertices;
+    }
 
-        if (bounds.IsEmpty)
+    /// <summary>
+    /// The boundary as triangles: the vertices ON each plane, ordered by angle about their own
+    /// centroid in that plane, fanned from the first. Winding is irrelevant — the distance to a
+    /// triangle does not read it — so no orientation convention has to be established.
+    /// <para>
+    /// Every threshold here is RELATIVE to the solid's own extent, because both are areas or
+    /// lengths and an absolute epsilon on one is a scale-dependent test (the recorded
+    /// decimator lesson). A vertex where four or more planes meet is produced once per triple,
+    /// so the list is welded first; a plane carrying fewer than three distinct vertices bounds
+    /// nothing and contributes none, and a collinear run inside a plane produces slivers whose
+    /// nearest point is a boundary EDGE, so dropping them cannot raise the minimum.
+    /// </para>
+    /// </summary>
+    private static (Vector3d, Vector3d, Vector3d)[] Triangulate(
+        Vector3d[] normals, double[] offsets, List<Vector3d> vertices, in Aabb bounds)
+    {
+        var size = bounds.Max - bounds.Min;
+        double extent = Math.Max(size.X, Math.Max(size.Y, size.Z));
+        double weld = 1e-9 * extent;
+        double sliver = 1e-13 * extent * extent;
+
+        var welded = new List<Vector3d>();
+        foreach (var v in vertices)
+        {
+            bool seen = false;
+            foreach (var w in welded)
+            {
+                if ((w - v).Length <= weld)
+                {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen)
+                welded.Add(v);
+        }
+
+        var triangles = new List<(Vector3d, Vector3d, Vector3d)>();
+        var onPlane = new List<Vector3d>();
+        for (int m = 0; m < normals.Length; m++)
+        {
+            onPlane.Clear();
+            foreach (var v in welded)
+            {
+                if (Math.Abs(normals[m].Dot(v) - offsets[m]) <= weld)
+                    onPlane.Add(v);
+            }
+            if (onPlane.Count < 3)
+                continue;
+
+            var centroid = Vector3d.Zero;
+            foreach (var v in onPlane)
+                centroid += v;
+            centroid /= onPlane.Count;
+
+            // The one arbitrary-perpendicular convention in the codebase; which direction it
+            // picks decides only where the angular sort starts, never the triangulation.
+            var u = normals[m].ArbitraryPerpendicular(Tolerance.Default);
+            var w2 = normals[m].Cross(u);
+            var ordered = onPlane
+                .OrderBy(v => Math.Atan2((v - centroid).Dot(w2), (v - centroid).Dot(u)))
+                .ToArray();
+
+            for (int t = 1; t + 1 < ordered.Length; t++)
+            {
+                var (a, b, c) = (ordered[0], ordered[t], ordered[t + 1]);
+                if ((b - a).Cross(c - a).LengthSquared > sliver * sliver)
+                    triangles.Add((a, b, c));
+            }
+        }
+
+        if (triangles.Count == 0)
             throw new ArgumentException(
-                "These half-spaces do not enclose a bounded solid: no point satisfies all of them " +
-                "while lying on three of the planes. Add the planes that close it off, or use " +
-                "Sdf.Intersection over half-spaces and supply the sampling region explicitly.");
-        return bounds;
+                "These half-spaces enclose no boundary faces: the enumerated vertices do not lie " +
+                "three-or-more to a plane, so the solid is degenerate.");
+        return [.. triangles];
     }
 
     /// <summary>Cramer's rule on the three plane equations; a determinant that is not
@@ -313,18 +432,37 @@ internal sealed class ConvexPolyhedronSdf : Sdf
         return true;
     }
 
+    /// <summary>
+    /// The half-space max first, because it settles the sign AND is already the exact answer
+    /// inside — so the triangle scan is paid only outside, and the interior value is
+    /// bit-identical under both <see cref="ConvexDistance"/> settings.
+    /// </summary>
     public override double Evaluate(in Vector3d p)
     {
-        double best = double.NegativeInfinity;
+        double outside = double.NegativeInfinity;
         for (int i = 0; i < _normals.Length; i++)
-            best = Math.Max(best, _normals[i].Dot(p) - _offsets[i]);
-        return best;
+            outside = Math.Max(outside, _normals[i].Dot(p) - _offsets[i]);
+        if (_triangles.Length == 0 || outside <= 0)
+            return outside;
+
+        double best = double.PositiveInfinity;
+        foreach (var (a, b, c) in _triangles)
+            best = Math.Min(best, (Distance3d.ClosestPointOnTriangle(p, a, b, c) - p).LengthSquared);
+        return Math.Sqrt(best);
     }
 
     public override Aabb Bounds => _bounds;
 
+    /// <summary>
+    /// Only the half-space form compiles. The exact form's outside branch is a minimum over a
+    /// Voronoi-region test per triangle, which is a loop rather than an expression, so it takes
+    /// the base class's call-back-into-Evaluate fallback — always exact, simply not flattened.
+    /// </summary>
     internal override Expression BuildExpression(SdfExpression e)
     {
+        if (_triangles.Length > 0)
+            return base.BuildExpression(e);
+
         Expression body = SdfExpression.Const(double.NegativeInfinity);
         for (int i = 0; i < _normals.Length; i++)
         {
