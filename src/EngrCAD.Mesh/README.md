@@ -495,6 +495,18 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   a reversed copy offsets <i>against</i> the vertex normals (material behind the
   surface), and each boundary loop is stitched with a quad band; open surfaces become
   closed slabs/shells, closed meshes become hollow two-shell solids.
+  - **Construct-new is the shape of the operation, not a stage before an in-place variant.**
+    An in-place hole fill or extrude on `EditableMesh` was filed as pending "once callers want
+    them", which reads as though it were an overload away; it is not. All five of the editor's
+    operators REARRANGE existing material, while a fill makes a face closing a boundary loop
+    and an extrude makes both vertices and wall faces — so each needs a *new* Euler operator
+    carrying the journaled `MeshChange` record that is what makes do→revert bit-identical by
+    construction, which is the substantial half rather than a rider. Going through the soup
+    (`ToIndexed` → append → the manifold-validating `Build`) is also the right shape for an
+    operation that invents geometry and therefore wants revalidating. The demand side agrees:
+    `MeshExtrude` has no consumer outside its own tests, and `HoleFiller`'s one production
+    caller (`MeshRepair.AutoRepair`) would save a single `ToMesh` on the branch that runs only
+    when a crack was welded.
 - **`Remesher`** — isotropic remeshing to a uniform target edge length (g3's
   `Remesher`/`RemesherPro`, Botsch &amp; Kobbelt's split/collapse/flip/smooth loop) built on
   `EditableMesh`'s guarded Euler operators, which is exactly what those operators exist for.
@@ -678,6 +690,20 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     failure modes are now caught: dropping a contributing face, and visiting the contributors
     in a different order (which shows up only in the last bits — `…4258002` against
     `…42581595` — and would sail through any tolerance comparison).
+  - **Sweep scheduling walks every face on purpose, and the reason is a measurement rather
+    than "every vertex is active".** Every vertex is a *candidate* under sweep, but a PINNED
+    candidate is never written — the read loop skips it — so a face with three pinned corners
+    contributes to nothing and skipping it is legal and bit-identical (built; 0 differing
+    vertices on eight fixtures). It does not pay, and the bound is structural: a pinned set is
+    a **one-dimensional** subcomplex of the surface (boundary loops and crease chains) and a
+    face needs all three corners inside it, so the skippable faces are those a curve fully
+    contains. Measured over fixtures chosen to *maximise* pinning: **0.23% – 9.17%**, the
+    ceiling being a cylinder whose n-gon caps put a fully pinned rim around a one-triangle-deep
+    fan — against a test on every face, which no timing separated from noise (the control arm,
+    skipping 0.00% of faces, measured 0.795×). The sweep test runs on that cylinder rather than
+    the queue fixture's featureless sphere, which pins nothing at all (`ConstrainedCount` 0
+    against 98), and asserts the fixture carries pins before asserting the count — the counter
+    rule above, applied to the claim that nothing is skipped.
 - **`TriangleQuality` / `TriangleQualityReport`** — triangle SHAPE as a value, and
   `RemeshResult.Quality` carries one for every remesh (`TetQuality` in `EngrCAD.Fea` is the
   precedent). It exists because everything else the remesher reports is edge *length*, which

@@ -315,7 +315,29 @@ Each engine uses the data structure its mathematics wants:
   a viewer setting, and it survives export, MCP description and the construction tree. The
   cost is that a design must say where the remesh happens, which is the honest requirement:
   put it in the middle of a graph and everything downstream inherits a tessellation.
-  A `Part`-level display remesh remains a separate, smaller idea in the backlog.
+  **The `Part`-level display remesh that was filed beside it is declined rather than
+  pending**, and for the reason above rather than for want of effort: the two use cases it
+  named are already served without it. A caller who wants uniform triangles for display or
+  for an FEA export writes `new Part(name, Remesher.Remesh(part.GetMesh(q), options).Mesh)`
+  — one line, over public API, with the fidelity trade visible at the call site — while a
+  flag on `Part` would have to negotiate `GetMesh`'s first-caller-wins cache and the
+  `Scene` > `EngrCadOptions` > `MeshQuality` precedence ladder to buy exactly that line, and
+  would put the trade back behind the rendering knob this decision exists to keep it out of.
+
+- **A mutable in-place hole fill or extrude is blocked on Euler operators that do not
+  exist, not on a caller** — the correction to the way it was filed ("once callers want
+  them"), which reads as though the variants were an overload away. `EditableMesh` has five
+  operators — `SplitEdge`, `FlipEdge`, `PokeFace`, `CollapseEdge`, `MergeEdges` — and every
+  one of them REARRANGES existing material. Filling a hole makes a face that closes a
+  boundary loop and an extrude makes both vertices and wall faces, so neither is expressible
+  in that vocabulary at all; both would need new operators, each carrying the journaled
+  `MeshChange` record that is what makes do→revert bit-identical by construction, which is
+  the substantial half of the work rather than a rider on it. `HoleFiller` and `MeshExtrude`
+  are accordingly SOUP-level (`ToIndexed` → append faces → the manifold-validating `Build`),
+  which is the right shape for what they do: a fill invents geometry and wants revalidating.
+  The demand side says the same thing — `MeshExtrude` has no consumer anywhere outside its
+  own tests, and `HoleFiller`'s single production caller (`MeshRepair.AutoRepair`) would
+  save one `ToMesh` round trip on the branch that runs only when a crack was welded.
 - **Region remeshing rides on the region operator's seam contract, which had to grow
   first.** `MeshRegionOperator` originally refused any replacement that re-split a seam
   edge, since the neighbour still held the un-split edge (a T-junction). Carrying the split
@@ -6413,6 +6435,27 @@ geometry kernel building *that* model in the reader's tab. The pieces are
   for unrelated reasons. An internal counter asserted strictly smaller *before* the
   positions are compared is what gives the test teeth, and it then catches both a dropped
   face and a changed visit order, the latter differing only in the last bits.
+- **Sweep scheduling keeps the whole-mesh walk, and the recorded reason for that was
+  wrong — the right one is a measurement.** It was filed as "with every vertex active the
+  restriction could only add a membership test per face", which conflates a *candidate* with
+  a vertex the pass WRITES: under sweep every vertex is a candidate, but a PINNED one is
+  never written (the accumulation's read loop skips it), so a face with three pinned corners
+  contributes to nothing and skipping it is legal. Built, and bit-identical on all eight
+  fixtures tried — so what is declined is the payoff, not the soundness. The share it can
+  save is bounded structurally rather than by a fixture: **a pinned set is a
+  ONE-DIMENSIONAL subcomplex of the surface** (boundary loops and crease chains), and a face
+  needs ALL THREE corners inside it, so the skippable faces are those a curve fully contains
+  — a vanishing fraction of a two-dimensional mesh. Measured over fixtures chosen to
+  maximise pinning it ran **0.23% to 9.17%**, the ceiling being a cylinder whose n-gon caps
+  put a fully pinned rim around a one-triangle-deep fan; no timing could separate that from
+  noise, and the control arm proves the instrument rather than the result — an arm skipping
+  **0.00%** of faces measured 0.795×, so the harness's own band is wider than the entire
+  effect. **The filed scoping was backwards in the instructive direction**: it offered the
+  saving to "a small `FixedVertices` set", and a small pinned set is precisely the case that
+  skips nothing — the saving needs a large one, and even a maximal one reaches single-digit
+  percent. The sweep test now runs on a cylinder rather than the queue fixture's featureless
+  sphere, which pins nothing at all (measured `ConstrainedCount` 0 against 98), so the claim
+  "sweep walks every face" is finally one a wrong implementation could fail.
 - **Prefer the standard algorithm to the reference library's heuristic.** g3's
   `MinimalHoleFill` is four iterative edge-flip passes; its own comments describe strong
   ordering effects, non-convergence, a hard pass cap to stop oscillation, and a forced
