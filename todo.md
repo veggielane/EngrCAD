@@ -597,22 +597,7 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   anchor. The principled fix is a density rule that measures a trimmed face against its OWN
   uv extent rather than its surface's whole domain — which moves every trimmed face's
   density, so it needs the corpus and the committed docs PNGs re-taken deliberately.
-- [ ] **2D sketch engine residue** (the front door ✅ landed — `Region2d`
-  polygon-with-holes with automatic nesting detection, `Region2dBoolean` over
-  `Arrangement2d`, `Sketch.ToRegions`, `Profile.FromRegion`; **exact curved 2D
-  booleans ✅ landed too** — `CurvedEdge2d`/`CurvedRegion2d`/`CurvedArrangement2d`/
-  `CurvedRegion2dBoolean`/`CurvedRegion2dOffset` in Core carry lines and arcs
-  unflattened, wired up through `Curve2d.TryToCurvedEdge`, `Profile.FromCurvedRegion`
-  and `Sketch.ToCurvedRegions`/`FromCurvedRegion`/`UnionExact`/`OffsetExact`):
-  `PolySimplification2`-style Douglas–Peucker simplification (only the exact-collinear
-  pass landed). ~~`Region2d` self-intersection validation~~ ✅ **done at `798622a`** —
-  `Region2dValidation` finds a PROPER crossing within one loop or between two, exactly via
-  `Orient2dSign`, over a `Bvh` above 24 segments, and `Region2d`'s constructors refuse
-  rather than producing garbage; `CurvedRegion2d` carries the curved twin over its own
-  x-sweep broad phase.
-- [ ] **Curved-2D-tier follow-ups** (the lines-and-arcs tier ✅ landed and is
-  complete in the sense that matters — its tangent+curvature tie-break is decidable
-  for exactly those two shapes; see design.md §5):
+- [ ] **Curved-2D-tier follow-ups**:
   - [ ] **Curved `Shape.Section`/`Silhouette`.** A section of a B-Rep could return a
     `CurvedRegion2d` for the analytic pairs (`PlanarSection` already gets exact circles
     and lines from `SurfaceIntersection`) instead of flattening them; the silhouette
@@ -643,14 +628,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     bézier's or an ellipse's nearest-point is itself a solve, so the residual would need
     its own foot parameter as a VARIABLE — which is the standard treatment and is real
     work rather than a reuse. Filed with the bézier tangency it shares a mechanism with.
-- [ ] **Drill follow-ups** (drill-tip angles ✅ landed — `HoleSpec.WithTipAngle`, exact
-  as an identity, depth measured to the shoulder; **cross-PLANE hole validation** ✅
-  landed — bounding-cylinder separation plus a separating axis, since collinear tools
-  bored from opposite faces have zero radial axis distance however much web is left) —
-  remaining: hole tables, and thread cosmetics/annotation. Not covered by the
-  interference test: `ThreadedHole`'s thread void (its tap-drill pilot goes through
-  `Drill` and is), and tools from separate `Shape` branches later unioned.
-
 ## Deformation / analysis follow-ups
 
 The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /

@@ -440,11 +440,20 @@ internal sealed class DrillShape : Shape
     /// boolean input and fails just as deep inside tessellation.
     /// </summary>
     /// <remarks>
-    /// Drills sharing a placement plane are compared in the plane's own 2D coordinates —
+    /// <para>Drills sharing a placement plane are compared in the plane's own 2D coordinates —
     /// the surface circles are coplanar, so centre distance against summed surface radii
     /// is the exact test. Drills on DIFFERENT planes (opposing bores on the two faces of
     /// a plate, a side bore crossing a top bore) go through the 3D tool-vs-tool test
-    /// below instead.
+    /// below instead.</para>
+    /// <para><b>What the cascade can see, stated rather than left to be discovered.</b> It
+    /// walks <c>Child</c> only while that child is another <see cref="DrillShape"/>, so two
+    /// facts follow. A <c>ThreadedHole</c>'s tap-drill pilot IS a <see cref="DrillShape"/>
+    /// and is compared; its modelled thread VOID is not a drill tool and is not — harmless,
+    /// because the void is strictly inside its own pilot's major diameter, so a pair the
+    /// pilots clear the voids clear too. And tools placed on two SEPARATE <c>Shape</c>
+    /// branches later unioned never meet in one chain at all, so nothing compares them:
+    /// that is a boolean between two independently built bodies rather than a second drill
+    /// into one, and it is the boolean's own coincident/tangent refusal that answers it.</para>
     /// </remarks>
     private void ValidateAgainstEarlierDrills()
     {
