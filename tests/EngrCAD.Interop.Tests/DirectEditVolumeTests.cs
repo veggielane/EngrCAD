@@ -164,6 +164,48 @@ public class DirectEditVolumeTests
         Assert.True(BRepTessellator.Tessellate(filled).IsClosed);
     }
 
+    [Theory]
+    [InlineData(2.0, 7.0)]   // +2 grows the SOLID: the bore wall's outward normal points into
+    [InlineData(-2.0, 11.0)] // the void, so a positive offset shrinks the bore (r9 -> r7).
+    public void OffsettingACurvedFaceOfBOOLEANOutput_MovesTheBoreAlongItsOutwardNormal(
+        double distance, double expectedBoreRadius)
+    {
+        // The residual the direct-editing scope test pinned as a known boundary: a difference
+        // marks the subtracted tool's walls IsReversed, and CarrierBody used to refuse a
+        // reversed face outright. A reversed face's OUTWARD normal is well-defined (it is the
+        // negative of its surface's), so Lift offsets its surface by -distance and the bore a
+        // boolean cut can now be pushed like any other face. This is the input direct editing
+        // exists for — boolean output has no history, the closest the kernel builds to an
+        // imported body.
+        var housing = (Shape.Cylinder(20, 30) - Shape.Cylinder(9, 40)).ToBrep();
+        housing.Validate();
+        Assert.True(housing.SatisfiesEulerFormula(genus: 1));
+
+        // Exactly one reversed cylindrical face at radius 9 — the bore wall.
+        var boreWall = housing.Faces.Single(f =>
+            f.IsReversed && f.IsCylindrical(out _, out _, out double r) && Math.Abs(r - 9) < 1e-6);
+
+        var edited = DirectEdit.OffsetFaces(housing, distance, f => ReferenceEquals(f, boreWall));
+        edited.Validate();
+        Assert.True(edited.SatisfiesEulerFormula(genus: 1));
+
+        // The bore wall is now a cylinder of the expected radius, still reversed, and the outer
+        // wall (r20) did not move.
+        Assert.Contains(edited.Faces, f =>
+            f.IsReversed && f.IsCylindrical(out _, out _, out double r) && Math.Abs(r - expectedBoreRadius) < 1e-6);
+        Assert.Contains(edited.Faces, f =>
+            f.IsCylindrical(out _, out _, out double r) && Math.Abs(r - 20) < 1e-6);
+
+        // Volume change is the exact annulus swept by the moving wall over the 30-tall bore:
+        // pi*(9^2 - r'^2)*30 (positive when the bore shrinks). Against the analytic value,
+        // since BrepMassProperties extrapolates.
+        double expectedChange = Math.PI * (9 * 9 - expectedBoreRadius * expectedBoreRadius) * 30;
+        Assert.Equal(expectedChange, Volume(edited) - Volume(housing), 3);
+
+        // And it still tessellates closed — the check that the edit produced a whole solid.
+        Assert.True(BRepTessellator.Tessellate(edited, segmentsPerCircle: 64).IsClosed);
+    }
+
     [Fact]
     public void AnEditedSolidSurvivesAFurtherBoolean()
     {

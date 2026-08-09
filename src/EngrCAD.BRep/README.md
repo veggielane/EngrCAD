@@ -676,7 +676,12 @@ operations. Depends only on `EngrCAD.Core`.
     neighbour is oblique the boundary grows as it slides and the change is the frustum
     integral (measured 140.78 against the naive 127.28 on a right-triangular prism — 10.6%,
     not round-off). Sign convention: positive grows the SOLID, so a positive offset on a
-    bore wall NARROWS the bore, the normal there pointing into the void.
+    bore wall NARROWS the bore, the normal there pointing into the void. A CURVED bore a
+    BOOLEAN cut works too: a difference marks the tool's walls `IsReversed`, and `Lift`
+    offsets a reversed face's surface by `−distance` (its outward normal is the negative of
+    the surface's), so the outward sign is honoured once and the caller stays orientation-free
+    (`CarrierBody.Recognize(solid, allowReversedFaces)` gates it; SHELL and DRAFT keep the
+    reversed-face refusal, so their output is bit-identical).
   - **`DirectEdit.MoveFaces(solid, translation, selector)`** translates planar faces, and is
     the offset under another name BY DERIVATION: a plane is invariant under translation
     within itself, so displacing a face by `v` reaches exactly the plane an offset of `v·n̂`

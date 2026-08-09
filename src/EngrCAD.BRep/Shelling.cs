@@ -61,7 +61,10 @@ public static partial class Shelling
     {
         ArgumentNullException.ThrowIfNull(distance);
         if (CarrierBody.IsCurved(solid))
-            return CarrierBody.Recognize(solid).Offset(distance);
+            // Reversed faces are allowed on the OFFSET path: Lift moves each face along its
+            // OUTWARD normal, which is well-defined for the subtracted-tool walls a boolean
+            // marks reversed, so a bore this kernel cut can be offset (DirectEdit.OffsetFaces).
+            return CarrierBody.Recognize(solid, allowReversedFaces: true).Offset(distance);
         var polyhedron = Polyhedron.Recognize(solid);
         var offsets = new double[polyhedron.Faces.Length];
         for (int f = 0; f < offsets.Length; f++)

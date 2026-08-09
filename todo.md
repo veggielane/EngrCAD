@@ -1015,19 +1015,6 @@ export — is recorded in CLAUDE.md):
     extended past its deleted top never meet) and the refusal must come BEFORE any coedge
     moves. Note the v1 gate is `IsPlanar` on the loop-dropping face and the general fix
     subsumes it.
-  - [ ] **Offset a CURVED face of BOOLEAN output.** `CarrierBody.Recognize` refuses a
-    reversed face outright ("offsetting needs forward-oriented faces"), and a difference
-    marks the subtracted tool's walls `IsReversed` — so a curved offset reaches a
-    primitive and an IMPORTED body (whose faces arrive forward-oriented, which is the case
-    the feature exists for) but not a bore this kernel cut. Planar faces are unaffected,
-    since the polyhedral tier never asks. The refusal reads as though the direction were
-    ambiguous and it is NOT: `IsPlanar` already applies the reversal and `BrepFace` carries
-    the flag, so the fix is to offset a reversed carrier by −distance and keep the flag.
-    What makes it more than a one-liner is that `CarrierBody` is shared with `Shelling` and
-    `Draft`, so lifting the refusal needs its own verification pass (both offset layers,
-    the rim reconstruction's sense, and the `Flipped` cavity rule) rather than riding on
-    this one. Pinned as a known boundary by `DirectEditScopeTests`, and it was found by a
-    DOCS RENDER rather than by a unit test — the argument for executable examples.
   - [ ] **Move a CURVED face.** Refused today because `CarrierBody.ConcentricRim` rebuilds
     each rim as a circle concentric with the ORIGINAL — exactly right for an offset (which
     leaves the axis alone) and false for a translation, which moves it. The fix is to take
@@ -1229,6 +1216,13 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     leave a solid that validates and is wrong.
   - [ ] **Global self-intersection detection** — deliberately unchecked, as in OCCT and
     `OffsetCurve3d`.
+  - [ ] **A REVERSED curved face (boolean output).** Curved OFFSET now accepts a reversed
+    face (`CarrierBody.Recognize(solid, allowReversedFaces: true)`, `Lift` offsets it by
+    `−distance`), but SHELL keeps the refusal because its cavity twin (`Flipped`) hard-codes
+    `IsReversed = true` for the inner face — right for a forward parent, and it needs to be
+    `!parent.IsReversed` for a reversed one. Making shell sense-aware is the same
+    verification pass DRAFT's `Taper` (which reads the lean off the surface normal, not the
+    outward one) also wants; neither is exercised by a `Shape`-level construction today.
   The `Shape` route exposes one thickness; per-face thickness and per-face draft angles
   stay kernel-level escape hatches (`Shape.From(...)`) until a selector-to-value
   vocabulary exists at the Shape level.

@@ -4175,6 +4175,27 @@ returns zero keeps its carrier object VERBATIM. No refusal was restated either �
 with no same-family offset, non-circular curved edges and non-concurrent higher-valence
 vertices all still refuse where they always did.
 
+**Offsetting a CURVED face of BOOLEAN output is Native now, and the fix is one sign in one
+place.** `CarrierBody` used to refuse a reversed face outright, so a curved offset reached a
+primitive and an imported body (faces forward-oriented from the file, the case the feature
+exists for) but not a bore this kernel cut — a difference marks the subtracted tool's walls
+`IsReversed`. The refusal read as though the offset DIRECTION were ambiguous, and it is not:
+an offset moves a face along its OUTWARD normal, and `SurfaceOffset.TryOffset` moves a
+surface along its own normal (∂u × ∂v), which is the outward normal only for a forward face
+— so a reversed face's surface is offset by `−distance`. `CarrierBody.Lift` spells exactly
+that, and the sign lives THERE once because every consumer already states the offset in
+outward terms (a positive `OffsetFaces` grows the solid; a shell's inner layer is a negative
+outward offset). The refusal is gated behind `CarrierBody.Recognize(solid,
+allowReversedFaces)` — the offset path passes `true` while SHELL and DRAFT keep it, because
+their carrier construction and cavity rules (the `Flipped` twin, `Draft.Taper`'s lean read
+off the surface normal) are not yet sense-aware. So forward-face offsets, every shell and
+every draft are bit-identical, and only a reversed face on the offset path takes the new
+branch. Verified in `DirectEditVolumeTests`: a `Cylinder(20,30) − Cylinder(9,40)` housing's
+bore wall pushed +2 shrinks the bore to r7 and −2 grows it to r11, each changing the volume
+by the exact annulus `π(9² − r'²)·30`, Validate-clean at genus 1 and re-tessellating closed.
+The MOVE of a reversed curved face and the SHELL of one stay filed (both want the same
+sense-aware carrier/cavity pass).
+
 **(b) A MOVE of a planar face is an offset, by derivation, so it is implemented as one.**
 A plane is invariant under translation within itself, so the plane reached by displacing a
 face by `v` is exactly the plane an offset of `v·n̂` reaches. Writing it as that reduction
