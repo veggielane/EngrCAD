@@ -10,7 +10,7 @@ work; B-Rep is honestly Impossible (meshes cannot be imported into B-Rep).
 
 ```csharp render:heightmap-terrain
 // A procedural dune field; any double[,] works - computed, read from an OpenSCAD
-// .dat text matrix (Heightmap.ReadDat), or from a grayscale PNG (Heightmap.ReadPng).
+// .dat text matrix (Heightmap.ReadDat), or from a grayscale/colour PNG (Heightmap.ReadPng).
 var heights = new double[40, 40];
 for (int r = 0; r < 40; r++)
     for (int c = 0; c < 40; c++)
@@ -33,11 +33,15 @@ scene.Add(new Part("terrain", terrain, Palette.Sage));
   strictly above the base level.
 - **`Heightmap.ReadDat(path)`** — OpenSCAD-style text matrices: one row of numbers
   per line, `#` comments and blank lines skipped.
-- **`Heightmap.ReadPng(path)`** — grayscale PNG, 8- or 16-bit (alpha ignored),
-  values normalized to 0..1. The reader is hand-rolled and dependency-free, like the
-  TrueType reader; color, palette, and interlaced PNGs are **rejected with a clear
-  message** rather than mis-read (a color-to-height rule is not something to invent
-  silently). Pair it with `heightScale` to give normalized data its real peak height:
+- **`Heightmap.ReadPng(path)`** — an 8- or 16-bit PNG (alpha ignored), values normalized
+  to 0..1. A grayscale pixel reads its own value; a **colour** pixel (truecolor RGB/RGBA)
+  reads its **Rec. 709 relative luminance** `0.2126·R + 0.7152·G + 0.0722·B` — the
+  physically-correct luminance from the sRGB primaries, a *documented* rule rather than an
+  inferred one (a grey pixel reads its own value, since the weights sum to 1). The reader
+  is hand-rolled and dependency-free, like the TrueType reader; palette (indexed-colour)
+  and interlaced PNGs are **rejected with a clear message** rather than mis-read, and a
+  corrupt critical chunk is named by its CRC-32. Pair it with `heightScale` to give
+  normalized data its real peak height:
 
 ```csharp
 var terrain = Shape.Heightmap(Heightmap.ReadPng("relief.png"),

@@ -115,9 +115,51 @@ Four conventions carry it, and each was a real choice:
   either end, and text longer than the path is refused with both lengths named — rather
   than extrapolating a curve past its own domain.
 
+### Upright, not tilted
+
+Pass `upright: true` to translate each glyph to its path point and leave it **un-rotated**
+— the banner or map-label case, where letters follow the curve's position but stay
+vertical. It still anchors at the middle of the advance and spaces by arc length, so on a
+straight horizontal path it reproduces ordinary layout exactly; on a curve the difference
+is that a glyph keeps its axis-aligned footprint instead of leaning with the tangent (and
+`VerticalAlign` then lifts along world +Y — the glyph's own up — rather than the path's
+normal). Upright is a property of the *placement*, so it is an argument here rather than on
+`TextStyle`.
+
+```csharp run:text-upright
+string fonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+var font = TrueTypeFont.Load(new[] { "arial.ttf", "segoeui.ttf", "verdana.ttf" }
+    .Select(name => Path.Combine(fonts, name)).First(File.Exists));
+
+// A gentle arc across the top of a large circle keeps upright glyphs clear of one another.
+double r = 120;
+double sweep = Math.PI * 0.3;
+var arc = new Arc2d(Vector2d.Zero, r, Math.PI * 0.35, sweep);
+var banner = Shape.TextOnPath("ENGRCAD", font, size: 8, height: 1, arc,
+                              style: new TextStyle { Align = TextAlign.Center },
+                              startOffset: r * sweep / 2, upright: true);   // centred on the arc
+if (!banner.ToMesh().IsClosed) throw new Exception("upright banner did not build");
+```
+
 Multi-line text on a path is refused by name: a second line would sit on an *offset* of
 the path, which is a different curve and can self-intersect. Build that curve deliberately
-(`Sketch.Offset`) and lay its line on it.
+(`Sketch.Offset` on a closed path, or a concentric `Arc2d`) and lay its line on it.
+
+## Text as a parametric feature
+
+`TextFeature(text, font)` puts modeled text in a `FeatureHistory` — an engraved serial
+number or an embossed label whose `Size`, `Height`, `LetterSpacing` and `Engrave` are
+`[Param]` values, so they re-tune through the same seam a design study, a configuration or
+the properties panel drives. The text string and font are *constructor* inputs (a font is a
+binary blob, not a value), so changing either replaces the instance — and because a fresh
+instance always re-runs, the regeneration cache covers the font without the parameter
+snapshot having to name it. Embossing overshoots the surface a little so the boolean stays
+transversal (the `Shape.Drill` doctrine); engraving cuts a recess of the stated depth.
+
+Persistence is honest rather than complete: a font has no data form, so the feature is
+opaque to `SaveHistory` — its type, name and `[Param]` values are written, and a load skips
+it with a warning unless a resolve hook rebuilds it (exactly the contract a `ComponentFeature`
+over a non-catalogue component follows).
 
 ## Fonts it reads
 

@@ -840,25 +840,39 @@ export — is recorded in CLAUDE.md):
   combination of them), arc-length spacing, mid-advance anchoring, left-normal "up",
   closed paths wrapping and multi-line refused by name; **vertical alignment ✅ landed** —
   `TextStyle.VerticalAlign`, measured from the font's ascender/descender rather than the
-  ink): **variable fonts** (`fvar`/`gvar`, incl. `CFF2` — rejected loudly today);
-  **`seac` accent composition** (legacy CFF accents — rejected loudly today, needs
-  charset + standard encoding); **`TextFeature`** as a parametric `Feature` (the
-  parameter snapshot must cover the font reference).
-- [ ] **Text on a path: bent glyphs, and per-glyph rotation control.** Deliberately NOT
-  built with the rigid placement (see CLAUDE.md for why bending costs exactness), but two
-  real requests remain. (a) An **upright** mode — every glyph translated along the path
-  and left un-rotated, the way a row of labels round a bolt circle is usually wanted;
-  cheap (it is `GlyphPose.At` at the path point) and the only open question is whether it
-  belongs on `TextStyle` or as an argument, since it is a property of the placement rather
-  than of the type. (b) **A second line via `Sketch.Offset`** as a convenience overload
-  that builds the offset curve itself — currently refused by name so the caller does it,
-  which is right while offsetting can self-intersect, but a helper that offsets and
-  REPORTS what it got would carry the honest failure.
+  ink; **`TextFeature` ✅ landed** — `TextFeature(text, font)` in `StandardFeatures.cs`,
+  `[Param]` Size/Height/LetterSpacing/Engrave/Plane, emboss/engrave with the Drill
+  overshoot, the text+font as CONSTRUCTOR inputs so a fresh instance re-runs and the
+  regeneration cache covers the font without the snapshot naming it, opaque to persistence
+  by name since a font has no data form): **variable fonts** (`fvar`/`gvar`, incl. `CFF2` —
+  rejected loudly today; PRODUCT-SIZED — fvar/avar axis parsing, gvar per-glyph delta
+  interpolation with IUP, and CFF2's separate blend charstring interpreter, each with its
+  own synthetic-font fixture); **`seac` accent composition** (legacy CFF accents — rejected
+  loudly today; needs CFF CHARSET parsing (formats 0/1/2 off DICT op 15, not parsed today)
+  plus the 256-entry StandardEncoding table to resolve bchar/achar codes → SID → GID, then
+  compose the two glyphs shifted by (adx, ady) — a bounded but non-trivial CFF add for a
+  legacy mechanism modern fonts express through the `cmap`).
+- [ ] **Text on a path: second line via an offset path.** The rigid-placement UPRIGHT mode
+  ✅ landed (`SketchesOnPath`/`Shape.TextOnPath` `upright:` argument — a property of the
+  placement, so an argument not a `TextStyle` field; anchors mid-advance, spaces by arc
+  length, `VerticalAlign` lifts along world +Y). What remains is **a second line via
+  `Sketch.Offset`** — a convenience overload that builds the offset curve itself, currently
+  refused by name so the caller does it (right while offsetting can self-intersect), with a
+  helper that offsets and REPORTS what it got carrying the honest failure. The clean general
+  answer needs offsetting an OPEN `Curve2d`, which has no exact form except `Line2d` (a
+  parallel line) and `Arc2d` (a concentric arc) — so it is either an analytic-only Modeling
+  helper (refuse other curve types by name; line k rides the path offset by −k·lineHeight
+  along the left normal, oracle: concentric radii r and r±lineHeight subtending
+  advance/(r±lineHeight)) or a new open-path offset in `Core.Geometry2`. The two-call form
+  (`Shape.TextOnPath` on two hand-built concentric curves) is already clean, so the value is
+  marginal and the API/where-offset-lives is a design call.
 - [ ] **Heightmap follow-ups** (`surface()` ✅ landed — `Shape.Heightmap` +
-  `Heightmap.Mesh/ReadDat/ReadPng`, grayscale-PNG reader dependency-free over BCL
-  `ZLibStream`): color-PNG luminance mapping (deliberately not invented silently —
-  decide a documented rule first); Adam7 interlaced PNGs; chunk CRC verification
-  (currently structural failures only).
+  `Heightmap.Mesh/ReadDat/ReadPng`; **colour-PNG luminance ✅ landed** — truecolor RGB/RGBA
+  → Rec. 709 relative luminance `0.2126 R + 0.7152 G + 0.0722 B`, a documented rule, alpha
+  ignored, palette still refused by name; **chunk CRC verification ✅ landed** — CRC-32/
+  ISO-HDLC checked on critical chunks, a corrupt IHDR/IDAT named): **Adam7 interlaced PNGs**
+  remain (rejected by name today — needs the seven-pass de-interlace, each pass its own
+  scanline-filter stream at reduced dimensions).
 - [ ] `BrepSolid` one-call transform story (`TransformedCurve` exists; add
   `TransformedSurface` or per-type transforms; `HalfEdgeMesh.Transformed(m)` ✅ landed
   with winding flip)
@@ -953,8 +967,12 @@ export — is recorded in CLAUDE.md):
   feature that is fine in every test and janky in the hand.
 - [ ] **Debug-modifier follow-ups** (v1 ✅ landed — `Part.Ghost`/`Hidden`/`Isolated`
   + `DebugFilter` shared by window/offscreen/exports/MCP; `#` highlight deliberately
-  stays the selection mechanism): web viewport honors Ghost (EffectiveDisplayMode)
-  but not yet Hidden/Isolated visibility; tree rows could gray hidden parts.
+  stays the selection mechanism; **web viewport Hidden/Isolated ✅ landed** —
+  `EngrCadViewport.ResolveInstances` applies `DebugFilter.Shown` exactly as the window /
+  offscreen / `--export` / MCP do, and Ghost renders through `EffectiveDisplayMode`, so with
+  no flags it is the identity): the only residual is a Web-viewer UI polish — the model tree
+  rows could GRAY hidden parts (a tree-row styling change in `EngrCAD.Web`, not a Modeling
+  matter).
 - [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame. This
   is the *expensive* cousin of the Animation section above and deliberately separate:
   that one moves poses and the camera only, which is why it can animate with matrices
