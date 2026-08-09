@@ -2547,6 +2547,32 @@ is checked by the property it must have — left–right SYMMETRY, which a wrong
   multiplicity-1 knot leaves exactly 3 nonzero basis functions); the closed case uses a
   periodic knot vector with wrapped control points, giving a C2 seam by construction.
   Two points degrade to a degree-1 chord.
+- **Surface fitting is the tensor-product generalization, and the shared parameterization
+  IS the design** (`NurbsSurface.InterpolatePoints` / `Approximate`, The NURBS Book §9.2/§9.4;
+  the approximation half of `GeomAPI_PointsToBSpline`, curve fitting having existed). Both
+  compute chord-length parameters along every column and every row and AVERAGE them per
+  direction (eqn 9.7), so the two directions share ONE parameterization — the loft-crack
+  rule stated for a grid rather than a strip: a per-line reparameterization would put every
+  column on its own v mapping and the fit would no longer pass through the grid. The surface
+  is then SEPARABLE — interpolate/fit each column in u, then the resulting control rows in v
+  (A9.4/A9.7) — so no 2D surface solve is needed, and because the parameters and knots are
+  shared, each direction's collocation or normal-equations matrix is built and factored ONCE
+  and re-solved per line. Interpolation reuses the curve's natural-end cubic verbatim (two
+  points degrade to a straight segment); approximation FIXES the two endpoints of every 1-D
+  fit — so the four corners interpolate their corner points and the boundary curves fit the
+  boundary rows — and solves the interior control points from `NᵀN·P = R`, a small symmetric
+  banded SPD system carried by a dense Cholesky (a fit's control count is small by design, so
+  the CSR assembly of a general sparse solver buys nothing). The net is sized either by
+  explicit per-direction control counts or grown to a tolerance (`GeomAPI_PointsToBSpline`'s
+  automatic mode), which always terminates because a full-count net is a determined system
+  whose residual is round-off. **The oracles are exact rather
+  than convergence bands, which is what a fit lets you have**: interpolation passes through
+  every grid point to round-off and a coplanar grid stays exactly planar (control points are
+  affine combinations of coplanar data); approximation reproduces every grid point to
+  round-off at the full control count (a determined system has zero residual) and — because
+  least squares is LINEAR in the data — a coplanar grid stays exactly planar however coarse
+  the net, since an affine relation among the coordinates survives the fit. Nothing downstream
+  consumes surface fits yet; periodic grids are the named gap.
 
 ### Where the 2D curve family meets the sketch and the profile
 
@@ -3611,6 +3637,25 @@ refusing at a half-chord of 0.35 to closing at 0.24 — **exactly where the `Sha
 route stops too**. What remains is one near-tangency (the bore's entry rim touching the
 plate's top EDGE, a circle against a line) rather than two limits for two reasons, which is
 the useful form for a limit to be in.
+
+#### An exact ray-parity classifier is rigor without a customer, and the reason is a measurement
+
+The obvious way to remove the `MeshSdf` bridge from the boolean is an EXACT B-Rep point
+classifier — cast a ray and count parity against every trimmed face — so that a fragment's
+inside/outside is decided against the exact surfaces rather than against a tessellated field.
+It is not built, and the decision is a scoping one rather than a gap: exact ray∩surface exists
+for planes and quadrics but not for trimmed NURBS or swept faces (that would want a surface-ray
+march with `SurfaceIntersection`'s own rigor), and parity THROUGH a trimmed face still needs the
+crossing classified against the trim, so every pole/parity lesson `FaceGeometry.Contains` carries
+(the both-directions rule, `ParityRayPointsDown`) reappears per ray. Against that cost, the
+`MeshSdf` probe's one known weakness is sliver fragments near the surface, and the
+largest-triangle-centroid rule already mitigates it — so the classifier buys robustness the
+kernel does not currently lack. **The verdict is checked rather than assumed**: every recent
+`ProbePoint` fix (the pole-cap loop measured by its closest approach, the thin-fragment
+boundary step-off above) was traced to a parity or coverage rule INSIDE the mesh-probe
+framework and fixed there, not to a case the mesh cannot decide. So the exact classifier is
+worth building only when a boolean failure is traced to a probe misclassification the mesh
+CANNOT fix; until then it is rigor without a customer.
 
 #### Coincident (flush) planar surface
 
