@@ -535,35 +535,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
-- [ ] **A traced branch that stops at a FOLD still ends inside its face.** The
-  termination half of the non-coaxial helical work ✅ landed (`TryLandOnDomain` — see the
-  BRep README), taking a cross-drilled M8×1.25 rod from refusing at 13 of 13 bores between
-  0.6 and 3.0 to building Validate-clean closed solids at 8 of them, and a tilted-plane cut
-  from 0 of 4 to 1 of 4. What is left is a different mechanism: where the corrector refuses
-  a step it was NOT trying to take out of the domain — the fold a cross-drill's own cylinder
-  makes as it doubles back — the branch stops mid-face with no boundary to land on, and
-  `FaceSplitter` refuses it by name.
-  - **Halving the step and retrying was built, measured and REVERTED**, which is what makes
-    this a filed item rather than an omission: it takes cross-drilling to 10 of 13, and it
-    reaches whole-solid FILLET bands too (they are anisotropic — long and only `r·π/2`
-    wide), where it broke seven Interop tests and took the tilted-plane family from 1 of 4
-    to 0 of 4. An algorithm that can only trade one refusal for another should not be
-    reached at all. A fix has to be scoped by the FOLD rather than by the surface's aspect,
-    or handle the fold as a fold (a turning point the trace continues through) rather than
-    as a shorter step.
-- [ ] **A trimmed face far narrower than one natural grid cell gets neither interior rows
-  nor refinement.** Measured on a thread's 45° end-chamfer cone, which is the family's
-  worst case: the cone strip is a few hundredths of a millimetre tall wrapped around the
-  whole rod, so its facet count grows LINEARLY with `segmentsPerCircle` (74/148/300/600 at
-  32/64/128/256 for a 5%-depth chamfer) and its worst facet-vs-surface agreement runs
-  0.0606 / 0.5802 / 0.9247 / 0.9819 against a corpus floor of `cos(3·2π/n)`. It CONVERGES,
-  so it is coarseness rather than a floor — but at 32 segments a 25%-depth chamfer still
-  emits 2 folds (worst −0.0406), which the corpus audit at 64 does not see. Refinement
-  cannot help because its step metric is relative to the natural grid step and the whole
-  face is far inside one cell; the rowed paths cannot help because there is no grid row to
-  anchor. The principled fix is a density rule that measures a trimmed face against its OWN
-  uv extent rather than its surface's whole domain — which moves every trimmed face's
-  density, so it needs the corpus and the committed docs PNGs re-taken deliberately.
 - [ ] **Sketch constraint follow-ups** (the variational solver ✅ landed —
   `Sketch.Constrain()`/`ConstrainedSketch`, full coincident/tangent/parallel/dimension
   vocabulary, analytic-Jacobian LM with rank-revealing DOF reports, drawn config as seed

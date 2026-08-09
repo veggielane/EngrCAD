@@ -859,12 +859,34 @@ operations. Depends only on `EngrCAD.Core`.
   the surface's width are the same condition, and it belongs to the surface. Measured on an
   M8×1.25 6 mm rod: cross-drilling refused at 13 of 13 bores from 0.6 to 3.0 and now builds
   Validate-clean, closed, converging solids at 8 of them; a tilted plane cut refused at 4 of
-  4 and now works at 20°. What remains is a different mechanism and is filed — a branch that
-  stops at a FOLD (the corrector refusing a step it was not trying to take out of the
-  domain) still ends inside the face. Halving the step and retrying was built for exactly
-  that, took cross-drilling to 10 of 13, and was REVERTED: fillet bands are anisotropic too,
-  so it reached them and broke seven tests, which is the standing rule that an algorithm
-  able only to trade one refusal for another should not be reached at all.
+  4 and now works at 20°.
+
+  **A FOLD is the other way a step is refused, and the trace now goes through it.** Where
+  the corrector refuses a step it was NOT trying to take out of the domain, there is no rail
+  to land on: the curve has turned back within one step — a cross-drill's cylinder doubling
+  back across a thread band — so the constraint plane a whole step ahead has no solution
+  near it, and the branch used to stop mid-face with `FaceSplitter` refusing it by name.
+  `RetryThroughFold` retries the step at successively halved lengths from the last accepted
+  point, then walks the step back up to the pair's own (the standard continuation rule, so a
+  fold early in a long branch cannot spend its step budget and truncate it).
+
+  **What makes it landable is the SCOPE, and the fold identifies itself.** The refused
+  step's own linearization either leaves a bounded domain or it does not, and that is
+  exactly the test `TryLandOnDomain` makes before it does anything else — asked rather than
+  restated, so the two cannot disagree about which case a refusal is, and the retry is only
+  ever reached where the trace previously stopped with nothing appended. The recorded
+  attempt scoped it by the surface pair's ASPECT — the same gate the second seed pass
+  carries — which halves at rail exits too, reaches whole-solid fillet bands (long and only
+  r·π/2 wide, so anisotropic by that measure) and broke seven Interop tests while taking the
+  tilted-plane family from 1 of 4 to 0 of 4: the standing rule that an algorithm able only
+  to trade one refusal for another should not be reached at all. Measured on the same bore
+  sweep: TWO bores stranded a branch inside a face (1.2 and 1.6) and now ONE does, with the
+  1.6 bore's failure moving DOWNSTREAM to two unpaired edges where a helix rail and its
+  coincident cut segment run between the same two points — a different defect the fold
+  refusal had been hiding, and the one the 2.8 bore already had. The remaining 1.2 case is
+  not a corrector refusal at all: raising the halving budget from 5 to 14 leaves it byte for
+  byte, so its branch stops for one of the trace's other reasons and a shorter step is not
+  its remedy.
 
   **The extents are measured as SPEED × domain length, never as a chordal polyline** —
   `ParameterExtents` averages |∂P/∂u| over a 4×4 cross of cell CENTRES (never the domain's

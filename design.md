@@ -3043,9 +3043,35 @@ converge to another root entirely. And **halving the step and retrying a refused
 step was built, measured and reverted**: it takes cross-drilling to 10 of 13, and it also
 reaches whole-solid FILLET bands, which are anisotropic too (long, and only r·π/2 wide),
 where it broke seven tests and took the tilted-plane family from 1 of 4 to 0 of 4. An
-algorithm that can only trade one refusal for another should not be reached at all; what
-remains — a branch stopping at a FOLD rather than at a boundary — is filed as the different
-mechanism it is.
+algorithm that can only trade one refusal for another should not be reached at all.
+
+##### Tracing through a fold: the same remedy, scoped by its own condition
+
+A refused step is one of two things and only one of them is a rail exit. The other is a
+**fold** — the curve turns back within one step, so the corrector's constraint plane, taken
+perpendicular to the tangent a whole step ahead, has no solution near the curve — and there
+the branch stops mid-face with nothing to land on, which `FaceSplitter` then refuses by
+name. Halving the step *is* the remedy for that; what was wrong with the reverted attempt
+was not the remedy but the scope, since aspect ratio says nothing about which of the two a
+refusal is.
+
+`RetryThroughFold` is therefore gated on the condition that DEFINES a fold: the refused
+step's own linearization lands strictly inside every bounded domain, so no boundary exists
+to land on. That is the same test `TryLandOnDomain` makes before it does anything else —
+asked (`LeavesDomain`) rather than restated, so the two cannot disagree about which case a
+refusal is — and it is only ever reached where the trace previously stopped with nothing
+appended, which is the bit-identity argument for every branch that meets no fold. Past the
+fold the step walks back up to the pair's own, the standard continuation rule, so a fold
+early in a long branch cannot spend its step budget and truncate it.
+
+Measured on the same bore sweep: **two** bores stranded a branch inside a face (1.2 and
+1.6) and now **one** does. The 1.6 bore's failure moved DOWNSTREAM to two unpaired edges
+where a helix rail and its coincident cut segment run between the same two points — a
+different defect the fold refusal had been hiding, and the one the 2.8 bore already had.
+The remaining 1.2 case is not a corrector refusal at all: raising the halving budget from
+5 to 14 leaves it byte for byte, so its branch stops for one of the trace's other reasons
+(a tangential contact, a branch jump, the step cap) and a shorter step is not its remedy —
+which is the useful half of a negative measurement, since it says where NOT to look next.
 
 ##### A refusal that named the wrong stage
 
@@ -3260,6 +3286,44 @@ reads 0.994 / 0.957 / 0.989 on 92 / 220 / 424 facets, `drilled breakout` is an o
 Corpus member, and z0 = 11.5 reclaims its old numbers exactly (2.5e-2 at 64 segments,
 0.99997 at 96/48) with its wall measuring 94.2403 against an exact 94.2478, i.e. inscribed,
 where the family's walls used to bulge past their analytic area.
+
+#### An OPEN angular edge: why the count is the MAXIMUM and not the tidier replacement
+
+The straight-edge rule above has an exact twin one case over, and the twin is the more
+instructive because the obvious form of it is wrong. `SampleEdge` asked
+`IsAngularlyParameterized` only on the CLOSED path, so a circle or an ellipse cut into arcs
+by a boolean — every split rim — fell to `curveSamples` and carried the same count at every
+density. That is a FLOOR rather than a coarseness: raising `segmentsPerCircle` refined the
+grid around such a rim and never the rim itself (measured on a threaded rod's end-chamfer
+cone, whose three spiral cuts scaled 5/9/17/33 with the density while the cap circle's arc
+sat at 25 at 32, 64, 128 **and** 256).
+
+The tidy fix is to give the open case the rule the closed one already has, replacing
+`curveSamples` outright — a fixed count on an angular curve being the wrong knob in both
+directions, since it gives a 10° arc the same 24 segments as a 350° one. **Measured, that
+makes the default density worse**, because at the default 32/24 a sub-half-turn arc is finer
+under `curveSamples` than under the angular count, so the replacement COARSENS every split
+rim in the repository: a partial revolve's tessellated volume stopped matching its exact
+closed form (2.35451265 against 2.35146969 — a discrete identity turned into an
+approximation), a slot pocket left its stated chordal-error band, and 19 of 632 Interop
+tests moved.
+
+So the count is the maximum of the two. That is not a compromise between two rules but the
+only form in which a change to a rule TWO FACES SHARE can be argued at all: the maximum is
+monotone, so no edge anywhere gets coarser and the change can only add fidelity. With it,
+one test moves and it is the one that documented the floor.
+
+**The residual is a boundary rather than an omission, and it is worth stating because the
+filed fix for it is not expressible.** The same chamfer strip measures 0.1301 against a
+floor of 0.8315 at 32/24, because its four boundary edges are sampled by two DIFFERENT
+rules — the helical family's pure angular count against `curveSamples` — so the strip zips a
+25-point chain against a 5-point one and fans, which is the tier-order lesson (the sliver's
+normal is the boundary's binormal rather than the surface's). "A density rule that measures
+a trimmed face against its own uv extent" cannot be built: an edge polyline is sampled ONCE
+and shared by both its faces, and that sharing IS the welding invariant, so a density can be
+a property of an EDGE and never of a face. Equalizing the two rules upward was built and
+measured and is a trade rather than a fix — it moves the 0.1301 onto the thread BAND as
+0.5204 and triples the mesh (4450 → 15772 facets at 32/24).
 
 #### A thin fragment is probed by stepping off its OWN boundary
 
