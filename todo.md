@@ -613,30 +613,10 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 - [ ] **Curved-2D-tier follow-ups** (the lines-and-arcs tier ✅ landed and is
   complete in the sense that matters — its tangent+curvature tie-break is decidable
   for exactly those two shapes; see design.md §5):
-  - [ ] **Béziers and general NURBS in the curved arrangement.** They are flattened at
-    the entry points today, and the refusal is documented rather than hidden. Making
-    them exact needs (a) bezier/anything intersection by subdivision or Bézier clipping
-    to a stated tolerance, and (b) a REPLACEMENT for the second-order fan tie-break,
-    since two Béziers can agree to second order and separate only in the third
-    derivative. A jet comparison of bounded order is not sound in general; the honest
-    v2 is probably to compare a small parametric offset off the node and refuse when
-    even that ties.
-  - [ ] Residual, filed rather than done: a `Sketch`-level wrapper (`Sketch.StrokeExact`,
-    beside the existing `OffsetExact`) so a designer reaches it without dropping to Core.
-    That is Modeling work, not Core.
-  - [ ] Residual: the POLYGONAL `Region2dOffset.Stroke` still cannot recognize a circuit
-    (its input genuinely cannot express one unambiguously), so a butt-capped closed
-    polyline keeps the notch measured above. Left alone deliberately — it is pinned
-    bit-for-bit by `Region2dGoldenTests` and the fix belongs with an explicit `closed:`
-    flag, not with a first-point-equals-last-point guess.
   - [ ] **Curved `Shape.Section`/`Silhouette`.** A section of a B-Rep could return a
     `CurvedRegion2d` for the analytic pairs (`PlanarSection` already gets exact circles
     and lines from `SurfaceIntersection`) instead of flattening them; the silhouette
     cannot, since it is a union of projected triangles.
-  - [ ] **A curved `Region2dValidation`.** `CurvedRegion2d`'s constructor rejects
-    transversal self-crossings (tangential contact is legal, and for lines and arcs a
-    tangency is always a touch) but its pairwise sweep is O(n²) with only a box reject
-    in front of it, where the polygonal validator has a `Bvh` above 24 segments.
   - [ ] **`ContainedIn` is O(cells × operand edges)** here as well — the curved twin of
     the open item below, and that item's measured verdict applies here first: a
     point-location index was built for the polygonal twin and DECLINED at 1.0× on the
