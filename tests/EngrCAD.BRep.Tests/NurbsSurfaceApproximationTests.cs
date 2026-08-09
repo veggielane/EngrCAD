@@ -136,6 +136,56 @@ public class NurbsSurfaceApproximationTests
     }
 
     [Fact]
+    public void Approximate_ToTolerance_MeetsTheTolerance()
+    {
+        var q = SampleField((x, y) => 0.6 * Math.Sin(0.9 * x) * Math.Cos(0.7 * y), 12, 10, 4.0, 3.0);
+        var (u, v) = AveragedParameters(q);
+
+        double Worst(NurbsSurface s)
+        {
+            double worst = 0;
+            for (int i = 0; i < 12; i++)
+                for (int j = 0; j < 10; j++)
+                    worst = Math.Max(worst, s.PointAt(u[i], v[j]).DistanceTo(q[i, j]));
+            return worst;
+        }
+
+        foreach (double tol in new[] { 1e-1, 1e-2, 1e-3 })
+        {
+            var s = NurbsSurface.Approximate(q, tol);
+            Assert.True(Worst(s) <= tol, $"tolerance {tol:E1} fit missed by {Worst(s):E3}");
+        }
+
+        // A tighter tolerance never uses a smaller net than a looser one.
+        Assert.True(NurbsSurface.Approximate(q, 1e-3).ControlPoints.Length >=
+                    NurbsSurface.Approximate(q, 1e-1).ControlPoints.Length);
+    }
+
+    [Fact]
+    public void Approximate_ToTolerance_PlaneFitsAtTheMinimumNet()
+    {
+        var q = new Vector3d[9, 7];
+        for (int i = 0; i < 9; i++)
+            for (int j = 0; j < 7; j++)
+            {
+                double x = 0.5 * i, y = 0.4 * j;
+                q[i, j] = new Vector3d(x, y, 0.25 * x - 0.1 * y + 2);
+            }
+        var s = NurbsSurface.Approximate(q, 1e-9);
+        // A plane is in the smallest bicubic net's space, so it fits at 4×4 to round-off.
+        Assert.Equal(4, s.ControlPoints.GetLength(0));
+        Assert.Equal(4, s.ControlPoints.GetLength(1));
+    }
+
+    [Fact]
+    public void Approximate_ToTolerance_Validates()
+    {
+        var q = SampleField((x, y) => x + y, 8, 7, 4.0, 3.0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => NurbsSurface.Approximate(q, 0.0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => NurbsSurface.Approximate(q, 1e-3, degreeU: 8));
+    }
+
+    [Fact]
     public void Approximate_ValidatesControlCounts()
     {
         var q = SampleField((x, y) => x + y, 8, 7, 4.0, 3.0);

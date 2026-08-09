@@ -126,8 +126,15 @@ operations. Depends only on `EngrCAD.Core`.
   cubic (interpolate each column in u, then the resulting control rows in v). The
   collocation matrix is identical for every line in a direction, so it is built once and
   re-solved per line; a direction with two points drops to a straight degree-1 segment.
-  The fit reproduces every input point to round-off; periodic grids and least-squares
-  approximation (a coarser net than the data) are not yet supported.
+  The fit reproduces every input point to round-off; periodic grids are the named gap.
+  `NurbsSurface.Approximate` is the least-squares half (a control net COARSER than the
+  data, so the surface approximates): each 1-D fit fixes the two endpoints (the four
+  corners interpolate, the boundary curves fit the boundary rows) and solves the interior
+  control points from the small symmetric-banded `NᵀN` normal equations by a dense
+  Cholesky. The explicit overload takes the per-direction control counts; the
+  tolerance-driven overload grows the net until the largest grid deviation is at or below
+  the tolerance (`GeomAPI_PointsToBSpline`'s automatic mode — always terminating, since a
+  full-count net is a determined system whose residual is round-off).
 - **2D curves** (`Curve2d`): `Line2d`, `Arc2d`, `BezierCurve2d`, `NurbsCurve2d` — the
   sketch-plane siblings of the 3D family. Two deliberate divergences from `Curve3d`:
   `DerivativeAt`/`SecondDerivativeAt` are **abstract**, because every 2D curve here is

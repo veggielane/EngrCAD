@@ -670,6 +670,67 @@ public sealed class NurbsSurface : Surface
     }
 
     /// <summary>
+    /// Least-squares B-spline surface fit whose control net is grown AUTOMATICALLY until the
+    /// grid is fit to within <paramref name="tolerance"/> (the tolerance-driven mode of
+    /// <c>GeomAPI_PointsToBSpline</c>).
+    /// </summary>
+    /// <remarks>
+    /// Starting from the smallest net (one Bézier span per direction) the net is grown a
+    /// control point at a time in every direction that still has room, re-fitting through
+    /// <see cref="Approximate(Vector3d[,], int, int, int, int)"/> until the largest deviation
+    /// at any grid point is at or below <paramref name="tolerance"/>. Growth ALWAYS
+    /// terminates: a net as large as the data is a determined system whose residual is
+    /// round-off, so a positive tolerance is always reached (a tolerance below round-off
+    /// simply returns the full-count interpolating fit). The net is not guaranteed MINIMAL —
+    /// a direction that is already flat still grows in lockstep with a curved one — but it is
+    /// guaranteed to meet the tolerance, which is the contract; when a minimal or asymmetric
+    /// net matters, size each direction explicitly through the control-count overload.
+    /// </remarks>
+    /// <exception cref="ArgumentException">The grid is smaller than 2×2, or a direction cannot be parameterized.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A degree is below 1 or exceeds one less than the point count, or the tolerance is not positive.</exception>
+    public static NurbsSurface Approximate(
+        Vector3d[,] points, double tolerance, int degreeU = 3, int degreeV = 3)
+    {
+        ArgumentNullException.ThrowIfNull(points);
+        int countU = points.GetLength(0);
+        int countV = points.GetLength(1);
+        if (countU < 2 || countV < 2)
+            throw new ArgumentException(
+                "Surface approximation needs at least a 2×2 grid of points.", nameof(points));
+        if (!(tolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(tolerance), "Tolerance must be positive.");
+        if (degreeU < 1 || degreeU > countU - 1)
+            throw new ArgumentOutOfRangeException(nameof(degreeU),
+                $"degreeU must be between 1 and one less than the u point count ({countU - 1}).");
+        if (degreeV < 1 || degreeV > countV - 1)
+            throw new ArgumentOutOfRangeException(nameof(degreeV),
+                $"degreeV must be between 1 and one less than the v point count ({countV - 1}).");
+
+        double[] paramsU = AveragedChordParameters(points, alongU: true);
+        double[] paramsV = AveragedChordParameters(points, alongU: false);
+
+        int controlCountU = degreeU + 1, controlCountV = degreeV + 1;
+        while (true)
+        {
+            var surface = Approximate(points, controlCountU, controlCountV, degreeU, degreeV);
+            double worst = 0;
+            for (int i = 0; i < countU && worst <= tolerance; i++)
+                for (int j = 0; j < countV; j++)
+                {
+                    worst = Math.Max(worst, surface.PointAt(paramsU[i], paramsV[j]).DistanceTo(points[i, j]));
+                    if (worst > tolerance)
+                        break;
+                }
+            if (worst <= tolerance || (controlCountU == countU && controlCountV == countV))
+                return surface;
+            if (controlCountU < countU)
+                controlCountU++;
+            if (controlCountV < countV)
+                controlCountV++;
+        }
+    }
+
+    /// <summary>
     /// One direction of the tensor-product least-squares fit: the knot vector (de Boor's
     /// averaging over the parameters, The NURBS Book eqn 9.68), plus the normal-equations
     /// matrix `NᵀN` built once from the interior basis and re-solved per line (the endpoints

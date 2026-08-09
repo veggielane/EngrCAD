@@ -2562,7 +2562,10 @@ is checked by the property it must have — left–right SYMMETRY, which a wrong
   fit — so the four corners interpolate their corner points and the boundary curves fit the
   boundary rows — and solves the interior control points from `NᵀN·P = R`, a small symmetric
   banded SPD system carried by a dense Cholesky (a fit's control count is small by design, so
-  the CSR assembly of a general sparse solver buys nothing). **The oracles are exact rather
+  the CSR assembly of a general sparse solver buys nothing). The net is sized either by
+  explicit per-direction control counts or grown to a tolerance (`GeomAPI_PointsToBSpline`'s
+  automatic mode), which always terminates because a full-count net is a determined system
+  whose residual is round-off. **The oracles are exact rather
   than convergence bands, which is what a fit lets you have**: interpolation passes through
   every grid point to round-off and a coplanar grid stays exactly planar (control points are
   affine combinations of coplanar data); approximation reproduces every grid point to
