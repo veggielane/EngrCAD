@@ -162,6 +162,53 @@ The magnitude is worth stating: on a two-material bar carrying 5000 and 1250 mW/
 value an interface node can report is wrong by 75% to 225% for one of the two materials, while
 `NodalFluxIn` is exact. `StructuralResults.NodalStressIn` is the same rule for the same reason.
 
+### Superconvergent flux recovery, and the error estimate
+
+`q = -k·grad T` is one derivative down from the solved temperature, exactly as stress is one
+down from displacement, so it carries the same choice. `FluxRecovery.Direct` (the default)
+averages the element flux at each node; `FluxRecovery.Superconvergent` fits a polynomial per
+corner-node patch to the flux at the element's *superconvergent* points and reads it there —
+the same machinery `StressRecovery.Superconvergent` runs, at three components rather than six,
+over the same `(node, region)` slot table. On a manufactured solution the recovered flux
+converges one order faster than the averaged one: measured rates **2.34 (linear) and 2.66
+(quadratic)** against direct evaluation's 1.43 and 2.00, and 15× / 8× lower nodal error at the
+finest mesh.
+
+The reason to build it is the estimate that comes with it. `ErrorEstimate` is the
+Zienkiewicz–Zhu figure — the energy-norm distance between the finite-element flux and its own
+recovery, per element and overall — which is the answer to "is this conduction mesh good
+enough" a solve otherwise never gives, and the per-element map an adaptive refinement loop
+would consume.
+
+```csharp run:fea-thermal-recovery
+var block = Shape.Box(60, 40, 20);
+var part = new Part("block", block);
+var tets = TetMesher.Mesh(part.GetMesh(), new TetMeshOptions { RefineQuality = true, MaxElementSize = 6 });
+
+var model = new ThermalModel(AnalysisMesh.Of(tets), Materials.Steel);
+model.Temperature(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX), 150);
+model.Convection(Facets.All, 0.02, 20);
+model.Generation(0.001);
+var results = ThermalSolver.Solve(model);
+
+// Is the mesh good enough? The estimate answers, and names the worst element. A large figure
+// here (this is a deliberately coarse block) says: refine, and refine where WorstElement is.
+Console.WriteLine(results.ErrorEstimate);       // "estimated error 43.83% (...)"
+Console.WriteLine($"worst element: {results.ErrorEstimate.WorstElement}");
+
+// The recovered flux converges one order faster; Direct stays the default so nothing moves.
+results.FluxRecovery = FluxRecovery.Superconvergent;
+Console.WriteLine($"peak recovered flux {results.MaxFluxMagnitude:F1} mW/mm^2");
+```
+
+`Direct` is the default for the same reason it is on the structural side: every thermal
+verification figure this project quotes was measured through the simple path, and a recovered
+field is smooth by construction — at a genuine discontinuity (a material interface, a
+re-entrant corner) it smooths harder than averaging does. Where no patch can be assembled at
+all (a mesh with no interior corner node), the estimate is **NaN** rather than a
+suspiciously-perfect zero: the honest reading is UNKNOWN, and it is the one answer that cannot
+be mistaken for good news.
+
 ## Transient conduction
 
 ```csharp run:fea-thermal-transient

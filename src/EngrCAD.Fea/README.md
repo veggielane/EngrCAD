@@ -46,11 +46,11 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `StructuralModel` / `Facets` / `Dof` | The model: materials per region, supports and loads over facet selectors |
 | `StructuralSolver` / `StructuralSolveOptions` / `FeaSolveReport` | Assembly, restraint checking, the solve, and what it did |
 | `StructuralResults` / `NodalAveraging` / `StressRecovery` | Displacements, strain, stress, von Mises, publishing and `.vtu` |
-| `ErrorEstimate` | The Zienkiewicz-Zhu error estimate: per element and overall, in the energy norm — the answer to "is this mesh good enough", which a solve otherwise never gives |
+| `ErrorEstimate` | The Zienkiewicz-Zhu error estimate: per element and overall, in the energy norm — the answer to "is this mesh good enough", which a solve otherwise never gives; the SAME type for a recovered stress or a recovered flux |
 | `ThermalModel` | Conduction: held temperatures, flux, generation and convection over the SAME facet selectors |
 | `ThermalSolver` / `ThermalSolveOptions` / `ThermalSolveReport` | Steady and theta-scheme transient solves, and the energy balance |
 | `ThermalTransientOptions` / `ThermalTimeScheme` / `ThermalTransientReport` | Step, count, scheme, initial condition; one factorization per run |
-| `ThermalResults` / `ThermalTransientResults` | Temperature, heat flux, per-state publishing and `.vtu` |
+| `ThermalResults` / `ThermalTransientResults` / `FluxRecovery` | Temperature, heat flux (averaged or superconvergent), per-material `NodalFluxIn`, the thermal `ErrorEstimate`, per-state publishing and `.vtu` |
 | `ModalSolver` / `ModalSolveOptions` / `MassLumping` / `ModalSolveReport` | Mass assembly, the shift, the eigensolve, and what it cost |
 | `ModalResults` / `VibrationMode` / `RigidBodyMode` | Frequencies, mode shapes, participation factors, publishing and `.vtu` |
 | `BucklingSolver` / `BucklingSolveOptions` / `BucklingSolveReport` | Geometric stiffness, the K-metric eigensolve, and what it cost |
@@ -466,6 +466,41 @@ not better *everywhere* — a recovered field is smooth by construction, so at a
 discontinuity it smooths harder than averaging. A *material* interface is no longer an example
 of that, per (e); a re-entrant corner still is, and always will be, since the true stress
 there is singular and no polynomial fit says so.
+
+**The quadratic rate settles near 2.76 rather than at theory 3, and an interior sub-domain
+study says why.** Two causes were candidates — the boundary FILL of (c), which extrapolates a
+patch polynomial to nodes outside its own elements (an O(h) volume fraction, so a half-order
+signature), and the SIMPLEX superconvergence theory being weaker on tetrahedra than on the
+hexahedra SPR was developed for. Restricting the recovered-error norm to a central interior box,
+away from the fill, lifts the quadratic rate from **2.758** (whole domain) to **2.883** —
+closing about half the gap to 3, which agrees in direction with (b)'s recorded 3.08/2.91 from
+excluding boundary patches entirely. So the boundary fill is the dominant cap; the small residual
+below 3 in the interior is within the noise of a single last-pair rate and does not establish a
+separate simplex-theory cap (`StressRecoveryTests.TheInteriorSubDomainRateSeparatesTheBoundaryFillFromSimplexTheory`).
+
+## Heat-flux recovery, and its error estimate
+
+The whole of the above is shared machinery, not a stress-only feature: `q = -k·grad T` is one
+derivative down from temperature exactly as stress is from displacement, so `ThermalResults`
+carries the twin `FluxRecovery.Direct` / `Superconvergent`, and the recovery runs at three
+components rather than six over the same `(node, region)` slot table — one
+`SuperconvergentRecovery.Recover<TValue, TField>` monomorphized twice, so the structural path
+stays bit-identical (an internal `IRecoveryField<TValue>` provides the sampling and value
+arithmetic; a `TValue`-generic accumulation is the same operations in the same order for a
+`SymmetricTensor3` stress as for a `Vector3d` flux). On the manufactured conduction solution the
+recovered flux converges one order faster than the averaged one:
+
+| element | direct rate | recovered rate | nodal error at finest | effectivity |
+|---|---|---|---|---|
+| linear | 1.43 (theory 1) | **2.34** (theory 2) | 15.3× lower | 0.979 → **0.998** (from below) |
+| quadratic | 2.00 (theory 2) | **2.66** (theory 3) | 7.8× lower | 1.035 → **1.020** (from above) |
+
+`ThermalResults.ErrorEstimate` is the ZZ figure for the flux — the energy-norm distance
+between the finite-element flux and its recovery, with the compliance replaced by the scalar
+thermal one `1/k` — reported as `NaN` where no patch can be assembled, exactly as the structural
+estimate is (`ThermalFluxRecoveryTests`). `Direct` is the default for the same reasons, and the
+quadratic rate settling at 2.66 rather than 3 is the same p+1 cap the interior sub-domain study
+above measures.
 
 ## Contracts
 
