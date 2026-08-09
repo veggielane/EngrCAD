@@ -561,6 +561,7 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     support function, so the constraint is `cross(B(t) − p, d) = 0` together with
     `cross(B′(t), d) = 0` — two rows over the foot parameter as a new variable, which is
     the `PointOnBezier` shape plus one row, and removes the one DOF a tangency means.
+
 ## Deformation / analysis follow-ups
 
 The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
