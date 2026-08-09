@@ -161,6 +161,38 @@ the mesh.
 A plane flush with a face, or containing an edge, is refused: a section that runs
 *along* a face is an area, not a curve. Move the plane a fraction.
 
+### `SectionExact`: the same section without the flattening
+
+`Shape.SectionExact(plane)` returns [`CurvedRegion2d`](sketching.md)s instead, so a bore's
+rim is **one arc** rather than however many chords a tolerance asked for — which is what a
+DXF `CIRCLE` entity, an SVG `A` command and `Sketch.FromCurvedRegion` all want. It is the
+same pipeline: the same edge crossings, the same containment probes, the same chaining,
+with only the emit differing.
+
+```csharp run:planar-section-exact
+var plate = Shape.Box(60, 40, 10)
+    .Drill(HoleSpec.Simple(8), [new(-15, 0), new(15, 0)], depth: 20,
+           SketchPlane.At((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY));
+var mid = SketchPlane.At((0, 0, 0), Vector3d.UnitX, Vector3d.UnitY);
+
+var exact = plate.SectionExact(mid);
+double area = exact.Sum(r => r.Area);
+double truth = 60.0 * 40 - 2 * Math.PI * 16;      // πr² per bore, exactly
+if (Math.Abs(area - truth) > 1e-9)
+    throw new Exception("an exact section is the closed form");
+
+// The flattened route leaves an inscribed polygon, which is a FLOOR rather than a
+// tolerance: it is over by the n-gon's own deficit however fine the chords get.
+if (!(plate.Section(mid).Sum(r => r.Area) > truth))
+    throw new Exception("an inscribed polygon leaves more material than the circle");
+```
+
+What it cannot express exactly it **flattens rather than refusing**: an oblique plane
+through a cylinder cuts an ellipse, which the curved 2D tier deliberately does not carry,
+and a traced intersection is a polyline to begin with. So a mixed section is honest, and
+its exact halves stay exact. `Silhouette` has no such mode at all, and that is structural:
+it is the union of projected *triangles*, so there is nothing exact to recover.
+
 ## Silhouette: `projection(cut = false)`
 
 `Shape.Silhouette(plane)` is the outline the shape casts along the plane's normal — the

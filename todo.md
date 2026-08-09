@@ -564,10 +564,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   anchor. The principled fix is a density rule that measures a trimmed face against its OWN
   uv extent rather than its surface's whole domain — which moves every trimmed face's
   density, so it needs the corpus and the committed docs PNGs re-taken deliberately.
-- [ ] **Curved `Shape.Section`.** A section of a B-Rep could return a
-  `CurvedRegion2d` for the analytic pairs (`PlanarSection` already gets exact circles
-  and lines from `SurfaceIntersection`) instead of flattening them; the silhouette
-  cannot, since it is a union of projected triangles.
 - [ ] **Sketch constraint follow-ups** (the variational solver ✅ landed —
   `Sketch.Constrain()`/`ConstrainedSketch`, full coincident/tangent/parallel/dimension
   vocabulary, analytic-Jacobian LM with rank-revealing DOF reports, drawn config as seed
