@@ -2011,6 +2011,43 @@ exactly.
   vectorization is the interesting part: the gyroid COMPILES (an expression tree calls
   `Math.Sin` itself, so it is bit-identical) where it deliberately does not vectorize, so
   the two are not the same trade.
+- **Lattices are two families with two distance contracts, and keeping them apart is the
+  design.** A **TPMS** is a level set of a trigonometric polynomial — neither a distance nor
+  1-Lipschitz — so the field divides `|F|` by the GLOBAL `max |grad F|`, which is exactly
+  what makes it 1-Lipschitz and therefore a lower bound on the distance (a 1-Lipschitz
+  function vanishing on the surface satisfies `|g(p)| = |g(p) − g(nearest)| ≤ |p − nearest|`).
+  Dividing by anything smaller would break the assumption `SurfaceCull`, the narrow-band
+  octree and the projection target all rest on, in the direction that drops geometry
+  silently. A **strut lattice** is a periodic union of capsules, whose distance is exact, so
+  its `LipschitzBound` stays 1 and its diameter means what it says. They therefore live
+  behind different factories rather than one `Lattice(kind)` that would hide which contract
+  a caller just bought.
+  - Each TPMS constant is DERIVED where a derivation exists (√3 for Schwarz P, Schwarz D and
+    the gyroid; exactly 7 for Neovius; 3√3 for I-WP) and MEASURED in every case, with the two
+    that have no closed form storing the measured supremum rounded up at the sixth figure.
+    The test asserts the field's own slope is **at most 1 and at least 0.99** — sound *and*
+    tight, because a loose constant costs wall thickness in direct proportion.
+  - **The cost of that constant is the wall, and it is why volume fraction is the parameter
+    offered as the engineering one.** The sheet's local half-thickness is
+    `(bound / |grad F|)·t/2`, so the requested thickness is a guaranteed MINIMUM and the
+    excess is how far the local gradient falls short of the global maximum — measured on the
+    level set from 1.15 (gyroid) to 6.99 (Neovius) and 56.9 at Lidinoid's near-critical
+    point. `Tpms.SheetForVolumeFraction` and friends solve for the fraction and report what
+    they ACHIEVED (the `BiArcFit.MaxDeviation` convention), measured on a grid sharing no
+    sample with the one the parameter was solved on.
+  - **One term table per surface is the single source of the scalar evaluator AND the emitted
+    expression**, so the compiled form is bit-identical by construction rather than by
+    testing — eight formulas rather than sixteen copies free to drift. It is also what let
+    the gyroid move out of `Primitives.cs` with its field bit-for-bit unchanged.
+  - **`Sdf.Repeat` cannot express a strut lattice, and that is a finding rather than a gap.**
+    A lattice's struts span the whole cell, so a capsule's bounds overhang by the strut
+    radius and the fits-in-one-cell precondition — the thing that makes the
+    two-cells-per-axis window sound — refuses it, correctly. Shortening the axes so the
+    solids fit would make consecutive copies meet at a tangent POINT rather than joining. So
+    the node folds the query point and visits a three-wide neighbourhood, with the pruning
+    done ONCE at construction into per-sub-cell candidate lists (exact, since the distance to
+    a segment is convex so its maximum over a box is at a corner). Two cheaper strategies
+    were measured and lost; see the implicit README's table for the numbers.
 - **The two primitives whose published formulas did not survive measurement** are recorded
   under the numerical lessons in CLAUDE.md: the ellipsoid (a genuine lower bound outside, an
   over-report of depth inside, with the error table against an exact Lagrange-multiplier

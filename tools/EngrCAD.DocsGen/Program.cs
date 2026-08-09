@@ -463,6 +463,37 @@ foreach (var (file, marker) in new[]
                    "with the real figure from this run.");
 }
 
+// ---- conflict-marker guard ---------------------------------------------------------
+// The same failure one step earlier. CLAUDE.md's status paragraph and roadmap are 3-way
+// spliced by hand on every merge, and TWO conflict blocks once shipped to main inside it:
+// the resolution loop handled the status paragraph, printed a warning for the others and
+// carried on, and the gate never looked because `git status` had listed a DIFFERENT file
+// as conflicted. Every downstream check passed -- the build does not read markdown, the
+// tests do not, and DocsGen only cared about fences -- so nothing failed for four days.
+//
+// A marker is unambiguous and costs one scan, so the gate reads the prose files it is
+// already standing next to. `docs/**` is covered by the fence walk above; these are not.
+foreach (var file in new[] { "CLAUDE.md", "todo.md", "design.md" })
+{
+    var path = Path.Combine(docsRoot, "..", file);
+    if (!File.Exists(path)) continue;
+
+    var lines = File.ReadAllLines(path);
+    for (var i = 0; i < lines.Length; i++)
+    {
+        // Anchored at the line start and exactly seven characters, which is git's own
+        // form -- a prose line may legitimately contain "<<<" or a row of equals signs.
+        var line = lines[i];
+        if (line.StartsWith("<<<<<<<", StringComparison.Ordinal)
+            || line.StartsWith(">>>>>>>", StringComparison.Ordinal))
+        {
+            errors.Add($"{file}:{i + 1}: an unresolved merge-conflict marker is committed " +
+                       "in this file. A 3-way splice left it behind and every other check " +
+                       "is blind to it.");
+        }
+    }
+}
+
 // ---- report ----------------------------------------------------------------------
 Console.WriteLine($"\n{snippets.Count} snippets: {executed} executed, {rendered} rendered" +
                   (canRender ? "" : " (rendering skipped)") + $", {errors.Count} error(s).");

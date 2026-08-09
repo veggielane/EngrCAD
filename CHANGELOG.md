@@ -25,7 +25,10 @@ date-stamp.
 - Exact mesh booleans by imprint and winding-number classification, replacing the earlier
   BSP clipper.
 - Implicit engine — an SDF AST of primitives and operators, polygonised by manifold
-  Surface Nets. See [Blends, offset, shell, lattice](docs/examples/implicit.md).
+  Surface Nets, with sharp features preserved by dual contouring. See
+  [The SDF vocabulary](docs/examples/sdf-vocabulary.md),
+  [Blends](docs/examples/blends.md), [Offset](docs/examples/offset.md) and
+  [Shell](docs/examples/shell.md).
 - B-Rep engine — analytic curves and surfaces, NURBS, topology, and surface–surface
   intersection with analytic pairs plus a marching tracer for the rest.
 - The conversion triangle — implicit→mesh, B-Rep→mesh and mesh→implicit. See
@@ -38,6 +41,9 @@ date-stamp.
   measures πr² rather than a polygon's approximation of it. See
   [2D sketch booleans](docs/examples/sketch-booleans.md).
 - Coplanar face fusion, so flush embossing and stacked plates fuse into one solid.
+- Lattices — eight triply periodic minimal surfaces (Schwarz P and D, gyroid, Neovius,
+  I-WP, Lidinoid, Fischer–Koch S, Split P) as sheets or networks, plus six strut
+  lattices, sized by volume fraction. See [Lattices](docs/examples/lattices.md).
 - Space-filling curves (Hilbert, Moore, Peano, Gosper, Z-order) and a 2D infill consumer.
   See [Space-filling curves & 2D infill](docs/examples/infill.md).
 

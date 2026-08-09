@@ -750,46 +750,7 @@ internal sealed class LinkSdf(double majorRadius, double minorRadius, double hal
     }
 }
 
-/// <remarks>
-/// Deliberately NOT vectorized: the field is built from <see cref="Math.Sin"/>/
-/// <see cref="Math.Cos"/> and no vector transcendental reproduces them bit for bit, so a
-/// SIMD gyroid would silently disagree with the scalar path. It still batches (the base
-/// <see cref="Sdf.EvaluateBatch"/> loop) and still benefits from vectorized operands
-/// wherever it is intersected with a finite solid.
-/// </remarks>
-internal sealed class GyroidSdf(double cellSize, double thickness) : Sdf
-{
-    // g has gradient magnitude ≤ √3·ω, so |g|/(√3·ω) is a conservative distance bound.
-    private readonly double _omega = 2 * Math.PI / cellSize;
-
-    public override double Evaluate(in Vector3d p)
-    {
-        double x = p.X * _omega, y = p.Y * _omega, z = p.Z * _omega;
-        double g = Math.Sin(x) * Math.Cos(y) + Math.Sin(y) * Math.Cos(z) + Math.Sin(z) * Math.Cos(x);
-        return Math.Abs(g) / (Math.Sqrt(3) * _omega) - thickness / 2;
-    }
-
-    public override Aabb Bounds => InfiniteBounds;
-
-    /// <summary>
-    /// Compiles even though it does not vectorize, and the difference is the point: an
-    /// expression tree calls <see cref="Math.Sin"/> itself, so the compiled form is the same
-    /// function on the same arguments and is bit-identical — whereas a SIMD kernel would have
-    /// to substitute a vector sine, and no vector transcendental reproduces
-    /// <see cref="Math"/>'s results. Compilation is not the same trade as vectorization.
-    /// </summary>
-    internal override Expression BuildExpression(SdfExpression b)
-    {
-        var w = SdfExpression.Const(_omega);
-        var x = b.Let(Expression.Multiply(b.X, w));
-        var y = b.Let(Expression.Multiply(b.Y, w));
-        var z = b.Let(Expression.Multiply(b.Z, w));
-        var g = SdfExpression.Add(
-            Expression.Multiply(SdfExpression.Sin(x), SdfExpression.Cos(y)),
-            Expression.Multiply(SdfExpression.Sin(y), SdfExpression.Cos(z)),
-            Expression.Multiply(SdfExpression.Sin(z), SdfExpression.Cos(x)));
-        return Expression.Subtract(
-            Expression.Divide(SdfExpression.Abs(g), SdfExpression.Const(Math.Sqrt(3) * _omega)),
-            SdfExpression.Const(thickness / 2));
-    }
-}
+// The gyroid moved to Tpms.cs, where it is one member of the triply periodic minimal
+// surface family rather than a lone special case. Sdf.Gyroid still names it, and its field
+// is bit-for-bit what it always was (asserted against a transcription of the closed form
+// this file used to carry).

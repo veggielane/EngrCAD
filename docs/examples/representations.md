@@ -89,7 +89,7 @@ if (Math.Abs(grown.Evaluate(new Vector3d(0, 0, 0)) - (-12.0)) > 1e-12)
 Because a boolean is just `min` (union) or `max` (intersection) of two fields, there
 is no intersection curve to trace, no seam to weld and no topology to corrupt —
 which is why the operations B-Rep refuses are *native* here.
-[Smooth blends, offsets, shells and lattices](implicit.md) all fall out of field
+[Smooth blends](blends.md), [offsets](offset.md), [shells](shell.md) and [lattices](lattices.md) all fall out of field
 arithmetic:
 
 ```csharp render:rep-implicit
