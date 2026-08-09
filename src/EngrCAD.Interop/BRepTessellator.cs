@@ -353,6 +353,39 @@ public static class BRepTessellator
             return points;
         }
 
+        // An OPEN angular edge — a circle or an ellipse cut into arcs by a boolean, which
+        // is what every split rim is — must resolve the natural grid COLUMNS its span
+        // crosses as well as its own curvature, so it takes the larger of the two counts.
+        // <para>Without the angular half it took `curveSamples` and nothing else: a fixed
+        // count at every density, which is a FLOOR (the same shape as the recorded
+        // baked-tracer-polyline and CurveSegment-turning-angle findings, and the fourth
+        // occurrence of `Underlying` being a TYPE hint that says nothing about the
+        // parameter mapping — the closed case asks `IsAngularlyParameterized` and the open
+        // one did not). Measured on a threaded rod's 5%-depth chamfer cone, whose rim is
+        // three spiral arcs and one arc of the new cap circle: the spirals scaled 5/9/17/33
+        // with the density while the circle piece sat at 25 at 32, 64, 128 AND 256, and the
+        // strip's worst facet-vs-surface agreement was 0.1301 against a floor of
+        // 0.8315.</para>
+        // <para><b>The MAXIMUM of the two counts, never a replacement — which was MEASURED
+        // rather than preferred.</b> Replacing `curveSamples` is the tidier rule and it
+        // makes the default density measurably WORSE: at the default 32/24 a sub-half-turn
+        // arc is finer under `curveSamples` than under the angular count, so replacing it
+        // COARSENS every split rim in the repository — a partial revolve's tessellated
+        // volume stopped matching its exact closed form (2.35451265 against 2.35146969, a
+        // discrete identity turned into an approximation), a slot pocket left its stated
+        // chordal-error band, and 19 of the Interop suite's tests moved. The maximum is
+        // monotone: no edge anywhere gets coarser, so a change here can only add fidelity,
+        // which is the whole safety argument for touching a shared sampling rule.</para>
+        if (IsAngularlyParameterized(edge.Curve))
+        {
+            int angular = AngularSegments(TurningAngle(edge.Curve, domain), segmentsPerCircle);
+            int n = Math.Max(curveSamples, angular);
+            var points = new List<Vector3d>(n + 1);
+            for (int i = 0; i <= n; i++)
+                points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
+            return points;
+        }
+
         // A rail of a loft that is AFFINE in v is an exact straight segment (the lerp of
         // its two sections' endpoints), and the band's own grid collapses its v columns to
         // the two section rows (GridParams asks the same IsAffineInV) — so the pair agrees
@@ -454,6 +487,15 @@ public static class BRepTessellator
         }
         if (curve.Underlying is Line3d)
             return [domain.Start, domain.End];
+        // The open angular rule SampleEdge applies, restated nowhere: face grids and the
+        // boundary edges they weld to must round to the same count.
+        if (IsAngularlyParameterized(curve))
+        {
+            return EvenParams(
+                domain,
+                Math.Max(curveSamples, AngularSegments(TurningAngle(curve, domain), segmentsPerCircle)),
+                includeEnd: true);
+        }
         return EvenParams(domain, curveSamples, includeEnd: true);
     }
 

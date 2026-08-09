@@ -88,13 +88,27 @@ public class PolylineEdgeSamplingTests
         var samples = BRepTessellator.SampleEdge(EdgeOver(line), segmentsPerCircle: 32, curveSamples: 24);
         Assert.Equal(2, samples.Count); // straight edges stay two points
 
-        // An open edge over a circle takes the generic uniform path (curveSamples + 1);
-        // the segmentsPerCircle rule applies to CLOSED edges, which this helper's two
-        // distinct vertices deliberately do not build.
+        // An OPEN edge over an angular curve takes the LARGER of the two counts. This one
+        // spans the circle's whole domain, so the angular rule asks for segmentsPerCircle
+        // segments (33 points) where curveSamples alone would give 25 — the floor that
+        // used to make a split rim coarser than its unsplit twin at high density.
         var circle = new Circle3d(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY, 2);
         var arcSamples = BRepTessellator.SampleEdge(EdgeOver(circle), 32, 24);
-        Assert.Equal(25, arcSamples.Count);
+        Assert.Equal(33, arcSamples.Count);
         foreach (var p in arcSamples)
             Assert.Equal(2.0, p.Length, 12);
+
+        // A SHORT arc keeps curveSamples, which is the monotone half of the rule: at the
+        // default density curveSamples is the finer of the two for anything under about a
+        // half turn, so nothing in the repository is sampled more coarsely than it was.
+        var quarter = EdgeOver(new CurveSegment(circle, 0, Math.PI / 2));
+        Assert.Equal(25, BRepTessellator.SampleEdge(quarter, 32, 24).Count);
+
+        // And the defect the rule removes is a FLOOR rather than a coarseness: without the
+        // angular half a split rim carried the SAME count at every density, so raising
+        // segmentsPerCircle refined the grid around it and never the rim itself.
+        Assert.Equal(25, BRepTessellator.SampleEdge(quarter, 32, 24).Count);
+        Assert.Equal(33, BRepTessellator.SampleEdge(quarter, 128, 24).Count);
+        Assert.Equal(65, BRepTessellator.SampleEdge(quarter, 256, 24).Count);
     }
 }
