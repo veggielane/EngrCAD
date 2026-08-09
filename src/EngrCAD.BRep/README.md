@@ -118,6 +118,16 @@ operations. Depends only on `EngrCAD.Core`.
   open curves use clamped knots + natural end conditions via a tridiagonal collocation
   solve (two points degrade to a degree-1 chord); closed curves use periodic knots with
   wrapped control points, so the seam is C2 by construction (cyclic system solved densely).
+  `NurbsSurface.InterpolatePoints(points)` is the tensor-product generalization (The NURBS
+  Book A9.4, global surface interpolation): chord-length parameters are computed along
+  every column and every row and AVERAGED per direction, so both directions share one
+  parameterization (the loft-crack rule — a per-line reparameterization would stop the fit
+  passing through the grid), then the surface is two passes of the curve's natural-end
+  cubic (interpolate each column in u, then the resulting control rows in v). The
+  collocation matrix is identical for every line in a direction, so it is built once and
+  re-solved per line; a direction with two points drops to a straight degree-1 segment.
+  The fit reproduces every input point to round-off; periodic grids and least-squares
+  approximation (a coarser net than the data) are not yet supported.
 - **2D curves** (`Curve2d`): `Line2d`, `Arc2d`, `BezierCurve2d`, `NurbsCurve2d` — the
   sketch-plane siblings of the 3D family. Two deliberate divergences from `Curve3d`:
   `DerivativeAt`/`SecondDerivativeAt` are **abstract**, because every 2D curve here is

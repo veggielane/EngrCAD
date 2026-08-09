@@ -2547,6 +2547,29 @@ is checked by the property it must have — left–right SYMMETRY, which a wrong
   multiplicity-1 knot leaves exactly 3 nonzero basis functions); the closed case uses a
   periodic knot vector with wrapped control points, giving a C2 seam by construction.
   Two points degrade to a degree-1 chord.
+- **Surface fitting is the tensor-product generalization, and the shared parameterization
+  IS the design** (`NurbsSurface.InterpolatePoints` / `Approximate`, The NURBS Book §9.2/§9.4;
+  the approximation half of `GeomAPI_PointsToBSpline`, curve fitting having existed). Both
+  compute chord-length parameters along every column and every row and AVERAGE them per
+  direction (eqn 9.7), so the two directions share ONE parameterization — the loft-crack
+  rule stated for a grid rather than a strip: a per-line reparameterization would put every
+  column on its own v mapping and the fit would no longer pass through the grid. The surface
+  is then SEPARABLE — interpolate/fit each column in u, then the resulting control rows in v
+  (A9.4/A9.7) — so no 2D surface solve is needed, and because the parameters and knots are
+  shared, each direction's collocation or normal-equations matrix is built and factored ONCE
+  and re-solved per line. Interpolation reuses the curve's natural-end cubic verbatim (two
+  points degrade to a straight segment); approximation FIXES the two endpoints of every 1-D
+  fit — so the four corners interpolate their corner points and the boundary curves fit the
+  boundary rows — and solves the interior control points from `NᵀN·P = R`, a small symmetric
+  banded SPD system carried by a dense Cholesky (a fit's control count is small by design, so
+  the CSR assembly of a general sparse solver buys nothing). **The oracles are exact rather
+  than convergence bands, which is what a fit lets you have**: interpolation passes through
+  every grid point to round-off and a coplanar grid stays exactly planar (control points are
+  affine combinations of coplanar data); approximation reproduces every grid point to
+  round-off at the full control count (a determined system has zero residual) and — because
+  least squares is LINEAR in the data — a coplanar grid stays exactly planar however coarse
+  the net, since an affine relation among the coordinates survives the fit. Nothing downstream
+  consumes surface fits yet; periodic grids are the named gap.
 
 ### Where the 2D curve family meets the sketch and the profile
 

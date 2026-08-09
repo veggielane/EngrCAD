@@ -1761,15 +1761,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   face REGIONS. The B-Rep boolean now HAS the planar half of that machinery
   (`CoplanarFaces` — same-plane recognition, area-overlap sampling, normal-agreement
   classification), so a planar *glue* is within reach; curved overlaps still are not.
-- [ ] Surface interpolation + least-squares approximation (`GeomAPI_PointsToBSpline`
-  proper; curve interpolation exists). Assessed (task #11): the interpolation half is
-  the tensor-product generalization of `NurbsCurve.InterpolatePoints` — chord-length
-  parameters per row/column averaged, then one tridiagonal solve per row and per
-  column of the control grid (The NURBS Book A9.1/9.2, global surface interpolation);
-  `BSplineBasis` and the curve solver are in place, so this is a well-bounded medium
-  item with exact pass-through tests. Least squares wants
-  `Core.Solvers.SparseCholesky` over the normal equations — also in place. Nothing
-  downstream consumes surface fits yet, which is why it stayed behind the STEP items.
 - [ ] Ray-parity B-Rep point classifier (drop the `MeshSdf` bridge in booleans).
   Assessed (task #11): exact ray∩surface exists for planes/quadrics but not for
   trimmed NURBS/swept faces (needs a surface-ray marching with the same rigor as
