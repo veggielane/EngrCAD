@@ -513,17 +513,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   ask it for. That is a post-processing vocabulary (`ElasticLaw.ToMaterialFrame(stress)` plus
   a `FailureCriterion` with its allowables) rather than a solver change, and it is the more
   valuable of the two.
-- [ ] **FEA: an anisotropic region's thermal CONDUCTIVITY is still a scalar.** `ElasticLaw`
-  carries directional stiffness and directional expansion, but `ThermalElement.Conductivity`
-  reads `Material.ThermalConductivity`, so a carbon laminate conducts isotropically in a
-  conduction solve while straining orthotropically in a structural one — the two halves of
-  one part disagreeing about what it is made of. The fix has the same shape as the elastic
-  one and is much smaller (a 3x3 conductivity tensor rotated once at construction, and the
-  element integrand becomes `grad N_a · k · grad N_b` instead of `k · grad N_a · grad N_b`),
-  but it wants a decision first: a *thermal* law is a different object from an elastic one
-  and putting both on `ElasticLaw` would make the name a lie, while a second per-region
-  dictionary is a second place a frame can be stated inconsistently. Probably one
-  `MaterialLaw` carrying both, with `ElasticLaw` as its elastic half.
 - [ ] **FEA: ADAPTIVE refinement, now that there is something to refine against.**
   `StructuralResults.ErrorEstimate` gives a per-element energy-norm error (design.md §3i),
   which is exactly the map an adaptive loop consumes — and the loop itself is the thing
@@ -721,9 +710,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
     than a change to it. Radiation is the more commonly wanted;
     `sigma·epsilon·(T⁴ − Tsurr⁴)` linearised about the current temperature reuses the
     convection matrix's assembly exactly.
-  - [ ] **Anisotropic conductivity** — a `k` tensor with a material frame, the thermal
-    twin of the orthotropic-elasticity item. `ThermalElement.Conductivity` takes a scalar
-    and would need the 3×3 form; everything above it is unchanged.
   - [ ] **Two-way coupling** (deformation feeding back into conduction) is a staggered or
     monolithic solver, not an extension of the one-way path. Filed for completeness; the
     one-way direction covers thermal stress, which is what is usually wanted.

@@ -162,6 +162,60 @@ The magnitude is worth stating: on a two-material bar carrying 5000 and 1250 mW/
 value an interface node can report is wrong by 75% to 225% for one of the two materials, while
 `NodalFluxIn` is exact. `StructuralResults.NodalStressIn` is the same rule for the same reason.
 
+### A directional conductor
+
+A carbon laminate conducts well along its fibres and poorly across them, so `k` is a tensor, not
+a scalar. `ConductivityLaw` states one — isotropic, orthotropic or fully anisotropic — with a
+material frame, and `ThermalModel.SetConductivity` sets it per region. It is the thermal twin of
+[`ElasticLaw`](fea-structural.md): the same part strains orthotropically in a structural solve,
+so it must conduct orthotropically here, and the frame is a property of how the stuff was laid
+into *this part* rather than of the stuff, which is why the law sits beside `Material` rather
+than inside it. It is a separate type from `ElasticLaw` on purpose — a laminate's conduction axes
+need not be its stiffness axes, so one object carrying both would make the name a claim it cannot
+keep.
+
+```csharp run:fea-thermal-directional
+// A laminate bar whose fibres run at 30 degrees to its long axis. The carrier states only
+// density and name; the conductivity is the LAW.
+var bar = Shape.Box(60, 30, 10);
+var part = new Part("laminate", bar);
+// Refine so the bar has INTERIOR nodes: the field below is prescribed on the whole boundary,
+// so the interior is what is actually solved for.
+var tets = TetMesher.Mesh(part.GetMesh(), new TetMeshOptions { RefineQuality = true, MaxElementSize = 5 });
+var mesh = AnalysisMesh.Of(tets);
+
+var carrier = new Material("carbon UD carrier", 135_000, 0.30, 1.6e-9);
+double angle = 30 * Math.PI / 180;
+var fibre = Frame3d.FromXY(
+    Vector3d.Zero, new Vector3d(Math.Cos(angle), Math.Sin(angle), 0), Vector3d.UnitY);
+var model = new ThermalModel(mesh, carrier);
+model.SetConductivity(0, ConductivityLaw.Orthotropic(fibre, 40, 5, 12));   // kx, ky, kz
+
+// A uniform temperature gradient of 2 K/mm along x on the whole boundary. The field is then
+// exactly linear, so the flux is a constant vector any element reports.
+const double gradient = 2.0;
+foreach (int node in model.NodesOn(Facets.All))
+    model.TemperatureNode(node, gradient * mesh.Position(node).X);
+
+var results = ThermalSolver.Solve(model);
+var q = results.ElementFlux(0);
+
+Console.WriteLine($"axial conductivity  {-q.X / gradient:F2} mW/(mm.K)   (40 along fibre, 5 across)");
+Console.WriteLine($"cross flux q_y      {q.Y:F2} mW/mm^2   heat carried ACROSS the gradient");
+Console.WriteLine(Math.Abs(q.Y) > 1e-3
+    ? "the flux is NOT parallel to the gradient -- cross-conduction, which no isotropic k can do"
+    : "the flux is parallel to the gradient");
+```
+
+The effective axial conductivity is `kx·cos²θ + ky·sin²θ` — here 40·¾ + 5·¼ = **31.25**, between
+the fibre value 40 and the transverse value 5. And the flux carries a component **across** the
+imposed gradient (the cross-conduction term), which is the one behaviour a scalar `k` cannot
+produce: an isotropic conductor's flux is always parallel to its gradient. An anisotropic
+conductor's is not, off-axis. The isotropic path is untouched — a model that states no law
+conducts exactly as it always did, bit for bit — and a non-symmetric or non-positive-definite
+tensor is refused by name, because a conductivity that let heat flow up its own gradient
+somewhere is unphysical.
+
 ### Superconvergent flux recovery, and the error estimate
 
 `q = -k·grad T` is one derivative down from the solved temperature, exactly as stress is one

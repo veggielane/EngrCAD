@@ -43,6 +43,7 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `AnalysisBody` | One body of a multi-material model: a closed surface **and what it is made of** — the list `TetMesher.Mesh` and `StructuralModel.For` / `ThermalModel.For` BOTH read, so a region id is never restated |
 | `Material` / `Materials` | **Lives in `EngrCAD.Core`**, not here — see below |
 | `ElasticLaw` | The constitutive law: isotropic (from a `Material`), transversely isotropic, orthotropic or fully anisotropic, with a material FRAME applied once at construction — the directional half `Material` deliberately cannot carry |
+| `ConductivityLaw` | The thermal twin of `ElasticLaw`: an isotropic, orthotropic or fully anisotropic conductivity TENSOR with a material frame, so a laminate conducts along its fibres — set per region with `ThermalModel.SetConductivity` |
 | `StructuralModel` / `Facets` / `Dof` | The model: materials per region, supports and loads over facet selectors |
 | `StructuralSolver` / `StructuralSolveOptions` / `FeaSolveReport` | Assembly, restraint checking, the solve, and what it did |
 | `StructuralResults` / `NodalAveraging` / `StressRecovery` | Displacements, strain, stress, von Mises, publishing and `.vtu` |
@@ -73,7 +74,7 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `DensityIsoSurface` | Internal: marching TETRAHEDRA over the nodal density field — exact for the piecewise-linear field, and deliberately not `Sdf` + Surface Nets |
 | `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent MASS, GEOMETRIC stiffness, consistent loads, quadrature |
 | `FeaAssembly` | Internal: the DOF index map, whole-model stiffness, MASS and geometric-stiffness assembly, reduction and weighted matrix sums — shared so the modal, buckling and transient solvers cannot build different `K` or `M` |
-| `ThermalElement` / `TriangleQuadrature` | Internal: conductivity, capacity, convection surface matrix, expansion load |
+| `ThermalElement` / `TriangleQuadrature` | Internal: conductivity (scalar or tensor), capacity, convection surface matrix, expansion load |
 | `LanczosEigen` | Internal: shift-and-invert Lanczos with deflation, locking and restarts — the inner-product METRIC is a parameter separate from the right-hand matrix, which is what lets one implementation serve vibration (metric M) and buckling (metric K) |
 | `RigidBodyModes` / `SmallSymmetricEigen` | Internal: the surviving-rigid-motion computation the static solver REFUSES on and the modal solver REPORTS, plus the small dense eigensolver both need |
 | `FeaGuards` | Internal: the element-Jacobian guard and the material-density guard EVERY solver asks, rather than each restating |
@@ -360,6 +361,64 @@ angles — is several regions or a homogenised law the caller supplies, not some
 computes; and failure criteria for directional materials (Tsai-Wu, Hashin, maximum strain)
 are a post-processing vocabulary that does not exist here, so `MaxVonMises` on a composite
 part is a number with no engineering meaning.
+
+## Directional conductivity: `ConductivityLaw`
+
+The other half of the same part disagreeing about what it is made of. `ElasticLaw` makes a
+carbon laminate strain orthotropically, but a conduction solve read its scalar
+`Material.ThermalConductivity` and had it conduct isotropically. `ConductivityLaw` closes
+that: a symmetric positive-definite 3x3 conductivity TENSOR with a material frame, set per
+region, so the heat flux is `q = -K·grad T` and a laminate conducts along its fibres and
+poorly across them.
+
+```csharp
+var alongFibre = ConductivityLaw.Orthotropic(fibreFrame, 40, 5, 12);   // kx, ky, kz
+var model = new ThermalModel(tets, carrier);
+model.SetConductivity(0, alongFibre);
+```
+
+**It is a SEPARATE type beside `ElasticLaw`, not a combined `MaterialLaw`, and that was the
+repo owner's call.** The two laws share the FRAME concept but not a frame VALUE — a
+laminate's conduction axes need not be its stiffness axes — and one object carrying both
+would make the name a claim it cannot keep. It sits beside `Material` for the identical
+reason `ElasticLaw` does: a conductivity needs a frame, and a frame is how the stuff was laid
+into *this part*, not a property of the stuff, so it is per-region analysis data.
+
+The design mirrors `ElasticLaw`'s four decisions, and two simplify.
+
+- **The frame is applied ONCE**: K is stored rotated into global coordinates by a rank-2
+  tensor CONGRUENCE `K_global = R·K·Rᵀ` — simpler than the elastic 6x6 Voigt rotation, because
+  a conductivity has no engineering-shear convention to trap the derivation — and
+  `ThermalModel` resolves and caches the law per REGION, so the rotation is paid once per
+  model.
+- **An isotropic model is untouched, bit for bit**: `ConductivityLaw.IsIsotropic` (only
+  `FromMaterial` sets it) makes every consumer — the conductance assembly, the element flux,
+  the averaged and superconvergent recoveries, the error estimate — branch to the exact scalar
+  arithmetic it used before. Asserted as a bitwise element comparison and a bit-identical whole
+  solve; the general tensor path is *separately* asserted to agree with the scalar form to
+  round-off on a `k·I` tensor.
+- **Positive definiteness is checked by a Cholesky** naming the leading minor that failed
+  (heat flowing up its own gradient is unphysical), and an asymmetric input is refused by name
+  (Onsager reciprocity makes a conductivity tensor symmetric, so it is a transcription error).
+  `FromMaterial` deliberately does NOT check — a zero-conductivity document material is legal —
+  so the zero-conductivity refusal stays at the solve, where it names the property.
+
+Verified against closed forms, exactly, because a uniform gradient prescribed on a bar's whole
+boundary is a constant-gradient (linear) field in the linear-tet space: the off-axis effective
+conductivity `kx·cos²θ + ky·sin²θ` is reproduced to round-off (40 / 31.25 / 22.5 / 5 at
+0/30/45/90°), and the **cross-conduction** — the flux is not parallel to the gradient off-axis
+(q_y = −37.9 / −43.8 at 30/45°, and exactly zero on-axis) — is the one behaviour no isotropic
+law can produce and the one a transposed congruence would lose. The oracle rotates the gradient
+into the material frame, applies the diagonal K there and rotates the flux back, sharing no line
+with the production congruence. A manufactured-solution study with a fully off-diagonal rotated
+tensor keeps the convergence orders unchanged (linear 2.01/1.01, quadratic 3.04/2.02 in L2 and
+energy), a constant directional conductivity changing the field and not the element order. The
+flux paths carry the tensor too — the averaged nodal flux, the superconvergent recovery, and the
+`ErrorEstimate`'s complementary energy norm `q·K⁻¹·q` — so a directional plot and a directional
+error estimate are the same physics as the solve.
+
+Not covered, stated: temperature-dependent conductivity (an outer nonlinear iteration, not a
+change to this) and a combined thermal-structural `MaterialLaw` (declined by name above).
 
 ## Stress recovery, and the error estimate that comes with it
 
