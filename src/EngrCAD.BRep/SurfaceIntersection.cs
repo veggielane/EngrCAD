@@ -1583,7 +1583,7 @@ public static class SurfaceIntersection
         double step = region.Size[region.LongestAxis] / settings.StepDivisor;
         var state = new MarchState(a, da, b, db, step, settings);
 
-        var seeds = FindSeeds(state, settings.SeedResolution);
+        var seeds = FindSeeds(state, settings.SeedResolution, out bool anisotropic);
         var curves = new List<Curve3d>();
         var traced = new List<Vector3d>();
 
@@ -1593,7 +1593,7 @@ public static class SurfaceIntersection
             if (traced.Any(q => q.DistanceSquaredTo(p) < settings.SeedDedupeStepsSquared * step * step))
                 continue;
 
-            var forward = Trace(state, seed, +1, out bool closed);
+            var forward = Trace(state, seed, +1, anisotropic, out bool closed);
             List<Vector3d> points;
             if (closed)
             {
@@ -1601,7 +1601,7 @@ public static class SurfaceIntersection
             }
             else
             {
-                var backward = Trace(state, seed, -1, out _);
+                var backward = Trace(state, seed, -1, anisotropic, out _);
                 backward.Reverse();
                 backward.RemoveAt(backward.Count - 1); // shared seed point
                 points = [.. backward, .. forward];
@@ -1640,14 +1640,26 @@ public static class SurfaceIntersection
     /// a sixth of a millimetre wide. Measured against a Ø6 cross-drill, the isotropic grid
     /// finds ZERO of the branches the drill cuts; the anisotropic pass finds them.</para>
     /// </summary>
-    private static List<double[]> FindSeeds(MarchState state, int resolution)
+    /// <summary>
+    /// <paramref name="anisotropic"/> reports whether the PAIR earned the second pass —
+    /// which is also the condition under which <see cref="TryLandOnDomain"/> runs, since
+    /// a surface whose parameter directions differ in model length by orders of magnitude
+    /// is exactly a surface the region-scaled march step cannot resolve. It is a property
+    /// of the pair rather than of the individual seed: an anisotropic band's branches are
+    /// all traced with the same step and all stop the same way, whichever grid found
+    /// them, so scoping by seed would leave the isotropic pass's own branches on that band
+    /// ending strictly inside the face (measured: a cross-drilled M8 flank band still
+    /// refused with six such branches).
+    /// </summary>
+    private static List<double[]> FindSeeds(MarchState state, int resolution, out bool anisotropic)
     {
         var seeds = new List<double[]>();
         CollectSeeds(state, resolution, resolution, resolution, resolution, isotropic: true, seeds);
 
         var (nuA, nvA) = SeedCounts(state.A, state.Da, resolution, state.Settings.SeedAnisotropy);
         var (nuB, nvB) = SeedCounts(state.B, state.Db, resolution, state.Settings.SeedAnisotropy);
-        if (nuA != resolution || nvA != resolution || nuB != resolution || nvB != resolution)
+        anisotropic = nuA != resolution || nvA != resolution || nuB != resolution || nvB != resolution;
+        if (anisotropic)
             CollectSeeds(state, nuA, nvA, nuB, nvB, isotropic: false, seeds);
         return seeds;
     }
@@ -1802,11 +1814,14 @@ public static class SurfaceIntersection
                 Eval(state.B, state.Db, parameters[2], parameters[3])).Length < settings.SeedAcceptance;
     }
 
-    private static List<Vector3d> Trace(MarchState state, double[] seed, int direction, out bool closed)
+    private static List<Vector3d> Trace(
+        MarchState state, double[] seed, int direction, bool landOnDomain, out bool closed)
     {
         var settings = state.Settings;
         closed = false;
         var parameters = (double[])seed.Clone();
+        var previous = (double[])seed.Clone();
+        var predicted = new double[4];
         var points = new List<Vector3d>();
         var start = Eval(state.A, state.Da, parameters[0], parameters[1]);
         points.Add(start);
@@ -1826,14 +1841,27 @@ public static class SurfaceIntersection
                 tangent *= direction;
             previousTangent = tangent;
 
+            parameters.CopyTo(previous, 0);
             var target = p + tangent * state.Step;
             if (!Correct(state, parameters, target, tangent))
+            {
+                // Eval CLAMPS a non-periodic parameter, so a step past a rail evaluates
+                // the rail's own point, the partials across it collapse to zero, and the
+                // corrector fails on a singular pivot — the branch therefore stops one
+                // step short WITHOUT ever reaching the domain test below. Where it WOULD
+                // have gone is the step's own linearization at the last good point.
+                PredictStep(state, previous, tangent * state.Step, predicted);
+                Land(previous, predicted, p);
                 break;
+            }
             if (Outside(parameters[0], state.Da.U, state.Da.PeriodicU, settings.DomainSlack) ||
                 Outside(parameters[1], state.Da.V, state.Da.PeriodicV, settings.DomainSlack) ||
                 Outside(parameters[2], state.Db.U, state.Db.PeriodicU, settings.DomainSlack) ||
                 Outside(parameters[3], state.Db.V, state.Db.PeriodicV, settings.DomainSlack))
+            {
+                Land(previous, parameters, p);
                 break;
+            }
 
             var next = Eval(state.A, state.Da, parameters[0], parameters[1]);
             if (next.DistanceTo(p) > settings.BranchJumpSteps * state.Step)
@@ -1847,6 +1875,170 @@ public static class SurfaceIntersection
             }
         }
         return points;
+
+        void Land(double[] inside, double[] outside, in Vector3d from)
+        {
+            if (!landOnDomain)
+                return;
+            if (TryLandOnDomain(state, inside, outside, out var landing) &&
+                landing.DistanceTo(from) > state.Settings.CorrectorAcceptance)
+                points.Add(landing);
+        }
+    }
+
+    /// <summary>
+    /// First-order image of a model-space displacement in each surface's own parameters:
+    /// the least-squares solution of [∂P/∂u ∂P/∂v]·(du, dv) = w, which is EXACT for a
+    /// displacement lying in the tangent plane (the marching tangent does, by
+    /// construction). It exists to say where a REFUSED step was heading, so it is only
+    /// ever a seed — <see cref="TryLandOnDomain"/> re-solves the landing exactly.
+    /// </summary>
+    private static void PredictStep(
+        MarchState state, double[] parameters, in Vector3d displacement, double[] predicted)
+    {
+        var settings = state.Settings;
+        var w = displacement; // copy: `in` parameters cannot be captured by local functions
+        var (jau, jav) = Partials(state.A, state.Da, parameters[0], parameters[1], settings);
+        var (jbu, jbv) = Partials(state.B, state.Db, parameters[2], parameters[3], settings);
+        parameters.CopyTo(predicted, 0);
+        Advance(jau, jav, ref predicted[0], ref predicted[1]);
+        Advance(jbu, jbv, ref predicted[2], ref predicted[3]);
+
+        void Advance(in Vector3d du, in Vector3d dv, ref double u, ref double v)
+        {
+            double a = du.Dot(du), b = du.Dot(dv), c = dv.Dot(dv);
+            double determinant = a * c - b * b;
+            // Scale-free degeneracy guard: the Gram determinant is an AREA squared, so it
+            // is compared against the product of the columns' own magnitudes.
+            if (!(Math.Abs(determinant) > a * c * 1e-12))
+                return;
+            double p = du.Dot(w), q = dv.Dot(w);
+            u += (p * c - q * b) / determinant;
+            v += (q * a - p * b) / determinant;
+        }
+    }
+
+    /// <summary>
+    /// The EXACT point at which a branch leaves a BOUNDED parameter domain — the tracer's
+    /// own termination, rather than a snap applied after the fact by a consumer.
+    ///
+    /// <para><b>Why an open branch stops short at all:</b> the march breaks its step AFTER
+    /// the corrector has left the domain, so the last accepted point is up to one whole
+    /// step inside the rail the branch was running into. On ordinary geometry that step is
+    /// small beside the surface and the shortfall is cosmetic. On the surfaces the
+    /// anisotropic seed pass exists for it is not: an M8 crest flat is 0.156 mm tall,
+    /// while the region-scaled step over a 24 mm query box is 0.16 mm — ONE step crosses
+    /// the whole band — so a branch can stop half a band short of BOTH rails
+    /// (measured: v spans [0.481, 0.819] of a band whose rails are v = 0 and v = 1).
+    /// A curve that reaches neither rail cannot split the face it lies on.</para>
+    ///
+    /// <para><b>The solve is the tracer's own Newton with one coordinate PINNED</b> at the
+    /// boundary value: three unknowns against the three components of S_a − S_b = 0, with
+    /// the fourth row of <see cref="Solve4"/>'s system reading <c>delta[k] = 0</c> where
+    /// <see cref="Correct"/> puts its plane constraint. The pinned coordinate therefore
+    /// keeps its boundary value BIT for bit, which is what puts the landing ON the rail
+    /// rather than near it. The boundary chosen is the FIRST one the step crosses, so a
+    /// step leaving through two at once lands on the one it met first.</para>
+    ///
+    /// <para><b>Scoped to pairs that earned the anisotropic seed pass</b>, and that is the
+    /// same additive contract the second pass itself carries rather than a convenience:
+    /// the condition that makes a branch invisible to the isotropic grid — a surface whose
+    /// two parameter directions differ in MODEL length by orders of magnitude — is exactly
+    /// the condition that makes the region-scaled march step exceed the surface's own
+    /// width. Every pair the second pass leaves alone is traced and terminated by the
+    /// rules it always was, bit for bit. The scope is the PAIR and not the individual
+    /// seed, because the step is a property of the pair: scoping by seed left the
+    /// isotropic grid's own branches on an anisotropic band ending strictly inside the
+    /// face, and a cross-drilled M8 flank band still refused with six of them.</para>
+    /// </summary>
+    private static bool TryLandOnDomain(
+        MarchState state, double[] inside, double[] outside, out Vector3d landing)
+    {
+        landing = default;
+        var settings = state.Settings;
+        ReadOnlySpan<Interval> intervals =
+        [
+            state.Da.U, state.Da.V, state.Db.U, state.Db.V,
+        ];
+        ReadOnlySpan<bool> periodic =
+        [
+            state.Da.PeriodicU, state.Da.PeriodicV, state.Db.PeriodicU, state.Db.PeriodicV,
+        ];
+
+        // The first boundary the step crosses, as a fraction of the step.
+        int pinned = -1;
+        double pinnedValue = 0, firstCrossing = double.PositiveInfinity;
+        for (int k = 0; k < 4; k++)
+        {
+            if (periodic[k])
+                continue;
+            double bound = outside[k] > intervals[k].End ? intervals[k].End
+                : outside[k] < intervals[k].Start ? intervals[k].Start
+                : double.NaN;
+            if (double.IsNaN(bound))
+                continue;
+            double travel = outside[k] - inside[k];
+            // Exact-zero guard on a division: a coordinate that did not move cannot have
+            // crossed anything, whatever the endpoint comparison says about round-off.
+            if (travel == 0)
+                continue;
+            double fraction = (bound - inside[k]) / travel;
+            if (fraction < 0 || fraction > 1 || fraction >= firstCrossing)
+                continue;
+            firstCrossing = fraction;
+            pinned = k;
+            pinnedValue = bound;
+        }
+        if (pinned < 0)
+            return false;
+
+        var x = new double[4];
+        for (int k = 0; k < 4; k++)
+            x[k] = inside[k] + firstCrossing * (outside[k] - inside[k]);
+        x[pinned] = pinnedValue;
+
+        for (int iteration = 0; iteration < settings.CorrectorIterations; iteration++)
+        {
+            var pa = Eval(state.A, state.Da, x[0], x[1]);
+            var pb = Eval(state.B, state.Db, x[2], x[3]);
+            var f = pa - pb;
+            if (f.Length < settings.NewtonResidual)
+                break;
+
+            var (jau, jav) = Partials(state.A, state.Da, x[0], x[1], settings);
+            var (jbu, jbv) = Partials(state.B, state.Db, x[2], x[3], settings);
+            var m = new double[4, 4]
+            {
+                { jau.X, jav.X, -jbu.X, -jbv.X },
+                { jau.Y, jav.Y, -jbu.Y, -jbv.Y },
+                { jau.Z, jav.Z, -jbu.Z, -jbv.Z },
+                { 0, 0, 0, 0 },
+            };
+            m[3, pinned] = 1;
+            var rhs = new double[] { -f.X, -f.Y, -f.Z, 0 };
+            if (!Solve4(m, rhs, settings.PivotFloor, out var delta))
+                return false;
+            for (int k = 0; k < 4; k++)
+                x[k] += delta[k];
+            x[pinned] = pinnedValue; // the pin is exact, never accumulated
+        }
+
+        var point = Eval(state.A, state.Da, x[0], x[1]);
+        if ((point - Eval(state.B, state.Db, x[2], x[3])).Length >= settings.CorrectorAcceptance)
+            return false;
+        // The Newton may leave through a DIFFERENT boundary while chasing this one; and a
+        // landing further than the step that produced it is an excursion, not a terminus.
+        for (int k = 0; k < 4; k++)
+        {
+            if (Outside(x[k], intervals[k], periodic[k], settings.DomainSlack))
+                return false;
+        }
+        if (point.DistanceTo(Eval(state.A, state.Da, inside[0], inside[1])) >
+            settings.BranchJumpSteps * state.Step)
+            return false;
+
+        landing = point;
+        return true;
     }
 
     /// <summary>Newton step onto both surfaces, constrained to the plane through the predicted point.</summary>

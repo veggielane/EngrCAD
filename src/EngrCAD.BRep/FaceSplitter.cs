@@ -570,7 +570,9 @@ public static class FaceSplitter
                         $"Open splitting curves must start and end outside the face: a {curve.GetType().Name} " +
                         $"on a {surface.GetType().Name} ends at {curve.PointAt(endParam)} (uv {uv}), " +
                         $"strictly inside the face's {face.Loops.Count} loop(s), with " +
-                        $"{crossings.Count} boundary crossing(s) found.");
+                        $"{crossings.Count} boundary crossing(s) found at " +
+                        $"[{string.Join(", ", crossings.Select(c => c.CurveParam.ToString("R")))}] " +
+                        $"over the curve's domain [{curve.Domain.Start:R}, {curve.Domain.End:R}].");
             }
         }
 
