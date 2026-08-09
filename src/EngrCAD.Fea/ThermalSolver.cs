@@ -723,8 +723,13 @@ public static class ThermalSolver
             var nodes = mesh.Element(e);
             for (int i = 0; i < perElement; i++)
                 positions[i] = mesh.Position(nodes[i]);
+            // The region's conductivity LAW, not just its scalar: an isotropic law delegates to
+            // the scalar path bit-for-bit, so a model that states no directional law assembles
+            // exactly the matrix it always did. (ThermalModel resolves and caches the law per
+            // region, so the tensor rotation is paid once per region rather than once per
+            // element.)
             ThermalElement.Conductivity(
-                mesh.Order, positions, model.MaterialOf(e).ThermalConductivity, rule, ke);
+                mesh.Order, positions, model.ConductivityLawOf(e), rule, ke);
             AddSymmetric(builder, nodes, ke, perElement);
         }
 
@@ -1194,9 +1199,14 @@ public static class ThermalSolver
         var seen = new HashSet<string>();
         for (int e = 0; e < model.Mesh.ElementCount; e++)
         {
-            var material = model.MaterialOf(e);
-            if (material.ThermalConductivity > 0)
+            var law = model.ConductivityLawOf(e);
+            // An explicit directional law is positive definite BY CONSTRUCTION, so it always
+            // conducts; only a region relying on a zero-conductivity material's isotropic law
+            // is the refusal — which keeps the message, and the whole check, bit-identical for
+            // every model that states no directional law.
+            if (!law.IsIsotropic || law.IsotropicConductivity > 0)
                 continue;
+            var material = model.MaterialOf(e);
             if (seen.Add(material.Name))
                 offenders.Add($"'{material.Name}' (region {model.Mesh.RegionOf(e)})");
         }

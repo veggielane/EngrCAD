@@ -1042,6 +1042,57 @@ traps it found were in the TESTS rather than the solver, and all four are the sa
 a fixture or a manufactured field that quietly makes the measurement exact — which is why
 they are recorded in CLAUDE.md's numerical notes beside the geometry ones.
 
+### Directional conductivity is `ElasticLaw`'s thermal twin, beside `Material` for §3h's reason
+
+A conduction solve read `Material.ThermalConductivity`, a scalar, so a carbon laminate strained
+orthotropically in a structural solve (§3h) and conducted isotropically in a thermal one — the
+two halves of one part disagreeing about what it is made of. `ConductivityLaw` closes it: a
+symmetric positive-definite 3x3 conductivity TENSOR with a material frame, set per region with
+`ThermalModel.SetConductivity`, so the heat flux is `q = -K·grad T`.
+
+**The type boundary is §3h's, applied verbatim, and the SEPARATE-type decision was the repo
+owner's.** A conductivity needs a frame, a frame is a property of how the stuff was laid into
+*this part* rather than of the stuff, so it is per-region analysis data that composes with a
+`Material` rather than widening it — the density a modal solve integrates is still the density a
+BOM weighs the part with. And it is a distinct type from `ElasticLaw`, not a combined
+`MaterialLaw` carrying both halves: the two laws share the frame CONCEPT but not a frame VALUE (a
+laminate's conduction axes need not be its stiffness axes), so one object carrying both would
+make the name a claim it cannot keep, while a second per-region dictionary that a
+`SetConductivity` fills is exactly the shape `SetElasticity` already established.
+
+**The rotation is SIMPLER than the elastic one, and that is the whole of what differs.** A
+conductivity is an ordinary rank-2 tensor relating two vectors (flux and gradient), each of
+which transforms by R, so the tensor transforms by the congruence `K_global = R·K·Rᵀ` — no Voigt
+vector, no engineering-shear convention, none of the trap the elastic 6x6 Bond transformation
+carries. It is stored rotated into global coordinates and `ThermalModel` caches the resolved law
+per REGION, so the rotation is paid once per model, the same "invert the basis once" call
+`ElasticLaw` makes.
+
+**The isotropic path is untouched, bit for bit, and everything reads the law now.** Every
+consumer branches on `ConductivityLaw.IsIsotropic` (only `FromMaterial` sets it): the conductance
+assembly delegates to the scalar `k·∫grad N·grad N`, the element flux to `grad·-k`, the averaged
+and superconvergent recoveries and the `ErrorEstimate`'s complementary energy norm `q·K⁻¹·q` to
+their `|q|²/k` forms — so an isotropic model assembles and post-processes exactly the arithmetic
+it always did (asserted as a bitwise element comparison and a bit-identical whole solve; the
+general tensor path is *separately* asserted to agree with the scalar form to round-off on a
+`k·I` tensor). Positive definiteness is a Cholesky naming the failing minor and symmetry is
+refused by name (Onsager reciprocity), while `FromMaterial` deliberately does not check — a
+zero-conductivity document material is legal — so that refusal stays at the solve where it names
+the property.
+
+**Verified against closed forms, exactly, and the oracle shares no line with the production
+congruence.** A uniform gradient prescribed on a bar's whole boundary is a constant-gradient
+field in the linear-tet space, so the off-axis effective conductivity `kx·cos²θ + ky·sin²θ` is
+reproduced to round-off (40 / 31.25 / 22.5 / 5 at 0/30/45/90°), and the CROSS-CONDUCTION — the
+flux carries a component across the imposed gradient (q_y = −37.9 / −43.8 at 30/45°, exactly zero
+on-axis) — is the one behaviour no isotropic law can produce and the one a transposed congruence
+would lose while leaving the axial conductivity intact, the exact thermal analogue of §3h's
+shear-extension coupling. The oracle rotates the gradient into the material frame, applies the
+diagonal K, and rotates the flux back — three-by-three matrices sharing nothing with `R·K·Rᵀ` but
+the physics. A manufactured-solution study with a fully off-diagonal rotated tensor keeps the
+orders unchanged (linear 2.01/1.01, quadratic 3.04/2.02 in L2 and energy) — a constant
+directional conductivity changes the field, not the element order.
+
 ## 3e. Modal analysis (`EngrCAD.Fea`)
 
 `K·phi = lambda·M·phi` over the same `AnalysisMesh`, materials and supports a

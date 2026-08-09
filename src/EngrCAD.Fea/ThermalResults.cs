@@ -170,12 +170,13 @@ public sealed class ThermalResults
         return GradientAt(element, 0.25, 0.25, 0.25);
     }
 
-    /// <summary>The heat flux <c>q = -k·grad T</c> at the centroid of one element — the
-    /// per-element value, before any averaging.</summary>
+    /// <summary>The heat flux <c>q = -K·grad T</c> at the centroid of one element — the
+    /// per-element value, before any averaging. Directional where the element's region carries a
+    /// conductivity law, and bit-for-bit <c>-k·grad T</c> where it does not.</summary>
     public Vector3d ElementFlux(int element)
     {
         RequireElement(element);
-        return ElementGradient(element) * -Model.MaterialOf(element).ThermalConductivity;
+        return Model.ConductivityLawOf(element).Flux(ElementGradient(element));
     }
 
     /// <summary>
@@ -328,7 +329,7 @@ public sealed class ThermalResults
                 positions[i] = Mesh.Position(nodes[i]);
                 values[i] = _temperature[nodes[i]];
             }
-            double conductivity = Model.MaterialOf(e).ThermalConductivity;
+            var law = Model.ConductivityLawOf(e);
             int region = perRegion ? Mesh.RegionOf(e) : 0;
             double weight = Averaging == NodalAveraging.VolumeWeighted ? Mesh.ElementVolume(e) : 1.0;
             if (!(weight > 0))
@@ -341,7 +342,11 @@ public sealed class ThermalResults
                     Mesh.Order, positions[..perElement], values[..perElement], r, s, t,
                     out var gradient);
                 int target = perRegion ? Mesh.RegionSlot(nodes[i], region) : nodes[i];
-                accumulated[target] += gradient * (-conductivity * weight);
+                // Bit-for-bit the incumbent arithmetic for an isotropic law; the tensor path
+                // takes the flux q = -K·grad first, then applies the averaging weight.
+                accumulated[target] += law.IsIsotropic
+                    ? gradient * (-law.IsotropicConductivity * weight)
+                    : law.Flux(gradient) * weight;
                 weights[target] += weight;
             }
         }
@@ -391,7 +396,7 @@ public sealed class ThermalResults
                 positions[i] = Mesh.Position(nodes[i]);
                 temps[i] = _temperature[nodes[i]];
             }
-            double conductivity = Model.MaterialOf(e).ThermalConductivity;
+            var law = Model.ConductivityLawOf(e);
             // An element reads its OWN material's recovered values, never the node-indexed
             // blend: at an interface element the blend carries the other material's flux, and
             // the estimator would book that modelling jump as this element's error.
@@ -413,7 +418,7 @@ public sealed class ThermalResults
                 var gradT = Vector3d.Zero;
                 for (int i = 0; i < perElement; i++)
                     gradT += grad[i] * temps[i];
-                var fe = gradT * -conductivity;
+                var fe = law.Flux(gradT);
 
                 // The recovered flux INSIDE the element is its nodal values interpolated by the
                 // element's own shape functions, which is what makes the two fields comparable
@@ -427,9 +432,13 @@ public sealed class ThermalResults
                     smooth += value * shape[i];
                 }
 
+                // The complementary energy norm of a flux is q·K⁻¹·q — |q|²/k for an isotropic
+                // law (bit-for-bit the incumbent form) and the resistivity quadratic form for a
+                // directional one, so an anisotropic error estimate measures the flux difference
+                // in the same energy the physics stores it in.
                 var d = smooth - fe;
-                error += weight * d.LengthSquared / conductivity;
-                energy += weight * fe.LengthSquared / conductivity;
+                error += weight * law.FluxEnergy(d);
+                energy += weight * law.FluxEnergy(fe);
             }
 
             perElementError[e] = Math.Sqrt(Math.Max(0, error));
@@ -487,10 +496,10 @@ public sealed class ThermalResults
         {
             ThermalElement.GradientAt(
                 results.Mesh.Order, positions, dofs, r, s, t, out var gradient);
-            double factor = -results.Model.MaterialOf(element).ThermalConductivity;
-            value[0] = gradient.X * factor;
-            value[1] = gradient.Y * factor;
-            value[2] = gradient.Z * factor;
+            var q = results.Model.ConductivityLawOf(element).Flux(gradient);
+            value[0] = q.X;
+            value[1] = q.Y;
+            value[2] = q.Z;
         }
 
         public Vector3d Zero => Vector3d.Zero;

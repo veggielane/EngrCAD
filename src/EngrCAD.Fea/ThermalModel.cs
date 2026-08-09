@@ -42,6 +42,8 @@ public sealed class ThermalModel
     private readonly double[] _filmCoefficient;   // per facet, accumulated
     private readonly double[] _filmSupply;        // per facet, sum of h·T_inf
     private readonly Dictionary<int, Material> _materials = [];
+    private readonly Dictionary<int, ConductivityLaw> _conductivityLaws = [];
+    private Dictionary<int, ConductivityLaw>? _resolvedLaws;
     private readonly List<string> _conditions = [];
     private int _convectiveFacets;
 
@@ -109,16 +111,61 @@ public sealed class ThermalModel
     public IReadOnlyList<string> Conditions => _conditions;
 
     /// <summary>The material of one element, by its region id.</summary>
-    public Material MaterialOf(int element) =>
-        _materials.TryGetValue(Mesh.RegionOf(element), out var m) ? m : DefaultMaterial;
+    public Material MaterialOf(int element) => MaterialForRegion(Mesh.RegionOf(element));
+
+    private Material MaterialForRegion(int region) =>
+        _materials.TryGetValue(region, out var m) ? m : DefaultMaterial;
 
     /// <summary>Assigns a material to one region id (from multi-body meshing).</summary>
     public ThermalModel SetMaterial(int region, Material material)
     {
         ArgumentNullException.ThrowIfNull(material);
         _materials[region] = material;
+        // A region's default conductivity law is FromMaterial of its material, so changing the
+        // material staleness the resolved-law cache for any region that inherits it.
+        _resolvedLaws = null;
         _conditions.Add($"material '{material.Name}' on region {region}");
         return this;
+    }
+
+    /// <summary>
+    /// Assigns a directional conductivity law to one region id — the thermal twin of
+    /// <see cref="StructuralModel.SetElasticity"/>, and the whole API for anisotropic heat
+    /// conduction. A region with no law conducts isotropically at its
+    /// <see cref="Material.ThermalConductivity"/> (the law <see cref="ConductivityLaw.FromMaterial"/>
+    /// gives), so nothing about an isotropic model changes.
+    ///
+    /// <para>The law is stored ROTATED into global coordinates (see <see cref="ConductivityLaw"/>),
+    /// and resolved once per region, so an anisotropic element costs one tensor contraction more
+    /// than an isotropic one and nothing else.</para>
+    /// </summary>
+    public ThermalModel SetConductivity(int region, ConductivityLaw law)
+    {
+        ArgumentNullException.ThrowIfNull(law);
+        _conductivityLaws[region] = law;
+        _resolvedLaws = null;
+        _conditions.Add($"conductivity {law.Description} on region {region}");
+        return this;
+    }
+
+    /// <summary>
+    /// The conductivity law of one element — its region's explicit law if one was set, otherwise
+    /// the isotropic law its <see cref="Material.ThermalConductivity"/> states.
+    /// <para>Resolved lazily and cached per REGION, so the assembly and the flux passes pay one
+    /// tensor rotation per region rather than one per element.</para>
+    /// </summary>
+    public ConductivityLaw ConductivityLawOf(int element) => ResolvedLaw(Mesh.RegionOf(element));
+
+    private ConductivityLaw ResolvedLaw(int region)
+    {
+        _resolvedLaws ??= [];
+        if (_resolvedLaws.TryGetValue(region, out var law))
+            return law;
+        law = _conductivityLaws.TryGetValue(region, out var set)
+            ? set
+            : ConductivityLaw.FromMaterial(MaterialForRegion(region));
+        _resolvedLaws[region] = law;
+        return law;
     }
 
     /// <summary>Whether one node's temperature is prescribed (a Dirichlet node).</summary>

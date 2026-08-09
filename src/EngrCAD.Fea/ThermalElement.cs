@@ -174,6 +174,62 @@ internal static class ThermalElement
     }
 
     /// <summary>
+    /// The element conductivity matrix for a directional (tensor) law,
+    /// <c>K_ij = integral((grad N_i)ᵀ K (grad N_j) dV)</c>, row-major, n-by-n. Cleared on entry.
+    ///
+    /// <para><b>Branches on <see cref="ConductivityLaw.IsIsotropic"/> to the scalar overload,
+    /// bit for bit.</b> An isotropic law's conductance is exactly <c>k·integral(grad N · grad N)</c>,
+    /// which is what every incumbent model assembled — the split <c>TetElement.Stiffness</c>
+    /// makes between the index form and <c>B'DB</c>, for the same reason. The general path
+    /// contracts the tensor once as <c>K·grad N_j</c> per node, then dots it with each
+    /// <c>grad N_i</c>; K is symmetric, so the resulting element matrix is symmetric too.</para>
+    /// </summary>
+    public static void Conductivity(
+        ElementOrder order,
+        ReadOnlySpan<Vector3d> nodePositions,
+        ConductivityLaw law,
+        in TetQuadrature rule,
+        Span<double> ke)
+    {
+        ArgumentNullException.ThrowIfNull(law);
+        if (law.IsIsotropic)
+        {
+            Conductivity(order, nodePositions, law.IsotropicConductivity, rule, ke);
+            return;
+        }
+
+        int n = nodePositions.Length;
+        ke[..(n * n)].Clear();
+        Span<Vector3d> grad = stackalloc Vector3d[10];
+        var k = law.ConductivityMatrix;
+        double k00 = k[0], k01 = k[1], k02 = k[2];
+        double k10 = k[3], k11 = k[4], k12 = k[5];
+        double k20 = k[6], k21 = k[7], k22 = k[8];
+
+        for (int q = 0; q < rule.Count; q++)
+        {
+            var (r, s, t) = rule.Point(q);
+            if (!TetElement.ShapeGradients(order, nodePositions, r, s, t, grad, out double detJ))
+                continue;
+            double weight = rule.Weight(q) * detJ;
+
+            for (int j = 0; j < n; j++)
+            {
+                var gj = grad[j];
+                // K · grad N_j, once per column.
+                double kx = k00 * gj.X + k01 * gj.Y + k02 * gj.Z;
+                double ky = k10 * gj.X + k11 * gj.Y + k12 * gj.Z;
+                double kz = k20 * gj.X + k21 * gj.Y + k22 * gj.Z;
+                for (int i = 0; i < n; i++)
+                {
+                    var gi = grad[i];
+                    ke[i * n + j] += weight * (gi.X * kx + gi.Y * ky + gi.Z * kz);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// The element CONSISTENT capacity matrix
     /// <c>C_ij = integral(rho·c · N_i · N_j dV)</c>, row-major, n-by-n. Cleared on entry.
     ///
