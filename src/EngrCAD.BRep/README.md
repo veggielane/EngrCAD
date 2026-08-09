@@ -717,9 +717,30 @@ operations. Depends only on `EngrCAD.Core`.
   on the rim where the arc closing the loop already is), and **on its own it TRADES
   refusals**, which is why it had been built, measured and reverted once: `CoaxialDiskIntersectionTests`
   and `SideWallBreakoutBooleanTests.TheDiametralCut_ConvergesOnTheAnalyticVolume` carry
-  the measurement; **bounded planar carriers** (below), and a general marching tracer
-  (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
-  everything else. See design.md §5 for the algorithm. Full-turn revolved surfaces whose
+  the measurement. **The FOURTH member closes the family from the b = 0 end** — a full-turn
+  revolve whose generator is a straight line PARALLEL to the axis is a cylindrical BAND,
+  which is every bore WALL a `Shape.Drill` tool presents where a `Shape.Cylinder` presents a
+  `CylinderSurface` (`TryCylinderCarrier` + `TryCylindricalBand`). A plane then cuts it in
+  the same exact conics `PlaneCylinder` gives a real cylinder, restricted to the extent the
+  band carries: the axis-PARALLEL pair are lines clipped exactly to the band's own axial
+  span (`PlaneRevolved`'s "no circle above a blind bore's end" rule, in the parallel member),
+  and an OBLIQUE plane's conic is accepted only when it lies WHOLLY inside that span — one
+  comparison, since the axial coordinate along a conic ranges over centre ± hypot of the two
+  semi-axis components — falling through to the tracer otherwise, the wholly-inside rule
+  `TryPatchQuadric` applies to a bounded patch. **The recognizer tests the radial VECTOR,
+  not the radius**, which carries two conditions at once: a constant radius makes the swept
+  set a cylinder, and a constant radial DIRECTION makes the generator straight and
+  axis-parallel, so the band's own u IS the returned cylinder's azimuth and nothing is
+  re-phased — a generator merely at constant radius (a helix) sweeps the same points with a
+  different parameterization, the "lies on the carrier is not IS the carrier" trap, refused
+  with no separate guard. The arm sits AFTER the axis-perpendicular one, so every circle a
+  drilled cap already produced keeps its incumbent arithmetic bit for bit. Measured on the
+  tessellation corpus's `drilled breakout`: worst facet-vs-surface agreement 0.107 / 0.694 /
+  0.840 → **0.994 / 0.957 / 0.989** at 16/8, 48/24, 96/48 (floors 0.383 / 0.924 / 0.981) on
+  92 / 220 / 424 facets against 374 / 1 008 / 3 682, which promoted that construction from a
+  locked residual into a full Corpus member. Then **bounded planar carriers** (below), and a
+  general marching tracer (periodic-aware, multi-branch, closed-loop detection) returning
+  `PolylineCurve3d` for everything else. See design.md §5 for the algorithm. Full-turn revolved surfaces whose
   sampled generator lies on a sphere centered on the axis (MakeSphere hemispheres) are
   recognized as **sphere carriers**: any plane cut returns the exact analytic circle
   (plane ⊥ axis keeps the phase-aligned path) — the tracer's region-clipped open
@@ -879,7 +900,22 @@ operations. Depends only on `EngrCAD.Core`.
   disagreement to *inside*. That makes it both the pole-correct rule and the one that errs
   toward inside, which is what a keep-or-drop decision wants — `PlanarSection`'s cross-section
   test, where the finding originated (a sphere's section came back empty), and the boolean's
-  carrier clip both ask it), splitting faces by closed interior curves (hole + disk
+  carrier clip both ask it. **`ParityRayPointsDown` is the third thing in that family and it
+  is about the RAY rather than about the answer**: the one-sided test is correct exactly
+  where the trim CLOSES in the direction it is cast, so it fires the ray away from a pole at
+  v = max. Which way that breaks is decided by the GENERATOR'S DIRECTION and by nothing
+  else — a profile leaving the axis puts the rim at v = max so the upward ray crosses it,
+  while one returning to the axis puts the rim at v = min and the identical cap reads as
+  having no interior at all (measured on a cylinder built as ONE full-turn revolve, whose
+  two caps differ in exactly that: `SplitByCurve` returned a single fragment for 56 of 112
+  chords, precisely the 56 on the cap whose generator ends on the axis; `PoleCapSplitTests`).
+  The face splitter's arrangement ASKS it; `Contains` itself deliberately does NOT, and the
+  reason is measured rather than conservative — pole-aware there, a sphere's cap accepts an
+  interior bore circle as a HOLE where the incumbent reading sends the same cut down the
+  band path, and a pole-bounded face carrying a hole is a trimmed tier that does not exist,
+  so the tessellator refuses the result by name. That correction therefore waits on the
+  tier, and until then the upward ray is load-bearing rather than merely incumbent),
+  splitting faces by closed interior curves (hole + disk
   sharing one manifold edge), open/crossing curves (full parameter-space arrangement:
   boundary edges split at crossings — refined by 3D curve–curve Gauss–Newton, exact from
   both solids' sides; crossing seeds slightly inclusive so cuts through split-created

@@ -825,7 +825,25 @@ logging complements them, never replaces them.
     face(s)". **The two-sided parity is NOT the fix** — `FaceGeometry.ContainsTwoSided`
     errs toward inside by design and duly accepts that very point. Pinned end to end by
     `SideWallBreakoutBooleanTests`, whose ten-row sweep across breakout depths fails three
-    rows without the rule and none with it.
+    rows without the rule and none with it, and now at FACE level too by
+    `ProbePointWrapTests`: a chord at perpendicular offset d has its own closest point at
+    radius exactly d, so the probe lands at radius exactly **d/2** — the rule as a VALUE,
+    where "it is inside" would pass for anything landing in the major segment — with a
+    mutation row asserting the average-v alternative lands OUTSIDE. (That fixture was
+    impossible until the splitter's parity ray learned to point away from a pole; see
+    `FaceGeometry.ParityRayPointsDown`.)
+  - **The last-resort probe STEPS OFF the fragment's own boundary rather than hunting for
+    it.** A uniform grid over the pulled uv bounding BOX is a statement about the box, and
+    a fragment that is thin anywhere slips between its samples however isotropic the box
+    is — the recorded "a sampling grid in parameter space says nothing about coverage"
+    lesson, here about a region's SHAPE rather than a band's aspect. Measured on a bore
+    grazing a plate's top face at a half-chord of 0.35: the discarded wall fragment is an
+    L, a 0.23 rad wedge joined to a 0.048-tall ring, and the 12x12 grid's 0.63 x 0.083 step
+    lands in neither, so the whole boolean refused for want of one point on a face it was
+    about to throw away. The loops ARE the region's own resolution, so the fallback offsets
+    each boundary edge's midpoint perpendicular in uv, both signs (no orientation
+    convention to get wrong), on a geometric ladder so an arbitrarily thin fragment is
+    still reached, widest clearance winning. It runs only where the code previously threw.
   - Drilling works into **cylinders** exactly as into boxes (the cap bounds a closed
     circular edge, so a different split/re-weld path runs): for well-posed inputs the
     result is `Validate`-clean with the right genus and exact volume in all three
