@@ -591,10 +591,13 @@ chain's parity is consistent across every joint.
     type belongs in the dependency-free foundation, beside the `SymmetricEigen3` that
     diagonalizes it.
 - **`Solvers`** (namespace `EngrCAD.Core.Solvers`) — a small sparse linear-algebra
-  library for symmetric positive-definite systems: the numerical substrate for the mesh
-  engine's Laplacian smoothing/deformation, and deliberately dependency-free and
-  mesh-agnostic (doubles + int indices only) because the future sketch constraint solver
-  and FEA assembly will sit on the same three types.
+  library: symmetric positive-definite (Cholesky / CG), symmetric indefinite (LDLᵀ) and
+  now **general NON-symmetric** systems (GMRES / BiCGSTAB + an ILU(0) preconditioner). It
+  is the numerical substrate for the mesh engine's Laplacian smoothing/deformation and
+  FEA assembly, and the non-symmetric solvers are the first stage of the CFD campaign
+  (advection makes a flow operator non-symmetric, so neither Cholesky nor CG applies).
+  Deliberately dependency-free and mesh-agnostic (doubles + int indices only) so the
+  sketch constraint solver, FEA and a future flow solver all sit on the same types.
   - **`PackedSparseMatrix`** — immutable CSR (row-start offsets + column indices +
     values, rows sorted by column), with an optional **symmetric-upper storage** form
     that keeps only the upper triangle of a square symmetric matrix and mirrors
@@ -764,6 +767,62 @@ chain's parity is consistent across every joint.
     (750 ms) while AMD factor + one solve is 227 ms — the direct solve wins on the FIRST
     right-hand side, by 3.3×. In 3D the crossover is real but far out (52 RHS at 13 824
     unknowns), because 3D fill grows like n² however it is ordered.
+  - **`Gmres` — restarted GMRES(m) for a general non-symmetric A·x = b**, the workhorse for
+    the systems Cholesky and CG cannot touch. Arnoldi (modified Gram–Schmidt) + Givens QR of
+    the Hessenberg minimises the true residual over a growing Krylov subspace; monotone and
+    non-increasing within an un-restarted cycle. **Right-preconditioned** (the
+    `IPreconditioner`, null = none): the Krylov subspace is built on `A·M⁻¹` so the residual
+    the Givens rotations track is the residual of the ORIGINAL system, not a preconditioned
+    one — the reported number is the one a caller can recompute, which is exactly the
+    silent-CFD-failure ("converged on the wrong residual") this guards against, and it is in
+    fact recomputed exactly as `‖b − A·x‖` at every restart. **Happy breakdown is
+    convergence**: a (near-)zero new Arnoldi vector means the subspace is invariant and the
+    iterate is already exact, detected and reported rather than divided by. The theorem is
+    a test: un-restarted GMRES (m ≥ n) reaches the exact solution in **at most n** steps, so
+    the residual is round-off — measured 12/35 iterations at 2.7e-13 on a 35×35 system.
+    Deterministic (fixed-order MGS, sequential reductions — bit-identical iterate sequence);
+    working storage (m + 1 basis vectors + the small Hessenberg) allocated once per solve.
+  - **`BiCgStab` — the cheaper-per-iteration non-symmetric alternative** (van der Vorst): a
+    short fixed recurrence, so constant storage, at the cost of GMRES's monotone residual (it
+    can oscillate, and stalls where GMRES grinds through). Which wins is problem-dependent, so
+    both are provided. The preconditioner is applied to the two search directions and the
+    recurrence carries the true residual throughout; the final report recomputes `‖b − A·x‖`
+    anyway (a recurrence residual drifts). **Breakdown is reported, never a silent NaN** — the
+    two failure modes (ρ ≈ 0, the shadow residual going orthogonal; ω ≈ 0 / t ≈ 0, the
+    stabiliser collapsing) are each caught BEFORE the division they would spoil, returning
+    `Converged = false` with the last honest residual (the CG "report the non-SPD direction
+    rather than divide by it" convention). Measured on a skew-dominant matrix: 81 relative
+    residual, no NaN.
+  - **`Ilu0` — incomplete LU with ZERO fill**, the "ILU at minimum" a Krylov method needs on a
+    non-symmetric system: L and U share A's OWN pattern, the IKJ elimination drops every
+    fill (`a[i,j] -= (a[i,k]/a[k,k])·a[k,j]` applied only where (i,j) is a stored entry), so
+    the factorization is O(nnz·bandwidth) and M = L·U is an approximation whose error is
+    exactly the dropped fill. Verified two ways: on a **no-fill matrix (tridiagonal) ILU(0) IS
+    the exact LU** — an identity, compared entry-for-entry against a complete LU and used as a
+    direct solve to round-off — and as a **preconditioner it strictly cuts iteration counts**,
+    measured GMRES 40→10, BiCGSTAB 37→7 on a 256-unknown 2D convection–diffusion operator.
+    <br>**There is no ordering parameter, deliberately, and it is a real decision rather than an
+    omission.** AMD reduces the FILL of a complete factorization and ILU(0) has no fill to
+    reduce — that is its definition — so a fill-reducing permutation would spend a symbolic
+    pass to move round-off around for no saving AND break the "no fill ⇒ exact LU" identity. A
+    permutation there changes only WHICH entries are dropped, i.e. preconditioner accuracy, a
+    different question wanting a different ordering (RCM for bandwidth, multicolour for
+    parallelism) that only earns its keep once fill is admitted (ILU(p > 0), ILUT) — filed for
+    that tier. So AMD does NOT apply here; the factorization stays natural-ordered, hence
+    deterministic and bit-reproducible.
+    <br>**For a symmetric matrix with a symmetric pattern (every SPD system this repo
+    assembles) ILU(0) is symmetric**, because the dropped fill is symmetric too, so
+    `M = L·U = L·D·Lᵀ` — the incomplete-Cholesky factor under another name — which makes it a
+    legitimate **conjugate-gradient** preconditioner (`CgOptions.Preconditioner`, additive and
+    leaving the Jacobi path bit-identical when null). Measured on a 24×24 Dirichlet grid
+    Laplacian: CG **87 → 32** iterations. Pivots are all-or-nothing like `SparseCholesky`: a
+    missing or zero diagonal throws naming the row (an exact-zero test, since how small a
+    legitimate pivot may be is the caller's conditioning; a positive diagonal shift is the
+    standard fix).
+  - **`IPreconditioner`** — the one-method seam (`z = M⁻¹·r`) the three Krylov solvers share;
+    null = identity, so an unpreconditioned solve costs no apply rather than an apply that
+    copies. `Ilu0` is the one implementation today; the interface exists so a future
+    block/multigrid preconditioner drops in without touching the solvers.
 - **`ParallelFor.Blocks(from, to, body, minBlockSize)`** — thin block-parallel-for over
   index ranges (g3's `gParallel.BlockStartEnd`): splits the range into a bounded number
   of large contiguous blocks so each worker touches a contiguous slice of the underlying
