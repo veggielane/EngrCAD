@@ -6102,6 +6102,99 @@ A drawing is a *document*, not a picture, and the whole design follows from that
   optional-content groups for those; filed), and a CLI route (sheets are produced by
   code and docs fences, not by `--export`, for SVG and DXF alike).
 
+## 6d. ECAD — schematics and the connectivity data model (`EngrCAD.Ecad`)
+
+The first stage of the ECAD campaign (schematic → board → placement constraints → copper
+DRC → routing → MID/LDS 3D routing; the later stages are filed in `todo.md`). Stage 1 is
+**connectivity only** — the graph and its exact verification — and it deliberately builds
+nothing geometric. `EngrCAD.Ecad` is kernel-tier: it references Core (math) and Modeling
+(the optional `Func<Shape>` body hook) and nothing that touches a viewport.
+
+### The one load-bearing decision: the object graph IS the netlist
+
+A netlist is a graph — components, pins, nets — and the failure mode of every ECAD/MCAD
+bridge is two models drifting: a net the copper does not connect, a part the schematic does
+not place. So there is **one source and everything derives from it**. A `Schematic` holds a
+`List<Component>` and a `List<Net>`, and those ARE the connectivity; there is no second
+editable netlist to keep in step, and a `Netlist` view (`pin → net`, `net → pins`) is a
+DERIVED, read-only projection computed FRESH by `ToNetlist()` — a method, not a cached
+property, precisely so there is no stored copy that could go stale. This is the same "the
+declaration is the model" doctrine `SheetMetalBody` and `FeatureHistory` already enforce,
+and it is the decision the whole campaign turns on: a DRC or a router that disagrees with
+the schematic is then a bug in one derivation, not an unresolvable difference between two
+hand-kept files. The API is fluent and code-first — `Schematic.Add` / `Connect` / `Stub` /
+`NoConnect` — exactly as `Sketch` declares curves and `Scene` declares parts.
+
+### The types, and where the value/identity split falls
+
+A `Pin` is a value (number + optional functional name + `PinType`) describing a terminal of
+a part TYPE. A `PartDefinition` (a type: name, prefix, ordered pins, an optional
+`Footprint` data placeholder, an optional `Func<Shape>` body) is instanced by many
+`Component`s (a placed instance: reference designator + value). The thing a `Net` connects
+is a `PinRef` — a `(Component, pin number)` pair, a REFERENCE into the component graph and
+not a copy, which is what the persistence layer must reproduce (and does, by resolving a
+saved `(refdes, number)` back to the same `Component` object). A `Net` has a `NetKind` —
+`Signal`, `Stub`, or `NoConnect` — and **NoConnect is a first-class state, never a null**:
+a pin is covered iff it is on a signal net, a stub, or a no-connect, and the kind is what
+makes the floating check meaningful (a lone `Signal` pin is a mistake, a `Stub` or
+`NoConnect` pin is not).
+
+**Net names are globally unique across kinds**, and that was a real finding rather than an
+obvious choice: the first cut kept one name map for signal/stub nets and left NoConnect
+nets unnamed in that map, so a signal net could quietly shadow a no-connect name. One lone
+name map, checked in `Connect`/`Stub`/`NoConnect` (and the auto `NCn` names skip any a user
+already took), is the fix — the same "one shared rule only holds if every caller asks it"
+lesson. `Connect` create-or-extends the signal net of its name (so a rail is declared
+incrementally), but refuses to shadow a non-signal net of that name.
+
+### Verification is combinatorial and exact, and every guard is shown to fire
+
+`Schematic.Check` is the DRC of connectivity, and every list NAMES its offenders (a check
+that only said "invalid" would be useless). **The counting identity** is the spine:
+`TotalPins == PinsCoveredOnce` with no over-assignments means every terminal of every
+component is on exactly one net. The two counts are exposed so the identity can be asserted
+NUMERICALLY, and the two lists it splits into name which way it failed — `UnassignedPins`
+(a floating pin) and `MultiplyAssignedPins` (a short across two nets, or a pin both wired
+and marked no-connect). Beside it: no `Signal` net with fewer than two terminals
+(`FloatingNets`, stub/no-connect exempt by kind), and no empty net. The tests drive a
+floating pin, a short, a lone signal net and an empty net and assert each produces a
+non-`Ok` report naming the offender — the guard-must-fire rule.
+
+### Persistence — the document model's seam, and a byte fixed point
+
+`Save`/`Load` follow the `Document`/`SaveParameters` conventions verbatim: a JSON tree
+serialized with `WriteIndented` (Modeling's own `FeatureHistory.JsonOptions` is internal
+and unreachable across the assembly boundary, so `EcadJson.Options` replicates the
+convention rather than being a second one), **write-only-when-stated** optional fields
+(a component's value, a net's kind when it is not the default `Signal`, a pin's functional
+name, a footprint), and **no informational field that cannot round-trip**. A
+`PartDefinition` used by many components is written ONCE and shared by identity — one
+definition record the components reference by a deterministic id (`d0`, `d1`, … assigned in
+component declaration order, the same interning `Scene.AllParts`/`DocumentWriter` use for
+parts) — so a net referencing a pin stays a reference and not a copy. The verification bar
+is the strong one: `save → load → save` is a **byte-identical fixed point** (which catches a
+field written but never read, a default that reloads as a different default, or an ordering
+that is not a function of the model), and two loads of one file produce structurally
+identical graphs.
+
+Two things do not travel and each is handled by name rather than by drift. The `Body` is
+code (a lambda over the modelling API), so it is NOT serialized; a `PartLibrary` re-attaches
+it by definition name on load — the `ResolveOpaqueFeature` pattern — and a data-only load is
+honest and complete for connectivity, so it warrants no warning. And a structural
+inconsistency is refused BY NAME at load: a component whose definition the file does not
+contain (the `HoleSpec`/catalogue rule — the definition is the source, so an instance
+without one is not loadable), a net naming a missing component or pin, an unknown format or
+version. These throw (a malformed file), where the document model's soft-degrade-with-a-
+warning path has no analogue here because a schematic's connectivity carries no opaque
+records — the one opaque thing, the body, is optional and simply absent.
+
+### Not in stage 1
+
+Board geometry, footprint placement, positioning constraints, copper DRC, routing, MID/LDS
+3D routing and interchange (IDF/KiCad/STEP) are later stages over this one graph. A drawn
+schematic SHEET (symbols and wires to SVG/DXF/PDF via the `DrawingSheet` machinery) is a
+VIEW of the graph and a later deliverable; `Netlist.ToText()` is the stage-1 textual view.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
