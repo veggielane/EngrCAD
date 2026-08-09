@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>EngrCAD ECAD: code-defined schematics and the connectivity data model (components, pins, nets). The object graph IS the netlist; footprint, board placement and 3D body all derive from one declaration.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Kernel-tier: Core for math (Vector2d), Modeling for the optional 3D body hook
+         (Func<Shape>). Deliberately NO viewer/Avalonia dependency. -->
+    <ProjectReference Include="..\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="EngrCAD.Ecad.Tests" />
+  </ItemGroup>
+</Project>
