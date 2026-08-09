@@ -472,6 +472,11 @@
       "live": true
     },
     {
+      "id": "mesh-to-brep",
+      "page": "examples/mesh-to-brep.md",
+      "live": true
+    },
+    {
       "id": "mirror",
       "page": "examples/transforms-patterns.md",
       "live": true

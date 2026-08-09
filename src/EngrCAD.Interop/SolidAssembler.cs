@@ -16,7 +16,7 @@ internal static class SolidAssembler
 {
     internal static (BrepSolid? Solid, string? Reason) Assemble(
         HalfEdgeMesh mesh, int[] region, int regionCount, MeshToBrep.SurfaceFit[] fits,
-        MeshToBrepOptions options, List<string> notes)
+        List<string> notes)
     {
         var faces = mesh.Faces.ToArray();
         int nv = mesh.VertexCount;

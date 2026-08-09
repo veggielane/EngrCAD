@@ -122,7 +122,7 @@ public static class MeshToBrep
         }
 
         // Phase 2: assemble the trimmed faces into a solid.
-        var assembled = SolidAssembler.Assemble(tris, region, regionCount, surfaces, options, notes);
+        var assembled = SolidAssembler.Assemble(tris, region, regionCount, surfaces, notes);
         return new MeshToBrepResult(
             assembled.Solid, report with { Notes = notes }, assembled.Solid is not null, assembled.Reason);
     }

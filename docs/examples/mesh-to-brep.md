@@ -30,6 +30,8 @@ var scene = new Scene();
 scene.Add(new Part("reconstructed", Shape.From(result.Solid!)));
 ```
 
+![The drilled plate, reconstructed from its triangle mesh back into seven analytic faces](images/mesh-to-brep.png)
+
 The report is the honest half. `result.Report.RegionCount` is **7**; every region is a
 `Plane` except the one `Cylinder`, and each `ReconstructedRegion.Residual` is the worst
 distance from a mesh vertex to its fitted surface — machine-epsilon-small here, because a
