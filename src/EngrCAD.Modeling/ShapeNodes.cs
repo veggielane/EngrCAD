@@ -816,6 +816,23 @@ internal sealed class RemeshShape(Shape child, RemeshOptions options) : Shape
         $"Remeshed(edge {options.TargetEdgeLength:0.###}, {options.Iterations} passes)";
 }
 
+/// <summary>
+/// Laplacian fairing of the child's mesh (<see cref="LaplacianMeshSmoother"/>). A
+/// geometry-changing node, like <see cref="RemeshShape"/>: it is defined on a
+/// triangulation, so it is mesh-Native, implicit-Bridged (a mesh SDF of the faired
+/// triangles) and B-Rep-Impossible. A closed solid has no boundary to pin, so the whole
+/// surface fairs — curvature flow that rounds corners and shrinks the model a little each
+/// step; that is the operation, not a defect.
+/// </summary>
+internal sealed class SmoothedShape(Shape child, LaplacianSmoothOptions options) : Shape
+{
+    public Shape Child => child;
+    public LaplacianSmoothOptions Options => options;
+
+    internal override string Describe() =>
+        $"Smoothed(step {options.TimeStep:0.###}, {options.Iterations} passes)";
+}
+
 /// <summary>The volume swept by the child over a sampled set of rigid poses — the
 /// union of the posed copies (implicit-native: one lowering of the child's field,
 /// N placements; B-Rep-impossible: a motion envelope is not one of the kernel's

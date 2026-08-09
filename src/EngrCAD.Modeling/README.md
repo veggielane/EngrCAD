@@ -54,6 +54,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `PatternLinear` / `PatternCircular` | ✅ native (multi-shell when disjoint) | ✅ native | ✅ native |
 | `Hull(...)` (convex hull) | ❌ mesh construction, no B-Rep import | 🔶 bridged (hull mesh → mesh SDF) | 🔶 quickhull over tessellated operand vertices (exact for polyhedral operands) |
 | `Remeshed(...)` (isotropic remesh) | ❌ a remesh is defined on a triangulation, and no mesh→B-Rep import | 🔶 bridged (remeshed triangles → mesh SDF, so the field carries their chord error) | ✅ native (`Remesher` over the child's mesh lowering, projected back onto it) |
+| `Smoothed(step, passes)` (Laplacian fairing) | ❌ fairing is defined on a triangulation, and no mesh→B-Rep import | 🔶 bridged (faired triangles → mesh SDF, carrying their chord error) | ✅ native (`LaplacianMeshSmoother` over the child's mesh lowering; a closed solid has no boundary to pin, so the whole surface fairs — curvature flow that rounds corners and shrinks the body; the step is dimensionless/scale-free) |
 | `Text(...)` (TrueType outlines) | ✅ native (lines + quadratic Béziers → exact profiles) | ✅ **native** (exact 2D SDF per glyph) | ✅ native |
 | `TextOnPath(...)` (one line along a `Curve2d`) | ✅ native (a rigid map of the control points IS the mapped curve) | ✅ **native** | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
@@ -516,11 +517,18 @@ so a caller who already has one does not pay a second lowering.
 
 ### Surface decoration (`SurfaceDecoration.cs`)
 
-`SurfaceDecoration.Wrap(mesh, seedVertex, points|curve)` lays a flat curve ON a doubly-curved
-surface — engraving, a decal outline, a heater track, a space-filling texture that follows the
-shape it decorates — through `MeshLocalParam`'s discrete exponential map, inverted per QUERY
-POINT by a BVH over the triangles in (u, v) plus barycentric interpolation (a triangle's own map
-is affine both ways, so the coordinates carry straight over).
+`SurfaceDecoration.Wrap(mesh, seedVertex, points|curve|sketch)` lays a flat curve ON a
+doubly-curved surface — engraving, a decal outline, a heater track, a space-filling texture that
+follows the shape it decorates — through `MeshLocalParam`'s discrete exponential map, inverted
+per QUERY POINT by a BVH over the triangles in (u, v) plus barycentric interpolation (a triangle's
+own map is affine both ways, so the coordinates carry straight over).
+
+- **The `Sketch` overload is the glyph/logo convenience**: a `Shape.Text` glyph, a logo or an
+  engraving pattern wraps in one call — every loop of every region (outer + holes) lands as its
+  own CLOSED run, in surface millimetres from the seed exactly as a flat polyline does, so the
+  measured distortion is reported the same way. It wraps a curve ONTO the surface; cutting a
+  groove INTO the solid (engraving proper) is a separate operation — stroke/offset/boolean the
+  laid `SurfaceCurve` against the body if a groove is wanted.
 
 - **The map's limit is REPORTED, not averaged away.** The exp map is exact on a plane, close to
   exact on a developable surface and genuinely distorted where Gaussian curvature concentrates,

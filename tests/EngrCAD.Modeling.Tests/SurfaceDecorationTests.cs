@@ -212,6 +212,31 @@ public class SurfaceDecorationTests
     }
 
     [Fact]
+    public void ASketchOutlineLaysEveryLoopClosedOntoTheSurface()
+    {
+        // The glyph/engraving convenience: a sketch's loops (outer + holes) each land as a
+        // CLOSED run, in surface millimetres from the seed, on a plane where the map is exact.
+        var plane = Plane(24, 40);
+        int seed = NearestVertex(plane, Vector3d.Zero);
+        var outline = Sketch.Rectangle(12, 8).WithHole(Sketch.Circle(2));
+
+        var decoration = SurfaceDecoration.Wrap(plane, seed, outline, referenceDirection: Vector3d.UnitX);
+
+        Assert.Equal(0, decoration.UnmappedPoints);
+        // Two loops in, two runs out: the rectangle and its circular hole.
+        Assert.Equal(2, decoration.Runs.Count);
+        // Every point is on the plane and the exp map is the identity there.
+        foreach (var run in decoration.Runs)
+        {
+            foreach (var p in run)
+                Assert.Equal(0.0, p.Z, 9);
+            // Each loop is drawn CLOSED (first point repeated at the end).
+            Assert.True(run[0].DistanceTo(run[^1]) < 1e-9, "the loop did not close");
+        }
+        Assert.True(decoration.Distortion < 1e-6, $"distortion {decoration.Distortion}");
+    }
+
+    [Fact]
     public void ASinglePointDecorationReportsAScaleOfExactlyOneRatherThanAnInfinity()
     {
         var plane = Plane(12, 40);

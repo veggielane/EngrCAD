@@ -77,33 +77,8 @@ public static class SurfaceDecoration
         var lookup = new UvTriangles(mesh, param);
 
         var runs = new List<IReadOnlyList<Vector3d>>();
-        var current = new List<Vector3d>();
         var flatRuns = new List<IReadOnlyList<Vector2d>>();
-        var flatCurrent = new List<Vector2d>();
-        int unmapped = 0;
-
-        foreach (var uv in points)
-        {
-            if (lookup.TryMap(uv, out var surface))
-            {
-                current.Add(surface);
-                flatCurrent.Add(uv);
-                continue;
-            }
-            unmapped++;
-            if (current.Count > 0)
-            {
-                runs.Add(current);
-                flatRuns.Add(flatCurrent);
-                current = [];
-                flatCurrent = [];
-            }
-        }
-        if (current.Count > 0)
-        {
-            runs.Add(current);
-            flatRuns.Add(flatCurrent);
-        }
+        int unmapped = AppendRuns(lookup, points, runs, flatRuns);
 
         if (runs.Count == 0)
         {
@@ -127,6 +102,102 @@ public static class SurfaceDecoration
         ArgumentNullException.ThrowIfNull(curve);
         return Wrap(mesh, seedVertex, curve.Points, referenceDirection, radius);
     }
+
+    /// <summary>
+    /// Lays a <see cref="Sketch"/>'s outline — a glyph (via <see cref="Shape.Text"/>'s own
+    /// sketches), a logo, an engraving pattern — onto <paramref name="mesh"/> around
+    /// <paramref name="seedVertex"/>: every loop of every region, each drawn CLOSED and each its
+    /// own run (or runs, where it leaves the map). The sketch's coordinates are surface
+    /// millimetres from the seed exactly as the flat-polyline overload's are, so the exp map's
+    /// distortion is MEASURED on the laid outline (<see cref="SurfaceCurve.MinScale"/>) rather
+    /// than assumed. Flattening follows <see cref="Sketch.ToRegions(double)"/>: arcs and béziers
+    /// become polylines at <paramref name="chordTolerance"/>.
+    /// <para>This wraps a curve ONTO the surface; cutting a groove INTO the solid (engraving,
+    /// embossing) is a separate operation and is not what this does — take the laid
+    /// <see cref="SurfaceCurve"/> and stroke/offset/boolean it against the body if a groove is
+    /// wanted.</para>
+    /// </summary>
+    public static SurfaceCurve Wrap(
+        HalfEdgeMesh mesh, int seedVertex, Sketch sketch,
+        Vector3d? referenceDirection = null, double? radius = null,
+        double chordTolerance = Sketch.DefaultChordTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        ArgumentNullException.ThrowIfNull(sketch);
+
+        var loops = new List<IReadOnlyList<Vector2d>>();
+        foreach (var region in sketch.ToRegions(chordTolerance))
+            foreach (var loop in region.AllLoops())
+                loops.Add(Closed(loop));
+        if (loops.Count == 0)
+            throw new ArgumentException(
+                "The sketch enclosed no region to lay onto the surface.", nameof(sketch));
+
+        double reach = 0;
+        foreach (var loop in loops)
+            foreach (var p in loop)
+                reach = Math.Max(reach, p.Length);
+        double mapRadius = radius ?? reach * Math.Sqrt(2) + 2 * LongestEdge(mesh);
+        if (!(mapRadius > 0) || !double.IsFinite(mapRadius))
+            throw new ArgumentOutOfRangeException(nameof(radius), "The map radius must be positive and finite.");
+
+        var param = MeshLocalParam.Compute(mesh, seedVertex, mapRadius, referenceDirection);
+        var lookup = new UvTriangles(mesh, param);
+
+        var runs = new List<IReadOnlyList<Vector3d>>();
+        var flatRuns = new List<IReadOnlyList<Vector2d>>();
+        int unmapped = 0;
+        foreach (var loop in loops)
+            unmapped += AppendRuns(lookup, loop, runs, flatRuns);
+
+        if (runs.Count == 0)
+            throw new ArgumentException(
+                $"No point of this sketch landed on the exponential map around vertex {seedVertex} "
+                + $"(radius {mapRadius}): the outline reaches {reach} from its origin and the map "
+                + "covers less. Reduce the outline, raise the radius, or seed where the surface is bigger.",
+                nameof(sketch));
+
+        return new SurfaceCurve(param, runs, flatRuns, unmapped);
+    }
+
+    /// <summary>Maps one flat loop's points into surface runs, starting a fresh run at the loop
+    /// and BREAKING wherever a point leaves the exp map (the run-splitting the class's contract
+    /// promises). Returns the number of dropped points.</summary>
+    private static int AppendRuns(
+        UvTriangles lookup, IReadOnlyList<Vector2d> points,
+        List<IReadOnlyList<Vector3d>> runs, List<IReadOnlyList<Vector2d>> flatRuns)
+    {
+        int unmapped = 0;
+        var current = new List<Vector3d>();
+        var flatCurrent = new List<Vector2d>();
+        foreach (var uv in points)
+        {
+            if (lookup.TryMap(uv, out var surface))
+            {
+                current.Add(surface);
+                flatCurrent.Add(uv);
+                continue;
+            }
+            unmapped++;
+            if (current.Count > 0)
+            {
+                runs.Add(current);
+                flatRuns.Add(flatCurrent);
+                current = [];
+                flatCurrent = [];
+            }
+        }
+        if (current.Count > 0)
+        {
+            runs.Add(current);
+            flatRuns.Add(flatCurrent);
+        }
+        return unmapped;
+    }
+
+    /// <summary>Appends the first point to close a loop, unless it already closes.</summary>
+    private static IReadOnlyList<Vector2d> Closed(IReadOnlyList<Vector2d> loop) =>
+        loop.Count < 2 || loop[0].DistanceTo(loop[^1]) < 1e-9 ? loop : [.. loop, loop[0]];
 
     /// <summary>The mesh's longest edge, which is the scale the default map radius has to clear:
     /// a point is placed from the triangle containing it, so its vertices are what must be

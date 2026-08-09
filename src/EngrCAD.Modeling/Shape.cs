@@ -1138,6 +1138,54 @@ public abstract class Shape
     }
 
     /// <summary>
+    /// Laplacian fairing (implicit smoothing): each pass solves (M + λL)·x′ = M·x over the
+    /// child's tessellation, rounding sharp features and reducing noise. <paramref name="timeStep"/>
+    /// is <b>dimensionless and scale-free</b> (λ = timeStep · h̄² for the mean edge length),
+    /// so the same value fairs the same amount at any model scale; <paramref name="iterations"/>
+    /// rebuilds the operator from the current geometry each pass (honest curvature flow, so
+    /// k passes of λ are not one pass of k·λ).
+    /// <para>
+    /// <b>This is a geometry-changing node, and <see cref="Explain"/> says so.</b> Fairing is
+    /// defined on a triangulation, so it is <b>Native for mesh only</b>: to B-Rep it is
+    /// Impossible (there is no mesh → B-Rep import, and the result is a tessellation rather than
+    /// a surface), and to implicit it is Bridged through a mesh SDF of the faired triangles —
+    /// a different field from the child's, since it carries the tessellation's chord error.
+    /// </para>
+    /// <para>
+    /// A <b>closed solid has no boundary to pin</b>, so the whole surface fairs: a cube's corners
+    /// round, and any curved shape shrinks a little toward its curvature centres every pass. That
+    /// is the operation, not a defect — reach for it at the end of a model, and keep the step
+    /// small (the default 1 is one visible fairing pass). A uniform scale above this node changes
+    /// nothing (the step is dimensionless); the operation commutes with any rigid placement.
+    /// </para>
+    /// </summary>
+    public Shape Smoothed(double timeStep = 1.0, int iterations = 1,
+        LaplacianWeighting weighting = LaplacianWeighting.Cotangent) =>
+        Smoothed(new LaplacianSmoothOptions
+        {
+            TimeStep = timeStep,
+            Iterations = iterations,
+            Weighting = weighting,
+        });
+
+    /// <summary>
+    /// Laplacian fairing with full control over the smoother's behaviour (step, passes,
+    /// weighting). See <see cref="Smoothed(double, int, LaplacianWeighting)"/> for the support
+    /// story and the closed-surface fairing behaviour. <see cref="LaplacianSmoothOptions.FixedVertices"/>
+    /// is honoured for advanced use, but its indices name the child's <i>lowered</i> mesh, which
+    /// a graph author generally has no handle on.
+    /// </summary>
+    public Shape Smoothed(LaplacianSmoothOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!(options.TimeStep > 0))
+            throw new ArgumentOutOfRangeException(nameof(options), "TimeStep must be positive.");
+        if (options.Iterations < 1)
+            throw new ArgumentOutOfRangeException(nameof(options), "Iterations must be at least 1.");
+        return new SmoothedShape(this, options);
+    }
+
+    /// <summary>
     /// The volume this shape sweeps over a set of sampled rigid poses — the union of
     /// the posed copies, typically the per-frame instance transforms of a
     /// <see cref="MotionStudy"/> (see <see cref="MotionStudy.SweptVolume"/>). Fidelity

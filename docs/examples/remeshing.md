@@ -221,3 +221,45 @@ So `Remeshed` belongs at the **end** of a model, after the exact work is done �
 in the middle and everything downstream inherits a tessellation. A uniform scale above
 it scales the target edge length with it, so the node means the same thing wherever the
 graph places it.
+
+## Fairing (Laplacian smoothing)
+
+`Shape.Smoothed` is the sibling operation: where remeshing rebuilds the *connectivity*
+and holds the shape, fairing moves the *vertices* and changes it. Each pass solves the
+implicit fairing system `(M + λL)·x′ = M·x` (`LaplacianMeshSmoother` in `EngrCAD.Mesh`),
+which rounds sharp features and reduces noise. It acts on the tessellation, so a coarse
+cube — eight vertices — barely moves; remesh first for a dense surface, then fair it.
+
+```csharp render:smooth-fair
+// A finely tessellated cube, faired into a rounded solid. A closed solid has no boundary
+// to pin, so the whole surface fairs: curvature flow that rounds corners and shrinks.
+var cube = Shape.Box(20, 20, 20).Remeshed(1.5, iterations: 12);
+
+var scene = new Scene();
+scene.Add(new Part("remeshed cube", cube, Palette.Steel));
+scene.Add(new Part("faired", cube.Smoothed(1.0, iterations: 3), Palette.Brass,
+    Matrix4d.CreateTranslation((0, 30, 0))));
+```
+
+![A finely tessellated cube beside a Laplacian-faired copy with rounded corners](images/smooth-fair.png)
+
+The `timeStep` is **dimensionless and scale-free** (`λ = timeStep · h̄²` for the mean
+edge length), so the same value fairs the same amount at any model scale; `iterations`
+rebuilds the operator from the current geometry each pass, so honest curvature flow. And
+because it is defined on a triangulation, its support story is the remesh's: B-Rep is
+impossible (a tessellation, not a surface), implicit is bridged through a mesh SDF of the
+faired triangles.
+
+```csharp run:smooth-fair-honest
+var box = Shape.Box(20, 20, 20);
+var faired = box.Smoothed(1.0, iterations: 2);
+
+// A closed solid has no boundary to pin, so the whole surface fairs: the corners pull in
+// and the volume drops. That is the operation, not a defect.
+double before = box.ToMesh().Volume();
+double after = faired.ToMesh().Volume();
+if (after >= before) throw new Exception($"fairing should shrink the body: {before} -> {after}");
+
+if (faired.Explain(TargetRep.Brep).IsConvertible) throw new Exception("B-Rep should be impossible");
+if (!faired.Explain(TargetRep.Implicit).IsConvertible) throw new Exception("implicit should work");
+```
