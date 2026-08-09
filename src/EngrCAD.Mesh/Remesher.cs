@@ -1112,9 +1112,18 @@ public static class Remesher
 
             // A vertex's position here is a function of its INCIDENT triangles, so the faces
             // that can contribute to anything this pass writes are exactly those incident to
-            // the active set. Under sweep scheduling that is every face, so nothing is gained
-            // by testing; under queue scheduling, skipping the rest is what makes face-aligned
-            // projection compose with the scheduler instead of costing O(faces) regardless.
+            // the active set. Under queue scheduling, skipping the rest is what makes
+            // face-aligned projection compose with the scheduler instead of costing O(faces)
+            // regardless.
+            //
+            // Sweep scheduling deliberately skips NOTHING, and the reason is a measurement
+            // rather than "every vertex is active". Every vertex is a candidate under sweep,
+            // but a PINNED candidate is never written (the read loop below skips it), so a
+            // face with three pinned corners does contribute to nothing — the skip exists and
+            // is bit-identical. It does not pay: a pinned set is a one-dimensional subcomplex
+            // of the surface (boundary loops and crease chains) and a face needs ALL THREE
+            // corners in it, so the skippable share measured 0.23%-9.17% over fixtures chosen
+            // to maximise pinning, against a test on every face. See the sweep test.
             bool restricted = _options.Scheduling == RemeshScheduling.Queue &&
                               !_options.AccumulateOverEveryFace;
             if (restricted)

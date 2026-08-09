@@ -714,18 +714,53 @@ public class RemesherTests
     }
 
     /// <summary>
-    /// Sweep scheduling keeps the whole-mesh walk deliberately: with every vertex active the
-    /// restriction could only add a membership test per face, and the plain loop is then both
-    /// faster and unchanged bit-for-bit from before the feature existed.
+    /// Sweep scheduling keeps the whole-mesh walk deliberately — and the reason is a
+    /// measurement, not "every vertex is active under sweep, so there is nothing to skip".
+    /// <para>
+    /// There IS something to skip. Every vertex is a <i>candidate</i> under sweep, but a
+    /// PINNED candidate is never written (the accumulation's read loop skips it), so a face
+    /// with three pinned corners contributes to nothing and dropping it is bit-identical —
+    /// built and measured, 0 differing vertices on eight fixtures. It does not pay, for a
+    /// structural reason: a pinned set is a <b>one-dimensional</b> subcomplex of the surface
+    /// (boundary loops and crease chains) and a face needs ALL THREE corners inside it, so
+    /// the skippable share is a vanishing fraction of a two-dimensional mesh. Measured over
+    /// fixtures chosen to maximise pinning it ran <b>0.23% to 9.17%</b> — the ceiling being
+    /// this cylinder, whose n-gon caps have a fully pinned rim around a one-triangle-deep
+    /// fan — against the cost of a test on every face, which no timing could separate from
+    /// noise (a control arm skipping 0.00% of faces measured 0.795x, i.e. the harness's own
+    /// band is wider than the whole effect).
+    /// </para>
+    /// <para>
+    /// The backlog entry that filed this had the scoping backwards, which is the part worth
+    /// keeping: it proposed the saving for "a small <c>FixedVertices</c> set", and a small
+    /// pinned set is precisely the case that skips nothing. The saving needs a LARGE one, and
+    /// even a maximal one reaches single-digit percent.
+    /// </para>
     /// </summary>
     [Fact]
     public void FaceAlignedProjection_SweepSchedulingStillAccumulatesOverEveryFace()
     {
-        var sphere = FaceAlignedQueueSphere();
-        var options = FaceAlignedQueueFixture(sphere) with { Scheduling = RemeshScheduling.Sweep };
+        // A CYLINDER at the default feature angle, not the queue fixture's featureless sphere:
+        // that one pins nothing at all (closed, FeatureAngleDegrees = 0), so "sweep skips no
+        // face" would hold there however the accumulation were written. The claim is only
+        // testable on a mesh with pinned vertices to skip.
+        var source = MeshPrimitives.Cylinder(1.0, 3.0, 32);
+        var options = new RemeshOptions(0.25)
+        {
+            Iterations = 12,
+            Scheduling = RemeshScheduling.Sweep,
+            Projection = RemeshProjection.FaceAligned,
+            ProjectionTarget = new MeshProjectionTarget(source),
+        };
 
-        var swept = Remesher.Remesh(sphere, options);
-        var forced = Remesher.Remesh(sphere, options with { AccumulateOverEveryFace = true });
+        var swept = Remesher.Remesh(source, options);
+        var forced = Remesher.Remesh(source, options with { AccumulateOverEveryFace = true });
+
+        // FIRST: the fixture must genuinely carry pinned triangles, or the assertion below is
+        // vacuous in exactly the way the featureless sphere made it.
+        Assert.True(swept.Quality.ConstrainedCount > 0,
+            "this fixture pins nothing, so it cannot tell 'sweep walks every face' from " +
+            "'sweep skips the faces it need not write'");
 
         Assert.Equal(forced.FacesAccumulated, swept.FacesAccumulated);
     }

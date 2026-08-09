@@ -7,29 +7,6 @@ triangle-mesh + implicit library; no half-edge, no BSP, no B-Rep, so it compleme
 rather than duplicates our engines) and name the g3 classes worth studying before
 implementing. Ordered roughly by value-for-effort within each section.
 
-## Mesh engine (EngrCAD.Mesh)
-
-Wave-A ✅ landed: `EditableMesh` (guarded Euler operators + journaled bit-identical
-undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAll),
-`MeshExtrude` (faces/thicken/selections), selections + connected components. Wave-B ✅:
-`Remesher` (isotropic, vertex-keyed constraints), `HoleFiller.FillMinimal`/`FillSmoothed`,
-`MeshDecimator` on `EditableMesh`, BSP boolean retired (`Csg.cs` and `BooleanMethod`
-deleted; the imprint boolean is the only one). Wave-C ✅: `SdfProjectionTarget` (Interop),
-seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
-`RemesherPro` scheduling (`RemeshScheduling.Queue`, `FastSplitPasses`), face-aligned
-(RZN-flow) reprojection, `RegionRemesher`, `Shape.Remeshed`. Remaining:
-
-- [ ] **Sweep scheduling still walks every face**, deliberately: with every vertex active
-  the restriction could only add a membership test per face. If a future caller wants
-  face-aligned projection over a large mesh with an explicit small `FixedVertices` set, the
-  same skip would apply — but nothing asks for it today.
-- [ ] **`Part`-level display remesh** — `Shape.Remeshed` is a graph node, so a remesh is a
-  modelling decision baked into the design. A viewer-only "give this part uniform triangles
-  for display/FEA export" switch on `Part` (a post-tessellation pass inside `GetMesh`) is a
-  different, smaller thing and is not built; it would need to interact with the mesh cache
-  and `MeshQuality` precedence.
-- [ ] Mutable in-place variants of fill/extrude once callers want them.
-
 ## Implicit engine (EngrCAD.Implicit)
 
 - [ ] **The strut lattices do not vectorize, and unlike the TPMS family the reason is not a
