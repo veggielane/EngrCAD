@@ -129,6 +129,93 @@ internal static class TopologyFixtures
         return model;
     }
 
+    /// <summary>MBB beam span (X).</summary>
+    public const double MbbSpan = 80;
+
+    /// <summary>MBB beam depth (Y, vertical).</summary>
+    public const double MbbDepth = 24;
+
+    /// <summary>MBB beam thickness (Z).</summary>
+    public const double MbbThickness = 12;
+
+    /// <summary>
+    /// The MBB (Messerschmitt-Bölkow-Blohm) beam — the canonical topology-optimisation problem:
+    /// a simply-supported beam loaded downward at the top centre, which optimises into the
+    /// iconic arch with a bottom tension chord and web members.
+    ///
+    /// <para><b>The supports are symmetric on purpose</b>, so the optimum is left-right
+    /// symmetric and a wrong boundary condition breaks that symmetry visibly (the mutation the
+    /// symmetry test relies on). Two bottom rollers carry the vertical reaction and pin the
+    /// out-of-plane translation; a single base-centre X pin removes the remaining horizontal
+    /// slide without breaking symmetry, because under a purely vertical load the horizontal
+    /// reaction is zero anyway (equilibrium), so the structure still forms its own tension tie
+    /// rather than leaning on a support for thrust.</para>
+    ///
+    /// <para>Refined by <paramref name="level"/> in the two long directions only, one fixed
+    /// thickness — the same device the cantilever uses so a refinement study compares the SAME
+    /// structure at three resolutions.</para>
+    /// </summary>
+    public static StructuralModel MbbBeam(int level, out AnalysisMesh mesh)
+    {
+        var tets = StructuredTetMesh.Box(
+            Vector3d.Zero, new Vector3d(MbbSpan, MbbDepth, MbbThickness),
+            20 + 10 * level, 6 + 3 * level, 3);
+        mesh = AnalysisMesh.Of(tets);
+        var model = new StructuralModel(mesh, Materials.Steel);
+
+        double support = 0.12 * MbbSpan, load = 0.10 * MbbSpan, zHi = MbbThickness + 1;
+        // Bottom rollers, left and right: resist vertical (Y) and out-of-plane (Z).
+        model.Fix(Facets.And(Facets.Tag(StructuredTetMesh.YMin),
+            Facets.InBox(new Aabb((-1, -1, -1), (support, 1, zHi)))), Dof.Y | Dof.Z);
+        model.Fix(Facets.And(Facets.Tag(StructuredTetMesh.YMin),
+            Facets.InBox(new Aabb((MbbSpan - support, -1, -1), (MbbSpan + 1, 1, zHi)))), Dof.Y | Dof.Z);
+        // Base-centre X pin: removes horizontal drift symmetrically.
+        model.Fix(Facets.And(Facets.Tag(StructuredTetMesh.YMin),
+            Facets.InBox(new Aabb((MbbSpan / 2 - load, -1, -1), (MbbSpan / 2 + load, 1, zHi)))), Dof.X);
+        // Downward load at the top centre.
+        model.Force(Facets.And(Facets.Tag(StructuredTetMesh.YMax),
+            Facets.InBox(new Aabb((MbbSpan / 2 - load, MbbDepth - 1, -1), (MbbSpan / 2 + load, MbbDepth + 1, zHi)))),
+            new Vector3d(0, -3000, 0));
+        return model;
+    }
+
+    /// <summary>The MBB density averaged into a fixed grid of bins over span × depth, so two
+    /// meshes (and a field and its mirror) are compared in one representation.</summary>
+    public static double[] MbbBinned(AnalysisMesh mesh, IReadOnlyList<double> density, int bx = 16, int by = 6)
+    {
+        var sum = new double[bx * by];
+        var weight = new double[bx * by];
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            var nodes = mesh.Element(e);
+            var centre = 0.25 * (mesh.Position(nodes[0]) + mesh.Position(nodes[1])
+                + mesh.Position(nodes[2]) + mesh.Position(nodes[3]));
+            int i = Math.Clamp((int)(centre.X / MbbSpan * bx), 0, bx - 1);
+            int j = Math.Clamp((int)(centre.Y / MbbDepth * by), 0, by - 1);
+            double v = mesh.ElementVolume(e);
+            sum[i + j * bx] += v * density[e];
+            weight[i + j * bx] += v;
+        }
+        for (int k = 0; k < sum.Length; k++)
+        {
+            if (weight[k] > 0)
+                sum[k] /= weight[k];
+        }
+        return sum;
+    }
+
+    /// <summary>A binned field mirrored left-to-right (about the mid-span plane).</summary>
+    public static double[] MirrorX(double[] binned, int bx = 16, int by = 6)
+    {
+        var mirror = new double[binned.Length];
+        for (int j = 0; j < by; j++)
+        {
+            for (int i = 0; i < bx; i++)
+                mirror[i + j * bx] = binned[(bx - 1 - i) + j * bx];
+        }
+        return mirror;
+    }
+
     /// <summary>
     /// The density field averaged into a fixed grid of bins over the two long directions —
     /// the ONE representation two different meshes can be compared in.

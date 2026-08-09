@@ -1893,6 +1893,59 @@ whose true range is 0.001 to 1: a picture of nothing, and a convincing one. The 
 sample onto `TetMesh.BoundaryMesh`, whose vertices ARE analysis nodes so every sample matches
 exactly.
 
+### Releasing the result is TWO measured stages, and the measuring is the design
+
+`TopologyResult.Release` turns the density field into a usable, exportable solid, and the whole
+of it is the decision to REPORT what each stage costs rather than return one opaque "cleaned up"
+mesh. The extracted iso-surface is the exact level set and a poor part — thresholded on
+tetrahedra, so stair-stepped at element scale, with every triangle shape (the MBB beam: 3 888
+faces, 2 916 slivers, smallest angle ≈ 0). Two stages fix it, and both MOVE the surface, so both
+are measured: (1) **smoothing** fairs the stair-steps (`LaplacianMeshSmoother`, implicit
+fairing) and (2) **remeshing** re-triangulates to a uniform edge length (`Remesher`).
+
+**Smoothing is deliberately GENTLE, and the failure mode is why.** A stair-step is material on
+the convex side of the mid-surface, so fairing a THIN optimised structure necessarily removes
+some — and a full step at the smoother's own "visible" strength of 1 melts thin members
+(measured −42% of the volume in three steps on the docs beam). The default is three steps at
+strength 0.1, which fairs the steps for a reported ≈−6% and moves the farthest vertex ≈0.72 mm.
+A smoothing that shrinks the part silently is the thing to avoid, so the volume delta and the
+max/mean displacement come back as values (`SmoothingVolumeDelta`, `SmoothingMaxDisplacement`).
+
+**Remeshing REDISTRIBUTES rather than moves**, which is what makes it the stage that makes the
+part usable without spending more of the shape. Its projection target is the SMOOTHED mesh, so
+the remeshed vertices sit on that surface to round-off (measured within 8e-13 of it) and the
+whole benefit is triangle SHAPE: the sliver count drops 2 916 → 69 and the mean smallest-angle
+rises 21° → 48° (`TriangleQuality`, before/after via `IsoSurfaceQuality`/`FinalQuality`), with
+the volume barely changed (−2%). Feature-angle detection is OFF by default here, per the
+recorded "feature detection reads the mesh you give it, not the surface you meant" lesson: an
+optimised part is an organic shape with no CAD creases, and a tessellated blob's facets meet at
+large dihedrals, so the remesher's usual 30° default would pin most of the mesh and leave the
+slivers this stage exists to remove.
+
+**The order is smooth-then-remesh**, and it is the right one: fair the surface, then redistribute
+vertices onto the faired surface. The other order would remesh the stair-steps and then have to
+fair the uniform result, fighting the resolution the remesh just established. The three stages
+(`TopologyReleaseStage.IsoSurface`/`Smoothed`/`Remeshed`) are honestly-different outputs each
+reachable on its own with its own cost — the `Shape.Remeshed`-is-a-graph-node-with-an-honest-
+`Explain` argument, one project over.
+
+**`Release` returns a `HalfEdgeMesh`, NOT a `Shape`**, because `EngrCAD.Fea` is a leaf that
+references only Core and Mesh and cannot see `Shape`/`Part` in `EngrCAD.Modeling` — the same
+sibling-layer constraint `ExtractSurface` already lives under, so `Shape.From(released.Mesh)` is
+the one line that crosses back, and from there the part flows through `--export` and
+`EngrCad.Show` unchanged.
+
+**Islands are reported, not tidied.** Extraction keeps every tetrahedron above the threshold, so
+a disconnected island survives as its own component (`ComponentCount`) rather than being
+silently deleted — keeping only the largest is one call over `MeshConnectedComponents` and is
+the caller's, since deleting material the optimiser put there is exactly the tidying that should
+be a stated act. **Verified by trades, not pictures** (`TopologyReleaseTests`): the delivered
+solid is `Validate`-clean and closed and round-trips through a real binary STL by
+signed-tetrahedral volume (which catches a wrong winding or a hole) to float precision; the two
+stage volume deltas add up to the whole iso-to-deliverable difference exactly; and the MBB beam
+is checked by the property it must have — left–right SYMMETRY, which a wrong support breaks by
+3× — plus a fixed-`r_min` refinement study onto the same structure.
+
 ## 4. Implicit engine
 
 - A model is an **AST of `Sdf` nodes**; every node reports conservative `Bounds`

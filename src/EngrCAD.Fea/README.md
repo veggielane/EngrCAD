@@ -68,6 +68,7 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `RainflowFatigueResults` | Per-node Miner damage per pass, log10 repetitions and the spectrum LOAD FACTOR |
 | `TopologyOptimizer` / `TopologyOptions` / `TopologyFilter` | SIMP compliance minimisation: **where should the material go**, by optimality criteria over one density per element |
 | `TopologyResult` / `TopologyIteration` / `TopologyStop` | The density field, the per-iteration history, the discreteness measure, and the threshold-plus-polygonisation route to a shape |
+| `TopologyResult.Release` / `TopologyReleaseOptions` / `ReleasedTopology` / `TopologyReleaseStage` | Turning the density field into a printable, re-meshable solid: extract → FAIR the stair-steps → REMESH to a uniform edge length, with each stage's volume, surface displacement and triangle-shape cost MEASURED and returned rather than hidden |
 | `DensityFilter` | Internal: the radius neighbourhood both filters share, volume-weighted so it generalises the published uniform-grid form rather than replacing it |
 | `DensityIsoSurface` | Internal: marching TETRAHEDRA over the nodal density field — exact for the piecewise-linear field, and deliberately not `Sdf` + Surface Nets |
 | `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent MASS, GEOMETRIC stiffness, consistent loads, quadrature |
@@ -2672,6 +2673,64 @@ and offering one would mean fitting.
 mesh — eight vertices for a box — interpolates the whole answer across eight corners: measured,
 a picture reading 0.002 to 0.116 on a field whose true range is 0.001 to 1. Sample onto
 `TetMesh.BoundaryMesh` instead, whose vertices are analysis nodes.
+
+## Releasing the result into a usable solid
+
+`TopologyResult.Release` turns the density field into a printable, re-meshable part in **two
+measured stages**, and the point is that both moves are reported rather than hidden behind a
+"cleaned up" result:
+
+```csharp
+var released = result.Release();       // TopologyReleaseStage.Remeshed by default
+Console.WriteLine(released.ToText());
+var solid = Shape.From(released.Mesh);  // one line back into the modelling graph, and thence
+                                        // --export (STL / 3MF / OBJ) and EngrCad.Show
+```
+
+The extracted iso-surface is the exact level set and a **poor part**: thresholded on
+tetrahedra, so stair-stepped at element scale, and marching them produces every triangle shape
+(the docs MBB beam: 3 888 faces, **2 916 slivers**, smallest angle ≈ 0). So:
+
+1. **Smoothing** fairs the stair-steps (`LaplacianMeshSmoother`, implicit fairing). It **moves
+   the surface**, so it is no longer the exact iso-surface — and because a stair-step is
+   material on the convex side of the mid-surface, fairing a thin structure shrinks it. The
+   default is deliberately GENTLE (three steps at strength 0.1): a full step at strength 1 melts
+   thin members (measured **−42%** of the volume in three steps), where the default costs about
+   **−6%** and moves the farthest vertex ≈ 0.72 mm. The volume it spends is returned
+   (`SmoothingVolumeDelta`, `SmoothingMaxDisplacement`), not hidden.
+2. **Remeshing** re-triangulates to a uniform edge length (`Remesher`, projecting onto the
+   smoothed mesh, so it **redistributes vertices without moving the surface** — it stays within
+   `8e-13` of it). This is what makes the part usable: sliver count **2 916 → 69** and mean
+   smallest-angle **21° → 48°** (`TriangleQuality`, before via `IsoSurfaceQuality`, after via
+   `FinalQuality`), volume barely changed (**−2%**).
+
+The **order is smooth-then-remesh**: fair the surface, then redistribute vertices onto the
+faired surface (its projection target is the smoothed mesh). The other order would remesh the
+stair-steps and then have to fair the uniform result, fighting the resolution the remesh just
+established. `TopologyReleaseStage.IsoSurface` / `Smoothed` / `Remeshed` are three
+honestly-different outputs, each reachable on its own with its own measured cost — the same
+spirit as `Shape.Remeshed` being a graph node with an honest `Explain` rather than a hidden
+knob.
+
+**`Release` returns a `HalfEdgeMesh`, not a `Shape`**, deliberately: `EngrCAD.Fea` is a leaf
+that references only Core and Mesh and cannot see the modelling layer, so `Shape.From(...)` is
+the one line that crosses back — the same `HalfEdgeMesh` seam `ExtractSurface` already uses.
+
+**Islands and thin necks are stated, not silently tidied.** Extraction keeps EVERY tetrahedron
+above the threshold, so a disconnected island survives as its own component
+(`ReleasedTopology.ComponentCount`) rather than being deleted; keeping only the largest is one
+call over `MeshConnectedComponents` and is left to the caller. A neck one element thick is a
+valid manifold and passes through; fairing can pinch a hair-thin one, which is a property of
+the threshold, not the release.
+
+**Verified by trades, not pictures** (`TopologyReleaseTests`): the delivered solid is
+`Validate`-clean and closed; it round-trips through a real binary STL by **signed-tetrahedral
+volume** (write, read, sum — which catches a wrong winding or a hole) to float precision; the
+smoothing volume delta and displacement fall inside a band; the sliver count and mean angle
+improve by the numbers above; the remesh stays on the surface to round-off; and the two stage
+deltas add up to the whole difference between the iso-surface and the deliverable exactly. The
+MBB beam itself is checked by the property it must have — left–right SYMMETRY (a wrong support
+breaks it) — and by refining at a fixed filter radius onto the same structure.
 
 ## Refused by name
 

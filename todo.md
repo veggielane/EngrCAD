@@ -840,12 +840,18 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
     problem has a unique optimum, so starting there and ramping is the standard way to
     reduce dependence on the starting design. Cheap to add and it changes committed
     numbers, so it wants its own before/after measurement rather than being switched on.
-  - **The extracted surface is faceted and can carry islands.** A threshold applied to a
-    continuous field leaves elements just above it that connect to nothing; the coarse
-    docs fixture showed a handful before the design space was made thin enough to be
-    nearly discrete. A largest-connected-component filter over `MeshConnectedComponents`
-    is one call and was left out deliberately: silently deleting material the optimiser
-    put there is exactly the kind of tidying that should be a stated option.
+  - **A largest-connected-component FILTER over the released surface** (the only piece of
+    the old faceting/islands item still open). `TopologyResult.Release` landed 2026-08-09:
+    it extracts, FAIRS the element-scale stair-steps (`LaplacianMeshSmoother`) and REMESHES
+    to a uniform edge length (`Remesher`), returning a `ReleasedTopology` whose per-stage
+    volume delta, surface displacement and triangle-shape (`TriangleQuality`) are all
+    MEASURED — so a caller sees what smoothing and remeshing each traded rather than one
+    opaque result. It also REPORTS how many components the extraction left
+    (`ReleasedTopology.ComponentCount`) rather than deleting a floating island, which is
+    right (silently deleting material the optimiser put there is exactly the tidying that
+    should be a stated option). Keeping only the largest is one call over
+    `MeshConnectedComponents` and is still the caller's; offering it as a named
+    `TopologyReleaseOptions` flag is the small open piece.
   - **Cost.** One factorization per iteration, and no reuse between them: measured 288
     elements in 0.43 s, 1 152 in 2.5 s and 10 800 in about 50 s at 60 iterations. The
     standard remedies are a preconditioned CG warm-started from the previous iterate's

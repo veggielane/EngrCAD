@@ -52,7 +52,7 @@ public readonly record struct TopologyIteration(
 /// <c>Shape.From(result.ExtractSurface(0.5))</c>, and re-modelling the result by hand is the
 /// step every topology-optimisation workflow has.</para>
 /// </summary>
-public sealed class TopologyResult
+public sealed partial class TopologyResult
 {
     private readonly double[] _design;
     private readonly double[] _physical;
