@@ -932,6 +932,49 @@ this project's conversions.)
   and would have to be threaded through call sites that sit *inside* cached lowerings —
   exactly where a token must not reach.
 
+## Mesh → B-Rep reconstruction (`MeshToBrep`)
+
+The fourth edge of the conversion triangle, and the only one that puts information BACK
+rather than throwing it away: `MeshToBrep.Reconstruct(mesh, options?)` re-recognises a
+triangle `HalfEdgeMesh` as a parametric `BrepSolid` of analytic faces. **The headline metric
+is the FACE COUNT** — a drilled plate comes back as about seven faces (six planes and one
+cylindrical bore), not five thousand planar facets wearing a `.step` extension, which is
+what "STL to STEP" usually and worthlessly means.
+
+**v1 is the tessellated-CAD case, said out loud.** A tessellation of exact geometry has its
+vertices lying ON the original surface, so a fit's residual is the chord error and nothing
+else, and a cylinder's radius is recovered essentially EXACTLY at every tessellation
+density — where a fit reporting the inscribed radius `r·cos(π/n)` would be measurably wrong
+(0.024 low at 32 segments). A 3D SCAN is a different product and is not attempted.
+
+Two phases:
+
+- **Segmentation + fitting** (`MeshToBrep`, `MeshToBrepReport`): region-grow triangles across
+  every edge that is not a sharp crease (`FeatureAngleDegrees`, default 35° — feature
+  detection reads the MESH, so a very coarse tessellation over-segments and the face count is
+  the honest check), then fit a plane / cylinder / sphere per region with the worst residual
+  REPORTED (`ReconstructedRegion.Residual`, the `BiArcFit.MaxDeviation` convention). The
+  cylinder axis is the smallest eigenvector of the area-weighted facet-normal covariance
+  (a cylinder's normals span a great circle ⊥ axis); the radius is an algebraic circle fit in
+  the plane ⊥ axis, which is exact for points ON a circle. Cone, torus and freeform regions
+  are reported `Unfitted` by name (a NURBS surface fitter is the genuinely new numerical work
+  and is future work).
+- **Assembly** (`SolidAssembler`): a region boundary becomes the EXACT intersection of the
+  two fitted surfaces — a `Line3d` (plane∩plane, through the snapped corners), a `Circle3d`
+  (plane∩cylinder rim), or an analytic branch of `SurfaceIntersection` — never the chordal
+  polyline the mesh happened to carry, and a triple-point corner is snapped to the exact
+  meeting of its three surfaces (`SurfaceCorner.SolvePoint`). Shared edges are built once and
+  referenced by both faces, so the result is a manifold directly; `ShapeHealing.Heal` repairs
+  shell orientation and `BrepSolid.Validate()` is the oracle.
+
+The verification bar needs no external data (`MeshToBrepTests`): box / cylinder / drilled
+plate reconstruct to valid closed solids with matching volumes and 6 / 3 / 7 faces, the
+cylinder radius is recovered to 8 decimals at 32 / 64 / 128 / 256 segments (never the
+inscribed impostor), and the reconstructed plate re-tessellates closed and round-trips.
+Refused by name: an open or non-manifold mesh (`MeshRepair.AutoRepair` is the front door,
+not invoked silently), an unfitted region, and a seamless closed surface with no boundary
+edge (a whole sphere is one face with no edge — the fit is still reported).
+
 ## Planar cross-sections (`PlanarSection`)
 
 `projection(cut = true)`: the cross-section of a solid through a plane, as 2D
