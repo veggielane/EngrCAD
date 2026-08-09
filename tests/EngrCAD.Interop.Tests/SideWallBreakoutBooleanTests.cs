@@ -151,26 +151,41 @@ public class SideWallBreakoutBooleanTests
     }
 
     [Fact]
-    public void BlindDrilledHoleAndTheSameCutByACylinder_AgreeInTheLIMIT()
+    public void BlindDrilledHoleAndTheSameCutByACylinder_AgreeAtEVERYDensity()
     {
-        // The two-constructions oracle, at the strength it is honestly available at. The
-        // pair above (a sketch extrusion's bounded wall against a box's unbounded plane)
-        // agrees to 1e-11 AT EVERY DENSITY because both routes produce the same SURFACES
-        // and so the same grid. These two do not: a `Drill` tool's side is a
-        // RevolvedSurface band while a `Shape.Cylinder`'s is a CylinderSurface, and the two
-        // carry different tessellation rules — measured, the drill route reads +0.674 where
-        // the cylinder route reads +0.457 at 32 segments. So what can be asserted is that
-        // the DIFFERENCE converges to zero at the same quadratic rate, which says the two
-        // describe one solid rather than two that happen to be close.
+        // The two-constructions oracle, and the strength it is available at is itself the
+        // measurement. It used to be a LIMIT statement: a `Drill` tool's side is a
+        // RevolvedSurface band while a `Shape.Cylinder`'s is a CylinderSurface, the drill
+        // route read +0.674 against the cylinder route's +0.457 at 32 segments, and all
+        // that could honestly be asserted was that the difference fell to zero at the same
+        // quadratic rate.
+        //
+        // Once the exact CYLINDRICAL-BAND carrier landed (SurfaceIntersection's
+        // TryCylindricalBand — a full-turn revolve of an axis-parallel straight generator
+        // IS a cylinder, so the breakout cut is two exact axis-parallel lines rather than a
+        // 49-sample tracer polyline) the two routes stopped differing in grade as well as
+        // in answer: measured, +0.4566 / +0.1151 / +0.0289 / +0.0072 against +0.4573 /
+        // +0.1146 / +0.0288 / +0.0072, i.e. the gap is 0.16% / 0.39% / 0.37% / 0.19% of the
+        // shared error rather than 47% of it.
+        //
+        // <para>So the sign assertion is GONE rather than relaxed, and its going is the
+        // finding: the gap now reads −7.1e-4, +4.5e-4, +1.1e-4, +1.4e-5 — it changes sign,
+        // because neither route is the coarser one any more and what is left is round-off
+        // in two different closed forms for the same rim. A one-signed assertion here would
+        // now be pinning an accident.</para>
         var wall = SketchPlane.At((0, -Ly / 2, Z0), Vector3d.UnitX, Vector3d.UnitZ);
-        double[] gaps = [.. new[] { 32, 64, 128, 256 }.Select(n =>
-            SoundVolume(ExtrudedPlate().Drill(HoleSpec.Simple(2 * R), [(0, 0)], Ly / 2, wall), n)
-            - SoundVolume(ExtrudedPlate() - Bore(-2 * Ly, 0), n))];
-
-        Assert.All(gaps, g => Assert.True(g > 0, $"the coarser route must over-report: {g}"));
-        for (int i = 1; i < gaps.Length; i++)
-            Assert.True(gaps[i - 1] / gaps[i] > 3.4, $"ratio {gaps[i - 1] / gaps[i]:F2}");
-        Assert.True(gaps[^1] < 3e-3, $"the two routes must be converging together: {gaps[^1]:E3}");
+        double exact = Lx * Ly * H - Removed(Ly / 2);
+        foreach (int n in (int[])[32, 64, 128, 256])
+        {
+            double drill = SoundVolume(
+                ExtrudedPlate().Drill(HoleSpec.Simple(2 * R), [(0, 0)], Ly / 2, wall), n) - exact;
+            double cylinder = SoundVolume(ExtrudedPlate() - Bore(-2 * Ly, 0), n) - exact;
+            Assert.True(drill > 0 && cylinder > 0,
+                $"both inscribed routes must over-report at {n}: {drill:E3}, {cylinder:E3}");
+            Assert.True(Math.Abs(drill - cylinder) < 1e-2 * cylinder,
+                $"at {n} the two routes differ by {Math.Abs(drill - cylinder):E3}, " +
+                $"{Math.Abs(drill - cylinder) / cylinder:P2} of the shared error {cylinder:E3}");
+        }
     }
 
     /// <summary>
@@ -216,6 +231,60 @@ public class SideWallBreakoutBooleanTests
             Assert.True(error > 0, $"z0 {z0}: inscribed tessellation must over-report, got {error:E3}");
             Assert.True(error < 5e-3 * removed,
                 $"z0 {z0}: error {error:E3} exceeds {5e-3 * removed:E3} on a removed volume of {removed:F3}");
+        }
+    }
+
+    /// <summary>
+    /// The GRAZING end of the same family: the bore's axis dropped until only a sliver of it
+    /// pokes through the top face, and both routes' limit measured rather than assumed.
+    ///
+    /// <para>Two fixes moved it and neither was about grazing. The exact cylindrical-band
+    /// carrier replaced the tracer polyline that used to end strictly inside the top face
+    /// (<i>"Open splitting curves must start and end outside the face"</i>), and
+    /// <c>ProbePoint</c> learned to step off a thin fragment's own boundary rather than hunt
+    /// for it on a uniform uv grid — the discarded wall fragment here is an L, a 0.23 rad
+    /// wedge joined to a 0.048-tall ring, and the 12x12 grid's 0.63 x 0.083 step landed in
+    /// neither. Together they took the drill route from refusing at a half-chord of 0.35 to
+    /// closing at 0.24.</para>
+    ///
+    /// <para><b>0.24 is where the <see cref="Shape.Cylinder"/> route stops too, and that is
+    /// the point of asserting both.</b> The two routes now fail at the same half-chord and in
+    /// the same way — an unclosed solid whose crack runs through (0, −15, 10), where the
+    /// bore's ENTRY RIM grazes the plate's own top EDGE — so what is left is one near-tangency
+    /// between a circle and a line, not two limits for two reasons. A tangency is where the
+    /// v1 exact boolean stops by design; the row below the last passing one is kept as a
+    /// LOUD refusal so a future fix announces itself.</para>
+    /// </summary>
+    [Fact]
+    public void GrazingBreakouts_CloseUntilTheEntryRimTouchesThePlatesTopEdge()
+    {
+        // Half-chords 0.768 / 0.545 / 0.346 / 0.245: the last two are what the two fixes
+        // bought, and the errors stay one-signed and of the family's own magnitude.
+        foreach (double z0 in (double[])[7.1, 7.05, 7.02, 7.01])
+        {
+            var wall = SketchPlane.At((0, -Ly / 2, z0), Vector3d.UnitX, Vector3d.UnitZ);
+            double removed = RemovedAt(z0, Ly / 2);
+            double error =
+                SoundVolume(ExtrudedPlate().Drill(HoleSpec.Simple(2 * R), [(0, 0)], Ly / 2, wall), 64)
+                - (Lx * Ly * H - removed);
+            Assert.True(error > 0, $"z0 {z0}: inscribed tessellation must over-report, got {error:E3}");
+            Assert.True(error < 5e-3 * removed,
+                $"z0 {z0}: error {error:E3} exceeds {5e-3 * removed:E3} on a removed volume of {removed:F3}");
+        }
+
+        // And the limit, from BOTH routes at the same depth — a half-chord of 0.173. A
+        // refusal asserted from one route only would leave it looking like a property of the
+        // drill tool, which is exactly what it was until the carrier landed.
+        const double grazing = 7.005;
+        var tooShallow = SketchPlane.At((0, -Ly / 2, grazing), Vector3d.UnitX, Vector3d.UnitZ);
+        foreach (var build in (Func<Shape>[])[
+            () => ExtrudedPlate().Drill(HoleSpec.Simple(2 * R), [(0, 0)], Ly / 2, tooShallow),
+            () => ExtrudedPlate() - Shape.Cylinder(R, 2 * Ly)
+                .Rotate(Vector3d.UnitX, -Math.PI / 2)
+                .Translate((0, -Ly, grazing))])
+        {
+            var refused = Assert.ThrowsAny<Exception>(() => build().ToBrep());
+            Assert.Contains("unclosed solid", refused.Message);
         }
     }
 

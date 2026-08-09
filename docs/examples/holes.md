@@ -105,8 +105,14 @@ var removed = 40 * 30 * 10 - BrepMassProperties.Compute(halved.ToBrep()).Volume;
 Console.WriteLine($"{removed:F2} removed");   // 212.06 removed
 ```
 
-The remaining limit is a **grazing** breakout — one whose opening is a small fraction of the
-bore's diameter. That still fails loudly rather than returning a solid with a crack in it.
+The remaining limit is a **grazing** breakout, and it is now a genuine near-tangency rather
+than a property of the drill: on the plate above, an opening down to about 0.5 mm across
+(a quarter of a millimetre either side of the bore's top) cuts cleanly, and below that the
+bore's own entry rim becomes tangent to the plate's top **edge** — a circle touching a line —
+which is where the exact boolean stops by design. The same cut made with a plain
+`Shape.Cylinder` stops at the same place, which is what says it is the configuration rather
+than the tool. Past it the boolean fails loudly rather than returning a solid with a crack
+in it, and the implicit route (`Shape.From(shape.ToImplicit()).ToMesh()`) takes any of them.
 
 ## The standards catalog
 

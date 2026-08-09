@@ -1029,6 +1029,60 @@ public static class BrepBoolean
         }
         if (best is { } found)
             return found;
+
+        // Thin fragments: STEP OFF THE BOUNDARY the fragment already has, rather than
+        // hunting for it. A uniform uv grid is a statement about the bounding BOX, and a
+        // fragment that is thin anywhere can slip between its samples however isotropic
+        // the box is — the recorded "a sampling grid in parameter space says nothing about
+        // coverage" lesson, here about a region's SHAPE rather than a band's aspect.
+        // Measured on a bore grazing a plate's top face (half-chord 0.35 of a Ø6 bore): the
+        // discarded wall fragment is an L, a 0.23 rad wedge joined to a 0.048-tall ring,
+        // and the 12x12 grid's 0.63 x 0.083 step lands in neither, so the whole boolean
+        // refused for want of one point on a face it was about to throw away.
+        //
+        // The loops ARE the region's own resolution, so a point just inside an edge is
+        // inside the region whenever the region is thicker than the step — and stepping
+        // perpendicular in uv reaches one side or the other with no orientation convention
+        // to get wrong (a reversed face's loops wind the other way; both signs are tried).
+        // The ladder shrinks geometrically so an arbitrarily thin fragment is still
+        // reached, and the widest clearance still wins, so this only ever probes close to a
+        // boundary when there is nowhere else to stand.
+        foreach (double fraction in (ReadOnlySpan<double>)[0.25, 0.0625, 0.015625, 1.0 / 256])
+        {
+            Vector3d? inset = null;
+            double insetClearance = 0;
+            foreach (var loop in loops)
+            {
+                for (int i = 0; i < loop.Count; i++)
+                {
+                    var from = loop[i];
+                    var to = loop[(i + 1) % loop.Count];
+                    var along = to - from;
+                    double length = along.Length;
+                    if (!(length > 0))
+                        continue;
+                    // The perpendicular's magnitude IS the edge's, so one multiply steps a
+                    // fraction of the local edge length — the region's own scale there.
+                    var offset = new Vector2d(-along.Y, along.X) * fraction;
+                    foreach (double sign in (ReadOnlySpan<double>)[1, -1])
+                    {
+                        var uv = (from + to) / 2 + offset * sign;
+                        var candidate = face.Surface.PointAt(uv.X, uv.Y);
+                        if (!FaceGeometry.Contains(face, candidate))
+                            continue;
+                        double clearance = loopPoints.Min(p => p.DistanceSquaredTo(candidate));
+                        if (clearance > insetClearance)
+                        {
+                            insetClearance = clearance;
+                            inset = candidate;
+                        }
+                    }
+                }
+            }
+            if (inset is { } stepped)
+                return stepped;
+        }
+
         // Name the fragment (the refusal culture): which carrier, where it sits, and the
         // uv shape the probe search saw — without these the failure reads the same for
         // every face of every boolean.
@@ -1036,6 +1090,7 @@ public static class BrepBoolean
             $"Could not find a probe point on a face fragment: {face.Surface.GetType().Name}" +
             $"{(face.IsReversed ? " (reversed)" : "")} with {loops.Count} loop(s), pulled uv " +
             $"u [{uMin:G6}, {uMax:G6}] x v [{vMin:G6}, {vMax:G6}], anchored at " +
-            $"{face.Surface.PointAt(uMin, vMin)}; no grid sample inside the trim contained a point.");
+            $"{face.Surface.PointAt(uMin, vMin)}; neither a grid sample nor a step off the " +
+            "fragment's own boundary landed inside its trim.");
     }
 }
