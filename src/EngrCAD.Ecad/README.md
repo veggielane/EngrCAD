@@ -132,9 +132,47 @@ IDF carries no connectivity, so `ToLayout()` synthesizes a data-only schematic (
 placement). `IdfWriter.Write` closes the loop — `read → write → read → write` is a byte fixed
 point for the geometry IDF carries.
 
+## Stage 3 — placement constraints
+
+Stage 3 places components by **constraint** rather than by typed coordinates. The variables are
+each free placement's rigid 2D pose `(x, y, θ)` on the board; a rough drawn layout is the *seed*,
+and `layout.Constrain()` builds a `ConstrainedLayout` whose `Solve()` returns a **new**
+`PcbLayout` at the poses that satisfy the relations — the copper, drills, nets and 3D bodies all
+derive from the moved placements, so nothing drifts.
+
+**The solver is the MateSolver doctrine, one layer up** (`PcbConstraintSolver` in `EngrCAD.Ecad`).
+The Modeling sketch/mate LM engines are internal/private and bound to their own variable models (3D
+6-DOF frames, or free 2D points), and a PCB placement is neither — so this is a *focused* 2D solver
+that follows the doctrine exactly: an analytic Jacobian; every residual a length (angular residuals
+scaled by the board diagonal, the rotation variable divided by it, so one linear tolerance is
+meaningful and every column is O(1)); a rank-revealing DOF report from a diagonally pivoted Cholesky
+of JᵀJ at the 1e-6 relative floor; the drawn layout as seed **and** branch selector; an
+under-constrained layout reported; a contradiction and a stationary start *named*; a failed solve
+leaving the source bit-identically unchanged.
+
+| Constraint | What it fixes |
+| --- | --- |
+| `Lock` / `Fix` | A placement is a datum (its pose is an input). |
+| `Group` / `Cluster` | Several placements move as ONE rigid body. |
+| `Orient` / `FixRotation` | A placement's rotation (to an angle, or to where it was drawn). |
+| `Distance` / `Spacing` | A stated gap between two points (origins, pads). |
+| `AlignX` / `AlignY` | Two points share a coordinate — a column or a row. |
+| `Parallel` / `Perpendicular` | Two directions (a component axis, a board edge). |
+| `PointOnLine` | A point on a line's carrier at a signed offset (the point-on-line-is-distance-at-zero rule). |
+| `AlignEdge` | A component side flush (or at a gap) to a board edge or another side. |
+| `InsideRegion` / `InsideBoard` | A footprint stays inside a zone (its bounding circle contained). |
+| `ClearOf` / `ClearOfRegion` / `ClearOfKeepOut` | A footprint stays a distance clear of another footprint, or of a keep-out. |
+
+Clearance and containment are **one-sided** (active-set) residuals — they push only when violated
+rather than a fake equality — over a footprint modelled by the smallest circle about its origin
+enclosing its pads (rotation-invariant, conservative). Constraints persist:
+`ConstrainedLayout.Save`/`Load` extends the layout format with a `constraints` array,
+write-only-when-stated, so a layout with no constraints is byte-identical to a stage-2 file and a
+constrained one is a `save → load → save` byte fixed point. Docs: `examples/ecad-constraints.md`.
+
 ## Not yet (later campaign stages)
 
-PCB positioning constraints, copper DRC (a region-offset clearance query over the placed pads),
+Copper DRC (a region-offset clearance query over the placed pads),
 autorouting, panel cutouts, thermal coupling, MID/LDS 3D routing, and the richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one graph. A
 drawn schematic **sheet** (symbols and wires to SVG/DXF/PDF via the `DrawingSheet` machinery) is a

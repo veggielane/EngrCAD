@@ -2485,6 +2485,34 @@ from what was already understood rather than from scratch.
     flattens/drops/ignores them with a diagnostic); keep-out DRC is a centre-in-polygon test,
     not yet the copper-clearance region query; the drawn schematic SHEET, KiCad `.kicad_pcb`
     and STEP AP214 board-assembly interchange stay open below.
+  - **✅ STAGE 3 — placement constraints — LANDED** (`PcbConstraints.cs`/`ConstrainedLayout.cs`/
+    `PcbConstraintSolver.cs`/`PcbConstraintFile.cs`; docs `examples/ecad-constraints.md`,
+    design.md §6d, README). Components are placed by CONSTRAINT rather than typed coordinates:
+    the variables are each free placement's rigid 2D pose `(x, y, θ)`, `layout.Constrain()`
+    builds a `ConstrainedLayout`, and `Solve()` returns a NEW `PcbLayout` at the solved poses —
+    the copper/drills/nets/bodies DERIVE from it, so `Solved.Check()` still passes and
+    `Solved.PadsOfNet` returns the moved copper (the one-declaration identity survives). **The
+    load-bearing decision was a FOCUSED solver, not reuse of the Modeling one, and it is about
+    the VARIABLE MODEL**: the sketch/mate LM engines are internal/private and bound to their own
+    variables (3D 6-DOF `Occurrence` frames; free 2D POINT coordinates), and a placement is
+    neither — a rigid pose whose rotation moves the WHOLE footprint about its origin — so
+    `PcbConstraintSolver` rebuilds the MateSolver doctrine at 2D (analytic Jacobian; every
+    residual a LENGTH, angular ones scaled by the board diagonal and the rotation variable
+    divided by it; rank/DOF from a diagonally pivoted Cholesky of JᵀJ at the 1e-6 relative
+    floor — the sketch-constraint floor, not the mate 1e-8; drawn layout as seed AND branch
+    selector; under-constrained reported, contradictions/stationary NAMED, a failed solve
+    bit-identical). No Modeling solver was touched; a shared generic 2D-rigid core is FILED (no
+    third consumer). Vocabulary: `Lock`/`Fix`, `Group`/`Cluster` (a rigid body — each member's
+    fixed offset captured off the drawn layout), `Orient`/`FixRotation`, `Distance`/`Spacing`,
+    `AlignX`/`AlignY`, `Parallel`/`Perpendicular`, `PointOnLine` (SIGNED offset), `AlignEdge`,
+    `InsideRegion`/`InsideBoard`, `ClearOf`/`ClearOfRegion`/`ClearOfKeepOut`. Inequalities are
+    ACTIVE-SET residuals (`min(g,0)`, pushing only when violated, adding no rank while inactive)
+    over a bounding-circle footprint model; the solve is deterministic; persistence extends the
+    stage-2 seam (no-constraints byte-identical to a stage-2 file, constrained a save→load→save
+    fixed point). Verified: satisfied-set converges to the weld tier with the DOF reported,
+    `AlignEdge` makes edges exactly parallel/collinear, `Spacing` met exactly, `ClearOfRegion`
+    leaves pads disjoint at the full clearance, contradiction/stationary/over/under all
+    exercised, scale-invariant to 1000×.
   - **The one genuinely new thing is a CONNECTIVITY DATA MODEL beside the geometry, and
     keeping the two coherent is the whole discipline.** A netlist is a graph — components,
     pins, nets — and it is NOT a signed distance field or a topology. The failure mode of
@@ -2509,17 +2537,6 @@ from what was already understood rather than from scratch.
     `ComponentAssembly.Place` cutting the host while recording the occurrence, already built
     and tested. Placing the footprints on the board is `LocationSet`/`Pattern` with a pose
     per part.
-  - **PCB positioning constraints** — component placement subject to constraints (align to a
-    board edge, keep a spacing, sit inside a region, stay clear of a keep-out, group by
-    function). This is the SKETCH-CONSTRAINT SOLVER's problem one layer up: the variational
-    LM solver behind `ConstrainedSketch`/`SketchConstraintSolver` already does
-    coincident/parallel/distance/point-on with an analytic Jacobian and a rank-revealing
-    DOF report, and a 2D placement constraint (a component's origin and rotation against a
-    board datum) is the same residual family. The 3D analog — a part constrained against an
-    enclosure feature — is the `MateSolver`, also landed. So the constraint engine exists;
-    what is new is the placement vocabulary that feeds it, and the verification is the
-    solver's own (a satisfied set converges to residual ≤ weld tier, an over-constrained
-    one is reported, a contradiction is named, the drawn layout is the seed).
   - **Copper DRC is a GEOMETRY problem this kernel is unusually well-equipped for, which is
     the correction to the old entry's "should not build".** The core rules are region
     queries the exact 2D machinery answers without a tolerance: trace-to-trace clearance is
