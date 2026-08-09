@@ -235,6 +235,60 @@ public class SideWallBreakoutBooleanTests
     }
 
     /// <summary>
+    /// The GRAZING end of the same family: the bore's axis dropped until only a sliver of it
+    /// pokes through the top face, and both routes' limit measured rather than assumed.
+    ///
+    /// <para>Two fixes moved it and neither was about grazing. The exact cylindrical-band
+    /// carrier replaced the tracer polyline that used to end strictly inside the top face
+    /// (<i>"Open splitting curves must start and end outside the face"</i>), and
+    /// <c>ProbePoint</c> learned to step off a thin fragment's own boundary rather than hunt
+    /// for it on a uniform uv grid — the discarded wall fragment here is an L, a 0.23 rad
+    /// wedge joined to a 0.048-tall ring, and the 12x12 grid's 0.63 x 0.083 step landed in
+    /// neither. Together they took the drill route from refusing at a half-chord of 0.35 to
+    /// closing at 0.24.</para>
+    ///
+    /// <para><b>0.24 is where the <see cref="Shape.Cylinder"/> route stops too, and that is
+    /// the point of asserting both.</b> The two routes now fail at the same half-chord and in
+    /// the same way — an unclosed solid whose crack runs through (0, −15, 10), where the
+    /// bore's ENTRY RIM grazes the plate's own top EDGE — so what is left is one near-tangency
+    /// between a circle and a line, not two limits for two reasons. A tangency is where the
+    /// v1 exact boolean stops by design; the row below the last passing one is kept as a
+    /// LOUD refusal so a future fix announces itself.</para>
+    /// </summary>
+    [Fact]
+    public void GrazingBreakouts_CloseUntilTheEntryRimTouchesThePlatesTopEdge()
+    {
+        // Half-chords 0.768 / 0.545 / 0.346 / 0.245: the last two are what the two fixes
+        // bought, and the errors stay one-signed and of the family's own magnitude.
+        foreach (double z0 in (double[])[7.1, 7.05, 7.02, 7.01])
+        {
+            var wall = SketchPlane.At((0, -Ly / 2, z0), Vector3d.UnitX, Vector3d.UnitZ);
+            double removed = RemovedAt(z0, Ly / 2);
+            double error =
+                SoundVolume(ExtrudedPlate().Drill(HoleSpec.Simple(2 * R), [(0, 0)], Ly / 2, wall), 64)
+                - (Lx * Ly * H - removed);
+            Assert.True(error > 0, $"z0 {z0}: inscribed tessellation must over-report, got {error:E3}");
+            Assert.True(error < 5e-3 * removed,
+                $"z0 {z0}: error {error:E3} exceeds {5e-3 * removed:E3} on a removed volume of {removed:F3}");
+        }
+
+        // And the limit, from BOTH routes at the same depth — a half-chord of 0.173. A
+        // refusal asserted from one route only would leave it looking like a property of the
+        // drill tool, which is exactly what it was until the carrier landed.
+        const double grazing = 7.005;
+        var tooShallow = SketchPlane.At((0, -Ly / 2, grazing), Vector3d.UnitX, Vector3d.UnitZ);
+        foreach (var build in (Func<Shape>[])[
+            () => ExtrudedPlate().Drill(HoleSpec.Simple(2 * R), [(0, 0)], Ly / 2, tooShallow),
+            () => ExtrudedPlate() - Shape.Cylinder(R, 2 * Ly)
+                .Rotate(Vector3d.UnitX, -Math.PI / 2)
+                .Translate((0, -Ly, grazing))])
+        {
+            var refused = Assert.ThrowsAny<Exception>(() => build().ToBrep());
+            Assert.Contains("unclosed solid", refused.Message);
+        }
+    }
+
+    /// <summary>
     /// The DIAMETRAL cut: the breakout face passes exactly through the drill cap's own
     /// POLE, so the surviving half-disk is bounded by a chord through the one point of the
     /// cap where its azimuth does not exist. It refused at every density — <i>"Open

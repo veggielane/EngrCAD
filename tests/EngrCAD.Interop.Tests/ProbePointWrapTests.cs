@@ -75,4 +75,77 @@ public class ProbePointWrapTests
         Assert.True(face.Surface.TryProjectPoint(probe, out var uv, FaceGeometry.InverseEvaluationTolerance));
         Assert.InRange(uv.Y, 0.25, 0.5);
     }
+
+    // ---- the pole rule, at face level ----
+
+    private const double CapRadius = 3, ToolHeight = 10;
+
+    /// <summary>An axis-touching revolve's flat bottom, cut by the exact chord at
+    /// perpendicular <paramref name="offset"/> — the shape a blind drill's cap takes when the
+    /// face it breaks out of slices it. Returns the fragment containing the POLE, which is
+    /// the one whose single loop WRAPS: a loop encircling the pole must, since in parameter
+    /// space the pole is the whole v = 0 line.</summary>
+    private static BrepFace CutCap(double offset, double azimuth)
+    {
+        var frame = Frame3d.FromXY(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitZ);
+        var profile = Profile.FromLoop(
+            [new(0, 0), new(CapRadius, 0), new(CapRadius, ToolHeight), new(0, ToolHeight)], frame);
+        var tool = SolidFactory.Revolve(profile, Vector3d.Zero, Vector3d.UnitZ);
+        var cap = tool.Faces.First(f =>
+            f.Surface is RevolvedSurface && Math.Abs(f.Bounds().Center.Z) < 1e-9);
+
+        double half = Math.Sqrt(CapRadius * CapRadius - offset * offset);
+        var n = new Vector3d(Math.Cos(azimuth), Math.Sin(azimuth), 0);
+        var t = new Vector3d(-Math.Sin(azimuth), Math.Cos(azimuth), 0);
+        var pieces = FaceSplitter.SplitByCurve(cap, new Line3d(n * offset - t * half, n * offset + t * half));
+        Assert.Equal(2, pieces.Count);
+        return pieces.Single(p => FaceGeometry.LoopWrapsPeriod(
+            FaceGeometry.PullLoops(p)[0], FaceGeometry.PeriodU(p.Surface)));
+    }
+
+    /// <summary>
+    /// <c>ProbePoint</c>'s pole path, measured at FACE level rather than only end to end,
+    /// which is what a bare pole cap declining to split by a chord used to make impossible.
+    ///
+    /// <para>A single loop that WRAPS the period separates the pole from everything else, so
+    /// the face is the pole's side and every v strictly between the pole and the loop is
+    /// inside at every u — which is why the probe may skip the parity check. It must read
+    /// the loop's CLOSEST APPROACH to the pole, though, and here that is a closed form: the
+    /// closest point of a chord at perpendicular offset d is at radius exactly d, so the
+    /// probe lands at radius exactly d/2. Asserting the VALUE pins the rule; asserting only
+    /// "inside" would pass for any rule that happens to land in the major segment.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(0.5, 0.0)]
+    [InlineData(1.0, 1.0)]
+    [InlineData(2.0, Math.PI)]
+    [InlineData(2.9, -0.7)]
+    public void ACutPoleCap_IsProbedHalfwayToItsPole(double offset, double azimuth)
+    {
+        var face = CutCap(offset, azimuth);
+        var probe = BrepBoolean.ProbePoint(face);
+
+        Assert.True(FaceGeometry.Contains(face, probe), $"probe {probe} is outside the cut cap");
+        Assert.Equal(offset / 2, new Vector3d(probe.X, probe.Y, 0).Length, 12);
+        Assert.Equal(0.0, probe.Z, 12);
+    }
+
+    /// <summary>
+    /// The fixture carries the configuration, which for this rule means the loop is NOT
+    /// level: measuring it by its AVERAGE v instead of its closest approach puts the probe
+    /// somewhere the face does not reach. That is exactly what cracked a blind drill breaking
+    /// out of a plate's top face — the average landed 0.106 above the plate — and without
+    /// this row the value above could be satisfied by an average that happened to agree.
+    /// </summary>
+    [Fact]
+    public void MeasuringTheCutCapsLoopByItsAVERAGE_ProbesOutsideIt()
+    {
+        var face = CutCap(1.0, Math.PI);
+        var loop = FaceGeometry.PullLoops(face)[0];
+        var average = face.Surface.PointAt(loop.Average(p => p.X), loop.Average(p => p.Y) / 2);
+
+        Assert.False(FaceGeometry.Contains(face, average),
+            $"the average-v probe {average} is inside after all — the fixture no longer carries the case");
+        Assert.True(FaceGeometry.Contains(face, BrepBoolean.ProbePoint(face)));
+    }
 }
