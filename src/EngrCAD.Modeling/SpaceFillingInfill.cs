@@ -49,11 +49,22 @@ public static class SpaceFillingInfill
     /// ACHIEVED spacing — a bead of that width then just touches the outline. Zero fills to the
     /// boundary.</param>
     /// <param name="maxSites">Refusal cap passed to the generator.</param>
+    /// <param name="tiled">Lay the curve over the region's bounding RECTANGLE as a tiling of
+    /// Hilbert blocks (<see cref="SpaceFillingCurve.OverTiled"/>) instead of over its bounding
+    /// SQUARE. On a long thin region the square footprint spends most of the curve outside it and
+    /// sets the achieved spacing by the region's LENGTH; tiling fits the rectangle, at the cost
+    /// of cells that are no longer square (<see cref="SpaceFillingCurve.Anisotropy"/> reports how
+    /// far). Hilbert only — Moore is a closed loop with no block ends to link and Gosper does not
+    /// tile a rectangle.</param>
+    /// <param name="blockOrder">The Hilbert block order when <paramref name="tiled"/> is set:
+    /// higher is more isotropic and fits the rectangle more coarsely.</param>
     public static InfillPath Fill(
         Sketch region, double spacing,
         SpaceFillingFamily family = SpaceFillingFamily.Hilbert,
         double? clearance = null,
-        int maxSites = SpaceFillingCurve.DefaultMaxSites)
+        int maxSites = SpaceFillingCurve.DefaultMaxSites,
+        bool tiled = false,
+        int blockOrder = 2)
     {
         ArgumentNullException.ThrowIfNull(region);
         if (!(spacing > 0) || !double.IsFinite(spacing))
@@ -68,6 +79,15 @@ public static class SpaceFillingInfill
                 + "grid width apart, so a path built from it would be mostly rapid moves. Use "
                 + "Hilbert (isotropic), Moore (closed) or Peano (longer straight runs) for a fill; "
                 + "SpaceFillingCurve.Over still offers Z-order for indexing.");
+        }
+        if (tiled && family != SpaceFillingFamily.Hilbert)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(family),
+                $"A tiled footprint links Hilbert BLOCKS by their two end corners, and {family} has "
+                + "no such pair: Moore is a closed loop with no ends at all and Gosper's island does "
+                + "not tile a rectangle. Ask for Hilbert, or drop tiled: true and accept the "
+                + "bounding square.");
         }
 
         // Region2d.FromLoops runs the simplicity guard, so a self-crossing outline is named
@@ -85,7 +105,9 @@ public static class SpaceFillingInfill
         foreach (var polygon in polygons)
             bounds = bounds.Union(polygon.Bounds);
 
-        var curve = SpaceFillingCurve.Over(bounds, family, spacing, maxSites);
+        var curve = tiled
+            ? SpaceFillingCurve.OverTiled(bounds, spacing, blockOrder, maxSites)
+            : SpaceFillingCurve.Over(bounds, family, spacing, maxSites);
         double wallClearance = clearance ?? curve.Spacing / 2;
 
         // The erosion says where a point COULD sit and still keep its clearance. An empty one
@@ -240,6 +262,35 @@ public sealed class InfillPath
     /// <summary>The number of travel moves between runs — <c>Runs.Count − 1</c>, and the
     /// number a family choice actually changes.</summary>
     public int TravelMoves => Math.Max(0, Runs.Count - 1);
+
+    /// <summary>The share of the generated curve the clip threw away. On a region filling its own
+    /// bounding square this is only the clearance band; on a long thin one it is most of the
+    /// curve, which is what <c>tiled: true</c> exists to fix — reported as a number, so reaching
+    /// for the tiled footprint is a decision rather than a guess.</summary>
+    public double Waste => 1.0 - (double)PointCount / Curve.Points.Count;
+
+    /// <summary>
+    /// The THINNEST place in the region, by <see cref="Region2dThickness"/>' opposing-edge probe.
+    ///
+    /// <para>This is what the per-piece refusal cannot see. That check catches a whole connected
+    /// piece of the eroded region the lattice stepped over; a NECK inside a piece that otherwise
+    /// catches plenty of passes is invisible to it, because the piece as a whole is reached. A
+    /// neck narrower than <c>Spacing + 2·Clearance</c> cannot hold a pass at all, and one under
+    /// about twice that holds at most one — so comparing this number against the spacing is how a
+    /// caller decides whether the <see cref="CoveredFraction"/> it is about to read is missing
+    /// something local.</para>
+    ///
+    /// <para>Measured on demand rather than at construction, since it costs
+    /// O(samples × outline edges) and most fills never ask.</para>
+    /// </summary>
+    public Region2dThicknessReport ThinnestFeature(int samplesPerEdge = 1) =>
+        Region2dThickness.Measure(_regions, samplesPerEdge);
+
+    /// <summary>The travel between runs, ordered — see <see cref="RunLinker"/>. The runs come
+    /// back in CURVE order, which is already a good tour (consecutive runs are spatial
+    /// neighbours), so what the linker buys is picking up the ends that order left behind, and
+    /// <see cref="PathLinkage.Improvement"/> says how much that was.</summary>
+    public PathLinkage Link() => RunLinker.Link(RunLinker.EndsOf(Runs));
 
     /// <summary>The region's enclosed area as the FLATTENED polygons carry it — deliberately
     /// not <c>Sketch.Area()</c>, which is exact for arcs and béziers. The footprint is polygonal
