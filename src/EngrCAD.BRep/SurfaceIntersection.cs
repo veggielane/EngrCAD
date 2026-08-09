@@ -1704,6 +1704,15 @@ public static class SurfaceIntersection
         /// <summary>Pivot magnitude below which the 4x4 solve reports singularity.</summary>
         public double PivotFloor { get; init; }
 
+        /// <summary>
+        /// How many times the march step may be halved when the corrector refuses a step
+        /// that was heading strictly INSIDE every domain — a FOLD, where the curve turns
+        /// back inside one step and the corrector's constraint plane has no nearby
+        /// solution, as distinct from a rail exit, which
+        /// <see cref="TryLandOnDomain"/> terminates exactly.
+        /// </summary>
+        public int MaxStepHalvings { get; init; }
+
         /// <summary>Central-difference step for surface partials: this, or this fraction of the domain length.</summary>
         public double PartialsStep { get; init; }
 
@@ -1728,6 +1737,7 @@ public static class SurfaceIntersection
             DomainSlack = 1e-9,
             PivotFloor = 1e-14,
             PartialsStep = 1e-7,
+            MaxStepHalvings = 5,
         };
     }
 
@@ -1988,6 +1998,10 @@ public static class SurfaceIntersection
         var start = Eval(state.A, state.Da, parameters[0], parameters[1]);
         points.Add(start);
         Vector3d? previousTangent = null;
+        // The march step, adapted only where a FOLD forces it (see the refusal branch).
+        // It starts at, and can never exceed, the pair's own step, so a branch that meets
+        // no fold traces bit for bit what it always did.
+        double marchStep = state.Step;
 
         for (int step = 0; step < settings.MaxSteps; step++)
         {
@@ -2004,17 +2018,47 @@ public static class SurfaceIntersection
             previousTangent = tangent;
 
             parameters.CopyTo(previous, 0);
-            var target = p + tangent * state.Step;
-            if (!Correct(state, parameters, target, tangent))
+            if (!Correct(state, parameters, p + tangent * marchStep, tangent))
             {
                 // Eval CLAMPS a non-periodic parameter, so a step past a rail evaluates
                 // the rail's own point, the partials across it collapse to zero, and the
                 // corrector fails on a singular pivot — the branch therefore stops one
                 // step short WITHOUT ever reaching the domain test below. Where it WOULD
                 // have gone is the step's own linearization at the last good point.
-                PredictStep(state, previous, tangent * state.Step, predicted);
-                Land(previous, predicted, p);
-                break;
+                PredictStep(state, previous, tangent * marchStep, predicted);
+                if (LeavesDomain(state, predicted))
+                {
+                    Land(previous, predicted, p);
+                    break;
+                }
+
+                // The step was heading strictly INSIDE every domain, so there is no rail
+                // to land on and this is a FOLD: the curve turns back within one step
+                // (a cross-drill's cylinder doubling back across a thread band), and the
+                // corrector's constraint plane — perpendicular to the tangent, a whole
+                // step ahead — then has no solution near the curve. Halving the step is
+                // exactly the remedy for that and for nothing else, which is what scopes
+                // it: a rail exit is settled above, by the exact landing, so this branch
+                // is only ever reached where today the trace stopped mid-face with
+                // nothing appended.
+                // <para>Scoping it by the FOLD is what makes it landable. The obvious
+                // scope — the surface pair's ASPECT, the same gate the anisotropic seed
+                // pass carries — was built, measured and reverted: it halves the step at
+                // rail exits too, reaches whole-solid FILLET bands (long and only r·pi/2
+                // wide, so anisotropic by that measure) and broke seven Interop tests
+                // while taking the tilted-plane family from 1 of 4 to 0 of 4. An
+                // algorithm that can only trade one refusal for another is not reached at
+                // all.</para>
+                if (!RetryThroughFold(state, previous, parameters, tangent, p, ref marchStep))
+                    break;
+            }
+            else
+            {
+                // Past the fold, walk the step back up to the pair's own. Leaving it
+                // halved would spend the branch's step budget on geometry that no longer
+                // needs it and truncate long branches — the standard continuation rule,
+                // and a no-op wherever no fold was met.
+                marchStep = Math.Min(state.Step, marchStep * 2);
             }
             if (Outside(parameters[0], state.Da.U, state.Da.PeriodicU, settings.DomainSlack) ||
                 Outside(parameters[1], state.Da.V, state.Da.PeriodicV, settings.DomainSlack) ||
@@ -2026,11 +2070,11 @@ public static class SurfaceIntersection
             }
 
             var next = Eval(state.A, state.Da, parameters[0], parameters[1]);
-            if (next.DistanceTo(p) > settings.BranchJumpSteps * state.Step)
+            if (next.DistanceTo(p) > settings.BranchJumpSteps * marchStep)
                 break; // corrector jumped to a different branch
 
             points.Add(next);
-            if (step > settings.MinStepsBeforeClosure && next.DistanceTo(start) < state.Step)
+            if (step > settings.MinStepsBeforeClosure && next.DistanceTo(start) < marchStep)
             {
                 closed = true;
                 break;
@@ -2046,6 +2090,51 @@ public static class SurfaceIntersection
                 landing.DistanceTo(from) > state.Settings.CorrectorAcceptance)
                 points.Add(landing);
         }
+    }
+
+    /// <summary>
+    /// Whether a predicted step has left any BOUNDED parameter domain — the question that
+    /// separates a rail exit (which <see cref="TryLandOnDomain"/> terminates exactly) from
+    /// a FOLD (which has no boundary to land on). It is deliberately the same test
+    /// <see cref="TryLandOnDomain"/> makes before it does anything else, so the two cannot
+    /// disagree about which case a refusal is.
+    /// </summary>
+    private static bool LeavesDomain(MarchState state, double[] predicted) =>
+        Outside(predicted[0], state.Da.U, state.Da.PeriodicU, state.Settings.DomainSlack) ||
+        Outside(predicted[1], state.Da.V, state.Da.PeriodicV, state.Settings.DomainSlack) ||
+        Outside(predicted[2], state.Db.U, state.Db.PeriodicU, state.Settings.DomainSlack) ||
+        Outside(predicted[3], state.Db.V, state.Db.PeriodicV, state.Settings.DomainSlack);
+
+    /// <summary>
+    /// Retries a refused corrector step at successively halved lengths, from the last
+    /// accepted point. On success <paramref name="parameters"/> holds the corrected point
+    /// and <paramref name="marchStep"/> the length that worked; on failure both are left
+    /// as they were and the caller stops the branch, which is what it did before.
+    /// <para>The retry restores <paramref name="parameters"/> from the last accepted point
+    /// each time, because <see cref="Correct"/> mutates them in place and a refused step
+    /// may have moved them part of the way.</para>
+    /// </summary>
+    private static bool RetryThroughFold(
+        MarchState state,
+        double[] previous,
+        double[] parameters,
+        in Vector3d tangent,
+        in Vector3d from,
+        ref double marchStep)
+    {
+        var settings = state.Settings;
+        double step = marchStep;
+        for (int halving = 0; halving < settings.MaxStepHalvings; halving++)
+        {
+            step *= 0.5;
+            previous.CopyTo(parameters, 0);
+            if (!Correct(state, parameters, from + tangent * step, tangent))
+                continue;
+            marchStep = step;
+            return true;
+        }
+        previous.CopyTo(parameters, 0);
+        return false;
     }
 
     /// <summary>
