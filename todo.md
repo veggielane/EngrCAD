@@ -823,6 +823,54 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
     displacements, and at minimum the viewer could refuse to hover-highlight while
     playback is running rather than silently answering from stale geometry.
 
+- [ ] **Instagram Reel / YouTube Short compatible animation export.** The pieces mostly
+  exist — `Animation` is a pure-`t` timeline, `OffscreenRenderer.RenderSequence` renders a
+  whole clip through one context, and `ApngWriter`/`GifWriter`/`AnimationExport` already
+  emit frame sequences (see CLAUDE.md's Animation section) — so this is a COMPOSITION +
+  PRESET + FORMAT job, not a new animation model. What a reel/short actually requires:
+  - **Vertical 9:16 is the format, and it is a FRAMING change, not just a resolution.**
+    `RenderToImage`/`RenderSequence` already take arbitrary width/height, so 1080×1920
+    (and 720×1280) renders today — but the camera framing must fill a TALL frame instead
+    of letterboxing a landscape auto-frame, so `CameraMath.FrameDistance`/`DefaultCamera`
+    needs to respect the target aspect (frame to the model's projected bounds IN the
+    9:16 viewport, not to a square). A `ReelFormat` preset (portrait 1080×1920 @ 30 fps,
+    plus 720×1280) is the surface; a landscape 16:9 "YouTube standard" preset falls out of
+    the same knob.
+  - **The platforms want MP4/H.264, and the honest v1 is the frame sequence + a documented
+    `ffmpeg` recipe** (the "ffmpeg escape hatch" the Animation section already names). GIF
+    is uploadable but transcoded and this repo's GIF is deliberately banding/no-dither (fine
+    for a wireframe preview, wrong for a shaded reel), and APNG is not accepted by either
+    platform — so state that plainly and hand the caller `ffmpeg -framerate 30 -i
+    frame_%04d.png -c:v libx264 -pix_fmt yuv420p -vf "scale=1080:1920" out.mp4` rather than
+    pretending the native writers cover it. **A dependency-free MP4/H.264 encoder is a
+    product-sized campaign and is FLAGGED, not promised** — the dependency-free ethos rules
+    out linking ffmpeg, and a hand-rolled H.264 is enormous; the smaller intermediate worth
+    costing first is a Motion-JPEG-in-MP4 or a minimal MPEG-4-container muxer, recorded here
+    so nobody starts H.264 from scratch.
+  - **The aliasing lessons apply directly and are the verification with teeth.** Reels run
+    at 30 fps, and CLAUDE.md already records that a gear clip ALIASES (a planetary set read
+    the sun turning slower than its carrier) and that "a mode does not animate at its own
+    frequency" — so a reel preset must CHECK the fastest periodic detail in the scene against
+    the frame step and either pick a clip length that loops seamlessly (the turntable
+    `t = i/frames` seam rule) or STATE the slowdown factor, never silently emit an aliased
+    clip. The oracle is the recorded one: the fastest periodic feature's per-frame advance
+    must stay under the Nyquist step, asserted, not eyeballed.
+  - **Safe areas are real geometry, not decoration.** Both platforms overlay captions and UI
+    on roughly the bottom ~15% and the right edge, so a reel export should keep the model's
+    projected bounds inside a stated safe rectangle (measured against the projected AABB the
+    framing already computes) and REPORT when a caption/leader would land under the UI —
+    the same "a legend is documentation" honesty the field legend uses. A thin opt-in
+    safe-area overlay for previews, off by default (the `ShadingStyle.Lit = 0` /
+    every-committed-PNG-byte-identical rule).
+  - **Duration caps are a refusal, not a silent trim**: Reels ≤ 90 s, Shorts ≤ 180 s — a
+    preset that is handed a longer `Animation.Duration` names the platform limit rather than
+    cropping. Verification bar: a portrait preset frames a known model to fill 9:16 with the
+    projected bounds inside the safe rectangle (geometric assertion); the seamless-loop /
+    slowdown check fires on a fast mechanism; every non-reel render stays byte-identical
+    (the presets are additive). Docs: extend `examples/animation.md` with a portrait clip
+    and the ffmpeg line. Lives in Viewer.Core (framing/format) + Viewer (export); the
+    browser front end inherits the framing but not the encode.
+
 ## OpenSCAD feature parity (open items)
 
 What remains from mapping OpenSCAD's feature set against EngrCAD (the covered ground —
