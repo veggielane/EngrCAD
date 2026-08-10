@@ -2702,7 +2702,9 @@ from what was already understood rather than from scratch.
     AP214 board assemblies** (the writer, reader and assemblies exist, so mostly a mapping)
     → IPC-2581 and ODB++ (richer, heavier; filed behind the first two). And for the
     connectivity side, a **KiCad schematic/netlist** import so a code-defined schematic can
-    ingest an existing design. **Gerber/Excellon are FABRICATION formats** — copper artwork
+    ingest an existing design (the LIBRARY half — a single component's `.kicad_sym` symbol +
+    `.kicad_mod` footprint via `ComponentLibrary` — has LANDED; whole-schematic/netlist import
+    of an existing design, plus **Eagle `.lbr`** and IPC-7351 footprint GENERATION, remain). **Gerber/Excellon are FABRICATION formats** — copper artwork
     for a photoplotter, not a solid model — named here so nobody reaches for them thinking
     "PCB format"; the AUTOROUTER's output, however, does export to them, since that is what
     a fab house consumes.
@@ -2729,11 +2731,13 @@ from what was already understood rather than from scratch.
   `DrawingSheet` / `SheetAnnotation` / `SheetWriter` machinery — so it is nearly free once
   the graph exists and is deliberately a VIEW of the graph, never a second editable thing (the
   one-declaration rule: the sheet is derived, so it cannot disagree with the netlist). What it
-  needs, and the honest sub-work: **(a)** a SYMBOL on `PartDefinition` — the 2D schematic
-  graphic (lines / rectangles / arcs / text) plus each pin's anchor POINT and side where a wire
-  attaches, with the symbol pin, the footprint pad and the netlist pin ONE identity by number
-  (this is introduced by the component-interchange loader — a `.kicad_sym` symbol carries
-  exactly this — or declared in code); **(b)** symbol PLACEMENT on the sheet, either stored
+  needs, and the honest sub-work: **(a) LANDED** — `Symbol`/`SymbolPin`/`SymbolGraphic` on
+  `PartDefinition` (the 2D schematic graphic — polyline/rectangle/circle/arc/text — plus each
+  pin's `Anchor` where a wire lands, its `SymbolPinDirection` and length), with `PinIdentity`
+  verifying the symbol pin, footprint pad and netlist pin are ONE identity by number, IMPORTED
+  from KiCad `.kicad_sym`/`.kicad_mod` via `ComponentLibrary` (`KiCadSymbolReader`/
+  `KiCadFootprintReader` over a hand-rolled `SExpr` parser) or declared in code — see CLAUDE.md's
+  ECAD status and design.md §6d "Component interchange"; **(b)** symbol PLACEMENT on the sheet, either stored
   positions on the schematic or a simple auto-layout (a real auto-placer is its own problem —
   v1 can take hand-placed positions and refuse to invent a good layout); **(c)** WIRE ROUTING
   between connected pins — orthogonal (Manhattan) wire segments with junction dots, a small
@@ -2744,9 +2748,9 @@ from what was already understood rather than from scratch.
   assertion against the graph, so the drawing cannot omit a connection the netlist has); the
   sheet is a deterministic FUNCTION of the graph (same schematic → byte-identical SVG/DXF); a
   symbol's pin anchors coincide with the wire endpoints to the weld tier; refusals by name (a
-  component with no symbol, a pin with no anchor). Depends on the symbol representation (a),
-  which the component-interchange loader is landing; the sheet render itself is then mostly the
-  `SheetWriter` machinery pointed at symbols-and-wires instead of dimensions-and-views.
+  component with no symbol, a pin with no anchor). The symbol representation (a) has LANDED, so
+  this is now mostly the `SheetWriter` machinery pointed at symbols-and-wires instead of
+  dimensions-and-views, plus the remaining sub-work (b) placement, (c) wire routing, (d) labels.
 
 ## Not worth adopting (deliberate)
 

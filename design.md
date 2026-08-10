@@ -6841,6 +6841,70 @@ version. These throw (a malformed file), where the document model's soft-degrade
 warning path has no analogue here because a schematic's connectivity carries no opaque
 records — the one opaque thing, the body, is optional and simply absent.
 
+### Component interchange — the symbol, and loading from KiCad (`Symbol`, `ComponentLibrary`)
+
+A `PartDefinition` used to carry two views of a part — its pins and its footprint — and a
+schematic was pins wired into nets. The piece a component was MISSING is its 2D schematic
+**`Symbol`**: the drawn shape a schematic sheet places, wires to and labels. A `Symbol` is
+graphic primitives (`SymbolPolyline`/`SymbolRectangle`/`SymbolCircle`/`SymbolArc`/`SymbolText`)
+plus one **`SymbolPin`** per terminal, and the load-bearing property of a `SymbolPin` is its
+**`Anchor`** — the connection point where a wire lands — plus a `SymbolPinDirection` (which way
+the pin points from that anchor into the body, the KiCad angle convention) and a length, so the
+filed "schematic drawing output" consumes a symbol whose pins already say where a wire attaches.
+`PartDefinition` gains the `Symbol` as an OPTIONAL last constructor parameter, so every existing
+positional construction is byte-for-byte unchanged and a symbol-less definition is unaffected.
+
+**The three representations are ONE identity by pin NUMBER** — symbol pin `"1"` == footprint pad
+`"1"` == netlist pin `"1"` — and that is the whole point of loading a symbol and a footprint
+together. `PinIdentity.Check` verifies it, anchored on the definition's `Pin` list as the
+authoritative terminal set: it names every declared pin with no symbol pin or no pad, every
+symbol pin that is not a pin, and every pad that is not a pin, so all four lists empty is a proof
+that the three number-sets are equal. Representations that are ABSENT (no symbol, or no footprint
+— connectivity needs neither) are simply not cross-checked; the check is only as strong as what
+the part carries. It is the schematic's one-declaration source-of-truth rule extended to the
+drawn symbol.
+
+**Loading is the real use, and KiCad is the interchange** (`ComponentLibrary.Load`/`Read`,
+`KiCadSymbolReader`, `KiCadFootprintReader`). KiCad's `.kicad_sym`/`.kicad_mod` are the primary
+open ubiquitous library formats, S-expression text, so the readers are a hand-rolled
+dependency-free S-expression parser (`SExpr`) in the `StepReader`/`IgesReader` ethos: structure
+validated up front (unbalanced parenthesis, unterminated string, top-level atom, wrong root tag,
+absent named symbol — each refused BY NAME), the **common subset** mapped, and everything else
+ignored or approximated **with a named diagnostic** rather than mis-read silently (a bezier
+graphic, an alternate pin function, a `no_connect`/`free` electrical type with no exact
+`PinType`, a pad rotation, a `trapezoid`/`custom` pad shape, an oval drill). A pin's electrical
+type maps to the SAME `PinType` the netlist uses (so the symbol's electrical type IS the pin's),
+a pin's `at x y angle` gives the anchor and the direction, and — because a KiCad pad's
+coordinates are STATED in the file — pad centres and sizes are carried EXACTLY, not to a
+tolerance. `ComponentLibrary.LoadFromPretty` resolves the `.kicad_mod` from a `.pretty` directory
+by the symbol's referenced footprint name, and a `LoadedPart` carries the assembled
+`PartDefinition`, its `PinIdentityReport` and the readers' diagnostics.
+
+**No change to `Footprint`/`Pad`/`PadShape` was needed**, which is the finding: the drill diameter
+a through-hole pad wants was already added additively in stage 2, and KiCad's `circle`/`rect`/
+`roundrect`/`oval` map onto the existing `PadShape`. So the board side that READS footprints
+compiles and behaves unchanged, and the stage-1 SMD footprint round-trips byte-identically — the
+KiCad loader adds a reading path, not a data-model change. A pad is constructed via the record
+constructor rather than the validating `Pad.ThroughHole` factory, so a malformed pad IMPORTS and
+the DRC reports it rather than the reader throwing on dirty interchange (the "readers never throw
+on dirty geometry" culture).
+
+**Persistence extends the seam.** A loaded `Symbol` is DATA now, so `SchematicFile` serializes it
+write-only-when-stated — graphic primitives by `kind`, pins with number/name/anchor/direction/
+length/type — and the writer's default arm THROWS on an unknown graphic kind (the
+Feature-persistence rule: a kind the reader learns and the writer does not takes the document
+down rather than degrading one symbol). A `PartDefinition` carrying a symbol is a `save → load →
+save` byte-identical fixed point, and a symbol-less definition writes no `"symbol"` key at all, so
+every stage-1..5 schematic file is byte-identical to what it always was. The verification bar is
+the interchange one (higher, since interchange fails plausibly): a transcribed real 0805 resistor
+and SOIC-8 parse with the pin count/names/numbers round-tripping, the symbol pins and footprint
+pads sharing the numbers, a deliberately mismatched footprint REPORTED by number, pad geometry
+matched EXACTLY to the file, the symbol's primitives and pin anchors matched, malformed input
+refused by name, the persistence fixed point, and determinism. What stays filed: Eagle `.lbr` (an
+XML second reader), IPC-7351 footprint GENERATION from a designation (a generator, not an import),
+EDIF, the drawn schematic SHEET itself (a VIEW that consumes the symbol this provides), and the
+KiCad 3D model reference (`.wrl`/`.step` — its path noted, not loaded).
+
 ### Stage 2 — the board and its parts (`PcbBoard`, `PcbLayout`, IDF import)
 
 Stage 2 turns a schematic into a board, and the load-bearing rule carries over verbatim: **one

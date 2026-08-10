@@ -206,6 +206,9 @@ internal static class SchematicWriter
         if (definition.Footprint is { } footprint)   // footprint is optional
             record["footprint"] = SaveFootprint(footprint);
 
+        if (definition.Symbol is { } symbol)          // symbol is optional
+            record["symbol"] = SaveSymbol(symbol);
+
         return record;
     }
 
@@ -232,6 +235,72 @@ internal static class SchematicWriter
             pads.Add(record);
         }
         return new JsonObject { ["name"] = footprint.Name, ["pads"] = pads };
+    }
+
+    // ---- symbol (the drawn schematic symbol; write-only-when-stated) ---------
+
+    private static JsonObject SaveSymbol(Symbol symbol)
+    {
+        var record = new JsonObject { ["name"] = symbol.Name };
+
+        if (symbol.Graphics.Count > 0)   // write-only-when-stated: a graphics-less symbol omits it
+        {
+            var graphics = new JsonArray();
+            foreach (var graphic in symbol.Graphics)
+                graphics.Add(SaveGraphic(graphic));
+            record["graphics"] = graphics;
+        }
+
+        var pins = new JsonArray();
+        foreach (var pin in symbol.Pins)
+        {
+            var pinRecord = new JsonObject { ["number"] = pin.Number };
+            if (pin.Name.Length > 0)                 // functional name is optional (the Pin rule)
+                pinRecord["name"] = pin.Name;
+            pinRecord["at"] = Vec(pin.Anchor);
+            pinRecord["dir"] = pin.Direction.ToString();
+            pinRecord["length"] = pin.Length;
+            pinRecord["type"] = pin.Type.ToString();
+            pins.Add(pinRecord);
+        }
+        record["pins"] = pins;
+        return record;
+    }
+
+    // The writer's default arm THROWS (the Feature-persistence rule): a graphic kind the reader
+    // learns and the writer does not takes the whole document down rather than degrading one
+    // symbol. SymbolGraphic is a sealed hierarchy, so this switch is exhaustive.
+    private static JsonObject SaveGraphic(SymbolGraphic graphic) => graphic switch
+    {
+        SymbolPolyline p => new JsonObject { ["kind"] = "polyline", ["points"] = Points(p.Points) },
+        SymbolRectangle r => new JsonObject
+        {
+            ["kind"] = "rectangle", ["min"] = Vec(r.Min), ["max"] = Vec(r.Max),
+        },
+        SymbolCircle c => new JsonObject
+        {
+            ["kind"] = "circle", ["center"] = Vec(c.Center), ["radius"] = c.Radius,
+        },
+        SymbolArc a => new JsonObject
+        {
+            ["kind"] = "arc", ["start"] = Vec(a.Start), ["mid"] = Vec(a.Mid), ["end"] = Vec(a.End),
+        },
+        SymbolText t => new JsonObject
+        {
+            ["kind"] = "text", ["value"] = t.Value, ["at"] = Vec(t.At), ["size"] = t.Size,
+        },
+        _ => throw new NotSupportedException(
+            $"Unknown symbol graphic '{graphic.GetType().Name}' has no JSON form."),
+    };
+
+    private static JsonArray Vec(Vector2d v) => [v.X, v.Y];
+
+    private static JsonArray Points(IReadOnlyList<Vector2d> points)
+    {
+        var array = new JsonArray();
+        foreach (var p in points)
+            array.Add(Vec(p));
+        return array;
     }
 }
 
@@ -270,7 +339,11 @@ internal static class SchematicReader
             var footprint = record.TryGetPropertyValue("footprint", out var footprintNode)
                 ? ReadFootprint(Object(footprintNode, "a footprint"))
                 : null;
-            var definition = new PartDefinition(name, prefix, pins, footprint, library?.BodyFor(name));
+            var symbol = record.TryGetPropertyValue("symbol", out var symbolNode)
+                ? ReadSymbol(Object(symbolNode, "a symbol"))
+                : null;
+            var definition = new PartDefinition(
+                name, prefix, pins, footprint, library?.BodyFor(name), symbol);
             if (!defsById.TryAdd(id, definition))
                 throw new FormatException($"Duplicate part-definition id '{id}' in the saved schematic.");
         }
@@ -351,6 +424,78 @@ internal static class SchematicReader
                 kind, drill));
         }
         return new Footprint(name, pads);
+    }
+
+    // ---- symbol -------------------------------------------------------------
+
+    private static Symbol ReadSymbol(JsonObject symbol)
+    {
+        string name = String(symbol, "name");
+
+        var graphics = new List<SymbolGraphic>();
+        if (symbol.TryGetPropertyValue("graphics", out var graphicsNode))
+        {
+            var array = graphicsNode as JsonArray
+                ?? throw new FormatException($"Symbol '{name}' 'graphics' must be an array.");
+            foreach (var node in array)
+                graphics.Add(ReadGraphic(Object(node, $"a graphic of symbol '{name}'")));
+        }
+
+        var pins = new List<SymbolPin>();
+        foreach (var node in Array(symbol, "pins"))
+        {
+            var record = Object(node, $"a pin of symbol '{name}'");
+            string number = String(record, "number");
+            string pinName = record["name"]?.GetValue<string>() ?? "";
+            var at = ReadVec(record, "at", $"symbol '{name}' pin '{number}'");
+            var dir = ParseEnum<SymbolPinDirection>(
+                String(record, "dir"), $"symbol '{name}' pin '{number}' direction");
+            double length = Double(record, "length");
+            var type = ParseEnum<PinType>(String(record, "type"), $"symbol '{name}' pin '{number}' type");
+            pins.Add(new SymbolPin(number, pinName, at, dir, length, type));
+        }
+
+        return new Symbol(name, pins, graphics);
+    }
+
+    private static SymbolGraphic ReadGraphic(JsonObject g)
+    {
+        string kind = String(g, "kind");
+        return kind switch
+        {
+            "polyline" => new SymbolPolyline(ReadPoints(g, "points")),
+            "rectangle" => new SymbolRectangle(ReadVec(g, "min", "rectangle"), ReadVec(g, "max", "rectangle")),
+            "circle" => new SymbolCircle(ReadVec(g, "center", "circle"), Double(g, "radius")),
+            "arc" => new SymbolArc(
+                ReadVec(g, "start", "arc"), ReadVec(g, "mid", "arc"), ReadVec(g, "end", "arc")),
+            "text" => new SymbolText(String(g, "value"), ReadVec(g, "at", "text"), Double(g, "size")),
+            _ => throw new FormatException($"Unknown symbol graphic kind '{kind}'."),
+        };
+    }
+
+    private static Vector2d ReadVec(JsonObject o, string key, string what)
+    {
+        var array = o[key] as JsonArray
+            ?? throw new FormatException($"{what}: '{key}' must be an [x, y] array.");
+        if (array.Count < 2)
+            throw new FormatException($"{what}: '{key}' must have two numbers.");
+        return new Vector2d(array[0]!.GetValue<double>(), array[1]!.GetValue<double>());
+    }
+
+    private static List<Vector2d> ReadPoints(JsonObject o, string key)
+    {
+        var array = o[key] as JsonArray
+            ?? throw new FormatException($"A polyline's '{key}' must be an array of [x, y] points.");
+        var points = new List<Vector2d>();
+        foreach (var node in array)
+        {
+            var pair = node as JsonArray
+                ?? throw new FormatException($"A point of '{key}' must be an [x, y] array.");
+            if (pair.Count < 2)
+                throw new FormatException($"A point of '{key}' must have two numbers.");
+            points.Add(new Vector2d(pair[0]!.GetValue<double>(), pair[1]!.GetValue<double>()));
+        }
+        return points;
     }
 
     // ---- typed JSON accessors (delegate to the shared EcadJson helpers) ----
