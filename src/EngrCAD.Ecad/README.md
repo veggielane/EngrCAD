@@ -195,6 +195,7 @@ other.
 | `TraceWidth` | A conductor narrower than the minimum (`Region2dThickness`' opposing-wall measure). |
 | `AcuteAngle` | A copper corner sharper than the acid-trap threshold. |
 | `CavityClearance` | Copper of another component closer than the copper-to-edge minimum to an embedded component's cavity wall (a milled edge), on the cavity's seat layer. See Stage 4b. |
+| `ViaToVia` | Two vias' drilled holes closer than the minimum via-to-via web (a manufacturing spacing between drills, applied to all via pairs regardless of net). See Stage 5 prerequisite. |
 
 `DrcRuleSet` transcribes nominal IPC-2221-ish defaults (⚠ verify against your fabricator's
 datasheet, like `StandardHoles` / `SheetMaterials`); every length is in the model's mm and
@@ -276,9 +277,44 @@ there is no modelled dielectric to slice, so use `ToAssembly` for a single-slab 
 off-render-thread work (building slabs is geometry); the animation is then matrices only. Docs:
 `examples/ecad-pcb.md` (with a committed APNG of a 4-layer board opening).
 
+## Vias and net connectivity — the routing prerequisite
+
+The precursor to autorouting, and what completes the one-declaration identity ACROSS LAYERS.
+
+| Type | What it is |
+| --- | --- |
+| `Via` / `ViaType` | A net-carrying, plated cross-layer connection at `(x, y)` spanning copper layers `[From, To]`, with a drill and an annular pad diameter. The `ViaType` (`Through` / `Blind` / `Buried` / `Microvia`) is **derived from the span**, never stored twice — through = outer face to outer face, blind = an outer face to an inner, buried = inner to inner, microvia = a single dielectric hop (adjacent copper layers). |
+| `PlacedVia` | The resolved copper of a via — centre, net, derived type, the ordered layers it touches, and the annular pad region (exact area `π(pad² − drill²)/4`). Carried by `PcbCopperModel.Vias`. |
+| `PcbConnectivity` / `NetConnectivity` / `ConnectivityReport` | The net-connectivity engine — the seam an autorouter reuses. |
+
+`PcbLayout.AddVia(net, x, y, from, to, drill, pad, require?)` / `WithVia(via)` place a via (refused
+by name for **no net**, a **non-positive drill**, a **pad not larger than the drill**, an **unknown
+layer**, a **zero-span** via, a centre **off the outline**, or a **derived type not matching
+`require`** — the way a caller states "this is a microvia" and is refused when the layers are not
+adjacent). `ViaTypeOf`/`ViaLayers`/`PlacedVias` are the derived facts; vias round-trip in the layout
+file (layout truth, write-only-when-stated — a via-free layout is byte-identical). A via places an
+annular pad on **every** copper layer it touches, tagged with its net, plus one drilled hole — fed
+into `PcbCopperModel`, so the general clearance / drill-to-copper / annular-ring rules reach a via
+as ordinary copper for free. The one genuinely new DRC rule is `ViaToVia` (the drill web).
+
+**`PcbConnectivity`** is the heart. It builds a per-net graph over the net's copper features
+(component pads, via pads, and — later — traces): two features join when they **touch on the same
+layer** (an exact `CurvedRegion2dBoolean.Intersection`, no tolerance) OR are the two ends of a
+**plated barrel** (a via, or a through-hole pad, whose per-layer copies share a source). A net is
+**connected** when all its component pads lie in one connected component. This **closes the
+multilayer caveat** ("a net whose pads sit on different layers reads as an unrouted ratsnest") — a
+via that touches each pad is a real connection, and the DRC's ratsnest now delegates to this engine
+(`PcbDrc.Ratsnest`), so `PcbLayout.Connectivity()`/`IsNetConnected(net)` answer it. A via on the
+**wrong net** does not connect (only same-net features are nodes); a floating/redundant via never
+makes a connected net read unconnected (via pads are connectors, not terminals). Docs:
+`examples/ecad-pcb.md`.
+
 ## Not yet (later campaign stages)
 
-Autorouting, panel cutouts, thermal coupling, MID/LDS 3D routing, and the richer interchange
-(KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one graph. A
-drawn schematic **sheet** (symbols and wires to SVG/DXF/PDF via the `DrawingSheet` machinery) is a
-VIEW of the graph; `Netlist.ToText()` is the stage-1 textual view.
+Autorouting itself (a DRC-aware maze/A* search over this connectivity graph, costing candidates
+with `PcbDrc.Violates`), panel cutouts, thermal coupling, MID/LDS 3D routing, and the richer
+interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one
+graph. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
+drilling the plate is a later refinement). A drawn schematic **sheet** (symbols and wires to
+SVG/DXF/PDF via the `DrawingSheet` machinery) is a VIEW of the graph; `Netlist.ToText()` is the
+stage-1 textual view.
