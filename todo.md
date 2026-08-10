@@ -2517,8 +2517,8 @@ from what was already understood rather than from scratch.
     round-trip byte fixed point for the geometry it carries, malformed structure refused by
     name. Residual follow-ups: IDF arc outlines / cutout loops / `.emp` component bodies (v1
     flattens/drops/ignores them with a diagnostic); keep-out DRC is a centre-in-polygon test,
-    not yet the copper-clearance region query; the drawn schematic SHEET, KiCad `.kicad_pcb`
-    and STEP AP214 board-assembly interchange stay open below.
+    not yet the copper-clearance region query; KiCad `.kicad_pcb` and STEP AP214 board-assembly
+    interchange stay open below (the drawn schematic SHEET has since landed).
   - **✅ STAGE 3 — placement constraints — LANDED** (`PcbConstraints.cs`/`ConstrainedLayout.cs`/
     `PcbConstraintSolver.cs`/`PcbConstraintFile.cs`; docs `examples/ecad-constraints.md`,
     design.md §6d, README). Components are placed by CONSTRAINT rather than typed coordinates:
@@ -2558,12 +2558,12 @@ from what was already understood rather than from scratch.
     already enforce. A DRC or a routing result that disagrees with the netlist is then a
     bug in one derivation, not an unresolvable difference between two hand-kept files.
   - **Code-defined schematics** ✅ LANDED (see the STAGE 1 note above; the model, the
-    combinatorial verification and the byte-fixed-point persistence all exist). What is
-    deliberately NOT in stage 1 and remains open here: a rendered schematic SHEET (symbols,
-    wires, labels) is a 2D drawing the `DrawingSheet`/`SheetAnnotation` machinery already
-    draws to SVG/DXF/PDF, so it is nearly free once the graph exists and is deliberately a
-    VIEW of the graph rather than a second editable thing — `Netlist.ToText()` is the stage-1
-    textual stand-in it will replace.
+    combinatorial verification and the byte-fixed-point persistence all exist). The **drawn
+    schematic SHEET** ✅ LANDED too (`SchematicSheet`/`SchematicDrawing`) — a VIEW of the graph
+    (placed symbols, orthogonal wires + junction dots, net labels, refdes/values, title block)
+    to SVG/DXF/PDF, a deterministic function of the graph + placement whose `Verify()` proves it
+    joins exactly the pins the netlist connects; it REPLACES `Netlist.ToText()` as the
+    human-readable view. Open follow-ons there are named below.
   - **The board and its parts are geometry this kernel already builds.** A board is a plate
     with holes and a thickness (`Sketch` outline + `Drill` for mounting holes and vias,
     exact B-Rep today). A component is a `HardwareComponent` — a body + a seating convention
@@ -2732,33 +2732,24 @@ from what was already understood rather than from scratch.
     its keep. The load-bearing early decision is the one-declaration-produces-both rule; get
     that wrong and every later stage inherits two drifting sources of truth.
 
-- [ ] **Schematic drawing output — render the schematic SHEET as a 2D drawing.** Today
-  `Netlist.ToText()` is the only human-readable view of a `Schematic`; this replaces it with
-  a real drawn sheet (placed symbols, wires between connected pins, net labels, reference
-  designators + values, a title block) exported to SVG / DXF / PDF through the EXISTING
-  `DrawingSheet` / `SheetAnnotation` / `SheetWriter` machinery — so it is nearly free once
-  the graph exists and is deliberately a VIEW of the graph, never a second editable thing (the
-  one-declaration rule: the sheet is derived, so it cannot disagree with the netlist). What it
-  needs, and the honest sub-work: **(a) LANDED** — `Symbol`/`SymbolPin`/`SymbolGraphic` on
-  `PartDefinition` (the 2D schematic graphic — polyline/rectangle/circle/arc/text — plus each
-  pin's `Anchor` where a wire lands, its `SymbolPinDirection` and length), with `PinIdentity`
-  verifying the symbol pin, footprint pad and netlist pin are ONE identity by number, IMPORTED
-  from KiCad `.kicad_sym`/`.kicad_mod` via `ComponentLibrary` (`KiCadSymbolReader`/
-  `KiCadFootprintReader` over a hand-rolled `SExpr` parser) or declared in code — see CLAUDE.md's
-  ECAD status and design.md §6d "Component interchange"; **(b)** symbol PLACEMENT on the sheet, either stored
-  positions on the schematic or a simple auto-layout (a real auto-placer is its own problem —
-  v1 can take hand-placed positions and refuse to invent a good layout); **(c)** WIRE ROUTING
-  between connected pins — orthogonal (Manhattan) wire segments with junction dots, a small
-  schematic router (NOT the copper autorouter — different rules, no layers, no clearance, just
-  readable orthogonal wires); **(d)** net labels / power symbols for nets drawn as labels
-  rather than wires (a GND rail is not drawn as one long wire). **Verification** (house style):
-  every net's connected pins are JOINED by drawn wires or share a label (a connectivity
-  assertion against the graph, so the drawing cannot omit a connection the netlist has); the
-  sheet is a deterministic FUNCTION of the graph (same schematic → byte-identical SVG/DXF); a
-  symbol's pin anchors coincide with the wire endpoints to the weld tier; refusals by name (a
-  component with no symbol, a pin with no anchor). The symbol representation (a) has LANDED, so
-  this is now mostly the `SheetWriter` machinery pointed at symbols-and-wires instead of
-  dimensions-and-views, plus the remaining sub-work (b) placement, (c) wire routing, (d) labels.
+- [ ] **Schematic sheet follow-ons — a good auto-placer and an obstacle-avoiding wire router.**
+  The drawn schematic SHEET ✅ LANDED (`SchematicSheet`/`SchematicDrawing`; docs
+  `examples/ecad-schematic-sheet.md`, design.md §6d, CLAUDE.md ECAD status): placed symbols,
+  orthogonal (Manhattan) wires with junction dots, net LABELS for rails, refdes/values, a title
+  block, to SVG/DXF/PDF, a deterministic VIEW of the graph whose `Verify()` proves it joins
+  exactly the pins the netlist connects. What it deliberately left, each a genuinely separate
+  problem rather than a gap: **(a) a real auto-placer** — v1 hand-places (`SchematicPlacement`)
+  and `Grid` is a labelled stand-in; a *good* layout (a graph/force-directed placer honouring
+  net proximity and readability) is its own project, so it is refused-by-placeholder rather than
+  invented. **(b) an obstacle-avoiding wire router** — the v1 trunk/L router may cross a symbol
+  or another net (a crossing is not a connection), and routing that lays wires in clean lanes
+  clear of symbols is a separate router (still NOT the copper autorouter). **(c)** hierarchical
+  sheets / buses / off-page connectors (a schematic that spans pages), and **(d)**
+  back-annotation (edits made on the drawn sheet flowing back into the graph — but the sheet is
+  a VIEW, so this is a different editing model, weighed against keeping the graph the one
+  source). Also filed: power/ground *symbols* (a ground triangle, a VCC bar) in place of the
+  plain text label a rail gets today, and pin name/number labelling on symbols (v1 draws the
+  symbol graphics and pin stubs, not per-pin name/number text).
 
 ## Not worth adopting (deliberate)
 

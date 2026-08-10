@@ -47,8 +47,8 @@ public sealed class Netlist
     /// <summary>
     /// A human-readable netlist listing — the components then the nets, textually. Reflects
     /// the graph's declaration order (it is a view of the graph, not a re-sorted report).
-    /// This is the stage-1 "rendered schematic"; a drawn SHEET (symbols and wires to SVG) is
-    /// a later deliverable over the same graph.
+    /// This is the textual view; a drawn SHEET (placed symbols, wires and labels to SVG/DXF/PDF)
+    /// is <see cref="SchematicSheet"/>, a derived view over the same graph.
     /// </summary>
     public string ToText()
     {

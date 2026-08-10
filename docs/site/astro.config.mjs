@@ -227,6 +227,7 @@ document.addEventListener('click', function (event) {
           collapsed: true,
           items: [
             { label: 'Code-defined schematics', slug: 'examples/ecad-schematics' },
+            { label: 'Drawing the schematic sheet', slug: 'examples/ecad-schematic-sheet' },
             { label: 'Loading a component (symbol + footprint)', slug: 'examples/ecad-library' },
             { label: 'The board and its parts', slug: 'examples/ecad-pcb' },
             { label: 'Placement constraints', slug: 'examples/ecad-constraints' },
