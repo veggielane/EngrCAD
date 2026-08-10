@@ -7353,9 +7353,8 @@ write-only-when-stated (an un-routed layout stays byte-identical).
 exactly right for a 2-layer board; blind/buried/microvia routing is a later stage); 45°/90° grid;
 rip-up-reroute; 2-pin MST decomposition. NOT in v1: topological / shove / push-and-route; length
 matching and differential pairs; copper POUR / ground planes with thermal reliefs (a region boolean,
-the tamper-mesh fill's shape); teardrops; cavity walls as routing obstacles; and **Gerber (RS-274X) /
-Excellon fabrication export** of the routed board — the fab output, the immediate follow-on, since a
-routed board that cannot go to fab is unfinished. Docs: `examples/ecad-routing.md`.
+the tamper-mesh fill's shape); teardrops; and cavity walls as routing obstacles.
+Docs: `examples/ecad-routing.md`.
 
 ### Drawing the schematic sheet (`SchematicSheet`, `SchematicDrawing`)
 
@@ -7403,9 +7402,54 @@ that produces a *good* layout is a different problem and is deliberately not inv
 v1 wire router may cross a symbol or another net (an obstacle-avoiding route is likewise
 separate). Docs: `examples/ecad-schematic-sheet.md`.
 
-### Not in stages 1–5
+### Stage 6 — Gerber (RS-274X) + Excellon fabrication export (`PcbGerberExport`)
 
-Gerber / Excellon fabrication export (the immediate follow-on), panel cutouts and enclosure fit,
+The fab output that makes a routed board manufacturable — one Gerber per copper layer, a
+board-outline Gerber, and an Excellon drill program. `PcbGerberExport.Write(layout, dir)` writes the
+set (and reports what it wrote); `Generate` returns it as text. Pads flash (`D03`), traces draw
+(`D01`/`D02` with a round aperture, whose swept stroke IS the copper model's trace region), via pads
+flash as solid discs, and anything else — a rotated pad, a copper pour — is a region fill
+(`G36`/`G37`), exact for any shape.
+
+**The oracle is the TWIN-DECODER round trip** — the repo's rule, that the geometry must survive the
+round trip and not merely a structural validator. Alongside the writer is a matching reader
+(`GerberReader.Read`, `ExcellonReader.Read`); the copper written is parsed BACK and the recovered
+copper must equal the copper model's on each layer to the region-area grade — by area AND by a
+symmetric-difference check through the DRC's own `CurvedRegion2dBoolean` — verified on both a
+hand-built and an AUTOROUTED board, while the decoded drill hits equal the board's holes exactly.
+
+**The imaging order is the whole design, and it reproduces a UNION exactly.** The copper on a layer
+is a UNION of feature regions, so a via drill (or a pour hole) is a hole in the copper ONLY where
+nothing covers it. A via under a routing trace, or a via directly under a pad (a via-in-pad), is
+FILLED — the model's union has no hole there. So the writer lays all the SOLID copper down (dark),
+then clears exactly the HOLES OF THE FINAL UNION (which the caller already computed): a via disc
+becomes its annular ring only where the drill is genuinely exposed, and a covered drill stays solid,
+matching the model set for set. This is the correct, always-faithful way to reproduce a union with
+Gerber's order-dependent dark/clear polarity — the naive "clear every via drill" opens a hole the
+model fills at a via-in-pad, which the crossing-board fixture (whose SIG via lands under a pad, and
+whose other via is covered by the trace ending on it) demonstrates: it has ZERO exposed drills, so a
+correct exporter emits no clear on it at all.
+
+**The coordinate format is derived from the board's own magnitudes** (`GerberFormat.For`), so the
+resolution stays a fixed fraction of the model at any scale — the epsilon-ladder property, in a file
+format. Each `%FS` digit field is a SINGLE digit, so the two counts are anti-correlated (large
+coordinates → fewer fractional digits) and their sum stays ≈ 11–12, well inside a long's
+exact-integer range; a first version allowed a two-digit fractional count and overflowed the
+single-digit field, decoding a 1e-3-scale board's coordinates 10^5 too large (the recovered area came
+back at 48000 against a model 5.28e-6 — a 10-orders-of-magnitude tell that reads as a format bug, not
+a tolerance one). Shape recognition is GEOMETRIC — a pad's region is read for a disc / axis-aligned
+rectangle / axis-aligned obround and flashed, a rotated one falls to a faithful region fill — so a
+placement rotation never has to be threaded through, and correctness never depends on recognition
+(an unrecognised feature region-fills, exact for any shape). Refused BY NAME: a Bézier copper
+boundary (RS-274X region contours carry only lines and circular arcs), and — in the reader, the
+round-trip oracle scoped to what the writer emits — a truncated file, a missing format/unit spec, or
+an aperture macro. **Not in v1** (each filed): solder-mask / silkscreen / paste layers (the board
+carries no mask/silk model yet), Gerber X2 attributes and the job file, and a Gerber IMPORT of a
+foreign board (this is export). Docs: `examples/ecad-fabrication.md`.
+
+### Not in stages 1–6
+
+Panel cutouts and enclosure fit,
 thermal coupling, and MID/LDS 3D routing are later stages over this one graph; each reads the
 netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. The drawn schematic SHEET has

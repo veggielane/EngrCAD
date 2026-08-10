@@ -233,6 +233,7 @@ document.addEventListener('click', function (event) {
             { label: 'Placement constraints', slug: 'examples/ecad-constraints' },
             { label: 'Copper design-rule check', slug: 'examples/ecad-drc' },
             { label: 'Autorouting', slug: 'examples/ecad-routing' },
+            { label: 'Gerber & Excellon fabrication export', slug: 'examples/ecad-fabrication' },
           ],
         },
         { label: 'Writing examples', slug: 'writing-examples' },
