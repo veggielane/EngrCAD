@@ -35,6 +35,14 @@ public sealed class PartDefinition
     /// (connectivity does not need one).</summary>
     public Footprint? Footprint { get; }
 
+    /// <summary>The 2D schematic <see cref="Ecad.Symbol"/> — graphic primitives plus a
+    /// <see cref="SymbolPin"/> per terminal (where a wire lands) — or null when the definition
+    /// carries no drawn symbol. OPTIONAL by design: stage 1 is connectivity, and a symbol is
+    /// what a drawn schematic SHEET consumes. When a symbol AND a footprint are both present,
+    /// their pins and pads share the pin NUMBER identity a <see cref="PinIdentity"/> check
+    /// verifies (symbol pin "1" == pad "1" == netlist pin "1").</summary>
+    public Symbol? Symbol { get; }
+
     /// <summary>
     /// The 3D body builder, or null. OPTIONAL by design — stage 1 is connectivity, not
     /// placement. It is a lambda over the modelling API (e.g.
@@ -50,6 +58,8 @@ public sealed class PartDefinition
     /// <param name="pins">The pins; numbers must be non-empty and unique.</param>
     /// <param name="footprint">The optional pad layout.</param>
     /// <param name="body">The optional 3D body builder (not serialized).</param>
+    /// <param name="symbol">The optional 2D schematic symbol. Added LAST so every existing
+    /// positional construction is unchanged.</param>
     /// <exception cref="ArgumentException">A name/prefix is empty, or a pin number is empty
     /// or repeated.</exception>
     public PartDefinition(
@@ -57,7 +67,8 @@ public sealed class PartDefinition
         string referencePrefix,
         IEnumerable<Pin> pins,
         Footprint? footprint = null,
-        Func<Shape>? body = null)
+        Func<Shape>? body = null,
+        Symbol? symbol = null)
     {
         ArgumentNullException.ThrowIfNull(pins);
         if (string.IsNullOrEmpty(name))
@@ -72,6 +83,7 @@ public sealed class PartDefinition
         Pins = [.. pins];
         Footprint = footprint;
         Body = body;
+        Symbol = symbol;
 
         _byNumber = new Dictionary<string, Pin>(Pins.Count);
         foreach (var pin in Pins)

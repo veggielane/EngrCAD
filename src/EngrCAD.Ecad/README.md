@@ -24,7 +24,9 @@ schematic is then a bug in a derivation, not a difference between two hand-kept 
 | `PinType` | Electrical character of a pin (`Power`/`Input`/`Output`/`Passive`/…) — enough for a floating-net and a no-connect check, not a SPICE model. `Unspecified` is the `0` value, so the default carries no meaning it was not given. |
 | `Pin` | One terminal of a part TYPE: a `Number` (its identity within the part), an optional functional `Name`, and a `Type`. A value. |
 | `Footprint` / `Pad` / `PadShape` | The 2D pad layout — **data now**, a placeholder the board-layout stage will consume. Nothing here builds board geometry. |
-| `PartDefinition` | A reusable part type: name/designation, an ordered `Pin` list, an optional `Footprint`, and an optional 3D `Body` hook (`Func<Shape>`). The definition is the source; a component is meaningless without one. |
+| `PartDefinition` | A reusable part type: name/designation, an ordered `Pin` list, an optional `Footprint`, an optional 2D `Symbol`, and an optional 3D `Body` hook (`Func<Shape>`). The definition is the source; a component is meaningless without one. |
+| `Symbol` / `SymbolPin` / `SymbolGraphic` | The 2D SCHEMATIC symbol — graphic primitives (`SymbolPolyline`/`SymbolRectangle`/`SymbolCircle`/`SymbolArc`/`SymbolText`) plus a `SymbolPin` per terminal carrying the pin NUMBER, name, the `Anchor` where a wire lands, a `SymbolPinDirection`, a length and a `PinType`. The representation a drawn schematic **sheet** consumes. |
+| `PinIdentity` / `PinIdentityReport` | The one-declaration identity check: symbol pin `"1"` == footprint pad `"1"` == netlist pin `"1"`. Names every symbol pin with no pad, pad with no pin, or pin with neither. |
 | `Component` | A placed instance of a `PartDefinition`: a reference designator (`R1`, `U3`) and an optional value (`"330"`, `"100nF"`). `component.Pin("1")` names a terminal. |
 | `PinRef` | A reference to one terminal of one placed component — the thing a `Net` connects. A reference, not a copy. |
 | `Net` / `NetKind` | A named connection of terminals. `Signal` (ordinary), `Stub` (a deliberate single-terminal net — a test point), or `NoConnect` (deliberately unconnected — an explicit first-class state, never a null). |
@@ -32,6 +34,8 @@ schematic is then a bug in a derivation, not a difference between two hand-kept 
 | `Netlist` | A **derived, read-only** projection (`net → pins`, `pin → net`) — computed fresh each call, so it cannot drift. `ToText()` is the stage-1 textual listing. |
 | `SchematicCheckResult` | The DRC of connectivity (see below). |
 | `PartLibrary` | Re-attaches 3D bodies by definition name on load (a body is code, so it does not travel in the file). |
+| `ComponentLibrary` / `LoadedPart` | Loads a component from KiCad interchange (`.kicad_sym` + `.kicad_mod`) so it arrives with its symbol, footprint and pins unified by pin number. `LoadedPart` carries the `PartDefinition`, its `PinIdentityReport` and the readers' diagnostics. |
+| `KiCadSymbolReader` / `KiCadFootprintReader` | Hand-rolled dependency-free S-expression readers (`SExpr`) for the KiCad symbol and footprint formats — the common subset mapped, the rest refused/ignored **by name** (the `StepReader`/`IgesReader` ethos). |
 
 ## Declaring one
 
@@ -309,12 +313,54 @@ via that touches each pad is a real connection, and the DRC's ratsnest now deleg
 makes a connected net read unconnected (via pads are connectors, not terminals). Docs:
 `examples/ecad-pcb.md`.
 
+## Loading a component — the KiCad interchange
+
+A `PartDefinition` carries three views of one part — its pins, its footprint, and (now) its 2D
+schematic `Symbol` — and a real library is *imported* rather than declared by hand.
+`ComponentLibrary.Load`/`Read` reads the **KiCad** interchange (`.kicad_sym` + `.kicad_mod`, the
+primary open ubiquitous format) so a part arrives with all three at once, and unifies them by
+pin NUMBER: **symbol pin `"1"` == footprint pad `"1"` == netlist pin `"1"`**. That identity is
+verified by `PinIdentity.Check` (on the returned `LoadedPart`), which names any symbol pin with
+no pad, pad with no pin, or pin with neither — the one-declaration rule extended to the drawn
+symbol, which is the whole point of loading symbol and footprint together.
+
+```csharp
+var part = ComponentLibrary.Load("R_0805.kicad_sym", "R_0805_2012Metric.kicad_mod");
+// part.Definition has Pins + Footprint + Symbol; part.Identity.Ok; part.Diagnostics names what
+// the readers could not carry. ComponentLibrary.LoadFromPretty resolves the .kicad_mod from a
+// .pretty directory by the symbol's referenced footprint name.
+```
+
+The readers are hand-rolled and dependency-free (`SExpr` is a small S-expression parser),
+validating structure up front and refusing malformed input **by name** (the
+`StepReader`/`IgesReader` rule). They cover the **common subset** and NAME the rest:
+
+- **Symbol** (`.kicad_sym`): the `Reference`/`Footprint` properties, nested unit sub-symbols
+  recursed for graphics and pins, `rectangle`/`circle`/`arc`/`polyline`/`text` graphics, and
+  `pin`s (electrical type → `PinType`, name, number, position, angle → `SymbolPinDirection`,
+  length). A `SymbolPin.Anchor` is the connection point where a wire lands, and the direction
+  points from there into the body (KiCad's pin angle convention). A bezier graphic, an alternate
+  pin function, or an electrical type with no exact `PinType` is ignored **with a diagnostic**.
+- **Footprint** (`.kicad_mod`): SMD and plated through-hole pads of the standard shapes
+  (`circle`/`rect`/`roundrect`/`oval`) with their `at`/`size`/`drill` — mapped onto the existing
+  `Footprint`/`Pad` with **no change to `Pad` or `PadShape`** (the drill a through pad needs was
+  already there from stage 2, so the board side that reads footprints is untouched). Pad centres
+  and sizes are STATED in the file, so they are carried exactly; a pad rotation, a
+  `trapezoid`/`custom` shape or an oval drill is approximated **with a note**.
+
+A loaded `Symbol` is DATA now, so a `PartDefinition` with a symbol round-trips through the
+schematic file as a **byte-identical fixed point**; a symbol-less definition serializes exactly
+as before (write-only-when-stated). The 3D body stays code, as always; a KiCad `.wrl`/`.step`
+model reference is out of scope (its path noted, not loaded).
+
 ## Not yet (later campaign stages)
 
 Autorouting itself (a DRC-aware maze/A* search over this connectivity graph, costing candidates
 with `PcbDrc.Violates`), panel cutouts, thermal coupling, MID/LDS 3D routing, and the richer
 interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one
-graph. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
+graph. On the LIBRARY side, **Eagle `.lbr`** (an XML second reader), **IPC-7351 footprint
+GENERATION** from a designation (a generator, not a file import), EDIF, and the KiCad 3D model
+reference (`.wrl`/`.step`) are filed beside the KiCad symbol/footprint import that just landed. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
 drilling the plate is a later refinement). A drawn schematic **sheet** (symbols and wires to
 SVG/DXF/PDF via the `DrawingSheet` machinery) is a VIEW of the graph; `Netlist.ToText()` is the
 stage-1 textual view.
