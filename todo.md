@@ -2722,6 +2722,32 @@ from what was already understood rather than from scratch.
     its keep. The load-bearing early decision is the one-declaration-produces-both rule; get
     that wrong and every later stage inherits two drifting sources of truth.
 
+- [ ] **Schematic drawing output — render the schematic SHEET as a 2D drawing.** Today
+  `Netlist.ToText()` is the only human-readable view of a `Schematic`; this replaces it with
+  a real drawn sheet (placed symbols, wires between connected pins, net labels, reference
+  designators + values, a title block) exported to SVG / DXF / PDF through the EXISTING
+  `DrawingSheet` / `SheetAnnotation` / `SheetWriter` machinery — so it is nearly free once
+  the graph exists and is deliberately a VIEW of the graph, never a second editable thing (the
+  one-declaration rule: the sheet is derived, so it cannot disagree with the netlist). What it
+  needs, and the honest sub-work: **(a)** a SYMBOL on `PartDefinition` — the 2D schematic
+  graphic (lines / rectangles / arcs / text) plus each pin's anchor POINT and side where a wire
+  attaches, with the symbol pin, the footprint pad and the netlist pin ONE identity by number
+  (this is introduced by the component-interchange loader — a `.kicad_sym` symbol carries
+  exactly this — or declared in code); **(b)** symbol PLACEMENT on the sheet, either stored
+  positions on the schematic or a simple auto-layout (a real auto-placer is its own problem —
+  v1 can take hand-placed positions and refuse to invent a good layout); **(c)** WIRE ROUTING
+  between connected pins — orthogonal (Manhattan) wire segments with junction dots, a small
+  schematic router (NOT the copper autorouter — different rules, no layers, no clearance, just
+  readable orthogonal wires); **(d)** net labels / power symbols for nets drawn as labels
+  rather than wires (a GND rail is not drawn as one long wire). **Verification** (house style):
+  every net's connected pins are JOINED by drawn wires or share a label (a connectivity
+  assertion against the graph, so the drawing cannot omit a connection the netlist has); the
+  sheet is a deterministic FUNCTION of the graph (same schematic → byte-identical SVG/DXF); a
+  symbol's pin anchors coincide with the wire endpoints to the weld tier; refusals by name (a
+  component with no symbol, a pin with no anchor). Depends on the symbol representation (a),
+  which the component-interchange loader is landing; the sheet render itself is then mostly the
+  `SheetWriter` machinery pointed at symbols-and-wires instead of dimensions-and-views.
+
 ## Not worth adopting (deliberate)
 
 - Raytraced/PBR rendering, a GUI sketcher, and freeform surface-modeling studios —
