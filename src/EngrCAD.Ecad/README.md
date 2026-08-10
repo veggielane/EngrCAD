@@ -1,8 +1,9 @@
 # EngrCAD.Ecad
 
-Code-defined **schematics**, the **connectivity data model**, and the **PCB board + placement**
-that derives from them — the first two stages of the ECAD campaign (schematic → board →
-placement constraints → copper DRC → routing → MID/LDS 3D routing; see `todo.md`). It builds on
+Code-defined **schematics**, the **connectivity data model**, the **PCB board + placement** that
+derives from them, and the **copper DRC** over the result — stages 1–4 of the ECAD campaign
+(schematic → board → placement constraints → copper DRC → routing → MID/LDS 3D routing; see
+`todo.md`). It builds on
 `EngrCAD.Core` (math) and `EngrCAD.Modeling` (the `Shape`/`Assembly`/`Bom` API the board lowers
 to), and — being kernel-tier — has **no viewer/Avalonia dependency**.
 
@@ -170,10 +171,48 @@ enclosing its pads (rotation-invariant, conservative). Constraints persist:
 write-only-when-stated, so a layout with no constraints is byte-identical to a stage-2 file and a
 constrained one is a `save → load → save` byte fixed point. Docs: `examples/ecad-constraints.md`.
 
+## Stage 4 — copper DRC
+
+Stage 4 is the **copper design-rule check** — an exact 2D-region query over a board's copper
+against a `DrcRuleSet`. `PcbDrc.Check(layout, rules)` returns a `DrcReport` that **names, locates
+and measures** every violation (a report that only said "fail" would be useless — the
+`PcbLayoutCheck` house style), plus the **ratsnest** (signal nets the copper does not yet connect)
+as *information* rather than a fault.
+
+**The load-bearing rule** is that the DRC reads the netlist to decide what SHOULD connect: a
+**short** is copper of DIFFERENT nets electrically connected; copper of the SAME net touching is the
+intended connection and is never flagged (the one-declaration identity — a pad's net *is* its pin's
+net). Two floating (unconnected / no-connect) pads are electrically distinct and must clear each
+other.
+
+| Rule | What it checks |
+| --- | --- |
+| `Clearance` | Copper of different nets closer than the minimum on one layer. **Grow each net's copper by half the clearance; an EMPTY intersection PROVES the clearance** (`CurvedRegion2dOffset` + `CurvedRegion2dBoolean`). |
+| `Short` | Copper of different nets actually overlapping (a stronger failure than a near miss). |
+| `AnnularRing` | A drilled pad's copper ring `(min pad dimension − drill) / 2` below the minimum. |
+| `DrillToCopper` | A hole closer than the minimum to OTHER-net copper — CROSS-LAYER (a drill goes through the stack). |
+| `CopperToEdge` | Copper closer than the minimum to the board outline (an exact polygon inward offset). |
+| `TraceWidth` | A conductor narrower than the minimum (`Region2dThickness`' opposing-wall measure). |
+| `AcuteAngle` | A copper corner sharper than the acid-trap threshold. |
+
+`DrcRuleSet` transcribes nominal IPC-2221-ish defaults (⚠ verify against your fabricator's
+datasheet, like `StandardHoles` / `SheetMaterials`); every length is in the model's mm and
+`Scaled(factor)` proves the thresholds are relative (a rule set and board that pass still pass after
+a uniform scale). Multi-layer: clearance / shorts / width / acute angles are per layer,
+drill-to-copper is cross-layer.
+
+**Traces arrive in stage 5.** Trace width and the acid-trap rule genuinely want conductors; the
+copper today is pads, so those rules run on whatever copper a layer carries (a deliberately-thin
+pad, a sharp corner) and fully engage once routing produces traces — a trace is a stroked
+centre-line region through the same `CopperFeature` type, so the DRC needs no change to reach it.
+`PcbCopperModel` is the seam between "what is on the board" and "what the rules say":
+`PcbCopperModel.FromLayout(layout)` derives it from placed pads, and the incremental
+`PcbDrc.Violates(model, candidate, rules)` is what a stage-5 router costs a candidate route with.
+Docs: `examples/ecad-drc.md`.
+
 ## Not yet (later campaign stages)
 
-Copper DRC (a region-offset clearance query over the placed pads),
-autorouting, panel cutouts, thermal coupling, MID/LDS 3D routing, and the richer interchange
+Autorouting, panel cutouts, thermal coupling, MID/LDS 3D routing, and the richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one graph. A
 drawn schematic **sheet** (symbols and wires to SVG/DXF/PDF via the `DrawingSheet` machinery) is a
 VIEW of the graph; `Netlist.ToText()` is the stage-1 textual view.

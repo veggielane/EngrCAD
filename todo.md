@@ -2571,21 +2571,22 @@ from what was already understood rather than from scratch.
     `ComponentAssembly.Place` cutting the host while recording the occurrence, already built
     and tested. Placing the footprints on the board is `LocationSet`/`Pattern` with a pose
     per part.
-  - **Copper DRC is a GEOMETRY problem this kernel is unusually well-equipped for, which is
-    the correction to the old entry's "should not build".** The core rules are region
-    queries the exact 2D machinery answers without a tolerance: trace-to-trace clearance is
-    "grow each net's copper by half the clearance and require the grown regions disjoint" —
-    the exact `Region2dOffset` + `CurvedRegion2dBoolean` construction the tamper mesh and
-    the packer already use, where an empty intersection PROVES the clearance; trace width,
-    annular ring, drill-to-copper and copper-to-edge are all offset-and-overlap; an
-    acute-angle or acid-trap check is an arrangement-angle query. A short (two nets touching)
-    is a connectivity check against the netlist — which is exactly why the one-declaration
-    rule matters, since the geometry and the netlist must agree on what SHOULD connect.
-    Verification is exact: a board with a KNOWN violation at a stated clearance must be
-    found and a near-miss at clearance + ε must not, measured the way the tamper mesh's
-    guarantee is (the largest inscribed empty gap against the closed form), and a rule set
-    that passes must still pass after a uniform scale of the board (relative, not absolute,
-    tolerances — the epsilon-ladder rule).
+  - **✅ STAGE 4 — copper DRC — LANDED** (`DrcRuleSet`/`PcbCopperModel`/`CopperFeature`/
+    `DrilledHole`/`PcbDrc.Check` → `DrcReport`; docs `examples/ecad-drc.md`, design.md §6d,
+    README). The geometric design-rule check over a board's copper — clearance, shorts,
+    annular ring, drill-to-copper, copper-to-edge, trace width and an acute-angle / acid-trap
+    threshold — every rule a region query the exact 2D machinery answers with no tolerance,
+    NAMING/LOCATING/MEASURING its offender against its limit. Clearance is the tamper-mesh
+    construction (grow each net's copper by half the clearance, require different-net grown
+    regions disjoint — an empty `CurvedRegion2dBoolean.Intersection` PROVES it) and a SHORT is
+    the ungrown overlap of different nets, read against the NETLIST (same-net copper touching
+    is the intended connection, never flagged — the one-declaration identity). `DrcRuleSet` is
+    a standalone checking parameter (NOT baked into the layout file, so stage-2/3 files stay
+    byte-identical); `PcbDrc.Violates(model, candidate)` is the incremental seam stage-5
+    routing costs a candidate route with. Verified from both sides of every limit against the
+    closed-form gap, scale-invariant, deterministic; the placed stage-2 fixture is DRC-clean
+    with an unrouted ratsnest. See CLAUDE.md's ECAD status paragraph and design.md §6d for the
+    findings. The OPEN stages below (autorouting, MID/LDS, enclosure fit, interchange) are next.
   - **Auto-routing — the genuinely hard one, and staged honestly.** Routing is a SEARCH
     problem (maze/A* per net, then rip-up-and-retry for congestion), not a closed form, and
     a bad autorouter is worse than hand routing — so v1 is a DRC-AWARE grid/maze router with

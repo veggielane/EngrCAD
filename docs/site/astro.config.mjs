@@ -229,6 +229,7 @@ document.addEventListener('click', function (event) {
             { label: 'Code-defined schematics', slug: 'examples/ecad-schematics' },
             { label: 'The board and its parts', slug: 'examples/ecad-pcb' },
             { label: 'Placement constraints', slug: 'examples/ecad-constraints' },
+            { label: 'Copper design-rule check', slug: 'examples/ecad-drc' },
           ],
         },
         { label: 'Writing examples', slug: 'writing-examples' },
