@@ -1,0 +1,100 @@
+---
+title: "Autorouting"
+---
+
+Stage 5 of the ECAD campaign is the **autorouter** — the genuinely hard stage. It turns a placed
+board's [ratsnest](ecad-pcb.md) into copper: `PcbTrace`s and vias that join each net's pins. A bad
+autorouter is worse than hand routing, so the bar is non-negotiable and it is the whole point:
+
+> Every routed net **connects** its pins **AND** passes the exact [DRC](ecad-drc.md) — or the router
+> **reports failure by name**. It never ships a clearance-violating trace, and a partial result (one
+> it could not fully route) is still DRC-clean.
+
+An autorouter that connects while violating clearance is the classic *silent* failure, so the
+router is built so that outcome cannot happen.
+
+## The grid is an accelerator; the exact DRC is the source of truth
+
+`PcbRouter.Route(layout, rules, options)` searches a uniform routing grid `(x, y, layer)` with A*,
+changes layers through vias, and decomposes a multi-pin net into 2-pin connections over an MST. The
+grid is *only* an accelerator: a candidate route is **committed only after the exact DRC confirms it
+adds no violation** — [`PcbDrc.Violates`](ecad-drc.md) for every new copper feature (clearance,
+short, copper-to-edge, trace width, acute angle) plus the drill and via rules — so a grid rounding
+error can never produce a violating trace. If the exact check disagrees with the grid, the exact
+check wins and the candidate is rejected, not shipped.
+
+A `PcbTrace` is a net's routed copper on one layer: a polyline centre-line of a given width, whose
+copper region is the polyline's exact **stroke** (its Minkowski sum with a disc of radius
+`width/2`, round caps and round joins) — precisely the model the DRC's clearance rule grows against,
+so a trace and the rule it is checked with cannot disagree. Round joins mean the copper carries no
+sharp corner, so a routed trace passes the acid-trap rule with nothing arranged. Traces feed the
+[copper model](ecad-drc.md) and the [connectivity engine](ecad-pcb.md), which reads a trace as a
+**connector** (like a via), not a terminal — so a net is *connected* when its component **pads** end
+up in one copper component.
+
+## Rip-up and reroute
+
+When a net cannot find a clean route, the router routes it **across** the traces that block it (at a
+high cost), rips those traces up, and re-queues them — *negotiated congestion*. Each rip-up is
+bounded, so a truly boxed-in net terminates and is reported **unroutable by name** rather than
+looping. A net whose pin is walled in by other-net copper comes back named; the rest of the board is
+still routed and clean.
+
+## A worked example
+
+A tiny two-net board: `GND` runs straight across the middle, and `SIG` must get from the bottom edge
+to the top edge — so it *cannot* stay on one layer. The router changes layers through a via, and both
+nets come out connected and DRC-clean, with an empty ratsnest.
+
+```csharp run:ecad-routing
+// A single-pad test point (0.6 mm), small enough that pads a grid pitch apart start DRC-clean.
+PartDefinition Tp(string name) => new(name, "TP",
+    new[] { new Pin("1", PinType.Passive) },
+    new Footprint(name + "_fp", new[] { Pad.Smd("1", new Vector2d(0, 0), 0.6, 0.6) }));
+
+var sch = new Schematic("router-demo");
+var g1 = sch.Add("G1", Tp("G1")); var g2 = sch.Add("G2", Tp("G2"));
+var s1 = sch.Add("S1", Tp("S1")); var s2 = sch.Add("S2", Tp("S2"));
+sch.Connect("GND", g1.Pin("1"), g2.Pin("1"));   // a wall across the board
+sch.Connect("SIG", s1.Pin("1"), s2.Pin("1"));   // must cross the wall — needs a via
+
+var board = new PcbBoard(new[] {
+    new Vector2d(0, 0), new Vector2d(20, 0), new Vector2d(20, 20), new Vector2d(0, 20) }, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("G1", 1, 10); layout.Place("G2", 19, 10);
+layout.Place("S1", 10, 1); layout.Place("S2", 10, 19);
+
+var rules = new DrcRuleSet(
+    MinCopperClearance: 0.3, MinTraceWidth: 0.2, MinAnnularRing: 0.2,
+    MinDrillToCopper: 0.3, MinCopperToEdge: 0.3, MinAcuteAngleDegrees: 80);
+var routed = PcbRouter.Route(layout, rules,
+    new RouterOptions { GridResolution = 1.0, TraceWidth = 0.4, Clearance = 0.3 });
+
+// The verification bar, in code: every net routed, connected, and the board DRC-clean.
+var report = PcbDrc.Check(routed.Layout, rules);
+var model = PcbCopperModel.FromLayout(routed.Layout);
+bool connected = PcbConnectivity.For(model, "GND").IsConnected
+              && PcbConnectivity.For(model, "SIG").IsConnected;
+
+Console.WriteLine(routed);                                                  // routed 2 nets (…, … vias)
+Console.WriteLine($"DRC: {report.Violations.Count} violations; ratsnest = [{string.Join(", ", report.Ratsnest)}]");
+Console.WriteLine($"both nets connected: {connected}");
+
+if (!routed.FullyRouted || !report.Ok || report.Ratsnest.Count != 0 || !connected)
+    throw new Exception("the router must connect every net AND leave the board DRC-clean");
+```
+
+The `RoutedResult` carries the routed `PcbLayout` (traces and vias added — the input is not
+mutated), the nets that routed, the nets that did **not** (by name), and the counts. A layout with
+nothing to route (every signal net already connected) returns unchanged, so `result.Layout.Save()`
+is byte-identical to the input's. Routed traces are **layout truth** and round-trip in the
+[layout file](ecad-pcb.md).
+
+## v1 scope
+
+An honest v1: a grid/maze A* with rip-up-reroute, **through-vias** (spanning all copper layers) for
+layer changes, and 2-pin MST decomposition of multi-pin nets. Deterministic — a fixed net order and
+grid give bit-identical routes. Not in v1 (each filed): topological / shove / push routing, length
+matching and differential pairs, copper pours with thermal reliefs, teardrops, cavity walls as
+routing obstacles, and **Gerber / Excellon fabrication export** of the routed board (the fab output,
+the immediate follow-on — a routed board that cannot go to fab is unfinished).

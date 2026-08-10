@@ -1,7 +1,8 @@
 # EngrCAD.Ecad
 
 Code-defined **schematics**, the **connectivity data model**, the **PCB board + placement** that
-derives from them, and the **copper DRC** over the result — stages 1–4 of the ECAD campaign
+derives from them, the **copper DRC** over the result, and the **autorouter** that turns the
+ratsnest into DRC-clean copper — stages 1–5 of the ECAD campaign
 (schematic → board → placement constraints → copper DRC → routing → MID/LDS 3D routing; see
 `todo.md`). It builds on
 `EngrCAD.Core` (math) and `EngrCAD.Modeling` (the `Shape`/`Assembly`/`Bom` API the board lowers
@@ -309,10 +310,42 @@ via that touches each pad is a real connection, and the DRC's ratsnest now deleg
 makes a connected net read unconnected (via pads are connectors, not terminals). Docs:
 `examples/ecad-pcb.md`.
 
+## Stage 5 — the autorouter
+
+The genuinely hard stage: turn the ratsnest into copper (`PcbTrace`s and vias) that joins every
+net's pins. `PcbRouter.Route(layout, rules, options)` → `RoutedResult` is a DRC-aware grid/maze A*
+router — a uniform routing grid `(x, y, layer)`, vias to change layers, 2-pin MST decomposition of
+multi-pin nets, and rip-up-and-reroute when a net is boxed in by congestion.
+
+**The bar** (an autorouter that connects while violating clearance is the classic silent failure):
+every routed net **connects** its pins **AND** passes the exact DRC, or the router **reports failure
+by name** — never a silent violation, and a partial result is still DRC-clean.
+
+**The grid is an accelerator; the exact DRC is the source of truth.** A candidate route is committed
+only after `PcbDrc.Violates` (plus the drill / via rules) confirms it adds no violation to the board,
+so a grid rounding error can never produce a violating trace. If the exact check disagrees with the
+grid, the exact check wins and the candidate is rejected.
+
+| Type | What it is |
+| --- | --- |
+| `PcbTrace` | A net's routed copper on one layer: a polyline centre-line of a given width, whose copper is the polyline's exact **stroke** (round caps/joins — the Minkowski sum with a disc, precisely the DRC's clearance model; round joins carry no acute corner). Layout truth — round-trips in the file. |
+| `PcbRouter.Route` | The router. Returns a NEW routed layout (the input is not mutated); a layout with nothing to route returns byte-identical. |
+| `RouterOptions` | Grid resolution, trace width, clearance, angles (45°/90°), vias on/off, via sizes, rip-up bound, net order — every field clearance-derived by default. |
+| `RoutedResult` | The routed layout, the nets routed / **unrouted by name**, the counts, and the rip-up count. `FullyRouted` when every net routed. |
+
+`PcbConnectivity` reads a trace as a **connector** (like a via), so a net is *connected* when its
+component pads end up in one copper component. **Rip-up** routes a blocked net across the traces that
+block it, rips those up, and re-queues them (negotiated congestion), bounded so a boxed-in net
+terminates and is reported unroutable. Deterministic — a fixed net order and grid give bit-identical
+routes. **v1 scope**: through-vias (all copper layers); NOT topological/shove routing, length
+matching, differential pairs, copper pours, teardrops, cavity walls as obstacles, or Gerber/Excellon
+fab export (the immediate follow-on). Docs: `examples/ecad-routing.md`.
+
 ## Not yet (later campaign stages)
 
-Autorouting itself (a DRC-aware maze/A* search over this connectivity graph, costing candidates
-with `PcbDrc.Violates`), panel cutouts, thermal coupling, MID/LDS 3D routing, and the richer
+Gerber (RS-274X) / Excellon fabrication export of the routed board (the immediate follow-on — a
+routed board that cannot go to fab is unfinished), panel cutouts, thermal coupling, MID/LDS 3D
+routing, and the richer
 interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one
 graph. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
 drilling the plate is a later refinement). A drawn schematic **sheet** (symbols and wires to

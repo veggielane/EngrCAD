@@ -73,7 +73,7 @@ public static class PcbConnectivity
     public static ConnectivityReport Analyze(PcbCopperModel model)
     {
         ArgumentNullException.ThrowIfNull(model);
-        var viaSources = new HashSet<string>(model.Vias.Select(v => v.Source), StringComparer.Ordinal);
+        var connectorSources = ConnectorSources(model);
 
         // Group the net-tagged copper by net (a null net is its own island — not part of connectivity).
         var byNet = new Dictionary<string, List<CopperFeature>>(StringComparer.Ordinal);
@@ -88,7 +88,7 @@ public static class PcbConnectivity
 
         var nets = new List<NetConnectivity>();
         foreach (var (name, features) in byNet.OrderBy(kv => kv.Key, StringComparer.Ordinal))
-            nets.Add(Compute(name, features, viaSources));
+            nets.Add(Compute(name, features, connectorSources));
         return new ConnectivityReport(nets);
     }
 
@@ -96,15 +96,26 @@ public static class PcbConnectivity
     public static NetConnectivity For(PcbCopperModel model, string net)
     {
         ArgumentNullException.ThrowIfNull(model);
-        var viaSources = new HashSet<string>(model.Vias.Select(v => v.Source), StringComparer.Ordinal);
+        var connectorSources = ConnectorSources(model);
         var features = model.Copper.Where(f => f.Net == net).ToList();
-        return Compute(net, features, viaSources);
+        return Compute(net, features, connectorSources);
+    }
+
+    /// <summary>The feature sources that are CONNECTORS rather than terminals — via pads and traces.
+    /// A connector ties copper together but is not itself a pin to be joined, so it never counts as
+    /// an island of its own (a floating via or a stray trace never makes a net read unconnected).</summary>
+    private static HashSet<string> ConnectorSources(PcbCopperModel model)
+    {
+        var connectors = new HashSet<string>(model.Vias.Select(v => v.Source), StringComparer.Ordinal);
+        foreach (var trace in model.TraceSources)
+            connectors.Add(trace);
+        return connectors;
     }
 
     // ---- the per-net graph ---------------------------------------------------
 
     private static NetConnectivity Compute(
-        string net, List<CopperFeature> features, HashSet<string> viaSources)
+        string net, List<CopperFeature> features, HashSet<string> connectorSources)
     {
         int n = features.Count;
         var parent = new int[n];
@@ -149,13 +160,14 @@ public static class PcbConnectivity
                 }
         }
 
-        // Endpoints are the COMPONENT PADS — the terminals to join. A via pad is a connector, not a
-        // terminal, so a floating/redundant via never makes a net read as unconnected.
+        // Endpoints are the COMPONENT PADS — the terminals to join. A via pad or a trace is a
+        // CONNECTOR, not a terminal, so a floating/redundant via and a routed trace never make a net
+        // read as unconnected (a net is connected when its component PADS end up in one component).
         var padRootOfSource = new Dictionary<string, int>(StringComparer.Ordinal);
         for (int i = 0; i < n; i++)
         {
             string src = features[i].Source;
-            if (viaSources.Contains(src))
+            if (connectorSources.Contains(src))
                 continue;
             padRootOfSource[src] = Find(parent, i);   // same source ⇒ same root (barrel union)
         }

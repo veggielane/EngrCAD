@@ -230,6 +230,7 @@ document.addEventListener('click', function (event) {
             { label: 'The board and its parts', slug: 'examples/ecad-pcb' },
             { label: 'Placement constraints', slug: 'examples/ecad-constraints' },
             { label: 'Copper design-rule check', slug: 'examples/ecad-drc' },
+            { label: 'Autorouting', slug: 'examples/ecad-routing' },
           ],
         },
         { label: 'Writing examples', slug: 'writing-examples' },
