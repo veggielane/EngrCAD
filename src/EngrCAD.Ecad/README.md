@@ -382,13 +382,40 @@ component pads end up in one copper component. **Rip-up** routes a blocked net a
 block it, rips those up, and re-queues them (negotiated congestion), bounded so a boxed-in net
 terminates and is reported unroutable. Deterministic — a fixed net order and grid give bit-identical
 routes. **v1 scope**: through-vias (all copper layers); NOT topological/shove routing, length
-matching, differential pairs, copper pours, teardrops, cavity walls as obstacles, or Gerber/Excellon
-fab export (the immediate follow-on). Docs: `examples/ecad-routing.md`.
+matching, differential pairs, copper pours, teardrops, or cavity walls as obstacles. Docs:
+`examples/ecad-routing.md`.
+
+## Fabrication export — Gerber (RS-274X) + Excellon
+
+The fab output that makes a routed board manufacturable. `PcbGerberExport.Write(layout, dir)` writes
+one **Gerber** per copper layer, a board-outline Gerber, and an **Excellon** NC-drill program (and
+reports what it wrote); `PcbGerberExport.Generate(layout)` returns the same as text.
+
+| Type | What it is |
+| --- | --- |
+| `GerberWriter` / `GerberBuilder` | RS-274X (extended Gerber): the format spec, an aperture table (circle/rectangle/obround/regular-polygon `%ADD`s), pads as flashes (`D03`), traces as round-aperture draws (`D01`/`D02`), region fills (`G36`/`G37`) and dark/clear polarity. |
+| `GerberReader` / `GerberImage` | The TWIN DECODER — parses exactly what the writer emits and reconstructs the copper as `CurvedRegion2d`s per layer. The round-trip oracle. |
+| `ExcellonWriter` / `ExcellonReader` / `DrillHit` | The NC-drill program (a tool per distinct diameter + the hits) and its twin decoder. Metric, decimal coordinates. |
+| `PcbGerberExport` / `FabricationOutput` / `GerberExportResult` | Composes the whole fab set for a `PcbLayout` (or a raw `PcbCopperModel` for pours), sharing one coordinate format. |
+
+**The oracle is the twin-decoder round trip** (the repo's rule — the geometry must survive the round
+trip, not merely a structural validator pass): the copper written is parsed *back* and the recovered
+copper equals the copper model's on each layer to the region-area grade (by area **and** by a
+symmetric-difference check through the DRC's own `CurvedRegion2dBoolean`), verified on both a
+hand-built and an autorouted board; the decoded drill hits equal the board's holes exactly. **The
+imaging order reproduces a UNION exactly**: the copper is a union of feature regions, so a via drill
+is a hole only where nothing covers it (a via under a trace, or a via-in-pad, is filled) — the writer
+lays all the solid copper down, then clears exactly the holes of the final union. The coordinate
+format is derived from the board's own magnitudes, so it is scale-invariant. An unrepresentable
+boundary (a Bézier edge in a copper region) is refused **by name**, and the reader refuses a
+truncated file / missing format spec / aperture macro by name (the `StepReader`/`IgesReader` ethos).
+**Not in v1** (each filed): solder-mask / silkscreen / paste layers (no mask/silk model yet), Gerber
+X2 attributes and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
+`examples/ecad-fabrication.md`.
 
 ## Not yet (later campaign stages)
 
-Gerber (RS-274X) / Excellon fabrication export of the routed board (the immediate follow-on — a
-routed board that cannot go to fab is unfinished), panel cutouts, thermal coupling, MID/LDS 3D
+Panel cutouts, thermal coupling, MID/LDS 3D
 routing, and the richer
 interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one
 graph. On the LIBRARY side, **Eagle `.lbr`** (an XML second reader), **IPC-7351 footprint

@@ -2586,7 +2586,7 @@ from what was already understood rather than from scratch.
     routing costs a candidate route with. Verified from both sides of every limit against the
     closed-form gap, scale-invariant, deterministic; the placed stage-2 fixture is DRC-clean
     with an unrouted ratsnest. See CLAUDE.md's ECAD status paragraph and design.md §6d for the
-    findings. The OPEN stages below (Gerber/Excellon fab export, MID/LDS, enclosure fit, interchange) are next.
+    findings. The OPEN stages below (MID/LDS, enclosure fit, interchange) are next.
   - **✅ STAGE 4b — multilayer stackups + embedded/enclosed components — LANDED**
     (`LayerStackup`/`StackLayer`/`Embedding`/`EmbeddedCavity`; the `PcbPlacement` extended with
     `Layer`/`Embedding`/`CavityClearance` + the new `Embed` method; `DrcRule.CavityClearance`;
@@ -2647,27 +2647,37 @@ from what was already understood rather than from scratch.
     stated, no-via byte-identical); v1 does NOT cut the via drill into the 3D plate B-Rep (copper /
     connectivity / DRC only). The connectivity engine is the seam an autorouter reuses — the routing
     prerequisite is now MET.
-  - **Gerber (RS-274X) + Excellon fabrication export — the immediate follow-on to the
-    autorouter (stage 5 landed), and a routed board that cannot go to fab is unfinished.**
-    A fab house consumes copper ARTWORK (Gerber, one file per copper/mask/silk layer) and a
-    DRILL file (Excellon, the holes and their tools), not a solid model — so this is a WRITER
-    over the copper model the router already produces. Each `CopperFeature` is a filled region
-    (a pad, a via pad, a stroked trace); Gerber's model is aperture flashes + draws, so a trace
-    is a `D10*` round aperture (its width) drawn along the centre-line and a pad is a flashed
-    aperture, which the `PcbTrace` centre-line + `Pad` geometry give directly — most of a trace
-    needs no polygon at all. The oracle is the one the whole ECAD campaign uses: parse the
-    emitted Gerber back (a small RS-274X reader), reconstruct the copper regions, and assert they
-    are the SAME regions (an exact area / a region boolean) the DRC saw — so the fab output and
-    the DRC cannot disagree about what copper exists, and a `save → parse → save` byte fixed
-    point on the ASCII stream (the `BrepArchive`/PDF text-fixed-point culture). Excellon is the
-    drill list keyed by tool; the round-trip is the hole set. NOT a `Shape` — copper thickness is
-    not modelled, so this is a 2D artwork writer, and the routed board's own `PcbCopperModel` is
-    the single source both it and the DRC read. Filed with the pour primitive it will want:
-    a copper POUR / ground plane is a hatched or solid region with thermal-relief clearances
-    (a region boolean, the tamper-mesh fill's shape; `RunLinker` links a hatched pour's segments),
-    which is a routing feature the fab writer then flashes like any other copper. Topological /
-    shove / push routing, length matching and differential pairs are later routing stages over the
-    same grid.
+  - **✅ GERBER (RS-274X) + EXCELLON FABRICATION EXPORT — LANDED** (`PcbGerberExport`/
+    `GerberWriter`/`GerberReader`/`ExcellonWriter`/`ExcellonReader`; docs
+    `examples/ecad-fabrication.md`, design.md §6d stage 6, README). One Gerber per copper layer +
+    a board-outline Gerber + an Excellon drill program, from a routed `PcbLayout` (or a raw
+    `PcbCopperModel` for pours): pads flash, traces draw with a round aperture (the swept stroke
+    IS the copper model's trace region), via pads flash as solid discs, anything else region-fills.
+    Verified by the campaign's twin-decoder oracle — parse the Gerber BACK and the recovered copper
+    equals the model's per layer by area AND symmetric difference (the DRC's own
+    `CurvedRegion2dBoolean`), on a hand-built AND an autorouted board; the Excellon hits recover
+    exactly. THE FILED FRAMING WAS RIGHT EXCEPT FOR ONE THING: the naive "flash the pad + clear the
+    via drill" opens a hole the model FILLS at a via-in-pad or a routed via (the copper is a UNION,
+    so a drill is a hole only where nothing covers it) — so the writer lays all the solid copper
+    down, then clears exactly the HOLES OF THE FINAL UNION, which stays correct for every via
+    (the crossing fixture's SIG via lands under a pad and its partner under the trace ending on it,
+    so a correct exporter emits ZERO clears there). Coordinate format derived from the board's own
+    magnitudes (scale-invariant; each `%FS` field is a single digit, so a two-digit fractional
+    count overflowed the field and decoded a 1e-3-scale board 10^5 too large — a format bug the
+    area oracle caught as a 10-orders-of-magnitude miss). A Bézier copper boundary is refused by
+    name; the reader refuses a truncated file / missing spec / aperture macro by name.
+  - **Fabrication follow-ups (filed):** SOLDER-MASK / SILKSCREEN / PASTE-STENCIL layers need a
+    mask/silk/paste MODEL the board does not carry yet (mask = the copper grown by a stated dam
+    less the openings; silk = a text/graphic layer; paste = the SMD pad set) — each a new layer
+    the same `GerberWriter` emits once the model exists. GERBER X2 attributes (`%TF`/`%TA`/`%TO`)
+    and the JOB FILE (`.gbrjob`) carry per-object net/component metadata a modern fab reads. A
+    copper POUR / ground plane (a hatched or solid region with thermal-relief clearances — a region
+    boolean, the tamper-mesh fill's shape; `RunLinker` links a hatched pour's segments) is a
+    ROUTING feature; the exporter already region-fills an arbitrary pour region faithfully (tested
+    via the model path), so it is a router deliverable rather than an exporter one. A Gerber
+    IMPORT of a foreign board is a different project (this is EXPORT; the reader is the round-trip
+    oracle scoped to what the writer emits). Topological / shove / push routing, length matching
+    and differential pairs are later routing stages over the same grid.
   - **3D component placement for MID/LDS — the novel capability, and it fits because the
     kernel ALREADY routes conductors on a moulded surface.** Moulded Interconnect Devices /
     Laser Direct Structuring put conductive traces directly on a 3D moulded plastic part,
