@@ -7168,11 +7168,76 @@ point is untouched, matching how `DrcRuleSet` is kept out); `ToExplodedAssembly`
 Docs: `examples/ecad-pcb.md` (with a committed APNG of a 4-layer board fanning open, the buried die
 rising last out of its cavity once the layers above have cleared).
 
+### Vias and the net-connectivity engine (`Via`, `PcbConnectivity`)
+
+Vias are the precursor to autorouting, and the net-connectivity engine underneath is the thing an
+autorouter reuses. A `Via` is a net-carrying cross-layer connection at `(x, y)` spanning the copper
+layers `[From, To]`, with a drill and an annular pad diameter. **The via TYPE is DERIVED from the
+span, not stored twice** (the `SheetBendSection`-carries-no-K discipline): `ViaGeometry.Resolve`
+against the board's stackup decides `Through` (outer face to outer face) / `Blind` (one outer face)
+/ `Buried` (neither face) / `Microvia`, and **the precedence is the finding** — THROUGH is decided
+first (both outer), then MICROVIA (a single dielectric hop, adjacent copper layers) takes precedence
+over blind/buried, because a microvia is a physically distinct single-hop via however its ends fall.
+There is no explicit `Microvia` a caller can assert into being across non-adjacent layers; the type
+is always derived, and the `AddVia(..., require:)` overload validates an INTENT against the derived
+type and refuses a mismatch BY NAME (the named "non-adjacent-for-microvia" refusal), a validation
+discarded rather than a second stored copy.
+
+**Via copper is fed into `PcbCopperModel`, so most of the via DRC is free.** A via places an
+**annular pad** (a disc of the pad diameter with the drill removed — a `CurvedRegion2d` whose one
+hole is the drill circle, so its `Area` is exactly `π(pad² − drill²)/4`) on EVERY copper layer it
+touches, tagged with its net, plus one `DrilledHole`. So the general clearance rule already spaces a
+via pad against different-net copper (a via pad is copper), the drill-to-copper rule already spaces a
+via drill against different-net copper (a via drill is a drilled hole), the annular-ring rule already
+checks the via (a via is a drilled pad, the drill carrying the pad diameter), copper-to-edge reaches
+it, and a same-net via touching its own copper is the intended connection and is never flagged. The
+ONE genuinely new rule is `ViaToVia` — the minimum WEB between two drilled holes, applied to all via
+pairs regardless of net (a manufacturing spacing; different-net via PAD clearance is already the
+copper-clearance rule) — measured by the SAME grow-and-intersect the clearance rule uses (grow each
+drill disc by half the minimum, require them disjoint), so a web AT the limit passes robustly the way
+a tangent contact is no region. `MinViaToVia` rides `DrcRuleSet` as a value with a default (NOT on
+the positional constructor), so a stage-4 caller building the six-argument way is unaffected.
+
+**`PcbConnectivity` is the heart, and it CLOSES the multilayer caveat.** It builds a per-net graph
+over the net's copper features (component pads, via pads, and — later — traces): two features join
+when they TOUCH on the same layer (an exact `CurvedRegion2dBoolean.Intersection`, no tolerance — the
+same query the DRC calls a SHORT between different nets) OR are the two ends of a PLATED BARREL. The
+barrel rule is the finding that needed no new machinery: **features sharing a source across layers
+are one plated connector** — a via (its annular pads on every touched layer) OR a through-hole pad
+(its per-layer copies) obey the identical rule, so no flag on `CopperFeature` is needed. A net is
+CONNECTED when all its COMPONENT PADS (not the via pads — those are connectors, not terminals, so a
+floating/redundant via never makes a connected net read unconnected) lie in one connected component.
+`PcbDrc.Ratsnest` now DELEGATES to this engine, so the stage-4b caveat ("a net whose pads sit on
+different layers reads as an unrouted ratsnest until routing") is answered by geometry: a via that
+touches each pad is a real connection. **The old ratsnest was a 2D-projection union across layers**
+(right for a through-hole pad by luck, wrong in general — it would connect two SMD pads on different
+layers at the same (x, y) without a via); the layer-aware graph is strictly more correct, and it is
+bit-compatible for every no-via board (through-hole barrels and same-layer touch reproduce the old
+answer, verified by the whole stage-4 suite passing). A via on the WRONG net does not connect it
+(only same-net features are nodes); a via elsewhere does not connect distant same-layer pads unless
+its copper reaches them.
+
+**Vias are LAYOUT TRUTH, so they round-trip in the layout file** (unlike the view/analysis
+`DrcRuleSet` and explode offsets, which do not): a `vias` array write-only-when-stated, so a via-free
+layout is byte-identical and a via one is a `save → load → save` fixed point. Verified higher than
+usual because ECAD fails plausibly: the type derived for every span (order-independent); a through via
+touching all N copper layers and a buried via only its inner span; the annular pad area exact to the
+closed form on every touched layer; every refusal by name; the connectivity headline from BOTH sides
+(with a via CONNECTED and the ratsnest empty, without it UNROUTED and named); wrong-net / floating /
+third-location vias not connecting; connectivity as EXACT region touch (a tangent point does not
+join, an overlap does); the via annular-ring / via-to-copper / via-to-via rules from both sides of
+their limit; a same-net via on its own copper never flagged; scale invariance and determinism. **v1
+does not cut the via drill into the 3D plate B-Rep** — vias are modelled in the copper /
+connectivity / DRC (the plate stays the mechanical outline + mounting holes, bit-identical), which is
+the safe scope and satisfies every layer-touching oracle; drilling the plate is a later refinement.
+Docs: `examples/ecad-pcb.md`.
+
 ### Not in stages 1–4
 
-Autorouting, panel cutouts and enclosure fit, thermal coupling, and MID/LDS 3D routing are later
-stages over this one graph; each reads the netlist↔copper identity stage 2 establishes and the DRC
-stage 4 provides (the router costs candidate routes with `PcbDrc.Violates`). The richer interchange
+Autorouting (a DRC-aware maze/A* search over `PcbConnectivity`'s graph, costing candidates with
+`PcbDrc.Violates` — the connectivity prerequisite is now met), panel cutouts and enclosure fit,
+thermal coupling, and MID/LDS 3D routing are later stages over this one graph; each reads the
+netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. A drawn schematic SHEET is still a
 VIEW of the graph and a later deliverable. Cross-layer via/microvia stitching between board layers
 (so a net's pads on different layers are geometrically connected) is the next embedded-side stage.

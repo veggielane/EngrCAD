@@ -55,7 +55,8 @@ public sealed class PcbCopperModel
         PcbBoard board,
         IEnumerable<CopperFeature> copper,
         IEnumerable<DrilledHole>? drills = null,
-        IEnumerable<EmbeddedCavity>? cavities = null)
+        IEnumerable<EmbeddedCavity>? cavities = null,
+        IEnumerable<PlacedVia>? vias = null)
     {
         ArgumentNullException.ThrowIfNull(board);
         ArgumentNullException.ThrowIfNull(copper);
@@ -63,6 +64,7 @@ public sealed class PcbCopperModel
         Copper = [.. copper];
         Drills = drills is null ? [] : [.. drills];
         Cavities = cavities is null ? [] : [.. cavities];
+        Vias = vias is null ? [] : [.. vias];
     }
 
     /// <summary>The board (its outline is the copper-to-edge datum).</summary>
@@ -77,6 +79,13 @@ public sealed class PcbCopperModel
     /// <summary>The embedded-component cavities milled into the board — their walls are a milled
     /// edge copper must clear, checked by the <see cref="DrcRule.CavityClearance"/> rule.</summary>
     public IReadOnlyList<EmbeddedCavity> Cavities { get; }
+
+    /// <summary>The placed vias — resolved copper (centre, net, touched layers, annular pad). Their
+    /// annular pads are ALSO in <see cref="Copper"/> (one per touched layer, tagged with the via's
+    /// net) and their drills in <see cref="Drills"/>, so the general clearance / drill-to-copper /
+    /// annular-ring rules reach them; this list is what the connectivity engine walks (a via joins
+    /// its pads across layers) and what the via-to-via rule spaces.</summary>
+    public IReadOnlyList<PlacedVia> Vias { get; }
 
     /// <summary>The distinct copper-layer names, in stackup order.</summary>
     public IReadOnlyList<string> Layers => Board.Stackup.Coppers.Select(c => c.Name).ToList();
@@ -139,14 +148,30 @@ public sealed class PcbCopperModel
             }
         }
 
-        // Board holes: bare drills of their own net (a mounting hole must clear all copper; a via
-        // has no pad in the stage-2 model, so it carries no annular-ring rule here).
+        // Board holes: bare drills of their own net (a mounting hole must clear all copper; a board
+        // via has no pad in the stage-2 model, so it carries no annular-ring rule here).
         foreach (var hole in layout.Board.Holes)
             drills.Add(new DrilledHole(
                 hole.Center, hole.Diameter, 0,
                 Net: null, Source: hole.Kind.ToString().ToLowerInvariant()));
 
-        return new PcbCopperModel(layout.Board, copper, drills, layout.Cavities());
+        // Vias: a plated cross-layer connection. Each places an annular pad (a disc of the pad
+        // diameter with the drill removed) on EVERY copper layer it touches, tagged with the via's
+        // net — the copper the general clearance / edge / connectivity walk over — plus one drill
+        // (the annular-ring and drill-to-copper rules ride the drill's PadDiameter and Net). The
+        // per-layer pad features share the via's Source, so the connectivity engine reads them as
+        // one plated barrel (the same rule a through-hole pad's per-layer copies obey).
+        var placedVias = layout.PlacedVias();
+        foreach (var via in placedVias)
+        {
+            var pad = via.PadRegion;
+            foreach (var layer in via.Layers)
+                copper.Add(new CopperFeature(layer, via.Net, via.Source, pad));
+            drills.Add(new DrilledHole(
+                via.Center, via.DrillDiameter, via.PadDiameter, via.Net, via.Source));
+        }
+
+        return new PcbCopperModel(layout.Board, copper, drills, layout.Cavities(), placedVias);
     }
 }
 

@@ -35,6 +35,16 @@ public sealed record DrcRuleSet(
     double MinCopperToEdge,
     double MinAcuteAngleDegrees)
 {
+    /// <summary>Minimum web between two vias' drilled holes (mm), edge to edge — a MANUFACTURING
+    /// spacing between drills, so it applies to ALL via pairs regardless of net (electrical clearance
+    /// between different-net via PADS is the general <see cref="MinCopperClearance"/>, which via
+    /// annular pads ride as ordinary copper). Not on the positional constructor (a value with a
+    /// default), so a stage-4 caller building a rule set the six-argument way is unaffected; ≈ 8 mil
+    /// at the default. A via annular ring uses <see cref="MinAnnularRing"/> (a via is a drilled pad),
+    /// and a via pad / drill to different-net copper uses <see cref="MinCopperClearance"/> /
+    /// <see cref="MinDrillToCopper"/> — a via pad is copper and a via drill is a drilled hole.</summary>
+    public double MinViaToVia { get; init; } = 0.2;
+
     /// <summary>
     /// Nominal defaults (⚠ verify against your fabricator's datasheet): 0.15 mm (≈ 6 mil)
     /// clearance, trace width and annular ring; 0.2 mm drill-to-copper; 0.25 mm copper-to-edge;
@@ -65,6 +75,7 @@ public sealed record DrcRuleSet(
             MinAnnularRing = MinAnnularRing * factor,
             MinDrillToCopper = MinDrillToCopper * factor,
             MinCopperToEdge = MinCopperToEdge * factor,
+            MinViaToVia = MinViaToVia * factor,
         };
     }
 }

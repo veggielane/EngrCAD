@@ -31,6 +31,10 @@ public enum DrcRule
     /// <summary>Copper of another component is closer than the minimum to an embedded component's
     /// cavity wall (the milled edge), on the layer the cavity is seated on.</summary>
     CavityClearance,
+
+    /// <summary>Two vias' drills are closer than the minimum via-to-via web (a manufacturing
+    /// spacing between drilled holes, applied to all via pairs regardless of net).</summary>
+    ViaToVia,
 }
 
 /// <summary>
@@ -144,6 +148,7 @@ public static class PcbDrc
         CheckTraceWidth(model, rules, violations);
         CheckAcuteAngles(model, rules, violations);
         CheckCavityClearance(model, rules, violations);
+        CheckViaToVia(model, rules, violations);
         return new DrcReport(violations, Ratsnest(model));
     }
 
@@ -360,6 +365,46 @@ public static class PcbDrc
         }
     }
 
+    // ---- via-to-via (the drill web between two vias) -------------------------
+
+    /// <summary>Two vias whose DRILLS are closer than the minimum via-to-via web are flagged. The
+    /// convention is stated: this is the minimum web between two drilled holes, so it applies to
+    /// ALL via pairs regardless of net — a drill web is a manufacturing minimum, and same-net-ness
+    /// does not relax it (electrical clearance between DIFFERENT-net via PADS is already the general
+    /// copper-clearance rule, which via annular pads ride as ordinary copper). Measured drill-edge to
+    /// drill-edge across the whole board (a drill goes through the stack, so it is not per-layer).
+    /// The web is proven by the SAME grow-and-intersect the clearance rule uses — grow each drill
+    /// disc by half the minimum and require the grown discs disjoint — so a web AT the limit passes
+    /// robustly (a tangent contact is no region), matching the tamper-mesh clearance construction.</summary>
+    private static void CheckViaToVia(PcbCopperModel model, DrcRuleSet rules, List<DrcViolation> v)
+    {
+        double m = rules.MinViaToVia;
+        if (!(m > 0) || model.Vias.Count < 2)
+            return;
+        var vias = model.Vias;
+        for (int i = 0; i < vias.Count; i++)
+            for (int j = i + 1; j < vias.Count; j++)
+            {
+                var a = vias[i];
+                var b = vias[j];
+                double ra = a.DrillDiameter / 2, rb = b.DrillDiameter / 2;
+                // Broad phase: two drill centres far enough apart are clear (a sound skip — it only
+                // ever skips a definitely-clear pair, so a near-limit pair falls to the exact check).
+                if (a.Center.DistanceTo(b.Center) - ra - rb >= m)
+                    continue;
+                var da = new[] { CurvedRegion2d.Disc(a.Center, ra) };
+                var db = new[] { CurvedRegion2d.Disc(b.Center, rb) };
+                if (CurvedRegion2dBoolean.Intersection(Grow(da, m / 2), Grow(db, m / 2)).Count == 0)
+                    continue;   // the grown discs are disjoint — the web is at least the minimum
+                double web = Separation(da, db, m);
+                v.Add(new DrcViolation(
+                    DrcRule.ViaToVia, "",
+                    $"via-to-via web {web:g3} < {m:g3} mm: {a.Source} (net {a.Net}) and "
+                    + $"{b.Source} (net {b.Net})",
+                    (a.Center + b.Center) * 0.5, web, m));
+            }
+    }
+
     // ---- trace width (opposing-wall thickness) -------------------------------
 
     private static void CheckTraceWidth(PcbCopperModel model, DrcRuleSet rules, List<DrcViolation> v)
@@ -430,34 +475,13 @@ public static class PcbDrc
 
     // ---- ratsnest (unrouted nets) --------------------------------------------
 
-    private static IReadOnlyList<string> Ratsnest(PcbCopperModel model)
-    {
-        // A named net whose copper is not one connected component is UNROUTED. Union each net's
-        // copper across all layers (a through-hole pad overlaps itself on every layer, so a via
-        // connects layers); more than one region left means the pads are separate islands. Only
-        // named nets carry copper the model tagged (Signal/Stub in a layout-derived model), and a
-        // one-feature net can never be disconnected, so a Stub (one terminal) never fires.
-        var byNet = new Dictionary<string, List<CurvedRegion2d>>(StringComparer.Ordinal);
-        foreach (var feature in model.Copper)
-        {
-            if (feature.Net is null)
-                continue;
-            if (!byNet.TryGetValue(feature.Net, out var list))
-                byNet[feature.Net] = list = [];
-            list.Add(feature.Region);
-        }
-
-        var unrouted = new List<string>();
-        foreach (var (name, regions) in byNet)
-        {
-            if (regions.Count < 2)
-                continue;   // one pad cannot be disconnected
-            if (CurvedRegion2dBoolean.UnionAll(regions).Count > 1)
-                unrouted.Add(name);
-        }
-        unrouted.Sort(StringComparer.Ordinal);
-        return unrouted;
-    }
+    /// <summary>A named net whose pads are not all in one connected component is UNROUTED — the
+    /// inverse of a short. The real connectivity answer lives in <see cref="PcbConnectivity"/>: two
+    /// features join when they TOUCH on a layer OR are the ends of a via (or through-hole pad), so a
+    /// net whose pads sit on different layers is CONNECTED once a via ties them, not a ratsnest. The
+    /// unrouted names come back in ordinal order.</summary>
+    private static IReadOnlyList<string> Ratsnest(PcbCopperModel model) =>
+        PcbConnectivity.Analyze(model).Unrouted;
 
     // ---- net grouping --------------------------------------------------------
 

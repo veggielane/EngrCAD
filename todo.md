@@ -2607,9 +2607,9 @@ from what was already understood rather than from scratch.
     part's own pads exempt). Persistence write-only-when-stated (a full `layerStackup` or the
     copper `stackup`, plus the placement's layer/embedding/clearance) — byte-identical stage-2..4
     files, a multilayer/embedded save→load→save fixed point, a missing-layer placement refused at
-    load. **The OPEN follow-up is cross-layer via/microvia STITCHING** so a net's pads on
-    different layers are geometrically connected (v1's identity is per the pad's OWN layer, so
-    they read as an unrouted ratsnest until routing — stated in the docs and the DRC).
+    load. Cross-layer via/microvia STITCHING (the "OPEN follow-up") is now ✅ LANDED — see the
+    VIAS + CONNECTIVITY bullet below — so a net's pads on different layers are geometrically
+    connected by a via and the per-pad-layer caveat is closed.
   - **✅ EXPLODED VIEW — the multilayer board sliced into per-layer slabs — LANDED**
     (`PcbLayout.ToExplodedAssembly(spacing?, name?)` + `LayerStackup.Extents`; `PcbExplode.cs`;
     docs `examples/ecad-pcb.md` animate fence + committed APNG, design.md §6d, README). Slices the
@@ -2629,17 +2629,37 @@ from what was already understood rather than from scratch.
     stack-order / factor-independent-count / determinism all asserted; a copper-only board (null
     `LayerStackup`) and a negative spacing refused BY NAME. Offsets are a VIEW concern, NOT baked
     into the layout file (byte fixed point untouched, the `DrcRuleSet` rule).
+  - **✅ VIAS + CROSS-LAYER CONNECTIVITY — the routing PREREQUISITE — LANDED** (`Via.cs`/
+    `PcbVia.cs`/`PcbConnectivity.cs`; `DrcRule.ViaToVia` + `DrcRuleSet.MinViaToVia`; docs
+    `examples/ecad-pcb.md`, design.md §6d, README). A `Via` is a net-carrying plated cross-layer
+    connection at `(x, y)` spanning copper layers `[From, To]` with a drill and an annular pad; the
+    **via TYPE is DERIVED from the span, not stored twice** (Through/Blind/Buried/Microvia, THROUGH
+    first then MICROVIA — a single dielectric hop — taking precedence; `AddVia(..., require:)`
+    validates an intent and refuses a mismatch by name, the "non-adjacent-for-microvia" refusal).
+    Via copper feeds `PcbCopperModel` (an annular pad per touched layer of exact area π(pad²−drill²)/4
+    plus one drill), so via clearance / drill-to-copper / annular-ring / copper-to-edge all ride the
+    existing rules FREE; the one new rule is `ViaToVia` (the drill web, all pairs, net-independent).
+    **`PcbConnectivity` is the heart and CLOSES the multilayer per-pad-layer caveat**: a per-net
+    graph joining features that TOUCH on a layer (exact region intersection, no tolerance) OR are the
+    ends of a plated barrel (a via or through-hole pad, same-source-across-layers), a net CONNECTED
+    when all its component pads are in one component; `PcbDrc.Ratsnest` DELEGATES to it, so a via
+    that touches each pad routes a cross-layer net. Vias are LAYOUT TRUTH (round-trip write-only-when-
+    stated, no-via byte-identical); v1 does NOT cut the via drill into the 3D plate B-Rep (copper /
+    connectivity / DRC only). The connectivity engine is the seam an autorouter reuses — the routing
+    prerequisite is now MET.
   - **Auto-routing — the genuinely hard one, and staged honestly.** Routing is a SEARCH
     problem (maze/A* per net, then rip-up-and-retry for congestion), not a closed form, and
     a bad autorouter is worse than hand routing — so v1 is a DRC-AWARE grid/maze router with
     the clearance rules above as the cost function and obstacles read from the arrangement,
     verified by "every routed net connects its pins AND passes DRC" (both asserted, since a
-    router that connects while violating clearance is the classic silent failure). Multi-
-    layer with vias, then topological/shove routing, are later stages filed with that
-    framing. The space-filling curves already landed are the fill/pour primitive (a ground
-    plane is a hatched or solid region with thermal-relief clearances — a region boolean),
-    and the `RunLinker` from the infill work is the same net-of-segments linking a router
-    produces.
+    router that connects while violating clearance is the classic silent failure). **The
+    connectivity prerequisite is now met** — `PcbConnectivity` builds the per-net graph a router
+    grows into (a trace is a stroked centre-line `CopperFeature` joining pads/vias), and
+    `PcbDrc.Violates` is the incremental cost function. Multi-layer with vias is done at the
+    connectivity level; topological/shove routing are later stages filed with that framing. The
+    space-filling curves already landed are the fill/pour primitive (a ground plane is a hatched or
+    solid region with thermal-relief clearances — a region boolean), and the `RunLinker` from the
+    infill work is the same net-of-segments linking a router produces.
   - **3D component placement for MID/LDS — the novel capability, and it fits because the
     kernel ALREADY routes conductors on a moulded surface.** Moulded Interconnect Devices /
     Laser Direct Structuring put conductive traces directly on a 3D moulded plastic part,

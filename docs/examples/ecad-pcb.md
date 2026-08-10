@@ -280,9 +280,76 @@ scene.AddTab("Board").Add(layout.ToAssembly());
 
 An embedded component's cavity wall is a milled edge, so other copper on its seat layer must clear
 it (`DrcRule.CavityClearance`), and clearance / shorts are checked **per copper layer including the
-inner ones**. Cross-layer via / microvia stitching between layers is a later stage — v1's identity
-is **per the pad's own layer**, so a net whose pads sit on different layers reads as unrouted (a
-ratsnest) until routing connects them.
+inner ones**. A net whose pads sit on different layers is joined by a **via** — see below.
+
+## Vias and cross-layer connectivity
+
+A **via** is a net-carrying, plated cross-layer connection: a drilled, plated hole at `(x, y)`
+spanning the copper layers `[from, to]`, with an annular copper **pad** on every layer it touches. A
+signal via transitions a routed trace between layers; a stitching via ties a plane — either way it
+belongs to a net, so a via with no net is refused by name.
+
+The via **type is derived from the span, never stored twice**: outer-face to outer-face is a
+`Through` via, an outer face to an inner layer is `Blind`, buried between inner layers is `Buried`,
+and a single dielectric hop (adjacent copper layers) is a `Microvia`.
+
+The engine underneath is the one an autorouter reuses — a **per-net connectivity graph**. Two copper
+features join when they *touch* on the same layer (an exact region intersection) **or** are the two
+ends of a via (a plated barrel across the layers). A net is **connected** when all its pads lie in
+one component. This is the real answer to *"a net whose pads sit on different layers"* — a via that
+touches each is a genuine connection, not an unrouted ratsnest:
+
+```csharp run:ecad-via-connectivity
+// A 4-layer board: copper planes Top / In1 / In2 / Bottom.
+var stackup = LayerStackup.FourLayer(copper: 0.035, prepreg: 0.2, core: 1.13);
+var board = PcbBoard.Rectangle(30, 20, stackup);
+
+// A round pad, instanced on the top and on the bottom, wired into one net — a signal that has to
+// change layers to get from one to the other.
+var pad = new PartDefinition("PAD", "U",
+    new[] { new Pin("1", PinType.Passive) },
+    new Footprint("PAD", new[] { Pad.Smd("1", new Vector2d(0, 0), 1.2, 1.2, PadShape.Round) }));
+
+var sch = new Schematic("stitch");
+var top = sch.Add("U1", pad);
+var bot = sch.Add("U2", pad);
+sch.Connect("SIG", top.Pin("1"), bot.Pin("1"));
+
+var layout = new PcbLayout(sch, board);
+layout.Place("U1", 0, 0, side: CopperSide.Top);      // SIG on the top copper
+layout.Place("U2", 0, 0, side: CopperSide.Bottom);   // SIG on the bottom copper
+
+// Before any via, SIG's two pads sit on different layers — an UNROUTED ratsnest.
+Console.WriteLine($"before the via: SIG connected = {layout.IsNetConnected("SIG")}, "
+    + $"ratsnest = [{string.Join(", ", PcbDrc.Check(layout).Ratsnest)}]");
+
+// A via ties the two layers. Its type is DERIVED from the span (Top..Bottom is a through via),
+// and it touches every copper layer it crosses.
+var stitch = new Via("SIG", 0, 0, "Top", "Bottom", DrillDiameter: 0.4, PadDiameter: 1.0);
+Console.WriteLine($"via Top..Bottom is a {layout.ViaTypeOf(stitch)} via touching "
+    + $"[{string.Join(", ", layout.ViaLayers(stitch))}]");
+layout.WithVia(stitch);
+
+// Now the via's annular pads touch each pad — SIG is CONNECTED, and its ratsnest is empty.
+var connectivity = layout.Connectivity();
+Console.WriteLine($"after the via:  SIG connected = {connectivity.Of("SIG").IsConnected}, "
+    + $"ratsnest = [{string.Join(", ", connectivity.Unrouted)}]");
+
+// The DRC catches a via with too thin an annular ring — a via IS a drilled pad, so (pad - drill)/2
+// must clear the minimum annular ring (0.15 mm by default).
+var check = new PcbLayout(new Schematic("drc"), board);
+check.AddVia("N", 8, 5, "Top", "Bottom", drill: 0.5, pad: 0.6);   // ring (0.6 - 0.5)/2 = 0.05 mm
+foreach (var v in PcbDrc.Check(check).OfRule(DrcRule.AnnularRing))
+    Console.WriteLine($"DRC: {v.Message}");
+```
+
+Because a via pad is ordinary copper and a via drill is a drilled hole, the general DRC rules reach
+them for free — a via pad to *different-net* copper rides the copper-clearance rule, a via drill to
+different-net copper the drill-to-copper rule, and a same-net via touching its own copper is the
+*intended* connection and is never flagged (the one-declaration identity). The one genuinely new via
+rule is **via-to-via** (`DrcRule.ViaToVia`): the minimum web between two drilled holes, applied to
+all via pairs regardless of net (a manufacturing spacing). Vias are **layout truth**, so they
+round-trip in the layout file; a via-free layout saves byte-identically.
 
 ## Exploding the stack
 

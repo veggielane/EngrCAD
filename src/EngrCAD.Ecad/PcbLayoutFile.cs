@@ -80,6 +80,22 @@ internal static class PcbLayoutWriter
         }
         root["placements"] = placements;
 
+        // Vias are layout truth (a placed signal / stitching via is part of the design), so they ride
+        // in the file — write-only-when-stated, so a via-free layout stays byte-identical.
+        if (layout.Vias.Count > 0)
+        {
+            var vias = new JsonArray();
+            foreach (var via in layout.Vias)
+                vias.Add(new JsonObject
+                {
+                    ["net"] = via.Net,
+                    ["x"] = via.X, ["y"] = via.Y,
+                    ["from"] = via.FromLayer, ["to"] = via.ToLayer,
+                    ["drill"] = via.DrillDiameter, ["pad"] = via.PadDiameter,
+                });
+            root["vias"] = vias;
+        }
+
         return root;
     }
 
@@ -201,6 +217,18 @@ internal static class PcbLayoutReader
                 EcadJson.Double(record, "x"), EcadJson.Double(record, "y"), rot, side,
                 layer, embedding, cavityClearance));
         }
+
+        if (root.TryGetPropertyValue("vias", out var viasNode) && viasNode is JsonArray viasArray)
+            foreach (var node in viasArray)
+            {
+                var record = EcadJson.Object(node, "a via");
+                layout.AddLoadedVia(new Via(
+                    EcadJson.String(record, "net"),
+                    EcadJson.Double(record, "x"), EcadJson.Double(record, "y"),
+                    EcadJson.String(record, "from"), EcadJson.String(record, "to"),
+                    EcadJson.Double(record, "drill"), EcadJson.Double(record, "pad")));
+            }
+
         return layout;
     }
 
