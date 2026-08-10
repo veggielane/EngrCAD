@@ -6986,14 +6986,75 @@ a constraint captured — a signed `PointOnLine` offset, an `AlignEdge` side rea
 rides as DATA (the branch selector, not a rule to re-run), and a stored direction is kept VERBATIM
 rather than re-normalized (the `AxisRef` ulp rule), so a reload reproduces the exact constraint.
 
-### Not in stages 1–3
+### Stage 4 — the copper DRC (`PcbDrc`)
 
-Copper DRC (a region-offset clearance query — grow each net's copper by half the clearance, require
-disjoint — over the exact 2D machinery), autorouting, panel cutouts and enclosure fit, thermal
-coupling, and MID/LDS 3D routing are later stages over this one graph; each reads the netlist↔copper
-identity stage 2 establishes. The richer interchange (KiCad `.kicad_pcb`, STEP AP214 board
-assemblies) follows IDF. A drawn schematic SHEET is still a VIEW of the graph and a later
-deliverable.
+Stage 4 is the geometric design-rule check over a board's copper (`DrcRuleSet`, `PcbCopperModel`,
+`CopperFeature`/`DrilledHole`, `PcbDrc.Check` → `DrcReport`). It is an exact 2D-region query the
+exact curved 2D machinery (§5) answers with no tolerance, and every rule NAMES, LOCATES and
+MEASURES its offender against its limit — the `PcbLayoutCheck`/`SchematicCheck` house style, higher
+than usual because ECAD fails plausibly.
+
+**The load-bearing rule is that the DRC reads the NETLIST to decide what should connect** — a SHORT
+is copper of DIFFERENT nets electrically connected; copper of the SAME net touching is the INTENDED
+connection and is never flagged. That is the one-declaration identity doing real work: a pad's net
+IS its pin's net, so `PcbCopperModel.FromLayout` resolves each pad's clearance group from the
+schematic. Only Signal/Stub nets JOIN their pins; a NoConnect terminal and an unconnected pin carry
+a NULL net (each its own group), because two floating pieces of copper are electrically distinct and
+must clear each other. A drill never clears its OWN pad (that is the annular ring), skipped by
+source rather than by net so an unconnected through-hole pad is not flagged against its own copper.
+
+**Clearance is the tamper-mesh construction** — group each net's copper, grow it by HALF the
+clearance (`CurvedRegion2dOffset`), and require different-net grown regions DISJOINT
+(`CurvedRegion2dBoolean.Intersection` empty PROVES the clearance). A positive-area overlap of the
+UNGROWN copper is a SHORT (the stronger failure); an overlap only once grown is a near miss. A
+broad-phase AABB gap ≥ the clearance is a sound skip (an AABB is a superset of its region, so the
+region gap is at least the box gap), so the exact curved boolean runs only on close pairs, and the
+MEASURED gap for the report is a bisection over the SAME grow-and-intersect the pass/fail rests on
+(run only on the few violations) so the number and the verdict cannot disagree. Annular ring is
+arithmetic; drill-to-copper grows the drill disc and intersects other-net copper on every layer
+(cross-layer); copper-to-edge subtracts the board outline shrunk by the clearance (an exact polygon
+inward offset) from each feature; trace width is `Region2dThickness`' opposing-wall neck; the
+acute-angle / acid-trap rule is the wedge angle between two copper edges at a joint (measured either
+side, so a copper spike AND an etchant-side notch both flag), with a smooth arc joint and a 90° pad
+corner passing under the default 90° threshold.
+
+**Multi-layer:** clearance, shorts, width and acute angles are PER LAYER; drill-to-copper is
+CROSS-LAYER. **The ratsnest is the INVERSE of a short** — a signal net whose copper is more than one
+connected region is UNROUTED (union each net's copper across layers; a through-hole pad overlaps
+itself, so a via connects layers) — and it is INFORMATION, not a fault, because a bare-pads board
+before routing is unrouted, not wrong; `DrcReport.Ok` ignores the ratsnest.
+
+**Traces arrive in stage 5, and the DRC needs no change to reach them.** Trace width and the
+acid-trap rule genuinely want conductors; the copper today is pads, so those rules run on whatever a
+layer carries and fully engage once a trace — a stroked centre-line region through the same
+`CopperFeature` type — exists. `PcbDrc.Violates(model, candidate, rules)` is the incremental seam a
+router costs a candidate route with (clearance/short on its layer, edge, width, acute), so the DRC
+is a routing cost function rather than only a final gate.
+
+**Scope decision on persistence.** A `DrcRuleSet` is a standalone checking parameter (a plain record
+of six numbers), NOT baked into the layout file — a board's design rules belong to the fabricator's
+capability sheet, and the caller passes a rule set to `Check`, so the stage-2/3 layout files stay
+byte-identical (nothing in the persisted layout changed). The defaults are ⚠ verify-against-datasheet
+nominal figures (0.15 mm clearance/width/ring, 0.2 mm drill-to-copper, 0.25 mm copper-to-edge, a 90°
+acid-trap threshold), flagged like `StandardHoles`/`SheetMaterials`.
+
+**Verification is the deliverable.** A known clearance violation is FOUND and a near miss at
+clearance + ε PASSES, measured against the closed-form gap (two Ø1 pads, gap = centre distance − 1);
+the clearance proof is asserted DIRECTLY (the grown regions' intersection empty on a passing board,
+non-empty on a failing one); a short NAMES BOTH NETS while two SAME-net overlapping pads are never
+flagged (and two unconnected pads ARE — the one-declaration assertion with teeth); annular ring,
+copper-to-edge and drill-to-copper are checked from both sides of their limit; a rule set and board
+that pass still pass after a 1e-3× and a 1e3× uniform scale (relative tolerances); the check is
+deterministic; and the placed stage-2 fixture is DRC-clean with an unrouted ratsnest of both its
+signal nets.
+
+### Not in stages 1–4
+
+Autorouting, panel cutouts and enclosure fit, thermal coupling, and MID/LDS 3D routing are later
+stages over this one graph; each reads the netlist↔copper identity stage 2 establishes and the DRC
+stage 4 provides (the router costs candidate routes with `PcbDrc.Violates`). The richer interchange
+(KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. A drawn schematic SHEET is still a
+VIEW of the graph and a later deliverable.
 
 ## 7. Query layer
 
