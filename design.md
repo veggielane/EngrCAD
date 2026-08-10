@@ -7357,14 +7357,62 @@ the tamper-mesh fill's shape); teardrops; cavity walls as routing obstacles; and
 Excellon fabrication export** of the routed board — the fab output, the immediate follow-on, since a
 routed board that cannot go to fab is unfinished. Docs: `examples/ecad-routing.md`.
 
+### Drawing the schematic sheet (`SchematicSheet`, `SchematicDrawing`)
+
+The human-readable VIEW of a schematic — placed symbols, orthogonal wires, junction dots, net
+labels, reference designators + values, a border and a title block, to SVG/DXF/PDF — and it
+**replaces `Netlist.ToText()`**. It is deliberately a VIEW: a `SchematicDrawing` is a
+**deterministic function of the graph and the placement**, so it cannot disagree with the
+netlist (the one-declaration rule), and the same schematic and placement produce byte-identical
+SVG. It consumes the drawing writers Modeling already carries (`SvgDrawing`/`DxfDocument`/
+`PdfDrawing`, the same pens and line classes the mechanical `DrawingSheet` writes through), but
+is NOT a `DrawingSheet`: a schematic is line work placed by the caller, not an orthographic
+projection of 3D geometry, so it owns its own 2D sheet type rather than forcing symbols through
+a projection machine.
+
+**The verification is the deliverable and reads the drawn PRIMITIVES, not the router's
+bookkeeping.** `SchematicDrawing.Verify()` reconstructs the connectivity from the wire segments,
+the pin anchors and the net labels — union-find over the wire graph, plus label equality — and
+asserts BOTH directions: every signal/stub net's pins are joined (by a wire path or a shared
+label), and no two pins on different nets are joined. A drawing that omitted a connection the
+netlist has, or invented one it does not, fails; that is what makes the sheet a faithful view
+of the graph rather than a picture that might lie. A pin's world anchor is where its wire lands,
+computed from an EXACT quarter-turn pose (a sign swap, never a `cos`), so the anchor coincides
+with the wire endpoint to the bit.
+
+**Three decisions carry the router.** A **rail is drawn as LABELS, not a wire**: a `GND` net is
+not one long wire across the sheet, so a net with a `Power`/`Ground` pin (or a recognised rail
+name, or more pins than a fanout threshold) is drawn as a net-name label at each pin, and
+labelled pins join by the shared label — which is what keeps a label and a wire from
+cross-joining two different nets (a labelled pin never takes the wire branch). A **wire is
+orthogonal**: two pins take an L, three or more a horizontal trunk at the pins' median height
+with a vertical stub from each pin, so an interior stub makes a T the **junction dot** renderer
+marks (multiplicity ≥ 3 of wire endpoints — a mid-segment CROSSING of two nets is not a
+junction, the schematic convention). And a **junction dot is a filled disc in SVG/PDF but an
+outline circle in DXF**: the stroke-only writers get a filled mark from a round-capped
+zero-length stroke, which DXF (no line width, no fill in the 2D writer) cannot spell, so the
+marker differs per format — exactly the kind of spelling difference the drawing writers already
+carry.
+
+**Refused by name at construction**: a component with no `Symbol` (it cannot be drawn), a net
+that connects a pin the component's symbol does not draw (the "pin with no anchor" case — the
+symbol and the netlist disagree about the part's pins, a `PinIdentity` failure), and a component
+the placement does not cover. **Placement is hand-done in v1** — a `SchematicPlacement` value,
+or `Grid(...)`, a deterministic grid PLACEHOLDER clearly labelled as such; a real auto-placer
+that produces a *good* layout is a different problem and is deliberately not invented, and the
+v1 wire router may cross a symbol or another net (an obstacle-avoiding route is likewise
+separate). Docs: `examples/ecad-schematic-sheet.md`.
+
 ### Not in stages 1–5
 
 Gerber / Excellon fabrication export (the immediate follow-on), panel cutouts and enclosure fit,
 thermal coupling, and MID/LDS 3D routing are later stages over this one graph; each reads the
 netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. The richer interchange
-(KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. A drawn schematic SHEET is still a
-VIEW of the graph and a later deliverable. Cross-layer via/microvia stitching between board layers
-(so a net's pads on different layers are geometrically connected) is the next embedded-side stage.
+(KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. The drawn schematic SHEET has
+landed (see above) as a VIEW of the graph; a good auto-placer and an obstacle-avoiding wire
+router are the open follow-ons there, plus hierarchical sheets, buses, off-page connectors and
+back-annotation. Cross-layer via/microvia stitching between board layers (so a net's pads on
+different layers are geometrically connected) is the next embedded-side stage.
 
 ## 7. Query layer
 

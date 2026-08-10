@@ -354,6 +354,37 @@ schematic file as a **byte-identical fixed point**; a symbol-less definition ser
 as before (write-only-when-stated). The 3D body stays code, as always; a KiCad `.wrl`/`.step`
 model reference is out of scope (its path noted, not loaded).
 
+## Drawing the schematic sheet
+
+The human-readable VIEW of a schematic: a drawn SHEET — placed symbols, orthogonal wires,
+junction dots, net labels, reference designators + values, a border and a title block —
+written to **SVG / DXF / PDF**. It **replaces `Netlist.ToText()`** as the way to look at a
+schematic, and it is deliberately a VIEW: a `SchematicDrawing` is a **deterministic function of
+the graph and the placement**, derived so it cannot disagree with the netlist (the
+one-declaration rule) — the same schematic and placement produce byte-identical SVG.
+
+| Type | What it is |
+| --- | --- |
+| `SchematicSheet` | A schematic + a `SchematicPlacement` + a paper size + a title block. `Draw()` computes the `SchematicDrawing`. Refuses **by name** at construction: a component with no `Symbol`, a net on a pin the symbol does not draw (a `PinIdentity` mismatch), a component the placement does not cover. |
+| `SchematicPlacement` | Where each component's symbol sits (`Place(refdes, position, quarterTurns, mirror)`). Hand-placed in v1; `Grid(schematic, format)` is a deterministic grid PLACEHOLDER (a good auto-layout is a separate problem, not attempted). |
+| `SymbolPose` | A symbol's origin, an orthogonal rotation (90° steps — the schematic convention) and an optional mirror. The transform is EXACT (a quarter turn is a sign swap), so a pin's world anchor coincides with its wire endpoint to the bit. |
+| `SchematicSheetOptions` | The net-label rule (fanout threshold, power-net names) plus a few sizes. |
+| `SchematicDrawing` | The computed sheet: `Segments`/`Junctions`/`Texts`/`Pins`, the `Connectivity`, `Verify()`, and the writers `ToSvg`/`ToDxf`/`ToPdf` (+ `Save*`). |
+| `DrawnConnectivity` / `DrawnConnectivityReport` | The connectivity the drawing EXPRESSES, reconstructed from its primitives (wire segments, pin anchors, net labels) — `AreJoined(a, b)`, `LabelOf(pin)`. `Verify()` asserts the drawn sheet joins exactly the pins the netlist connects, BOTH ways. |
+
+**Wires** are orthogonal (Manhattan): two pins take an L, three or more a horizontal trunk at
+the pins' median height with a vertical stub from each pin, so interior stubs make **junction
+dots** (a T or cross of wires — a crossing is not a connection). It is a small *schematic*
+router — no layers, no clearance — and v1 may cross a symbol or another net; an
+obstacle-avoiding route is a separate problem. **Net labels** carry a net drawn as labels
+rather than wires: a power/ground rail (any pin typed `Power`/`Ground`, or a recognised rail
+name) or a net past the fanout threshold (default 4).
+
+The verification is the house style — every net's connected pins are JOINED (by a wire path or
+a shared label) and no two pins on different nets are joined — reconstructed from the drawn
+primitives so the drawing cannot omit a connection the netlist has nor invent one it does not.
+Docs: `examples/ecad-schematic-sheet.md`.
+
 ## Stage 5 — the autorouter
 
 The genuinely hard stage: turn the ratsnest into copper (`PcbTrace`s and vias) that joins every
@@ -394,6 +425,8 @@ interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later s
 graph. On the LIBRARY side, **Eagle `.lbr`** (an XML second reader), **IPC-7351 footprint
 GENERATION** from a designation (a generator, not a file import), EDIF, and the KiCad 3D model
 reference (`.wrl`/`.step`) are filed beside the KiCad symbol/footprint import that just landed. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
-drilling the plate is a later refinement). A drawn schematic **sheet** (symbols and wires to
-SVG/DXF/PDF via the `DrawingSheet` machinery) is a VIEW of the graph; `Netlist.ToText()` is the
-stage-1 textual view.
+drilling the plate is a later refinement). The drawn schematic **sheet** (`SchematicSheet` →
+SVG/DXF/PDF) has landed as a VIEW of the graph (see above); what stays open there is a real
+**auto-placer** (a good layout, not the grid placeholder) and an **obstacle-avoiding** wire
+router (v1 wires may cross symbols), plus hierarchical sheets, buses, off-page connectors and
+back-annotation.
