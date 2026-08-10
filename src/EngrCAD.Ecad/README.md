@@ -244,6 +244,38 @@ with disjoint z do not overlap — stacked dies). **v1's identity is per the pad
 cross-layer via/microvia stitching between board layers is a later stage, so a net whose pads sit on
 different layers reads as an unrouted ratsnest until routing. Docs: `examples/ecad-pcb.md`.
 
+### Exploded views — `ToExplodedAssembly()`
+
+A full `LayerStackup` makes the board a sandwich the kernel can take apart. `PcbLayout.ToExplodedAssembly(spacing?, name?)`
+slices the plate into **one slab per physical layer** — the outline extruded over that layer's own
+z-range (from `LayerStackup.Extents`, the same bottom-up accumulation the copper z's come off, never
+recomputed), drilled by every through hole and milled by every embedded cavity that reaches its
+z-range — and assembles them with the placed components (surface AND embedded), fanned along the
+**stackup normal** (`BoardFrame.Z`). It is the sibling of `ToAssembly()` (the board as one part),
+leaves it untouched, and returns an ordinary `Assembly`, so the exploded-view slider,
+`ExplodeTrack` and every exporter animate it with **no new code** (the offsets are
+`Occurrence.ExplodeOffset`/`ExplodePath`, Modeling-level values, so this needs no viewer dependency).
+
+The explode is decided by the one relationship a board has — its z-stacking:
+
+- **Layers fan up from the BOTTOM layer as the datum** (it stays put — the natural datum, since the
+  stackup accumulates from z = 0). A layer's offset is `n · gap · rank` from the bottom, so **stack
+  order is explode order** and, because the offset adds to the layer's original contiguous position,
+  `gap` is the clean empty gap between consecutive layers whatever their thickness.
+- **Surface components** lift off their face — top up clear of the fan, bottom down below the datum.
+  Pure Z.
+- **Embedded components** come out of their cavity along Z first, then spread aside — an `ExplodePath`
+  **dogleg** (leg 1 pure ±n out of the cavity, the final offset carrying the lateral step so the die
+  does not tunnel through the layers above it; a diagonal reads as *insert at an angle*).
+
+The slabs are DISJOINT, tile `[0, TotalThickness]` exactly, and their **union is the plate**
+(`Σ slab volume == ExpectedPlateVolume()`). At factor 0 the whole assembly is the assembled board —
+each component's world transform is bit-identical to `ToAssembly`'s — so an un-exploded flatten is
+the board in place. A board built the **copper-only way** (null `LayerStackup`) is refused by name:
+there is no modelled dielectric to slice, so use `ToAssembly` for a single-slab board. It is
+off-render-thread work (building slabs is geometry); the animation is then matrices only. Docs:
+`examples/ecad-pcb.md` (with a committed APNG of a 4-layer board opening).
+
 ## Not yet (later campaign stages)
 
 Autorouting, panel cutouts, thermal coupling, MID/LDS 3D routing, and the richer interchange

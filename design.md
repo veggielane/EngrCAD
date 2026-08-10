@@ -7113,6 +7113,61 @@ array when present, else the copper `stackup`; the placement's `layer`/`embeddin
 only when non-default), so a stage-2..4 file is byte-identical and a multilayer/embedded one is a
 `save → load → save` fixed point, with a placement naming a missing layer refused BY NAME at load.
 
+### Exploded views — the layer decomposition (`PcbLayout.ToExplodedAssembly`)
+
+A copper-only board is one plate; a `LayerStackup` board is a SANDWICH, and the exploded view is
+where that pays. `ToExplodedAssembly(spacing?, name?)` slices the plate into ONE slab per physical
+`StackLayer` — the outline extruded over that layer's own z-range, drilled by every through hole and
+milled by every cavity that reaches it — and assembles them with the placed components, fanned along
+the stackup normal. It is the SIBLING of `ToAssembly` (the board as one part), leaves it untouched,
+and returns an ordinary `Assembly`, so the exploded-view slider, the `ExplodeTrack` animation and
+every exporter drive it with NO new machinery: the offsets are `Occurrence.ExplodeOffset`/
+`ExplodePath`, Modeling-level values, so the decomposition needs no viewer dependency.
+
+**The per-layer z-ranges are reused, not recomputed.** The `LayerStackup` constructor already
+accumulates the build-up bottom-up to place the copper planes; it now exposes the same `[low, high]`
+pairs as `LayerStackup.Extents`, so a slab is placed at the exact z its copper plane came off. That
+is what makes the reassembly EXACT: the extents tile `[0, TotalThickness]` (endpoints on the faces
+exactly, contiguous with no gap), so the slabs are DISJOINT and their union IS the plate —
+`Σ slab volume == ExpectedPlateVolume()` as a closed form (each slab carries the same holes per unit
+height and its share of each cavity), verified to the mass-properties grade on the tessellated slabs.
+
+**The explode is decided by the one relationship a board has — its z-stacking — and every offset
+falls out of it:**
+
+- **Layers fan up from the BOTTOM layer as the datum** (it stays put, `ExplodeOffset = null`). The
+  natural datum, because the stackup itself accumulates from the bottom face at z = 0; deriving it
+  from a centroid, as the mechanical `AutoExplode` does, is meaningless for a sandwich. A layer's
+  offset is `n · gap · rank` counting rank from the bottom, so STACK ORDER IS EXPLODE ORDER (a layer
+  above another when assembled is above it when exploded — the final z, original mid plus offset, is
+  monotone in stack order). And because the offset adds to the layer's ORIGINAL (contiguous)
+  position rather than replacing it, the layer thicknesses cancel and `gap` is the clean EMPTY gap
+  between consecutive exploded layers whatever their thickness — a 4 mm core and a 35 µm film both
+  get the same gap. The default `gap = 2·T/(L−1)` opens the fully-fanned stack to about 3× the board
+  thickness, big enough to read and small enough to frame.
+- **Surface components lift off their face** — a top part up clear of the whole fan, a bottom part
+  down below the datum. Pure Z.
+- **Embedded components come out of their cavity along Z FIRST, then spread aside** — an `ExplodePath`
+  DOGLEG. Its first leg is pure ±n (straight out of the cavity), and its FINAL offset carries a
+  lateral step so the die does not tunnel straight up through the layers directly above it (a
+  diagonal reads as "insert at an angle", the recorded explode-path lesson). This is the reason an
+  embedded offset is the one that is NOT pure Z: the lateral leg IS the dogleg, and a pure-Z endpoint
+  with a "straight up first" leg is provably a collinear no-op. Layers and surface components fan
+  purely axially; only embedded parts carry the lateral spread.
+
+**Factor 0 is the assembled board, bit-identically.** The component occurrences are built exactly as
+`ToAssembly` builds them (same `OccurrenceFrame`, same `PartTransform`), and `ExplodeDisplacement(0)`
+is exactly zero, so at factor 0 every component's world transform is bit-identical between the two
+assemblies — the animation opens FROM the board and closes back TO it. The instance count and order
+are independent of the factor (matrices only), and the whole thing is deterministic (bit-identical
+offsets on repeated builds; no ordering that is not a function of the model). A board built the
+copper-only way (null `LayerStackup`) is refused BY NAME — there is no modelled dielectric to slice,
+so `ToAssembly` is the single-slab answer — as is a negative spacing. Explode offsets are a
+VIEW/analysis concern, so they are NOT baked into the layout file (the save→load→save byte fixed
+point is untouched, matching how `DrcRuleSet` is kept out); `ToExplodedAssembly` recomputes them.
+Docs: `examples/ecad-pcb.md` (with a committed APNG of a 4-layer board fanning open, the buried die
+rising last out of its cavity once the layers above have cleared).
+
 ### Not in stages 1–4
 
 Autorouting, panel cutouts and enclosure fit, thermal coupling, and MID/LDS 3D routing are later

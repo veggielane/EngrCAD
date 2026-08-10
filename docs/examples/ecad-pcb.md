@@ -284,6 +284,98 @@ inner ones**. Cross-layer via / microvia stitching between layers is a later sta
 is **per the pad's own layer**, so a net whose pads sit on different layers reads as unrouted (a
 ratsnest) until routing connects them.
 
+## Exploding the stack
+
+The reason a full `LayerStackup` — copper AND dielectric, each with a thickness — is worth carrying
+is that the board is then a *sandwich the kernel knows how to take apart*. `ToExplodedAssembly()`
+slices the plate into **one slab per physical layer** (a dielectric core, or a thin copper film)
+and assembles them with the placed components, fanned along the **stackup normal**. It is the
+sibling of `ToAssembly()` (the board as one part) and rides the same `Assembly` / `Occurrence`
+machinery, so the ordinary exploded-view slider and `ExplodeTrack` animate it with no new code.
+
+Every decision is fixed by the fact that a PCB's one interesting relationship is its z-stacking:
+
+- The **layers fan up from the bottom layer as the datum** (it stays put — the natural datum, since
+  the stackup itself accumulates from the bottom face at z = 0). A layer's offset is
+  `stackup-normal · gap · rank`, counting rank from the bottom, so **stack order is explode order**:
+  a layer above another when assembled is above it when exploded, and because the offset adds to the
+  layer's *original* (contiguous) position, `gap` is the clean empty gap between consecutive layers
+  whatever their thickness.
+- **Surface components lift off their face** — a top part up clear of the fan, a bottom part down
+  below the datum. Pure Z.
+- **Embedded components come out of their cavity along Z first, then spread aside** — an
+  `Occurrence.ExplodePath` **dogleg** whose first leg is pure ±normal (straight out of the cavity)
+  and whose final offset carries a lateral step, so the die does not tunnel straight up through the
+  layers above it (a diagonal reads as *insert at an angle*).
+
+The slabs are disjoint, tile the stackup z-range exactly, and — being the outline drilled by every
+through hole and milled by every cavity — their **union is the plate**: `Σ slab volume` equals
+`ExpectedPlateVolume()`. At explode factor 0 the whole thing is the assembled board (each
+component's world transform is bit-identical to `ToAssembly`'s), so the animation genuinely opens
+*from* the board and closes back *to* it.
+
+```csharp animate:ecad-explode frames:28
+// A thick illustrative 4-layer build-up so the fanned slabs read (total ≈ 5.4 mm).
+var stackup = LayerStackup.FourLayer(copper: 0.1, prepreg: 0.5, core: 4.0);
+var board = new PcbBoard(
+    new[] { new Vector2d(-22, -14), new Vector2d(22, -14), new Vector2d(22, 14), new Vector2d(-22, 14) },
+    stackup,
+    holes: new[] {
+        new BoardHole(new Vector2d(-18, -10), 3.0, BoardHoleKind.Mounting),
+        new BoardHole(new Vector2d(18, 10), 3.0, BoardHoleKind.Mounting),
+    });
+
+var die = new PartDefinition("DIE", "U",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("DIE", new[] {
+        Pad.Smd("1", new Vector2d(-2.2, 0), 1.6, 2.4),
+        Pad.Smd("2", new Vector2d(2.2, 0), 1.6, 2.4),
+    }),
+    body: () => Shape.Box(6.0, 4.0, 3.0).Translate(0, 0, 1.5));
+var res = new PartDefinition("R_0805", "R",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("R0805", new[] {
+        Pad.Smd("1", new Vector2d(-1.0, 0), 1.2, 1.4),
+        Pad.Smd("2", new Vector2d(1.0, 0), 1.2, 1.4),
+    }),
+    body: () => Shape.Box(2.0, 1.25, 0.6).Translate(0, 0, 0.3));
+
+var sch = new Schematic("stack");
+var u1 = sch.Add("U1", die);
+var r1 = sch.Add("R1", res);
+sch.Connect("A", u1.Pin("1"), r1.Pin("1"));
+sch.Connect("B", u1.Pin("2"), r1.Pin("2"));
+
+var layout = new PcbLayout(sch, board);
+layout.Embed("U1", "In2", 0, 0, cavityClearance: 0.2);   // a die buried between the copper layers
+layout.Place("R1", 15, 0, 0, CopperSide.Top);            // a resistor proud on top
+
+// Slice the board into per-layer slabs and fan them along the stackup normal.
+var assembly = layout.ToExplodedAssembly();
+
+var scene = new Scene();
+scene.AddTab("Board").Add(assembly);
+
+// Sequence it: the layers fan open first, the surface part lifts, and the buried die comes out
+// LAST — straight up out of its cavity, then aside — once the layers above it have cleared.
+var track = new ExplodeTrack(scene, deriveOffsets: false);
+foreach (var occurrence in assembly.Occurrences)
+{
+    if (occurrence.Name == "U1") track.Stagger(occurrence, 0.55, 1.0);
+    else if (occurrence.Name == "R1") track.Stagger(occurrence, 0.35, 0.85);
+    else track.Stagger(occurrence, 0.0, 0.6);
+}
+var animation = new Animation(durationSeconds: 5, AnimationEasing.Smoothstep).With(track);
+```
+
+![A 4-layer board exploding: the copper and dielectric layers fan apart along the stackup normal, the surface resistor lifts off the top, and the buried die rises straight up out of its cavity.](images/ecad-explode.png)
+
+`deriveOffsets: false` keeps the offsets `ToExplodedAssembly` computed (the generic
+`Assembly.AutoExplode` would derive a mechanical radial explode instead, and would move the datum
+layer). The offsets are pure geometry, so this — like `AutoExplode` — is off-the-render-thread work;
+evaluating the animation is then matrices only, the instance count and order independent of the
+factor.
+
 ## Interchange: IDF import
 
 `IdfReader` imports an IDF 3.0/4.0 board (`.emn`) file — board outline, thickness, drilled holes,

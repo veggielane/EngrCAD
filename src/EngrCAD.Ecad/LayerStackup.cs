@@ -60,6 +60,16 @@ public sealed class LayerStackup
     /// (see the type remarks). This is the copper model every stage-2..4 consumer reads.</summary>
     public IReadOnlyList<CopperLayerSpec> Coppers { get; }
 
+    /// <summary>The z-range <c>[Low, High]</c> each physical <see cref="StackLayer"/> occupies,
+    /// indexed to match <see cref="Layers"/> (top-most first). These are the SAME numbers the copper
+    /// planes' z-heights derive from — accumulated bottom-up in the constructor, not recomputed — so
+    /// <c>Layers[i]</c> fills exactly <c>[Extents[i].Low, Extents[i].High]</c>, consecutive layers
+    /// tile <c>[0, TotalThickness]</c> with no gap (<c>Extents[i].Low == Extents[i+1].High</c>), and
+    /// the two outer extremes land on the faces EXACTLY (<c>Extents[0].High == TotalThickness</c>,
+    /// <c>Extents[^1].Low == 0</c>). This is the seam an exploded-view decomposition slices the plate
+    /// into per-layer slabs on (<c>PcbLayout.ToExplodedAssembly</c>).</summary>
+    public IReadOnlyList<(double Low, double High)> Extents { get; }
+
     /// <summary>The derived copper planes as a <see cref="PcbStackup"/> — the seam a
     /// <see cref="PcbBoard"/> built from this stackup carries as its <see cref="PcbBoard.Stackup"/>.</summary>
     public PcbStackup CopperStackup => new(Coppers);
@@ -125,6 +135,14 @@ public sealed class LayerStackup
                 coppers.Add(new CopperLayerSpec(Layers[i].Name, z));
             }
         Coppers = coppers;
+
+        // The per-layer z-ranges are exactly the [low, high] pairs the copper z's came off, so they
+        // are exposed rather than recomputed — a consumer slicing the plate into per-layer slabs
+        // reads the SAME accumulation the copper planes did.
+        var extents = new (double Low, double High)[Layers.Count];
+        for (int i = 0; i < Layers.Count; i++)
+            extents[i] = (low[i], high[i]);
+        Extents = extents;
     }
 
     /// <summary>The conventional two-layer board — copper, core, copper — with the copper planes
