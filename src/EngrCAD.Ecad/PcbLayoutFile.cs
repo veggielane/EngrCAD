@@ -70,6 +70,12 @@ internal static class PcbLayoutWriter
                 record["rot"] = placement.RotationDegrees;
             if (placement.Side != CopperSide.Top)
                 record["side"] = placement.Side.ToString();
+            if (placement.Layer is not null)                 // embedded/inner-layer fields
+                record["layer"] = placement.Layer;
+            if (placement.Embedding != Embedding.Surface)
+                record["embedding"] = placement.Embedding.ToString();
+            if (placement.CavityClearance != 0)
+                record["cavityClearance"] = placement.CavityClearance;
             placements.Add(record);
         }
         root["placements"] = placements;
@@ -86,7 +92,17 @@ internal static class PcbLayoutWriter
             outline.Add(new JsonObject { ["x"] = p.X, ["y"] = p.Y });
         record["outline"] = outline;
 
-        if (!IsDefaultStackup(board.Stackup, board.Thickness))   // default 2-layer omitted
+        if (board.LayerStackup is not null)                      // the full physical build-up
+        {
+            var layers = new JsonArray();
+            foreach (var l in board.LayerStackup.Layers)
+                layers.Add(new JsonObject
+                {
+                    ["kind"] = l.Kind.ToString(), ["name"] = l.Name, ["thickness"] = l.Thickness,
+                });
+            record["layerStackup"] = layers;
+        }
+        else if (!IsDefaultStackup(board.Stackup, board.Thickness))   // default 2-layer omitted
         {
             var stackup = new JsonArray();
             foreach (var c in board.Stackup.Coppers)
@@ -174,9 +190,16 @@ internal static class PcbLayoutReader
                 ? EcadJson.Enum<CopperSide>(sideNode?.GetValue<string>(), "a placement side")
                 : CopperSide.Top;
             double rot = record["rot"]?.GetValue<double>() ?? 0;
+            string? layer = record.TryGetPropertyValue("layer", out var layerNode)
+                ? layerNode?.GetValue<string>() : null;
+            var embedding = record.TryGetPropertyValue("embedding", out var embNode)
+                ? EcadJson.Enum<Embedding>(embNode?.GetValue<string>(), "a placement embedding")
+                : Embedding.Surface;
+            double cavityClearance = record["cavityClearance"]?.GetValue<double>() ?? 0;
             layout.AddLoadedPlacement(new PcbPlacement(
                 EcadJson.String(record, "ref"),
-                EcadJson.Double(record, "x"), EcadJson.Double(record, "y"), rot, side));
+                EcadJson.Double(record, "x"), EcadJson.Double(record, "y"), rot, side,
+                layer, embedding, cavityClearance));
         }
         return layout;
     }
@@ -192,8 +215,24 @@ internal static class PcbLayoutReader
             outline.Add(new Vector2d(EcadJson.Double(p, "x"), EcadJson.Double(p, "y")));
         }
 
+        // A full physical stackup takes precedence over the copper-only one (it derives the copper).
+        LayerStackup? layerStackup = null;
+        if (record.TryGetPropertyValue("layerStackup", out var layerNode) && layerNode is JsonArray layerArray)
+        {
+            var stackLayers = new List<StackLayer>();
+            foreach (var node in layerArray)
+            {
+                var l = EcadJson.Object(node, "a stackup layer");
+                stackLayers.Add(new StackLayer(
+                    EcadJson.Enum<StackLayerKind>(EcadJson.String(l, "kind"), "a stackup layer kind"),
+                    EcadJson.String(l, "name"), EcadJson.Double(l, "thickness")));
+            }
+            layerStackup = new LayerStackup(stackLayers);
+        }
+
         PcbStackup? stackup = null;
-        if (record.TryGetPropertyValue("stackup", out var stackupNode) && stackupNode is JsonArray stackupArray)
+        if (layerStackup is null
+            && record.TryGetPropertyValue("stackup", out var stackupNode) && stackupNode is JsonArray stackupArray)
         {
             var coppers = new List<CopperLayerSpec>();
             foreach (var node in stackupArray)
@@ -232,7 +271,9 @@ internal static class PcbLayoutReader
                     poly));
             }
 
-        return new PcbBoard(outline, thickness, stackup, holes, keepOuts);
+        return layerStackup is not null
+            ? new PcbBoard(outline, layerStackup, holes, keepOuts)
+            : new PcbBoard(outline, thickness, stackup, holes, keepOuts);
     }
 
     private static Frame3d ReadFrame(JsonObject f) => Frame3d.FromOrthonormal(

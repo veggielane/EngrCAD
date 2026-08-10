@@ -7048,13 +7048,79 @@ that pass still pass after a 1e-3× and a 1e3× uniform scale (relative toleranc
 deterministic; and the placed stage-2 fixture is DRC-clean with an unrouted ratsnest of both its
 signal nets.
 
+### Stage 4b — multilayer stackups and embedded components (`LayerStackup`, `Embedding`)
+
+Stage 2's `PcbStackup` is copper-only — a list of named copper PLANES at stated z-heights. Stage 4b
+generalizes it to the full physical build-up while keeping the copper-only path **byte-identical**.
+
+**`LayerStackup` is an ordered list of copper AND dielectric `StackLayer`s, each with a thickness,
+top-most first.** The board is extruded through the whole build-up, so `TotalThickness` (the sum of
+every layer's thickness) is the board thickness, and each copper plane's z is DERIVED rather than
+stated. **The z-derivation is one CONTACT rule applied uniformly**: a copper plane sits at the
+surface at which it is contacted — the two OUTER copper layers at the board's faces (top at
+`TotalThickness`, bottom at 0), an INNER copper (reached through the dielectric from either side) at
+its own midplane. For the standard copper–dielectric–…–copper builds this puts the outer coppers
+exactly on the faces (so an SMD part still seats on the surface) and the inner coppers between,
+which is the oracle. **The accumulation is bottom-up so the endpoints are EXACT**: walking the
+layers in reverse from z = 0 puts the bottom copper's plane at exactly 0 and, since the total is the
+same bottom-up sum, the top copper's at exactly the total — where accumulating from the top and
+subtracting would leave the bottom face at `total − Σt`, which is 0 only to round-off (measured:
+−2.2e-16 on a six-layer stack). `LayerStackup.CopperStackup` is the derived `PcbStackup`, so every
+stage-2..4 consumer reads a multilayer board through the exact seam it already reads; a board built
+the copper-only way carries a null `LayerStackup`, and its path is unchanged.
+
+**A placement generalizes from `(x, y, rot, side)` to also carry a seat `Layer` and an `Embedding`.**
+`Place` stays the surface API (Layer = null, Embedding = Surface — the struct default, so the record
+serializes byte-identically); `Embed(reference, layer, x, y, embedding, cavityClearance, side)` seats
+a component on an inner copper layer, at that layer's z (`SeatZ`), inside a cavity milled into the
+plate. **The cavity is a box tool subtracted from the plate**, sized to the footprint (and body)
+bounding box grown by the clearance, at the component's depth — and the two embedding styles differ
+only in the tool's z-extent: an ENCLOSED cavity is a box fully interior to the plate (an internal
+void — the build-up above and below stays intact, so the die is buried with no external access), an
+OPEN cavity is a box that overshoots the placement's surface (a well breaking that face). Both are
+**exact** because a box tool cuts planar faces the B-Rep boolean handles at machine precision
+(measured rel ~1e-16, closed manifold), and the removed volume is a closed form (lateral area ×
+depth-inside-the-board), so `ExpectedPlateVolume` stays the plate's own oracle less each cavity.
+
+**Three properties carry the design.** (a) **The containment oracle is against the outer extruded
+prism**: an enclosed body's world AABB is strictly inside `outline × [0, total]` (0 < min.z,
+max.z < total) — buried — while a surface body is proud (max.z > total) and an open cavity reaches a
+face (its z-range touches 0 or total); each is a crisp measured assertion. (b) **Overlap is a 3D
+test — z-intervals AND the rotated lateral rectangles (a separating-axis test on the two OBBs)** —
+so two cavities on DIFFERENT inner layers (disjoint z) with overlapping footprints are allowed
+(stacked dies), while two on one layer are refused. And this yields an EMERGENT minimum-spacing
+property worth stating: a cavity is footprint-plus-clearance, larger than the pads, so two embedded
+parts whose cavities do not overlap have pads at least `2·cavityClearance` apart — which is why a
+short between two embedded parts on one layer is not reachable through `Embed` (the overlap refusal
+fires first). (c) **Every refusal fires at `Embed`, before the placement is recorded** (the
+declaration-time `Place` pattern): an unknown layer, a non-negative clearance, a missing
+footprint/body, an enclosed cavity that would breach a surface, a cavity off the outline, or an
+overlap with an already-embedded cavity — all BY NAME.
+
+**The one-declaration identity holds across layers, and the DRC is N-layer aware for free.** The DRC
+already iterates `model.Layers` (all stackup coppers) and groups per layer, and through-hole copper
+already lands on every layer — so once `PcbCopperModel.FromLayout` puts an embedded SMD pad on its
+inner seat layer (`TargetLayerName`), inner-layer clearance and shorts are checked with no new code
+(measured: an inner-layer clearance violation found, an inner short named, a clean multilayer board
+reporting zero). One rule is genuinely new — `DrcRule.CavityClearance`: an embedded cavity's wall is
+a milled edge, so OTHER copper on its seat layer must clear it by the copper-to-edge minimum (the
+embedded part's OWN pads sit inside their own cavity by construction and are exempt). v1 checks the
+SEAT layer only (the layer the pads occupy); spanning layers is the microvia-stitching boundary. And
+that boundary is stated rather than hidden: v1's identity is per the pad's own layer, so a net whose
+pads sit on different layers reads as unrouted (a ratsnest) until routing — cross-layer via/microvia
+stitching is a later stage. Persistence extends the seam write-only-when-stated (a full `layerStackup`
+array when present, else the copper `stackup`; the placement's `layer`/`embedding`/`cavityClearance`
+only when non-default), so a stage-2..4 file is byte-identical and a multilayer/embedded one is a
+`save → load → save` fixed point, with a placement naming a missing layer refused BY NAME at load.
+
 ### Not in stages 1–4
 
 Autorouting, panel cutouts and enclosure fit, thermal coupling, and MID/LDS 3D routing are later
 stages over this one graph; each reads the netlist↔copper identity stage 2 establishes and the DRC
 stage 4 provides (the router costs candidate routes with `PcbDrc.Violates`). The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. A drawn schematic SHEET is still a
-VIEW of the graph and a later deliverable.
+VIEW of the graph and a later deliverable. Cross-layer via/microvia stitching between board layers
+(so a net's pads on different layers are geometrically connected) is the next embedded-side stage.
 
 ## 7. Query layer
 

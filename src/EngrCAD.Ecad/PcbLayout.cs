@@ -3,16 +3,47 @@ using EngrCAD.Modeling;
 
 namespace EngrCAD.Ecad;
 
+/// <summary>How a placed component sits in the board's z — on a face, or buried in a cavity.</summary>
+public enum Embedding
+{
+    /// <summary>On an outer copper face, proud of the board (the default, and the stage-2
+    /// behaviour). The seat is the outer copper of the placement's <see cref="CopperSide"/>.</summary>
+    Surface,
+
+    /// <summary>Buried in an INTERNAL cavity — the build-up above and below stays intact, so the
+    /// component has no external access and its body is strictly inside the board volume.</summary>
+    Enclosed,
+
+    /// <summary>In an OPEN CAVITY — a well milled down to the seat layer from the placement's
+    /// <see cref="CopperSide"/> face, so the component is accessible and the well breaks that
+    /// surface.</summary>
+    OpenCavity,
+}
+
 /// <summary>A component placed on a board: a reference designator naming a
 /// <see cref="Component"/> of the layout's <see cref="Schematic"/>, a 2D pose on the board
-/// (mm and degrees, about the board Z), and which face it sits on.</summary>
+/// (mm and degrees, about the board Z), which face it references, and — for an inner-layer or
+/// embedded part — the copper layer it seats on and how it is embedded.</summary>
 /// <param name="Reference">The reference designator (<c>R1</c>), a component of the schematic.</param>
 /// <param name="X">The placement X (mm, board coordinates).</param>
 /// <param name="Y">The placement Y (mm, board coordinates).</param>
 /// <param name="RotationDegrees">Rotation about the board Z axis (degrees, CCW).</param>
-/// <param name="Side">The board face the component is placed on.</param>
+/// <param name="Side">The board face the component references (its facing/orientation).</param>
+/// <param name="Layer">The copper layer the component seats on, or null for the outer copper of
+/// <paramref name="Side"/> (a surface part). A non-null name is an inner layer; the part is
+/// embedded and seats at that layer's z (the cavity floor).</param>
+/// <param name="Embedding">How the component sits in z — on the surface (default), enclosed
+/// (buried) or in an open cavity.</param>
+/// <param name="CavityClearance">The gap (mm) milled around and above the component in its cavity;
+/// meaningful only for an embedded part.</param>
 public readonly record struct PcbPlacement(
-    string Reference, double X, double Y, double RotationDegrees, CopperSide Side);
+    string Reference, double X, double Y, double RotationDegrees, CopperSide Side,
+    string? Layer = null, Embedding Embedding = Embedding.Surface, double CavityClearance = 0)
+{
+    /// <summary>Whether this placement is embedded (buried or in an open cavity) rather than on a
+    /// surface.</summary>
+    public bool IsEmbedded => Embedding != Embedding.Surface;
+}
 
 /// <summary>One footprint pad projected onto the board — the geometric lift of a pin. It ties a
 /// schematic <see cref="Pin"/> (as a <see cref="PinRef"/>) to a copper location, which is the
@@ -131,12 +162,25 @@ public sealed partial class PcbLayout
         return this;
     }
 
-    // Used by the loader to reconstruct placements verbatim (same validation).
+    // Used by the loader to reconstruct placements verbatim (same validation). Geometry-dependent
+    // cavity validation (breach/overlap) is deferred to Plate/Cavities so a data-only load with no
+    // bodies still round-trips; the seat layer must exist, which is refused by name here.
     internal void AddLoadedPlacement(PcbPlacement placement)
     {
         if (Schematic.Find(placement.Reference) is null)
             throw new FormatException(
                 $"Placement '{placement.Reference}' names a component the schematic does not contain.");
+        if (placement.IsEmbedded)
+        {
+            if (string.IsNullOrEmpty(placement.Layer))
+                throw new FormatException(
+                    $"Embedded placement '{placement.Reference}' names no seat layer.");
+            if (!Board.Stackup.Coppers.Any(c => c.Name == placement.Layer))
+                throw new FormatException(
+                    $"Placement '{placement.Reference}' names copper layer '{placement.Layer}', which "
+                    + $"the stackup does not contain (layers: "
+                    + $"{string.Join(", ", Board.Stackup.Coppers.Select(c => c.Name))}).");
+        }
         if (!_placed.Add(placement.Reference))
             throw new FormatException($"Component '{placement.Reference}' is placed more than once.");
         _placements.Add(placement);
@@ -144,14 +188,44 @@ public sealed partial class PcbLayout
 
     // ---- placement transforms (the seam ToAssembly and the oracles share) ----
 
+    /// <summary>The z the placement seats at (the plane its body's local origin lands on): the
+    /// board thickness for a top surface part, 0 for a bottom surface part, and the seat layer's
+    /// copper z (the cavity floor) for an embedded part.</summary>
+    public double SeatZ(PcbPlacement placement)
+    {
+        if (placement.IsEmbedded)
+            return ResolveSeatLayer(placement).Z;
+        return placement.Side == CopperSide.Top ? Board.Thickness : 0;
+    }
+
+    /// <summary>The copper layer a placement's pads occupy: the seat layer for an embedded part,
+    /// else the outer copper of its side.</summary>
+    public string TargetLayerName(PcbPlacement placement) =>
+        placement.IsEmbedded ? ResolveSeatLayer(placement).Name : Board.Stackup.Outer(placement.Side).Name;
+
+    /// <summary>Resolves the copper layer an embedded placement names, or throws by name.</summary>
+    private CopperLayerSpec ResolveSeatLayer(PcbPlacement placement)
+    {
+        string name = placement.Layer
+            ?? throw new InvalidOperationException(
+                $"Embedded placement '{placement.Reference}' names no seat layer.");
+        foreach (var c in Board.Stackup.Coppers)
+            if (c.Name == name)
+                return c;
+        throw new ArgumentException(
+            $"Placement '{placement.Reference}' names copper layer '{name}', which the stackup does "
+            + $"not contain. Its layers are: {string.Join(", ", Board.Stackup.Coppers.Select(c => c.Name))}.",
+            nameof(placement));
+    }
+
     /// <summary>The board-local rigid pose of a placement (translation + rotation about Z,
-    /// seated on its face at z = thickness for top, 0 for bottom). The reflection for a bottom
-    /// placement is NOT here — it is on the part transform, so this stays a proper frame.</summary>
+    /// seated at <see cref="SeatZ"/>). The reflection for a bottom placement is NOT here — it is on
+    /// the part transform, so this stays a proper frame.</summary>
     public Frame3d PlacementPose(PcbPlacement placement)
     {
         double rot = placement.RotationDegrees * Math.PI / 180.0;
         double c = Math.Cos(rot), s = Math.Sin(rot);
-        double seatZ = placement.Side == CopperSide.Top ? Board.Thickness : 0;
+        double seatZ = SeatZ(placement);
         return Frame3d.FromOrthonormal(
             new Vector3d(placement.X, placement.Y, seatZ),
             new Vector3d(c, s, 0),
@@ -221,9 +295,9 @@ public sealed partial class PcbLayout
                     onLayer.Add(pad);   // through-hole pads are on every copper layer
                 }
                 else if (placementByRef.TryGetValue(pad.Reference, out var placement)
-                    && Board.Stackup.Outer(placement.Side).Z.Equals(spec.Z))
+                    && TargetLayerName(placement) == spec.Name)
                 {
-                    onLayer.Add(pad);   // SMD pad on its placement side's outer copper
+                    onLayer.Add(pad);   // SMD pad on its target copper (outer side, or embedded seat)
                 }
             }
             layers.Add(new CopperLayer(spec.Name, spec.Z, onLayer));
@@ -265,16 +339,25 @@ public sealed partial class PcbLayout
     }
 
     /// <summary>The board plate as an exact B-Rep <see cref="Shape"/>: the outline extruded to
-    /// the thickness, then every through hole drilled — the board's own holes AND this layout's
-    /// through-hole pads.</summary>
-    public Shape Plate() =>
-        PcbGeometry.BuildPlate(Board.OutlinePoints, Board.Thickness, ThroughHoles());
+    /// the thickness, then every through hole drilled (the board's own holes AND this layout's
+    /// through-hole pads) and every embedded component's cavity milled (an internal void for an
+    /// enclosed part, a well for an open cavity).</summary>
+    public Shape Plate()
+    {
+        var plate = PcbGeometry.BuildPlate(Board.OutlinePoints, Board.Thickness, ThroughHoles());
+        foreach (var cavity in Cavities())
+            plate = plate.Subtract(cavity.Tool);
+        return plate;
+    }
 
-    /// <summary>The closed-form volume of <see cref="Plate"/>: outline area × thickness less each
-    /// through hole's cylinder πr² × thickness (board holes and through-hole pads).</summary>
+    /// <summary>The closed-form volume of <see cref="Plate"/>: outline area × thickness, less each
+    /// through hole's cylinder πr² × thickness (board holes and through-hole pads) and each embedded
+    /// cavity's removed volume (lateral area × depth). Assumes cavities do not overlap holes or each
+    /// other (an overlap is refused at <see cref="Embed"/>).</summary>
     public double ExpectedPlateVolume() =>
         PcbGeometry.ExpectedPlateVolume(Board.OutlineArea(), Board.Thickness,
-            ThroughHoles().Select(h => h.Diameter));
+            ThroughHoles().Select(h => h.Diameter))
+        - Cavities().Sum(c => c.RemovedVolume);
 
     // ---- the assembly -------------------------------------------------------
 
