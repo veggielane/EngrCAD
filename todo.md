@@ -2610,6 +2610,25 @@ from what was already understood rather than from scratch.
     load. **The OPEN follow-up is cross-layer via/microvia STITCHING** so a net's pads on
     different layers are geometrically connected (v1's identity is per the pad's OWN layer, so
     they read as an unrouted ratsnest until routing — stated in the docs and the DRC).
+  - **✅ EXPLODED VIEW — the multilayer board sliced into per-layer slabs — LANDED**
+    (`PcbLayout.ToExplodedAssembly(spacing?, name?)` + `LayerStackup.Extents`; `PcbExplode.cs`;
+    docs `examples/ecad-pcb.md` animate fence + committed APNG, design.md §6d, README). Slices the
+    plate into ONE slab per physical `StackLayer` (outline extruded over the layer's own z-range
+    from `LayerStackup.Extents` — the SAME bottom-up accumulation the copper z's come off, exposed
+    rather than recomputed — drilled by every through hole and milled by every overlapping cavity),
+    assembled with the placed components (surface AND embedded), fanned along the STACKUP NORMAL.
+    Sibling of `ToAssembly` (untouched); returns an ordinary `Assembly`, so the explode slider,
+    `ExplodeTrack` and exporters drive it with no new code (offsets are Modeling-level
+    `ExplodeOffset`/`ExplodePath`, no viewer dep). Layers fan up from the BOTTOM datum (stays put);
+    `gap` is the clean empty gap whatever a layer's thickness (offset adds to the original
+    contiguous position, so thicknesses cancel), STACK ORDER = explode order. Surface parts lift off
+    their face pure-Z; embedded parts dogleg (straight out of the cavity, then spread — the lateral
+    leg IS the dogleg, which is why an embedded offset is the one not pure-Z). Oracles: factor-0
+    component poses bit-identical to `ToAssembly`; slabs DISJOINT and TILE `[0, TotalThickness]`
+    exactly so their union IS the plate (`Σ slab volume == ExpectedPlateVolume`); pure-Z /
+    stack-order / factor-independent-count / determinism all asserted; a copper-only board (null
+    `LayerStackup`) and a negative spacing refused BY NAME. Offsets are a VIEW concern, NOT baked
+    into the layout file (byte fixed point untouched, the `DrcRuleSet` rule).
   - **Auto-routing — the genuinely hard one, and staged honestly.** Routing is a SEARCH
     problem (maze/A* per net, then rip-up-and-retry for congestion), not a closed form, and
     a bad autorouter is worse than hand routing — so v1 is a DRC-AWARE grid/maze router with

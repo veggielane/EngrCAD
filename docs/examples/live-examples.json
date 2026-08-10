@@ -173,6 +173,12 @@
       "live": true
     },
     {
+      "id": "ecad-explode",
+      "page": "examples/ecad-pcb.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'LayerStackup' does not exist in the current context"
+    },
+    {
       "id": "ecad-multilayer",
       "page": "examples/ecad-pcb.md",
       "live": false,
