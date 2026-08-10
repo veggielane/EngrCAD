@@ -174,14 +174,39 @@ public sealed class PcbBoard
         KeepOuts = keepOuts is null ? [] : [.. keepOuts];
     }
 
+    /// <summary>Builds a board from a full physical <see cref="LayerStackup"/> — the copper AND
+    /// dielectric build-up. The thickness is the stackup's <see cref="LayerStackup.TotalThickness"/>
+    /// (extruded through as the solid body) and the copper planes are the stackup's derived
+    /// <see cref="LayerStackup.CopperStackup"/>, so an inner-layer component seats at its layer's z.</summary>
+    /// <param name="outline">The board outline, a closed polygon (no repeated closing point).</param>
+    /// <param name="layers">The physical stackup (copper + dielectric layers, thicknesses).</param>
+    /// <param name="holes">The board's mounting holes and vias.</param>
+    /// <param name="keepOuts">The board's keep-out regions.</param>
+    public PcbBoard(
+        IEnumerable<Vector2d> outline,
+        LayerStackup layers,
+        IEnumerable<BoardHole>? holes = null,
+        IEnumerable<KeepOut>? keepOuts = null)
+        : this(outline, (layers ?? throw new ArgumentNullException(nameof(layers))).TotalThickness,
+            layers.CopperStackup, holes, keepOuts)
+    {
+        LayerStackup = layers;
+    }
+
     /// <summary>The board outline, a closed polygon (no repeated closing point).</summary>
     public IReadOnlyList<Vector2d> OutlinePoints { get; }
 
     /// <summary>The board thickness (mm). The board occupies z ∈ [0, thickness].</summary>
     public double Thickness { get; }
 
-    /// <summary>The copper stackup.</summary>
+    /// <summary>The copper stackup (the derived copper planes every stage-2..4 consumer reads).</summary>
     public PcbStackup Stackup { get; }
+
+    /// <summary>The full physical stackup (copper + dielectric build-up), or null when the board was
+    /// built the copper-only way (a plain thickness + <see cref="PcbStackup"/>). When present its
+    /// <see cref="LayerStackup.TotalThickness"/> equals <see cref="Thickness"/> and its
+    /// <see cref="LayerStackup.CopperStackup"/> equals <see cref="Stackup"/> by construction.</summary>
+    public LayerStackup? LayerStackup { get; private set; }
 
     /// <summary>The board's own holes (mounting holes and vias).</summary>
     public IReadOnlyList<BoardHole> Holes { get; }
@@ -198,6 +223,15 @@ public sealed class PcbBoard
                 new Vector2d(width / 2, height / 2), new Vector2d(-width / 2, height / 2),
             ],
             thickness, stackup);
+
+    /// <summary>A rectangular board centred at the origin, built from a full physical stackup.</summary>
+    public static PcbBoard Rectangle(double width, double height, LayerStackup layers) =>
+        new(
+            [
+                new Vector2d(-width / 2, -height / 2), new Vector2d(width / 2, -height / 2),
+                new Vector2d(width / 2, height / 2), new Vector2d(-width / 2, height / 2),
+            ],
+            layers);
 
     /// <summary>The outline as a <see cref="Sketch"/> (the extrusion profile).</summary>
     public Sketch Outline() => Sketch.Polygon([.. OutlinePoints]);

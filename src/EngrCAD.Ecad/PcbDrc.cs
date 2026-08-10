@@ -27,6 +27,10 @@ public enum DrcRule
 
     /// <summary>A copper corner is sharper than the acid-trap threshold.</summary>
     AcuteAngle,
+
+    /// <summary>Copper of another component is closer than the minimum to an embedded component's
+    /// cavity wall (the milled edge), on the layer the cavity is seated on.</summary>
+    CavityClearance,
 }
 
 /// <summary>
@@ -139,6 +143,7 @@ public static class PcbDrc
         CheckCopperToEdge(model, rules, violations);
         CheckTraceWidth(model, rules, violations);
         CheckAcuteAngles(model, rules, violations);
+        CheckCavityClearance(model, rules, violations);
         return new DrcReport(violations, Ratsnest(model));
     }
 
@@ -306,6 +311,52 @@ public static class PcbDrc
                 DrcRule.CopperToEdge, feature.Layer,
                 $"copper-to-edge {measured:g3} < {d:g3} mm at {feature.Source}",
                 CenterOf(outside), measured, d));
+        }
+    }
+
+    // ---- copper-to-cavity-wall (embedded parts) ------------------------------
+
+    /// <summary>An embedded component sits in a milled cavity; copper of OTHER components on the
+    /// cavity's seat layer must clear the cavity wall (a milled edge) by the copper-to-edge minimum.
+    /// The embedded component's OWN pads sit inside their own cavity by construction and are exempt.
+    /// v1 checks the SEAT layer only — the layer the pads occupy; spanning layers is a later
+    /// concern (the microvia-stitching v1 boundary).</summary>
+    private static void CheckCavityClearance(PcbCopperModel model, DrcRuleSet rules, List<DrcViolation> v)
+    {
+        double d = rules.MinCopperToEdge;   // a cavity wall is a milled edge, like the board edge
+        if (!(d > 0) || model.Cavities.Count == 0)
+            return;
+
+        foreach (var cavity in model.Cavities)
+        {
+            var corners = new List<Vector2d>();
+            foreach (var loop in cavity.Footprint.AllLoops())
+                foreach (var edge in loop)
+                    corners.Add(edge.Start);
+            if (corners.Count < 3)
+                continue;
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var feature in model.Copper)
+            {
+                if (feature.Layer != cavity.Layer)
+                    continue;
+                // The embedded part's own pads are inside its own cavity by construction — exempt.
+                if (feature.Source == cavity.Source
+                    || feature.Source.StartsWith(cavity.Source + ".", StringComparison.Ordinal))
+                    continue;
+                if (!seen.Add(feature.Source))
+                    continue;
+                if (AabbGap(feature.Region.Bounds, cavity.Footprint.Bounds) >= d)
+                    continue;
+                double measured = DistanceToOutline(feature.Region, corners);
+                if (measured < d)
+                    v.Add(new DrcViolation(
+                        DrcRule.CavityClearance, cavity.Layer,
+                        $"copper-to-cavity {measured:g3} < {d:g3} mm: {feature.Source} near the cavity for "
+                        + $"{cavity.Source}",
+                        CenterOf([feature.Region]), measured, d));
+            }
         }
     }
 

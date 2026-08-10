@@ -2587,6 +2587,29 @@ from what was already understood rather than from scratch.
     closed-form gap, scale-invariant, deterministic; the placed stage-2 fixture is DRC-clean
     with an unrouted ratsnest. See CLAUDE.md's ECAD status paragraph and design.md §6d for the
     findings. The OPEN stages below (autorouting, MID/LDS, enclosure fit, interchange) are next.
+  - **✅ STAGE 4b — multilayer stackups + embedded/enclosed components — LANDED**
+    (`LayerStackup`/`StackLayer`/`Embedding`/`EmbeddedCavity`; the `PcbPlacement` extended with
+    `Layer`/`Embedding`/`CavityClearance` + the new `Embed` method; `DrcRule.CavityClearance`;
+    docs `examples/ecad-pcb.md`, design.md §6d Stage 4b, README). The copper-only `PcbStackup`
+    generalizes to the full physical build-up (an ordered list of copper AND dielectric layers,
+    each a thickness) with the copper-only / surface path BYTE-IDENTICAL (a board built the old
+    way carries a null `LayerStackup`). `TotalThickness` = Σ layers, copper z DERIVED by one
+    contact rule (outer coppers at the faces — top at total, bottom at exactly 0 via bottom-up
+    accumulation — inner coppers at midplanes). `Embed(reference, layer, x, y, embedding,
+    clearance, side)` seats a component on an inner layer inside a cavity milled into the plate:
+    ENCLOSED (an internal void, buried) or OPEN (a well to a face), both EXACT box-tool booleans
+    (rel ~1e-16, closed) with a closed-form removed volume, so `ExpectedPlateVolume` stays the
+    oracle less each cavity. Containment against the outer prism, 3D overlap (z-interval AND
+    OBB SAT — stacked dies on different layers allowed), an emergent 2·clearance minimum-pad
+    spacing, every refusal at `Embed` BY NAME. Identity holds across layers (embedded pads on
+    their inner seat layer); the DRC is N-layer aware for free (inner clearance/shorts checked)
+    plus a new `CavityClearance` (other copper clearing a cavity wall on its seat layer, the
+    part's own pads exempt). Persistence write-only-when-stated (a full `layerStackup` or the
+    copper `stackup`, plus the placement's layer/embedding/clearance) — byte-identical stage-2..4
+    files, a multilayer/embedded save→load→save fixed point, a missing-layer placement refused at
+    load. **The OPEN follow-up is cross-layer via/microvia STITCHING** so a net's pads on
+    different layers are geometrically connected (v1's identity is per the pad's OWN layer, so
+    they read as an unrouted ratsnest until routing — stated in the docs and the DRC).
   - **Auto-routing — the genuinely hard one, and staged honestly.** Routing is a SEARCH
     problem (maze/A* per net, then rip-up-and-retry for congestion), not a closed form, and
     a bad autorouter is worse than hand routing — so v1 is a DRC-AWARE grid/maze router with

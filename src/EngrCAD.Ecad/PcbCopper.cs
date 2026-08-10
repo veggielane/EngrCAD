@@ -54,13 +54,15 @@ public sealed class PcbCopperModel
     public PcbCopperModel(
         PcbBoard board,
         IEnumerable<CopperFeature> copper,
-        IEnumerable<DrilledHole>? drills = null)
+        IEnumerable<DrilledHole>? drills = null,
+        IEnumerable<EmbeddedCavity>? cavities = null)
     {
         ArgumentNullException.ThrowIfNull(board);
         ArgumentNullException.ThrowIfNull(copper);
         Board = board;
         Copper = [.. copper];
         Drills = drills is null ? [] : [.. drills];
+        Cavities = cavities is null ? [] : [.. cavities];
     }
 
     /// <summary>The board (its outline is the copper-to-edge datum).</summary>
@@ -71,6 +73,10 @@ public sealed class PcbCopperModel
 
     /// <summary>The drilled holes.</summary>
     public IReadOnlyList<DrilledHole> Drills { get; }
+
+    /// <summary>The embedded-component cavities milled into the board — their walls are a milled
+    /// edge copper must clear, checked by the <see cref="DrcRule.CavityClearance"/> rule.</summary>
+    public IReadOnlyList<EmbeddedCavity> Cavities { get; }
 
     /// <summary>The distinct copper-layer names, in stackup order.</summary>
     public IReadOnlyList<string> Layers => Board.Stackup.Coppers.Select(c => c.Name).ToList();
@@ -140,7 +146,7 @@ public sealed class PcbCopperModel
                 hole.Center, hole.Diameter, 0,
                 Net: null, Source: hole.Kind.ToString().ToLowerInvariant()));
 
-        return new PcbCopperModel(layout.Board, copper, drills);
+        return new PcbCopperModel(layout.Board, copper, drills, layout.Cavities());
     }
 }
 

@@ -194,6 +194,7 @@ other.
 | `CopperToEdge` | Copper closer than the minimum to the board outline (an exact polygon inward offset). |
 | `TraceWidth` | A conductor narrower than the minimum (`Region2dThickness`' opposing-wall measure). |
 | `AcuteAngle` | A copper corner sharper than the acid-trap threshold. |
+| `CavityClearance` | Copper of another component closer than the copper-to-edge minimum to an embedded component's cavity wall (a milled edge), on the cavity's seat layer. See Stage 4b. |
 
 `DrcRuleSet` transcribes nominal IPC-2221-ish defaults (⚠ verify against your fabricator's
 datasheet, like `StandardHoles` / `SheetMaterials`); every length is in the model's mm and
@@ -209,6 +210,39 @@ centre-line region through the same `CopperFeature` type, so the DRC needs no ch
 `PcbCopperModel.FromLayout(layout)` derives it from placed pads, and the incremental
 `PcbDrc.Violates(model, candidate, rules)` is what a stage-5 router costs a candidate route with.
 Docs: `examples/ecad-drc.md`.
+
+## Stage 4b — multilayer stackups and embedded components
+
+Stage 2's `PcbStackup` is copper-only (named copper planes at z-heights). Stage 4b adds the full
+physical build-up and components inside the board, keeping the copper-only / surface path
+**byte-identical**.
+
+| Type | What it is |
+| --- | --- |
+| `LayerStackup` / `StackLayer` / `StackLayerKind` | The physical build-up: an ordered list of copper AND dielectric layers, each with a thickness, top-most first. `TotalThickness` is the sum; the copper planes' z are **derived** — outer coppers at the two faces (top at `TotalThickness`, bottom at exactly 0), inner coppers at their midplanes. `FourLayer`/`SixLayer`/`TwoLayer` factories; `CopperStackup` is the derived `PcbStackup` every stage-2..4 consumer reads. A board carries a null `LayerStackup` when built the copper-only way. |
+| `Embedding` | How a placement sits in z: `Surface` (the default — on an outer copper face, proud), `Enclosed` (buried in an internal cavity, build-up intact above and below), `OpenCavity` (a well milled to the placement's face). |
+| `EmbeddedCavity` | The resolved geometry of one embedded component's cavity — the milled pocket, its z-range, the exact removed volume, and the board-local wall the DRC clears copper against. Derived from the placement + footprint + body (the one-declaration rule). |
+
+`PcbBoard` gains a `LayerStackup` constructor (thickness = the stackup total, copper = its derived
+planes) and a `LayerStackup` property (null for copper-only boards). `PcbLayout.Embed(reference,
+layer, x, y, embedding, cavityClearance, side)` seats a component on an inner copper layer at its z
+(`SeatZ`); `Cavities()` resolves the milled pockets, `Plate()` subtracts them (an internal void for
+`Enclosed`, a well for `OpenCavity`), and `ExpectedPlateVolume()` is the plate's own closed form less
+each cavity's `lateral area × depth`. `EmbeddedBodyBounds(placement)` is the containment oracle — an
+enclosed body is strictly inside the outer extruded prism, a surface body is proud.
+
+**The identity holds across layers**: an embedded component's SMD pads land on its inner seat layer
+(`CopperLayers`/`PadsOfNet` return them there), `Check()` still passes, and the copper DRC is fully
+N-layer aware — clearance and shorts per copper layer including inner ones, plus `CavityClearance`
+(other copper clearing an embedded part's milled cavity wall on its seat layer; the part's own pads
+are exempt). Persistence writes the full `layerStackup` (or the copper `stackup`) and the placement's
+`layer`/`embedding`/`cavityClearance` write-only-when-stated, so a stage-2..4 file is byte-identical
+and a multilayer/embedded one is a `save → load → save` fixed point. Refused **by name** at `Embed`:
+an unknown layer, a negative clearance, a missing footprint/body, a cavity that would breach a
+surface or the outline, or an overlap with another cavity (two cavities on different inner layers
+with disjoint z do not overlap — stacked dies). **v1's identity is per the pad's own layer** —
+cross-layer via/microvia stitching between board layers is a later stage, so a net whose pads sit on
+different layers reads as an unrouted ratsnest until routing. Docs: `examples/ecad-pcb.md`.
 
 ## Not yet (later campaign stages)
 
