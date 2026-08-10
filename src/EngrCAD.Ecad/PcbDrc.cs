@@ -155,9 +155,11 @@ public static class PcbDrc
     /// <summary>
     /// The INCREMENTAL entry a stage-5 router costs a candidate route with: the violations a single
     /// <paramref name="candidate"/> copper feature would introduce against the model as it stands —
-    /// clearance and shorts against existing copper on its own layer, copper-to-edge, trace width
-    /// and acute angles. It does NOT re-run the whole board (that is <see cref="Check(PcbCopperModel,
-    /// DrcRuleSet?)"/>); it answers "does adding THIS copper violate anything".
+    /// clearance and shorts against existing copper on its own layer, copper-to-edge, trace width,
+    /// acute angles, and drill-to-copper against every OTHER-net drilled hole. It does NOT re-run the
+    /// whole board (that is <see cref="Check(PcbCopperModel, DrcRuleSet?)"/>); it answers "does adding
+    /// THIS copper violate anything". The via overload (<see cref="Violates(PcbCopperModel, PlacedVia,
+    /// DrcRuleSet?)"/>) adds the drill / via rules a via carries.
     /// </summary>
     public static DrcReport Violates(PcbCopperModel model, CopperFeature candidate, DrcRuleSet? rules = null)
     {
@@ -178,6 +180,71 @@ public static class PcbDrc
         CheckFeatureAgainstEdge(model.Board, candidate, rules, violations);
         CheckFeatureWidth(candidate, rules, violations);
         CheckFeatureAcuteAngles(candidate, rules, violations);
+
+        // Drill-to-copper: an OTHER-net drilled hole coming within the minimum of this new copper.
+        double dd = rules.MinDrillToCopper;
+        if (dd > 0)
+            foreach (var drill in model.Drills)
+            {
+                var grownHole = Grow([CurvedRegion2d.Disc(drill.Center, drill.Diameter / 2)], dd);
+                var hit = DrillCopperHit(grownHole, drill.Center, drill.Diameter / 2, drill.Source, drill.Net, candidate, dd);
+                if (hit is not null)
+                    violations.Add(new DrcViolation(
+                        DrcRule.DrillToCopper, "",
+                        $"drill-to-copper {Separation([CurvedRegion2d.Disc(drill.Center, drill.Diameter / 2)], [candidate.Region], dd):g3}"
+                        + $" < {dd:g3} mm: {drill.Source} hole near {candidate.Source}",
+                        CenterOf(hit), Separation([CurvedRegion2d.Disc(drill.Center, drill.Diameter / 2)], [candidate.Region], dd), dd));
+            }
+        return new DrcReport(violations, []);
+    }
+
+    /// <summary>
+    /// The INCREMENTAL via entry a router costs a candidate via with — the drill / via rules a single
+    /// <paramref name="candidate"/> via carries against the model as it stands: its annular ring, its
+    /// drill against OTHER-net copper (drill-to-copper), and its drill against every existing via
+    /// (the via-to-via web). The via's PAD copper clearance / edge / width is checked by adding its
+    /// per-layer pad features through <see cref="Violates(PcbCopperModel, CopperFeature, DrcRuleSet?)"/>,
+    /// so between the two a router asks the DRC's OWN constructions rather than restating them.
+    /// </summary>
+    public static DrcReport Violates(PcbCopperModel model, PlacedVia candidate, DrcRuleSet? rules = null)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        rules ??= DrcRuleSet.Default;
+        var violations = new List<DrcViolation>();
+
+        if (candidate.AnnularRing < rules.MinAnnularRing)
+            violations.Add(new DrcViolation(
+                DrcRule.AnnularRing, "",
+                $"annular ring {candidate.AnnularRing:g3} < {rules.MinAnnularRing:g3} mm at {candidate.Source}",
+                candidate.Center, candidate.AnnularRing, rules.MinAnnularRing));
+
+        double dd = rules.MinDrillToCopper;
+        if (dd > 0)
+        {
+            var hole = CurvedRegion2d.Disc(candidate.Center, candidate.DrillDiameter / 2);
+            var grownHole = Grow([hole], dd);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var feature in model.Copper)
+            {
+                if (!seen.Add(feature.Source))
+                    continue;
+                var hit = DrillCopperHit(grownHole, candidate.Center, candidate.DrillDiameter / 2,
+                    candidate.Source, candidate.Net, feature, dd);
+                if (hit is not null)
+                    violations.Add(new DrcViolation(
+                        DrcRule.DrillToCopper, "",
+                        $"drill-to-copper {Separation([hole], [feature.Region], dd):g3} < {dd:g3} mm: "
+                        + $"{candidate.Source} hole near {feature.Source}",
+                        CenterOf(hit), Separation([hole], [feature.Region], dd), dd));
+            }
+        }
+
+        double m = rules.MinViaToVia;
+        if (m > 0)
+            foreach (var ev in model.Vias)
+                if (ViaWebViolation(candidate, ev, m) is { } web)
+                    violations.Add(web);
+
         return new DrcReport(violations, []);
     }
 
@@ -261,15 +328,10 @@ public static class PcbDrc
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var feature in model.Copper)
             {
-                // A drill never clears its OWN pad, and same-net copper is intended — skip both.
-                if (feature.Source == drill.Source || SameNet(drill.Net, feature.Net))
-                    continue;
                 if (!seen.Add(feature.Source))   // one check per copper source (it repeats per layer)
                     continue;
-                if (AabbGap(drill.Center, drill.Diameter / 2, feature.Region.Bounds) >= d)
-                    continue;
-                var hit = CurvedRegion2dBoolean.Intersection(grownHole, [feature.Region]);
-                if (hit.Count == 0)
+                var hit = DrillCopperHit(grownHole, drill.Center, drill.Diameter / 2, drill.Source, drill.Net, feature, d);
+                if (hit is null)
                     continue;
                 double measured = Separation([hole], [feature.Region], d);
                 v.Add(new DrcViolation(
@@ -279,6 +341,23 @@ public static class PcbDrc
                     CenterOf(hit), measured, d));
             }
         }
+    }
+
+    /// <summary>The shared drill-to-copper primitive: whether a drilled hole (already grown by the
+    /// minimum <paramref name="d"/>) comes within it of a copper feature of a DIFFERENT net (never
+    /// its own pad, and same-net copper is intended). Returns the overlap region (for locating the
+    /// violation) or null. One construction used by the whole-board check and both incremental
+    /// entries, so the router and the DRC cannot disagree about it.</summary>
+    private static IReadOnlyList<CurvedRegion2d>? DrillCopperHit(
+        IReadOnlyList<CurvedRegion2d> grownHole, in Vector2d center, double radius,
+        string drillSource, string? drillNet, in CopperFeature feature, double d)
+    {
+        if (feature.Source == drillSource || SameNet(drillNet, feature.Net))
+            return null;
+        if (AabbGap(center, radius, feature.Region.Bounds) >= d)
+            return null;
+        var hit = CurvedRegion2dBoolean.Intersection(grownHole, [feature.Region]);
+        return hit.Count > 0 ? hit : null;
     }
 
     // ---- copper-to-board-edge ------------------------------------------------
@@ -384,25 +463,31 @@ public static class PcbDrc
         var vias = model.Vias;
         for (int i = 0; i < vias.Count; i++)
             for (int j = i + 1; j < vias.Count; j++)
-            {
-                var a = vias[i];
-                var b = vias[j];
-                double ra = a.DrillDiameter / 2, rb = b.DrillDiameter / 2;
-                // Broad phase: two drill centres far enough apart are clear (a sound skip — it only
-                // ever skips a definitely-clear pair, so a near-limit pair falls to the exact check).
-                if (a.Center.DistanceTo(b.Center) - ra - rb >= m)
-                    continue;
-                var da = new[] { CurvedRegion2d.Disc(a.Center, ra) };
-                var db = new[] { CurvedRegion2d.Disc(b.Center, rb) };
-                if (CurvedRegion2dBoolean.Intersection(Grow(da, m / 2), Grow(db, m / 2)).Count == 0)
-                    continue;   // the grown discs are disjoint — the web is at least the minimum
-                double web = Separation(da, db, m);
-                v.Add(new DrcViolation(
-                    DrcRule.ViaToVia, "",
-                    $"via-to-via web {web:g3} < {m:g3} mm: {a.Source} (net {a.Net}) and "
-                    + $"{b.Source} (net {b.Net})",
-                    (a.Center + b.Center) * 0.5, web, m));
-            }
+                if (ViaWebViolation(vias[i], vias[j], m) is { } web)
+                    v.Add(web);
+    }
+
+    /// <summary>The shared via-to-via primitive: whether two vias' drills are closer than the minimum
+    /// web <paramref name="m"/> (proven by the SAME grow-and-intersect the clearance rule uses — grow
+    /// each drill disc by half the minimum and require the grown discs disjoint, so a web AT the limit
+    /// passes robustly). Returns the violation or null. One construction, shared by the whole-board
+    /// check and the incremental via entry.</summary>
+    private static DrcViolation? ViaWebViolation(in PlacedVia a, in PlacedVia b, double m)
+    {
+        double ra = a.DrillDiameter / 2, rb = b.DrillDiameter / 2;
+        // Broad phase: two drill centres far enough apart are clear (a sound skip — it only ever
+        // skips a definitely-clear pair, so a near-limit pair falls to the exact check).
+        if (a.Center.DistanceTo(b.Center) - ra - rb >= m)
+            return null;
+        var da = new[] { CurvedRegion2d.Disc(a.Center, ra) };
+        var db = new[] { CurvedRegion2d.Disc(b.Center, rb) };
+        if (CurvedRegion2dBoolean.Intersection(Grow(da, m / 2), Grow(db, m / 2)).Count == 0)
+            return null;   // the grown discs are disjoint — the web is at least the minimum
+        double web = Separation(da, db, m);
+        return new DrcViolation(
+            DrcRule.ViaToVia, "",
+            $"via-to-via web {web:g3} < {m:g3} mm: {a.Source} (net {a.Net}) and {b.Source} (net {b.Net})",
+            (a.Center + b.Center) * 0.5, web, m);
     }
 
     // ---- trace width (opposing-wall thickness) -------------------------------

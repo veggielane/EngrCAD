@@ -96,6 +96,27 @@ internal static class PcbLayoutWriter
             root["vias"] = vias;
         }
 
+        // Traces are layout truth (routed copper is part of the design), so they ride in the file —
+        // write-only-when-stated, so an un-routed layout stays byte-identical to a pre-routing one.
+        if (layout.Traces.Count > 0)
+        {
+            var traces = new JsonArray();
+            foreach (var trace in layout.Traces)
+            {
+                var points = new JsonArray();
+                foreach (var p in trace.Points)
+                    points.Add(new JsonObject { ["x"] = p.X, ["y"] = p.Y });
+                traces.Add(new JsonObject
+                {
+                    ["net"] = trace.Net,
+                    ["layer"] = trace.Layer,
+                    ["width"] = trace.Width,
+                    ["points"] = points,
+                });
+            }
+            root["traces"] = traces;
+        }
+
         return root;
     }
 
@@ -227,6 +248,21 @@ internal static class PcbLayoutReader
                     EcadJson.Double(record, "x"), EcadJson.Double(record, "y"),
                     EcadJson.String(record, "from"), EcadJson.String(record, "to"),
                     EcadJson.Double(record, "drill"), EcadJson.Double(record, "pad")));
+            }
+
+        if (root.TryGetPropertyValue("traces", out var tracesNode) && tracesNode is JsonArray tracesArray)
+            foreach (var node in tracesArray)
+            {
+                var record = EcadJson.Object(node, "a trace");
+                var points = new List<Vector2d>();
+                foreach (var pointNode in EcadJson.Array(record, "points"))
+                {
+                    var p = EcadJson.Object(pointNode, "a trace point");
+                    points.Add(new Vector2d(EcadJson.Double(p, "x"), EcadJson.Double(p, "y")));
+                }
+                layout.AddLoadedTrace(new PcbTrace(
+                    EcadJson.String(record, "net"), EcadJson.String(record, "layer"),
+                    EcadJson.Double(record, "width"), points));
             }
 
         return layout;

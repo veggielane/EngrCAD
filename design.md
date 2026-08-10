@@ -7296,10 +7296,70 @@ connectivity / DRC (the plate stays the mechanical outline + mounting holes, bit
 the safe scope and satisfies every layer-touching oracle; drilling the plate is a later refinement.
 Docs: `examples/ecad-pcb.md`.
 
-### Not in stages 1–4
+### Stage 5 — the autorouter (`PcbRouter`, `PcbTrace`)
 
-Autorouting (a DRC-aware maze/A* search over `PcbConnectivity`'s graph, costing candidates with
-`PcbDrc.Violates` — the connectivity prerequisite is now met), panel cutouts and enclosure fit,
+The genuinely hard stage, and the one where the verification culture earns its keep: **an autorouter
+that connects while violating clearance is the classic silent failure**, so the router is built so
+that outcome *cannot* happen. `PcbRouter.Route(layout, rules, options)` → `RoutedResult` is a
+DRC-aware grid/maze A* router — a uniform routing grid `(x, y, layer)`, through-vias to change
+layers, 2-pin MST decomposition of multi-pin nets, and rip-up-and-reroute.
+
+**The load-bearing rule is that the grid is an ACCELERATOR and the exact DRC is the SOURCE OF
+TRUTH.** A candidate route is committed only after the exact `PcbDrc.Violates` (plus the drill and
+via rules the incremental seam does not carry — drill-to-copper, via-to-via, mirroring `PcbDrc.Check`
+so the two cannot disagree) confirms it adds NO violation to the board. So the grid may over- or
+under-block a cell — that only costs a detour or a commit-time rejection — but a grid rounding error
+can never produce a violating trace, because the trace is not committed until the exact check passes.
+If the exact check disagrees with the grid, the exact check wins and the candidate is rejected, not
+shipped. This is what makes the two mandatory guarantees structural rather than hoped-for: every
+committed trace is DRC-clean by construction, so the PARTIAL result of a board it cannot fully route
+is still clean, and a net it cannot route cleanly is reported UNROUTABLE by name.
+
+**A trace is the DRC's own clearance model.** `PcbTrace` is a net's routed copper on one layer — a
+polyline centre-line of a width — whose copper region is the polyline's exact STROKE
+(`CurvedRegion2dOffset.Stroke`, round caps and round joins). That is the Minkowski sum of the
+centre-line with a disc of radius `width/2`, which is *precisely* the region the clearance rule grows
+against, so a trace built here and the rule it is checked with cannot disagree; round joins also mean
+the copper carries no sharp corner, so a routed trace passes the acid-trap rule with nothing arranged.
+The trace feeds `PcbCopperModel` and `PcbConnectivity`, which reads a trace (and a via) as a
+CONNECTOR, not a terminal — so a net is CONNECTED when its component PADS end up in one copper
+component, which is what makes "the router connected the net" a geometric fact rather than a claim.
+
+**Rip-up is negotiated congestion, not reorder-restart** — the choice was measured. A first design
+re-routed all nets in a new order when a net failed, and a search over thousands of small congested
+boards found it almost never completes a board a greedy pass cannot, because A*'s own per-net detour
+already resolves a 2-net conflict (the loser detours) and where it cannot, a reorder cannot either.
+Rip-up-the-blocker does complete them: a blocked net is routed ACROSS the traces that block it (at a
+high cost so it prefers clean cells), those traces are ripped up and re-queued, and the net is
+re-routed cleanly without them — and the ripped nets find new routes around it. The blocker traces
+are SOFT obstacles in the grid (a per-cell bitmask of committed nets); the base pads and the board
+edge are HARD (never rippable). Each rip-up is bounded per net, so a truly boxed-in net terminates and
+is reported unroutable rather than looping.
+
+**Verified higher than usual because ECAD fails plausibly** (`PcbRouterTests`): a 2-pin net connects
+and passes DRC with the ratsnest empty; several parallel nets all route clean; a net that MUST cross
+another gets a via and both come out clean and connected (and WITHOUT vias the crossing is reported
+unroutable by name, the rest clean); a congested board where a greedy pass leaves a net unrouted is
+COMPLETED by rip-up (both clean, `RipUps ≥ 1`) — the measured demonstration that rip-up earns its
+place; a pin walled in by other-net copper is reported unroutable by name with the rest routed and
+clean; a dense knot of crossing nets on one layer cannot fully route, and whatever the router manages
+is still DRC-clean with the failures named (the never-a-silent-violation guarantee); two runs are
+byte-identical (determinism); a board with nothing to route returns byte-identical (`Save()`); routed
+traces round-trip through `save → load → save` as a fixed point; and the whole thing is scale-invariant
+at 1e-3× and 1e3×. Traces are LAYOUT TRUTH, so a `traces` array rides in the layout file
+write-only-when-stated (an un-routed layout stays byte-identical).
+
+**v1 scope, each boundary stated**: through-vias only (spanning all copper layers — always valid,
+exactly right for a 2-layer board; blind/buried/microvia routing is a later stage); 45°/90° grid;
+rip-up-reroute; 2-pin MST decomposition. NOT in v1: topological / shove / push-and-route; length
+matching and differential pairs; copper POUR / ground planes with thermal reliefs (a region boolean,
+the tamper-mesh fill's shape); teardrops; cavity walls as routing obstacles; and **Gerber (RS-274X) /
+Excellon fabrication export** of the routed board — the fab output, the immediate follow-on, since a
+routed board that cannot go to fab is unfinished. Docs: `examples/ecad-routing.md`.
+
+### Not in stages 1–5
+
+Gerber / Excellon fabrication export (the immediate follow-on), panel cutouts and enclosure fit,
 thermal coupling, and MID/LDS 3D routing are later stages over this one graph; each reads the
 netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. A drawn schematic SHEET is still a

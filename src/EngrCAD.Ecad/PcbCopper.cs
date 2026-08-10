@@ -56,7 +56,8 @@ public sealed class PcbCopperModel
         IEnumerable<CopperFeature> copper,
         IEnumerable<DrilledHole>? drills = null,
         IEnumerable<EmbeddedCavity>? cavities = null,
-        IEnumerable<PlacedVia>? vias = null)
+        IEnumerable<PlacedVia>? vias = null,
+        IEnumerable<string>? traceSources = null)
     {
         ArgumentNullException.ThrowIfNull(board);
         ArgumentNullException.ThrowIfNull(copper);
@@ -65,6 +66,9 @@ public sealed class PcbCopperModel
         Drills = drills is null ? [] : [.. drills];
         Cavities = cavities is null ? [] : [.. cavities];
         Vias = vias is null ? [] : [.. vias];
+        TraceSources = traceSources is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(traceSources, StringComparer.Ordinal);
     }
 
     /// <summary>The board (its outline is the copper-to-edge datum).</summary>
@@ -86,6 +90,12 @@ public sealed class PcbCopperModel
     /// annular-ring rules reach them; this list is what the connectivity engine walks (a via joins
     /// its pads across layers) and what the via-to-via rule spaces.</summary>
     public IReadOnlyList<PlacedVia> Vias { get; }
+
+    /// <summary>The <see cref="CopperFeature.Source"/>s that are TRACES rather than component pads —
+    /// the connectivity engine reads these as CONNECTORS (not terminals), exactly as it reads via
+    /// pad sources: a trace ties copper together but is not itself a pin to be joined, so a routed
+    /// net's connectivity is decided by whether its component PADS end up in one component.</summary>
+    public IReadOnlyCollection<string> TraceSources { get; }
 
     /// <summary>The distinct copper-layer names, in stackup order.</summary>
     public IReadOnlyList<string> Layers => Board.Stackup.Coppers.Select(c => c.Name).ToList();
@@ -171,7 +181,23 @@ public sealed class PcbCopperModel
                 via.Center, via.DrillDiameter, via.PadDiameter, via.Net, via.Source));
         }
 
-        return new PcbCopperModel(layout.Board, copper, drills, layout.Cavities(), placedVias);
+        // Traces: routed copper on one layer. Each strokes to its exact copper region(s), tagged
+        // with the trace's net and its stable source (so the DRC names it and the connectivity
+        // engine reads it as a CONNECTOR — the traceSources set below). A trace touching a pad of
+        // its own net is the intended connection; a trace near other-net copper is a clearance /
+        // short the DRC reads with no change (a trace is a CopperFeature like any other).
+        var traceSources = new List<string>(layout.Traces.Count);
+        for (int i = 0; i < layout.Traces.Count; i++)
+        {
+            var trace = layout.Traces[i];
+            var source = PcbLayout.TraceSource(i);
+            traceSources.Add(source);
+            foreach (var region in TraceGeometry.Regions(trace))
+                copper.Add(new CopperFeature(trace.Layer, trace.Net, source, region));
+        }
+
+        return new PcbCopperModel(
+            layout.Board, copper, drills, layout.Cavities(), placedVias, traceSources);
     }
 }
 

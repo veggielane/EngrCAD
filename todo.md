@@ -2586,7 +2586,7 @@ from what was already understood rather than from scratch.
     routing costs a candidate route with. Verified from both sides of every limit against the
     closed-form gap, scale-invariant, deterministic; the placed stage-2 fixture is DRC-clean
     with an unrouted ratsnest. See CLAUDE.md's ECAD status paragraph and design.md §6d for the
-    findings. The OPEN stages below (autorouting, MID/LDS, enclosure fit, interchange) are next.
+    findings. The OPEN stages below (Gerber/Excellon fab export, MID/LDS, enclosure fit, interchange) are next.
   - **✅ STAGE 4b — multilayer stackups + embedded/enclosed components — LANDED**
     (`LayerStackup`/`StackLayer`/`Embedding`/`EmbeddedCavity`; the `PcbPlacement` extended with
     `Layer`/`Embedding`/`CavityClearance` + the new `Embed` method; `DrcRule.CavityClearance`;
@@ -2647,19 +2647,27 @@ from what was already understood rather than from scratch.
     stated, no-via byte-identical); v1 does NOT cut the via drill into the 3D plate B-Rep (copper /
     connectivity / DRC only). The connectivity engine is the seam an autorouter reuses — the routing
     prerequisite is now MET.
-  - **Auto-routing — the genuinely hard one, and staged honestly.** Routing is a SEARCH
-    problem (maze/A* per net, then rip-up-and-retry for congestion), not a closed form, and
-    a bad autorouter is worse than hand routing — so v1 is a DRC-AWARE grid/maze router with
-    the clearance rules above as the cost function and obstacles read from the arrangement,
-    verified by "every routed net connects its pins AND passes DRC" (both asserted, since a
-    router that connects while violating clearance is the classic silent failure). **The
-    connectivity prerequisite is now met** — `PcbConnectivity` builds the per-net graph a router
-    grows into (a trace is a stroked centre-line `CopperFeature` joining pads/vias), and
-    `PcbDrc.Violates` is the incremental cost function. Multi-layer with vias is done at the
-    connectivity level; topological/shove routing are later stages filed with that framing. The
-    space-filling curves already landed are the fill/pour primitive (a ground plane is a hatched or
-    solid region with thermal-relief clearances — a region boolean), and the `RunLinker` from the
-    infill work is the same net-of-segments linking a router produces.
+  - **Gerber (RS-274X) + Excellon fabrication export — the immediate follow-on to the
+    autorouter (stage 5 landed), and a routed board that cannot go to fab is unfinished.**
+    A fab house consumes copper ARTWORK (Gerber, one file per copper/mask/silk layer) and a
+    DRILL file (Excellon, the holes and their tools), not a solid model — so this is a WRITER
+    over the copper model the router already produces. Each `CopperFeature` is a filled region
+    (a pad, a via pad, a stroked trace); Gerber's model is aperture flashes + draws, so a trace
+    is a `D10*` round aperture (its width) drawn along the centre-line and a pad is a flashed
+    aperture, which the `PcbTrace` centre-line + `Pad` geometry give directly — most of a trace
+    needs no polygon at all. The oracle is the one the whole ECAD campaign uses: parse the
+    emitted Gerber back (a small RS-274X reader), reconstruct the copper regions, and assert they
+    are the SAME regions (an exact area / a region boolean) the DRC saw — so the fab output and
+    the DRC cannot disagree about what copper exists, and a `save → parse → save` byte fixed
+    point on the ASCII stream (the `BrepArchive`/PDF text-fixed-point culture). Excellon is the
+    drill list keyed by tool; the round-trip is the hole set. NOT a `Shape` — copper thickness is
+    not modelled, so this is a 2D artwork writer, and the routed board's own `PcbCopperModel` is
+    the single source both it and the DRC read. Filed with the pour primitive it will want:
+    a copper POUR / ground plane is a hatched or solid region with thermal-relief clearances
+    (a region boolean, the tamper-mesh fill's shape; `RunLinker` links a hatched pour's segments),
+    which is a routing feature the fab writer then flashes like any other copper. Topological /
+    shove / push routing, length matching and differential pairs are later routing stages over the
+    same grid.
   - **3D component placement for MID/LDS — the novel capability, and it fits because the
     kernel ALREADY routes conductors on a moulded surface.** Moulded Interconnect Devices /
     Laser Direct Structuring put conductive traces directly on a 3D moulded plastic part,
