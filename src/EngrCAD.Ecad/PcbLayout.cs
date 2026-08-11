@@ -400,4 +400,48 @@ public sealed partial class PcbLayout
     /// <summary>Runs the one-declaration identity check — the geometric lift of the schematic's
     /// pin-counting identity. See <see cref="PcbLayoutCheckResult"/>.</summary>
     public PcbLayoutCheckResult Check() => PcbLayoutChecker.Check(this);
+
+    // ---- fabrication settings (LAYOUT TRUTH: solder mask / silkscreen) -------
+
+    /// <summary>The solder-mask settings (expansion, via policy), or null for the defaults. It is
+    /// LAYOUT TRUTH — it rides in the layout file (write-only-when-stated), so a layout that states none
+    /// saves byte-identically to a pre-mask one, exactly as a pour's settings do.</summary>
+    public PcbMaskSettings? MaskSettings { get; private set; }
+
+    /// <summary>The silkscreen settings (text height, pen width, what to draw, board marks), or null
+    /// for the defaults. LAYOUT TRUTH — see <see cref="MaskSettings"/>.</summary>
+    public PcbSilkscreenSettings? SilkscreenSettings { get; private set; }
+
+    /// <summary>Sets the solder-mask settings (see <see cref="MaskSettings"/>); returns this layout.</summary>
+    public PcbLayout WithMask(PcbMaskSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        settings.Validate();
+        MaskSettings = settings;
+        return this;
+    }
+
+    /// <summary>Sets the silkscreen settings (see <see cref="SilkscreenSettings"/>); returns this
+    /// layout.</summary>
+    public PcbLayout WithSilkscreen(PcbSilkscreenSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        settings.Validate();
+        SilkscreenSettings = settings;
+        return this;
+    }
+
+    // Loader entry points — validated the same way, so a saved-then-loaded setting is refused for the
+    // same reasons a freshly-set one is.
+    internal void SetLoadedMaskSettings(PcbMaskSettings settings)
+    {
+        settings.Validate();
+        MaskSettings = settings;
+    }
+
+    internal void SetLoadedSilkscreenSettings(PcbSilkscreenSettings settings)
+    {
+        settings.Validate();
+        SilkscreenSettings = settings;
+    }
 }

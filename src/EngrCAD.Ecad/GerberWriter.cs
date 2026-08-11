@@ -403,6 +403,45 @@ public static class GerberWriter
         return builder.Finish();
     }
 
+    /// <summary>
+    /// The Gerber for one solder-mask layer. By the standard positive-openings convention, the mask
+    /// Gerber images the WINDOWS (the pad openings where mask is removed) as DARK — the fabricator
+    /// clears mask where the Gerber is dark and leaves it elsewhere — so a decoded mask Gerber recovers
+    /// the openings, not the mask coverage. Each opening flashes (a disc / rect / obround pad window) or
+    /// region-fills (a rounded or rotated one), so the decoder rebuilds the exact same window. A side
+    /// with no openings still yields a well-formed empty Gerber.
+    /// </summary>
+    public static string MaskLayer(
+        string layerName, IEnumerable<CurvedRegion2d> openings, GerberFormat format)
+    {
+        ArgumentNullException.ThrowIfNull(openings);
+        var builder = new GerberBuilder(
+            format, $"EngrCAD solder mask '{layerName}' (openings imaged dark)");
+        foreach (var opening in openings)
+            EmitSolid(builder, opening);
+        return builder.Finish();
+    }
+
+    /// <summary>
+    /// The Gerber for one silkscreen layer — the reference / value / outline line-work drawn with a
+    /// round aperture of the pen <paramref name="lineWidth"/> (a `D01` draw, exactly as a trace draws),
+    /// so the round-trip decoder strokes each run back to the same footprint. A side with no strokes
+    /// still yields a well-formed empty Gerber.
+    /// </summary>
+    public static string Silkscreen(
+        string layerName, IEnumerable<IReadOnlyList<Vector2d>> strokes, double lineWidth,
+        GerberFormat format)
+    {
+        ArgumentNullException.ThrowIfNull(strokes);
+        if (!(lineWidth > 0))
+            throw new ArgumentOutOfRangeException(nameof(lineWidth), "The silkscreen pen width must be positive.");
+        var builder = new GerberBuilder(format, $"EngrCAD silkscreen '{layerName}'");
+        foreach (var polyline in strokes)
+            if (polyline.Count >= 2)
+                builder.Draw(lineWidth, polyline);
+        return builder.Finish();
+    }
+
     private static void EmitSolid(GerberBuilder builder, CurvedRegion2d region)
     {
         if (GerberShapes.TryDisc(region, out var c, out double d))
