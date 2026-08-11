@@ -4,8 +4,11 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- Kernel-tier: Core for math (Vector2d), Modeling for the optional 3D body hook
-         (Func<Shape>). Deliberately NO viewer/Avalonia dependency. -->
+         (Func<Shape>). Deliberately NO viewer/Avalonia dependency. Fea is a clean leaf
+         (Core + Mesh only, no UI) and carries the thermal solver the board couples into
+         (PcbThermal). -->
     <ProjectReference Include="..\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
+    <ProjectReference Include="..\EngrCAD.Fea\EngrCAD.Fea.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="EngrCAD.Ecad.Tests" />

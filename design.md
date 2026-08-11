@@ -7554,11 +7554,72 @@ the smallest box the layout fits in place — a starting point to refine, not an
 the seat, non-positive dimensions, a non-positive cutout. Round panel cutouts are checked against
 their bounding box in v1 (exact round-hole corner fit is filed). Docs: `examples/ecad-enclosure.md`.
 
-### Not in stages 1–7
+### Stage 8 — thermal coupling (the ECAD/thermal boundary) (`PcbThermal`)
 
-Thermal coupling (per-component power as a Generation load into the thermal solver, verified against
-a uniformly-dissipating board's analytic temperature rise — its own stage, since it wants that
-analytic oracle rather than a geometric one), airflow/CFD cooling, snap-fit/screw-boss detailing,
+Where does the heat go? A powered board is a heat-conduction problem, and `PcbThermal.Solve(layout,
+spec)` solves it on the **landed FEA thermal solver** (`EngrCAD.Fea` — a clean leaf, Core + Mesh
+only, so `EngrCAD.Ecad` references it with no UI dependency) rather than a lumped estimate, so the
+answers are verifiable against closed forms. Each component's dissipation becomes a volumetric heat
+source; the copper spreads it; a held cold edge or a convecting face carries it away; the result is
+a temperature field the `FieldDisplay` colour map picks up and a hot-spot temperature per component.
+
+**v1 is the standard board-level model: an effective conductivity over a slab, and the mixing rule
+is the physics of the sandwich.** The copper is not meshed as discrete traces/planes — it is SMEARED
+into the slab's conductivity, high in-plane and low through-thickness, and each half is the classical
+composite bound: the copper layers are PARALLEL heat paths for in-plane flow, so `k_in = f·k_Cu +
+(1−f)·k_FR4` (the area-fraction rule of mixtures / Voigt bound), and they are in SERIES through the
+thickness, so `k_th = 1 / (f/k_Cu + (1−f)/k_FR4)` (the harmonic mean / Reuss bound). `f` is the
+copper VOLUME fraction — (total copper thickness × average coverage) / board thickness — the one
+honest knob (`PcbThermalSpec.CopperFraction`, or `.FromCoverage(board, coverage)` off the stackup).
+This is the standard model precisely because it needs no conforming multi-material copper mesh (which
+`TetMesher` refuses anyway); a future stage refines it by meshing the copper. **A bare board (`f = 0`)
+collapses both effective values to the dielectric's own conductivity — an isotropic slab, the
+verification simplification** — and the model takes the scalar conductivity path bit-for-bit
+(the anisotropic `ConductivityLaw.Orthotropic` is only set when the two values differ). The board is
+a SLAB with NO holes: the smear ignores the copper geometry, so it ignores the drills too, which is
+what keeps the closed-form oracles clean.
+
+**One unit crosses the ECAD/model boundary and it is done once, where it belongs.** Power is stated
+in WATTS (nobody specs a chip in milliwatts-of-model-units) and converted to the model's mW at the
+boundary — the `ModelUnits` discipline that the input a caller states is converted at the edge while
+the field the equation integrates is native; a film coefficient likewise is stated in SI W/(m²·K)
+(natural air ~10) and converted ×1e-3. Both conversions are pinned by a test that a 1 W uniform
+source gives the hand-calc resistance rise (a forgotten factor of 1000 shows immediately). Held
+temperatures and ambients carry no length or mass, so they cross verbatim in the caller's scale.
+
+**Per-component power is a `Generation` load, and the diffuse case is exact.** A component's watts
+are spread uniformly over its footprint × thickness as a step field (its resultant reported by the
+solve, since a step straddles elements); a board-wide `BoardPower` is an exact uniform generation
+(a constant integrates exactly). Boundary conditions (`PcbThermalBoundary.FixedTemperature`,
+`.Convection`) name a `BoardSurface` (Top/Bottom/Edges/All) or a raw `Facets` selector — the escape
+hatch that lets a single edge of a rectangular board be clamped, which the four-wall `Edges` cannot
+single out.
+
+**Verified against closed forms, in the FEA house style** (`PcbThermalTests`, since an ECAD thermal
+answer fails plausibly): a **uniformly-dissipating board** to a fixed cold edge settles into
+`T(x) = T0 + (q/2k)(L²−x²)`, a PARABOLA in the quadratic element space reproduced to **3.16e-12
+relative** (round-off), with the stated watts coming out as exactly `P × 1000` mW of applied heat
+(the units check). A **single hot component** past a cold edge carries all its power as a constant
+flux, so the far-field profile is the series-resistance line `T0 + Q(L−x)/(kA)` — matched to
+**3.6e-5** (the honest accuracy: a localized step source on an unstructured tet mesh is not exactly
+1D, so the departure is its 3D discretization), with the ENERGY BALANCE exact to round-off (all the
+generated heat leaves the cold edge). **Copper raises spreading**: the same 0.3 W source over real
+FR4 (k = 0.3) against FR4 with 2.6 % copper lifts the effective in-plane conductivity 0.3 → 10.4 and
+drops the peak rise **1129 K → 32.6 K (34.7× lower)**, with the far-field rise ratio exactly
+`k_copper / k_bare` (a ratio, not a hand-waved direction). Convection is verified by the film unit
+(a near-isothermal high-k board lands within 0.14 % of the lumped `P/(hA)`, so a forgotten ×1e-3
+shows as a 1000× miss) plus the exact energy balance (convected = generated). A **no-boundary** board
+is an undriven conduction problem refused BY NAME (the `ThermalSolver` convention); a **zero-power**
+board is isothermal at its held temperature exactly; a solve is **deterministic** to the bit. Docs:
+`examples/ecad-thermal.md`.
+
+### Not in stages 1–8
+
+Thermal VIAS as discrete high-conductivity paths (v1's effective conductivity smears the copper, so
+it smears the vias too), a TRANSIENT board warm-up (the `SolveTransient` path exists, so it is a
+bounded follow-on with its own erfc-style oracle; the effective slab already carries a volume-weighted
+heat capacity), detailed die/package thermal models (v1 spreads a component's power uniformly over its
+footprint, not through a junction-to-case network), airflow/CFD cooling, snap-fit/screw-boss detailing,
 tolerance stack-up, and MID/LDS 3D routing are later stages over this one graph; each reads the
 netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. The drawn schematic SHEET has
