@@ -69,6 +69,13 @@ var svg = sheet.Draw().ToSvg();
 one long wire (a `GND` rail is not one wire across the sheet). `LED_A` is an ordinary signal
 net, drawn as an orthogonal **wire** from R1.2 to D1.A.
 
+The border and title block come from the same `DrawingFrame` the [mechanical drawing
+sheet](drawings.md#the-shared-frame) draws — one shared value type, so a schematic and a
+mechanical drawing of one project cannot look inconsistent. A schematic configures its own
+two-band title block (no scale, no projection angle) on the ECAD schematic layers; that is the
+only thing that differs. The frame's opt-in `FrameStandards` (the ISO 5457 zone grid and
+centring marks) reach a schematic sheet too, via the `standards:` constructor argument.
+
 ## The verification: the drawing joins exactly the pins the netlist connects
 
 `SchematicDrawing.Verify()` asserts the bar in both directions — no connection omitted, none

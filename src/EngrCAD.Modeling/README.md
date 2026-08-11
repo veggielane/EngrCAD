@@ -3401,6 +3401,29 @@ parser in the test suite (xref offsets checked against their objects, content st
 tokenized, polyline coordinates asserted bit-identical) and by Poppler's `pdftotext`
 recovering every text run. Docs: `docs/examples/drawings.md`.
 
+**The frame is shared** (`DrawingFrame.cs`). The paper, the border and the title block are
+one value type — a `DrawingFrame` — that both `DrawingSheet` (`sheet.Frame()`) and the ECAD
+schematic sheet consume, so a drawing and a schematic of one project share one look and cannot
+DRIFT. It is ONE pure function of its parameters (`DrawingFrame.Compute()` returns the border
+and title-block geometry), which is the whole point: two sheets given the same paper, the same
+`TitleBlock` fields and the same frame options produce byte-identical furniture because they
+call one function. The extraction is ADDITIVE — the two title blocks differ *today* (the
+mechanical `EngineeringTitleBlock` is a three-band layout on `SheetLayers`, the schematic
+`SchematicTitleBlock` a two-band one on the ECAD schematic layers) so the frame carries BOTH
+parameterisations (the `Layout` strategy plus the layer names) and each sheet passes the ones
+that reproduce its own look byte-for-byte. Verified two ways: a pre-vs-post hash of every
+mechanical and schematic SVG/DXF/PDF is byte-identical (additive-extraction oracle), and the
+frame is exercised directly — the same frame options, given to a mechanical sheet and a
+schematic sheet, produce identical geometry because it is one function (the one-function
+oracle). `SheetFormat` is the one paper-size table the frame reads: the ISO 216 A and B series
+and the ANSI/ASME Y14.1 A–E sizes (`SheetFormat.All`), all landscape. `FrameStandards` adds
+opt-in sheet-standard furniture — the ISO 5457 zone grid (column numbers, row letters, I and O
+omitted) and centring marks, drawn in the margin band so they never reach the drawing area —
+OFF by default (`FrameStandards.None`), so nothing existing moves; `FrameStandards.Iso5457`
+turns them on. The `TitleBlock` gained `Project` and `Sheet` (N-of-M) fields for completeness
+(scale stays derived, never a settable field it could contradict); the ISO 7200 field layout
+is filed. Docs: `docs/examples/drawings.md#the-shared-frame`.
+
 ## Quality
 
 Bridges and mesh output honor `MeshQuality` (`SegmentsPerCircle`, `CurveSamples` for

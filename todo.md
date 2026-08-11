@@ -1508,29 +1508,25 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     already numbers distinct parts — connecting them means picking a leader anchor per
     occurrence from the projection (a visible point on that instance's line work) and
     emitting a parts-list table beside the title block.
-  - [ ] **More sheet standards**: ISO 5457 border/zone frames with the row/column grid
-    and centring marks, the third/first-angle projection SYMBOL as geometry rather than
-    the words the title block prints today, an ISO 7200 field layout, and the B-series
-    and ANSI A–E paper sizes beside the A series.
-  - [ ] **ONE drawing frame shared by mechanical AND ECAD sheets.** The mechanical
-    `DrawingSheet`/`SheetAnnotation`/`SheetWriter` and the ECAD `SchematicSheet` (which
-    deliberately built its OWN 2D sheet rather than reuse `DrawingSheet`) each carry their
-    own border, title block and sheet-size handling, so a schematic sheet and a mechanical
-    drawing of ONE project can look inconsistent and can DRIFT. Extract a shared drawing
-    FRAME — the paper size (the A series here, plus the B-series/ANSI of the bullet above),
-    the ISO 5457 border with its zone/grid references and centring marks, and an ISO 7200
-    TITLE BLOCK whose fields (title, drawing number, revision, sheet N-of-M, scale, author,
-    date, project) are ONE value type filled per drawing — that BOTH sheets and the future
-    PCB FABRICATION drawing consume, so every drawing the kernel emits shares one look and
-    one parameter set. This is the VEHICLE for the sheet-standards bullet above: do the ISO
-    5457 / ISO 7200 / B-series work ONCE, in the shared frame, not twice. Only the FRAME is
-    shared — the schematic keeps its own BODY (it is caller-placed line work, not a 3D
-    projection, which is why it owns its content). Verify the house way: a schematic and a
-    mechanical sheet built at the SAME size have BYTE-IDENTICAL border + title-block geometry
-    (the frame is one function of the sheet parameters, so the two cannot disagree), the
-    SVG/DXF/PDF writers emit the shared frame identically, and every existing mechanical and
-    schematic sheet stays byte-identical where the frame is unchanged — an ADDITIVE
-    extraction, not a redesign.
+  - [ ] **More sheet standards** (the shared `DrawingFrame` landed with the ISO 5457 zone
+    grid + centring marks and the B-series/ANSI paper table; these three remain). The
+    third/first-angle projection SYMBOL as geometry rather than the words the title block
+    prints today. An **ISO 7200 field layout** — a full new `TitleBlockLayout` beside the
+    engineering and schematic ones (its own cell arrangement; wants a datasheet to get the
+    exact fields right, which is why it was filed rather than half-built), which is what the
+    `TitleBlock.Project`/`Sheet` fields already carry data for. **Exact per-size ISO 5457
+    zone COUNTS**: `FrameStandards` derives the column/row count from a nominal field size,
+    where ISO 5457 fixes a specific count per sheet size in a small table — transcribe it
+    (verify-against-datasheet), keeping the nominal-size path as the fallback for a custom
+    sheet.
+  - [ ] **PCB fabrication drawing** — the third consumer the shared `DrawingFrame` was
+    designed for (a mechanical `DrawingSheet` and an ECAD `SchematicSheet` already consume
+    it). A sheet of the board OUTLINE, a DRILL TABLE (grouped by size, read off the
+    layout's holes/vias the way `HoleTable.For` reads a part's drills) and fab NOTES, in the
+    shared frame — so a board's fab drawing looks like the project's other drawings. Reuses
+    `DrawingFrame` (paper, border, title block) verbatim; the body is board-specific line
+    work (outline + hole markers + the table), which is why it is a new sheet type rather
+    than a `DrawingSheet` view.
   - [ ] **Detail views** (a scaled-up circle of a region) and **broken views** (a long
     part with its middle removed). Both are clipping problems on top of the existing
     view, not new projections.
