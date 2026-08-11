@@ -206,8 +206,20 @@ internal static class SchematicWriter
         if (definition.Footprint is { } footprint)   // footprint is optional
             record["footprint"] = SaveFootprint(footprint);
 
-        if (definition.Symbol is { } symbol)          // symbol is optional
+        // A MULTI-UNIT definition writes its per-unit symbols under "units"; a single-unit one keeps
+        // the incumbent single "symbol" key (write-only-when-stated), so a single-unit / symbol-less
+        // definition saves byte-identically to before.
+        if (definition.IsMultiUnit)
+        {
+            var units = new JsonArray();
+            foreach (var unit in definition.Units)
+                units.Add(SaveSymbol(unit));
+            record["units"] = units;
+        }
+        else if (definition.Symbol is { } symbol)     // symbol is optional
+        {
             record["symbol"] = SaveSymbol(symbol);
+        }
 
         // The 3D model is optional AND only a FILE-referenced one travels as data (write-only-when-
         // stated). A code model (a Func<Shape>) is opaque — like the legacy Body, it is re-attached
@@ -364,14 +376,30 @@ internal static class SchematicReader
             var footprint = record.TryGetPropertyValue("footprint", out var footprintNode)
                 ? ReadFootprint(Object(footprintNode, "a footprint"))
                 : null;
-            var symbol = record.TryGetPropertyValue("symbol", out var symbolNode)
-                ? ReadSymbol(Object(symbolNode, "a symbol"))
-                : null;
+            // Either "units" (multi-unit) or "symbol" (single-unit); never both. A single-unit /
+            // symbol-less definition reads exactly as before.
+            Symbol? symbol = null;
+            IReadOnlyList<Symbol>? units = null;
+            if (record.TryGetPropertyValue("units", out var unitsNode))
+            {
+                var array = unitsNode as JsonArray
+                    ?? throw new FormatException($"Definition '{name}': 'units' must be an array.");
+                var list = new List<Symbol>();
+                foreach (var unitNode in array)
+                    list.Add(ReadSymbol(Object(unitNode, $"a unit symbol of '{name}'")));
+                if (list.Count == 0)
+                    throw new FormatException($"Definition '{name}': 'units' must not be empty.");
+                units = list;
+            }
+            else if (record.TryGetPropertyValue("symbol", out var symbolNode))
+            {
+                symbol = ReadSymbol(Object(symbolNode, "a symbol"));
+            }
             var model = record.TryGetPropertyValue("model", out var modelNode)
                 ? ReadModel(Object(modelNode, "a model"))
                 : null;
             var definition = new PartDefinition(
-                name, prefix, pins, footprint, library?.BodyFor(name), symbol, model);
+                name, prefix, pins, footprint, library?.BodyFor(name), symbol, model, units);
             if (!defsById.TryAdd(id, definition))
                 throw new FormatException($"Duplicate part-definition id '{id}' in the saved schematic.");
         }

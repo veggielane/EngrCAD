@@ -369,8 +369,103 @@ if (!sch.Check().Ok) throw new Exception(sch.Check().ToString());
 or transitively) is refused by name — a self-including hierarchy cannot be flattened. A **missing or
 unreadable** sub-sheet file is *reported* in `read.Diagnostics` and its subtree skipped (never
 thrown — the readers-never-throw-on-dirty culture), as is a hierarchical label with no matching parent
-sheet pin (a dangling port). Still out of scope: **buses** across sheets, and **multi-unit** symbols
-(a duplicate reference is imported as a separate component with a note).
+sheet pin (a dangling port). Still out of scope across sheets: **buses**.
+
+### Multi-unit symbols
+
+Many ICs are **multi-unit**: a dual op-amp is ONE physical package (one footprint, one reference
+designator) drawn as SEVERAL schematic symbols — amp A, amp B, and often a power unit. KiCad's
+`.kicad_sym` draws them as unit sub-symbols (`_1_1`, `_2_1`, `_3_1` — the `<unit>_<style>` suffix),
+and a schematic places a multi-unit part as several `(symbol …)` instances **sharing one reference
+designator**, each carrying its own `(unit N)`. EngrCAD keeps that as **one `Component` with all the
+pins**: a `PartDefinition` gains `Units` (one `Symbol` per unit, each with its own pins at its own
+anchors) while `Pins` is their **union** — the netlist terminals of the whole package — and the pin
+NUMBER identity spans the units (symbol pin `"1"` in amp A == pad `"1"` == netlist pin `"1"`). The
+reader **merges** the same-refdes instances into that one component, placing each unit's pins where
+that unit is drawn, so a net wired to amp A's output and one to amp B's input are distinct nets on
+one IC. The board never sees the split — one footprint, all pads.
+
+```csharp run:ecad-multi-unit
+// A dual op-amp .kicad_sym: three unit sub-symbols — amp A (pins 1,2,3), amp B (pins 5,6,7) and a
+// power unit (pins 4,8) — under one package "Dual_Opamp".
+var symText = """
+(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
+  (symbol "Dual_Opamp"
+    (property "Reference" "U" (at 0 5 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Dual_Opamp" (at 0 -5 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (symbol "Dual_Opamp_1_1"
+      (pin output line (at 7.62 0 180) (length 2.54) (name "~") (number "1"))
+      (pin input line (at -7.62 -2.54 0) (length 2.54) (name "-") (number "2"))
+      (pin input line (at -7.62 2.54 0) (length 2.54) (name "+") (number "3")))
+    (symbol "Dual_Opamp_2_1"
+      (pin input line (at -7.62 2.54 0) (length 2.54) (name "+") (number "5"))
+      (pin input line (at -7.62 -2.54 0) (length 2.54) (name "-") (number "6"))
+      (pin output line (at 7.62 0 180) (length 2.54) (name "~") (number "7")))
+    (symbol "Dual_Opamp_3_1"
+      (pin power_in line (at 0 -7.62 90) (length 2.54) (name "V-") (number "4"))
+      (pin power_in line (at 0 7.62 270) (length 2.54) (name "V+") (number "8")))))
+""";
+
+var symbol = KiCadSymbolReader.Read(symText);
+var def = new PartDefinition(symbol.Symbol.Name, symbol.ReferencePrefix, symbol.Pins,
+    symbol: null, units: symbol.Units);
+
+// Three units, but ONE set of pins — the union of every unit's pins is the package's terminals.
+Console.WriteLine($"{def.Name}: {def.Units.Count} units, {def.Pins.Count} pins "
+    + $"({string.Join(", ", def.Pins.Select(p => p.Number))})");
+Console.WriteLine("amp A: " + string.Join(",", def.Units[0].PinNumbers)
+    + " | amp B: " + string.Join(",", def.Units[1].PinNumbers)
+    + " | power: " + string.Join(",", def.Units[2].PinNumbers));
+if (!def.IsMultiUnit || def.Units.Count != 3 || def.Pins.Count != 8)
+    throw new Exception("expected three units and eight pins");
+
+// A schematic places amp A, amp B and the power unit as three instances under ONE reference
+// designator "U1" (each with its own (unit N)). The reader merges them into one component.
+var schText = """
+(kicad_sch (version 20230121) (paper "A4") (title_block (title "dual"))
+  (lib_symbols
+    (symbol "Amp:Dual_Opamp"
+      (property "Reference" "U" (at 0 0 0)) (property "Value" "Dual_Opamp" (at 0 0 0))
+      (symbol "Dual_Opamp_1_1"
+        (pin output line (at 7.62 0 180) (length 2.54) (name "~") (number "1"))
+        (pin input line (at -7.62 -2.54 0) (length 2.54) (name "-") (number "2"))
+        (pin input line (at -7.62 2.54 0) (length 2.54) (name "+") (number "3")))
+      (symbol "Dual_Opamp_2_1"
+        (pin input line (at -7.62 2.54 0) (length 2.54) (name "+") (number "5"))
+        (pin input line (at -7.62 -2.54 0) (length 2.54) (name "-") (number "6"))
+        (pin output line (at 7.62 0 180) (length 2.54) (name "~") (number "7")))
+      (symbol "Dual_Opamp_3_1"
+        (pin power_in line (at 0 -7.62 90) (length 2.54) (name "V-") (number "4"))
+        (pin power_in line (at 0 7.62 270) (length 2.54) (name "V+") (number "8")))))
+  (symbol (lib_id "Amp:Dual_Opamp") (at 100 100 0) (unit 1) (property "Reference" "U1" (at 100 92 0)) (property "Value" "LM358" (at 100 108 0)))
+  (symbol (lib_id "Amp:Dual_Opamp") (at 150 100 0) (unit 2) (property "Reference" "U1" (at 150 92 0)) (property "Value" "LM358" (at 150 108 0)))
+  (symbol (lib_id "Amp:Dual_Opamp") (at 100 130 0) (unit 3) (property "Reference" "U1" (at 100 138 0)) (property "Value" "LM358" (at 100 145 0)))
+  (wire (pts (xy 107.62 100) (xy 112 100))) (label "OUTA" (at 112 100 0))
+  (wire (pts (xy 142.38 97.46) (xy 137 97.46))) (label "INB" (at 137 97.46 0))
+  (sheet_instances (path "/" (page "1"))))
+""";
+
+var sch = KiCadSchReader.Read(schText).Schematic;
+
+// The three same-refdes instances MERGE into one component "U1" carrying all eight pins.
+Console.WriteLine($"{sch.Components.Count} component: {sch.Components[0].ReferenceDesignator} "
+    + $"with {sch.Components[0].AllPins.Count()} pins");
+if (sch.Components.Count != 1) throw new Exception("expected one merged component");
+
+// A net on amp A's output and one on amp B's input are DISTINCT nets on the SAME IC.
+var netlist = sch.ToNetlist();
+var outA = netlist.NetOf(sch.Find("U1")!.Pin("1"));
+var inB = netlist.NetOf(sch.Find("U1")!.Pin("5"));
+Console.WriteLine($"U1.1 -> {outA?.Name}, U1.5 -> {inB?.Name}");
+if (outA?.Name != "OUTA" || inB?.Name != "INB" || ReferenceEquals(outA, inB))
+    throw new Exception("the two units' nets should be distinct and named right");
+```
+
+Where the units genuinely disagree — two units claiming pin `"1"` with different types — the reader
+**reports it by name** and keeps the first (it never throws on dirty input), and a De Morgan
+**alternate body style** (`_1_2`) is out of scope, ignored with a named diagnostic. Multi-unit
+schematic **drawing** (placing each unit at its own location on a sheet) is a follow-up.
 
 ## The 3D model — the third view
 
@@ -439,11 +534,13 @@ than shipping a part whose copper does not match its schematic.
 
 The reader maps the **common subset** and NAMES anything else rather than mis-reading it:
 
-- **Symbol** (`.kicad_sym`): the `Reference`/`Footprint` properties, nested unit sub-symbols
-  recursed for graphics and pins, graphic `rectangle`/`circle`/`arc`/`polyline`/`text`, and
-  `pin`s (electrical type → `PinType`, name, number, position, angle → direction, length). A
-  bezier graphic, an alternate pin function, or an electrical type with no exact `PinType` is
-  ignored **with a named diagnostic**.
+- **Symbol** (`.kicad_sym`): the `Reference`/`Footprint` properties, the **unit sub-symbols** (each
+  `<name>_<unit>_<style>` kept as its own `Symbol` in `Units`, unit `0` common to every unit, the
+  union of their pins the netlist terminals), graphic `rectangle`/`circle`/`arc`/`polyline`/`text`,
+  and `pin`s (electrical type → `PinType`, name, number, position, angle → direction, length). A
+  bezier graphic, an alternate pin function, a De Morgan alternate body style (`_1_2`), or an
+  electrical type with no exact `PinType` is ignored **with a named diagnostic**; two units
+  disagreeing about one pin are reported by name (the first is kept).
 - **Footprint** (`.kicad_mod`): SMD and plated through-hole pads of the standard shapes
   (`circle`/`rect`/`roundrect`/`oval`) with their `at`/`size`/`drill`. A pad rotation (not
   carried by a footprint pad), a `trapezoid`/`custom` shape, or an oval drill is approximated

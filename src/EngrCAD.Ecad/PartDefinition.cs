@@ -43,8 +43,28 @@ public sealed class PartDefinition
     /// carries no drawn symbol. OPTIONAL by design: stage 1 is connectivity, and a symbol is
     /// what a drawn schematic SHEET consumes. When a symbol AND a footprint are both present,
     /// their pins and pads share the pin NUMBER identity a <see cref="PinIdentity"/> check
-    /// verifies (symbol pin "1" == pad "1" == netlist pin "1").</summary>
+    /// verifies (symbol pin "1" == pad "1" == netlist pin "1").
+    /// <para>For a MULTI-UNIT part (a dual op-amp drawn as several schematic symbols under one
+    /// package and reference designator) this is the FIRST unit's symbol — a representative;
+    /// <see cref="Units"/> carries all of them. For the ordinary single-unit part it is the sole
+    /// unit's symbol.</para></summary>
     public Symbol? Symbol { get; }
+
+    /// <summary>
+    /// The part's schematic symbols, ONE PER UNIT. A single-unit part has exactly one (equal to
+    /// <see cref="Symbol"/>); a symbol-less definition has none; a MULTI-UNIT part (e.g. a dual
+    /// op-amp: amp A, amp B, a power unit) has several, each carrying only that unit's own pins at
+    /// that unit's anchors, so a schematic can place each unit separately while the part stays ONE
+    /// component with ONE set of pins (their UNION, which is what <see cref="Pins"/> holds).
+    /// <para>Units are a SCHEMATIC-drawing/placement concern: connectivity, the board footprint and
+    /// the BOM all read the whole pin set, so a multi-unit component is one component with all pads
+    /// and all pins. The pin NUMBER identity spans the units (<see cref="PinIdentity"/> takes the
+    /// union of every unit's symbol pins).</para>
+    /// </summary>
+    public IReadOnlyList<Symbol> Units { get; }
+
+    /// <summary>Whether this definition carries more than one schematic unit (a multi-unit part).</summary>
+    public bool IsMultiUnit => Units.Count > 1;
 
     /// <summary>
     /// The legacy 3D body builder, or null. OPTIONAL by design — stage 1 is connectivity, not
@@ -77,10 +97,15 @@ public sealed class PartDefinition
     /// <param name="footprint">The optional pad layout.</param>
     /// <param name="body">The optional legacy 3D body builder (not serialized).</param>
     /// <param name="symbol">The optional 2D schematic symbol.</param>
-    /// <param name="model">The optional 3D <see cref="ComponentModel3D"/> peer. Added LAST so every
-    /// existing positional construction is byte-for-byte unchanged.</param>
-    /// <exception cref="ArgumentException">A name/prefix is empty, or a pin number is empty
-    /// or repeated.</exception>
+    /// <param name="model">The optional 3D <see cref="ComponentModel3D"/> peer.</param>
+    /// <param name="units">The optional MULTI-UNIT symbols — one <see cref="Ecad.Symbol"/> per unit
+    /// (a dual op-amp's amp A, amp B, power unit). Added LAST so every existing positional
+    /// construction is byte-for-byte unchanged; pass it INSTEAD of <paramref name="symbol"/> (not
+    /// both). When it is null, the definition's <see cref="Units"/> is derived from
+    /// <paramref name="symbol"/> (one unit, or none) so the single-unit case is unchanged.</param>
+    /// <exception cref="ArgumentException">A name/prefix is empty, a pin number is empty
+    /// or repeated, both <paramref name="symbol"/> and <paramref name="units"/> are given, or
+    /// <paramref name="units"/> is an empty list.</exception>
     public PartDefinition(
         string name,
         string referencePrefix,
@@ -88,7 +113,8 @@ public sealed class PartDefinition
         Footprint? footprint = null,
         Func<Shape>? body = null,
         Symbol? symbol = null,
-        ComponentModel3D? model = null)
+        ComponentModel3D? model = null,
+        IReadOnlyList<Symbol>? units = null)
     {
         ArgumentNullException.ThrowIfNull(pins);
         if (string.IsNullOrEmpty(name))
@@ -103,8 +129,29 @@ public sealed class PartDefinition
         Pins = [.. pins];
         Footprint = footprint;
         Body = body;
-        Symbol = symbol;
         Model = model;
+
+        // The unit list is the source when given (a multi-unit part); otherwise the single symbol
+        // derives one unit (or none), so a single-unit / symbol-less definition is byte-identical to
+        // before. Symbol stays the first unit (or null) — the representative one-unit accessor.
+        if (units is not null)
+        {
+            if (symbol is not null)
+                throw new ArgumentException(
+                    $"Part definition '{name}': pass either a single 'symbol' or a 'units' list, not "
+                    + "both (a units list already carries the first unit as its symbol).", nameof(units));
+            if (units.Count == 0)
+                throw new ArgumentException(
+                    $"Part definition '{name}': the 'units' list is empty. Pass symbol: null for a "
+                    + "symbol-less definition, or the units the part draws.", nameof(units));
+            Units = [.. units];
+            Symbol = Units[0];
+        }
+        else
+        {
+            Symbol = symbol;
+            Units = symbol is null ? [] : [symbol];
+        }
 
         _byNumber = new Dictionary<string, Pin>(Pins.Count);
         foreach (var pin in Pins)

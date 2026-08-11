@@ -392,12 +392,36 @@ The readers are hand-rolled and dependency-free (`SExpr` is a small S-expression
 validating structure up front and refusing malformed input **by name** (the
 `StepReader`/`IgesReader` rule). They cover the **common subset** and NAME the rest:
 
-- **Symbol** (`.kicad_sym`): the `Reference`/`Footprint` properties, nested unit sub-symbols
-  recursed for graphics and pins, `rectangle`/`circle`/`arc`/`polyline`/`text` graphics, and
-  `pin`s (electrical type → `PinType`, name, number, position, angle → `SymbolPinDirection`,
-  length). A `SymbolPin.Anchor` is the connection point where a wire lands, and the direction
-  points from there into the body (KiCad's pin angle convention). A bezier graphic, an alternate
-  pin function, or an electrical type with no exact `PinType` is ignored **with a diagnostic**.
+- **Symbol** (`.kicad_sym`): the `Reference`/`Footprint` properties, the **unit sub-symbols** (each
+  `<name>_<unit>_<style>` kept as its own `Symbol` in `PartDefinition.Units`, unit `0` common to
+  every unit), `rectangle`/`circle`/`arc`/`polyline`/`text` graphics, and `pin`s (electrical type →
+  `PinType`, name, number, position, angle → `SymbolPinDirection`, length). A `SymbolPin.Anchor` is
+  the connection point where a wire lands, and the direction points from there into the body (KiCad's
+  pin angle convention). A bezier graphic, an alternate pin function, a De Morgan alternate body
+  style (`_1_2`), or an electrical type with no exact `PinType` is ignored **with a diagnostic**; two
+  units disagreeing about one pin are reported by name (the first is kept).
+
+**Multi-unit symbols.** A dual op-amp is ONE physical package (one footprint, one reference
+designator) drawn as SEVERAL schematic symbols — amp A, amp B, a power unit. A `PartDefinition` gains
+`Units` (one `Symbol` per unit, each with its own pins at its own anchors) while `Pins` is their
+**UNION** — the netlist terminals of the whole package — and the pin NUMBER identity spans the units
+(`PinIdentity.Check` takes the union of every unit's pins). A single-unit / symbol-less definition is
+**byte-identical** to before: `Symbol` is the sole unit (or null), `Units` derives from it, and the
+`units` constructor parameter is OPTIONAL and LAST (passed INSTEAD of `symbol`, never both). The board
+side is one component with all pads — units are a schematic-drawing/placement concern. In a
+`.kicad_sch` a multi-unit part is placed as several `(symbol …)` instances SHARING one reference
+designator, each with a distinct `(unit N)`; `KiCadSchReader` **merges** them into one `Component` and
+places only that instance's unit's pins at that instance's location (so a net wired to amp A's output
+and one to amp B's input are distinct nets on the same IC). A repeated placement of one unit, or two
+different symbols under one reference designator, is reported and skipped. Persistence writes the
+per-unit symbols under a `units` key (a single-unit definition keeps the incumbent `symbol` key, so it
+saves byte-identically); `save → load → save` is a byte-identical fixed point. Verified higher than
+usual (a wrong merge silently mis-wires an IC): a dual op-amp parses to three units with the right
+per-unit pins and the union; a sheet placing its three units under "U1" imports as EXACTLY one
+component with all eight pins (the mutation against the old two-component behaviour); the two units'
+nets are distinct and land on the right pins; a net physically SPANS the two amp units; identity spans
+the units; persistence and determinism; the inconsistent-units and De Morgan refusals by name.
+Multi-unit schematic DRAWING (placing each unit at its own sheet location) is a filed follow-up.
 - **Footprint** (`.kicad_mod`): SMD and plated through-hole pads of the standard shapes
   (`circle`/`rect`/`roundrect`/`oval`) with their `at`/`size`/`drill` — mapped onto the existing
   `Footprint`/`Pad` with **no change to `Pad` or `PadShape`** (the drill a through pad needs was
@@ -567,9 +591,10 @@ occurrence-path convention) — so a sheet placed TWICE gives distinct instances
 reference (a sheet including itself, directly or transitively) is refused by name (a self-including
 hierarchy cannot be flattened); a **missing / unreadable** sub-sheet file is reported and its subtree
 skipped (never thrown), as is a hierarchical label with no matching parent sheet pin (a dangling
-port). Still out of scope: buses across sheets, and multi-unit symbols. The oracle is the same
-"reconstructed from geometry + name-matching" partition asserted exactly, plus the MUTATION that
-proves the stitch bites — rename the sub-sheet's hierarchical label and the parent/child net SPLITS.
+port). Still out of scope across sheets: buses (multi-unit symbols merge in the hierarchical path too,
+keyed by the hierarchical refdes). The oracle is the same "reconstructed from geometry + name-matching"
+partition asserted exactly, plus the MUTATION that proves the stitch bites — rename the sub-sheet's
+hierarchical label and the parent/child net SPLITS.
 
 Verified higher than usual (an importer that mislabels nets is a silent failure): the reconstructed
 partition matches the intended one exactly (with `Schematic.Check()` passing); the MUTATION that
@@ -578,8 +603,7 @@ reported); the junction rule from both sides (a crossing needs a junction to joi
 equivalence (same label = one net, different = two); no_connect (an isolated marked pin is on no
 signal net); the symbol == netlist pin identity (`PinIdentity`); determinism (two reads save
 byte-identically); and the refusals. Filed follow-ups: bus GROUPS (`{…}` aliases) and buses across
-sheets (hierarchical bus pins), and multi-unit symbols (a duplicate reference is currently imported
-as a separate component with a note). Docs: `examples/ecad-library.md`.
+sheets (hierarchical bus pins). Docs: `examples/ecad-library.md`.
 
 ## Drawing the schematic sheet
 
