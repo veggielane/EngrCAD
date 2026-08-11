@@ -1519,23 +1519,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     where ISO 5457 fixes a specific count per sheet size in a small table — transcribe it
     (verify-against-datasheet), keeping the nominal-size path as the fallback for a custom
     sheet.
-  - [ ] **Fabrication-drawing follow-ups** (the `PcbFabricationSheet` landed as the shared
-    `DrawingFrame`'s third consumer — board outline + drill map + drill table + stackup table
-    + fab notes on the engineering frame, byte-identical to a mechanical `DrawingSheet`'s
-    frame; `EngrCAD.Ecad/PcbFabricationDrawing.cs`; the drill-symbol standardisation with a
-    legend and the through-hole component pad drills have since LANDED — the drill table is now
-    a keyed LEGEND over a canonical `DrillGlyphPalette` (a letter + glyph per size, the glyph
-    cycling past the palette with the letter the distinguishing suffix, refused past a 26-size
-    `A`–`Z` alphabet) and its `(diameter, plated)` partition covers holes + placed vias +
-    through-hole component pad drills, the SMD-vs-THT distinction read the paste layer's way).
-    Residuals: **(a) per-layer fabrication plots** — a copper/mask/silk plot per layer beside the
-    drill map (a picture per Gerber), which wants the copper-model geometry the Gerber
-    exporter already builds rendered as sheet line work. (The `PcbFabricationSpec` catalogue —
-    a per-fabricator house-spec preset set, the `StandardHoles` / `SheetMaterials`
-    verify-against-datasheet pattern — LANDED as `StandardFabSpecs`; a `KiCadPcbReader` import
-    POPULATES the spec from the board-setup / stackup; and `DrcRuleSet.ForIpcClass(1|2|3)` +
-    `DrcRuleSet.CheckSpec(spec)` make the STATED class DRIVE the DRC and cross-check the spec's own
-    `MinTraceWidthMm` / `MinClearanceMm` against it.)
   - [ ] **Detail views** (a scaled-up circle of a region) and **broken views** (a long
     part with its middle removed). Both are clipping problems on top of the existing
     view, not new projections.

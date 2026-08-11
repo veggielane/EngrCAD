@@ -8081,10 +8081,34 @@ component pad drills** (board holes + placed vias + THT pads, grouped by (diamet
 has no drill and contributes no row — the paste layer's SMD-vs-THT distinction reused). Symbols are a
 defined ordered set assigned deterministically by ascending diameter, and the drill-table
 closed-form oracle EXTENDS unchanged: `Σ row.Count == board holes + placed vias + THT pads`, every
-feature in exactly one row, adding a THT pad moving exactly its row by +1. **v1 scope**, filed as a
-follow-up: no per-layer copper/mask/silk plots yet (a picture per Gerber, wanting the copper-model
-geometry the Gerber exporter already builds rendered as sheet line work).
+feature in exactly one row, adding a THT pad moving exactly its row by +1.
 Docs: `examples/ecad-fab-drawing.md`.
+
+**The per-layer PLOTS complete the fab sheet set** (`PcbFabricationPlots` / `PcbLayerPlot` →
+`PcbLayerPlotDrawing`, `PcbLayerPlot.cs`): the human-readable plot per layer a fab package ships
+beside the Gerbers. `PcbFabricationPlots.For(layout)` returns one `PcbLayerPlot` per copper layer (in
+stackup order), then one per **declared** mask / silk / paste side — write-only-when-stated, so a bare
+copper board plots just its copper layers (the same "if present" convention the notes and persistence
+use). **The load-bearing decision is that a plot consumes the copper model's OWN regions rather than
+re-deriving copper**: a copper plot draws exactly the `PcbCopperModel`'s features on that layer (via
+pads and traces included — they are copper features like any other, already in `model.Copper`), a mask
+plot the mask windows, a paste plot the SMD apertures, a silk plot the line-work — the SAME geometry
+`PcbGerberExport` consumes — so a plot and its Gerber cannot disagree (the one-declaration rule applied
+to a plot). **The correspondence is the oracle, and it needs no union re-computation**: the plot
+carries its layer's own `Regions` (or silk `Strokes`), so `drawing.Regions.Count` equals the copper
+model's feature count on that layer and `drawing.PlottedArea` (the sum of each region's OWN `Area`)
+equals the model's total — a plot showing more or fewer regions than its layer carries is the bug, and
+drawing exactly the copper model's region objects is what "the plot IS the layer's geometry, not a
+re-derivation" means. Each plot rides the SAME shared `DrawingFrame` (§6c), so `plot.Frame().Compute()`
+given one paper and title is **byte-identical** to a `PcbFabricationSheet`'s frame (asserted the fab
+drawing's own way — reconfigure both frames to one shared `EngineeringTitleBlock` and compare line-work
+and text, the difference by default being each sheet's own fitted scale). **A bottom-side layer is
+MIRRORED** — plotted *viewed from the bottom*, the fabrication convention that a bottom layer is read
+looking through the board — so the transform reflects X about the sheet centre (same Y) for a
+bottom-side copper / mask / silk / paste layer, the top and inner layers viewed from the top; each plot
+STATES its `ViewSide` and `Mirrored`, and the mirror is asserted directly (`bottomPlot.Project(p).X`
+reflected about the shared `ColumnCenter.X`, `.Y` equal). `Compute()` feeds the SVG / DXF / PDF writers
+from one primitive set (the drawing-sheet one-`Compute` rule). Docs: `examples/ecad-fab-drawing.md`.
 
 ### Copper pours — ground / power planes (`CopperPour`, `CopperPourBuilder`)
 
