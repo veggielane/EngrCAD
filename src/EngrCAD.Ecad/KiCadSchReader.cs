@@ -62,12 +62,21 @@ public sealed record KiCadSchematic(
 /// value, <c>lib_id</c> → definition), power symbols (their <c>Value</c> is the net name),
 /// <c>wire</c>, <c>junction</c>, local <c>label</c>, <c>global_label</c>, and <c>no_connect</c>.</para>
 ///
-/// <para><b>Refused BY NAME</b> (out of v1 scope, filed as follow-ups): buses (<c>bus</c>,
-/// <c>bus_entry</c>, and bus-vector labels like <c>D[7..0]</c>), hierarchical sheets (<c>sheet</c>
-/// subsheets, <c>hierarchical_label</c>). A netless wire, an instance referencing an unknown
-/// symbol, or a dangling pin is REPORTED (a diagnostic), not thrown (the readers-never-throw
-/// culture). A non-<c>(kicad_sch …)</c> root — including a <c>.kicad_pcb</c> board or a
-/// <c>.kicad_sym</c> handed here — or a malformed S-expression is refused by name.</para>
+/// <para><b>Hierarchical / multi-sheet designs</b> (a root that references sub-sheet FILES) are
+/// handled by <see cref="ReadProject(string)"/> / <see cref="ReadProjectFrom"/>, which flatten the
+/// hierarchy into one <see cref="Schematic"/> and STITCH connectivity across sheets (a parent sheet
+/// pin ↔ a sub-sheet <c>hierarchical_label</c> of the same name; global labels and power span every
+/// sheet; local labels stay local). The single-sheet <see cref="Read"/> deliberately REFUSES a
+/// hierarchical design by name so a flat import cannot silently drop a whole subsheet.</para>
+///
+/// <para><b>Refused BY NAME</b>: buses (<c>bus</c>, <c>bus_entry</c>, and bus-vector labels like
+/// <c>D[7..0]</c>) — still out of scope in both entry points; and, in <see cref="Read"/> only,
+/// hierarchical sheets (<c>sheet</c> subsheets, <c>hierarchical_label</c>). A netless wire, an
+/// instance referencing an unknown symbol, or a dangling pin is REPORTED (a diagnostic), not thrown
+/// (the readers-never-throw culture); a hierarchical project's missing/unreadable sub-sheet file is
+/// reported too, and a RECURSIVE sheet reference is refused by name. A non-<c>(kicad_sch …)</c> root
+/// — including a <c>.kicad_pcb</c> board or a <c>.kicad_sym</c> handed here — or a malformed
+/// S-expression is refused by name.</para>
 /// </summary>
 public static class KiCadSchReader
 {
@@ -203,6 +212,69 @@ public static class KiCadSchReader
 
     /// <summary>Reads a <c>.kicad_sch</c> file from disk.</summary>
     public static KiCadSchematic ReadFile(string path) => Read(File.ReadAllText(path));
+
+    // ======================================================================
+    // Hierarchical / multi-sheet import (the multi-FILE entry points)
+    // ======================================================================
+
+    /// <summary>
+    /// Reads a HIERARCHICAL KiCad project — a root <c>.kicad_sch</c> plus the sub-sheet FILES it
+    /// references through <c>(sheet … (property "Sheetfile" …))</c> — into ONE flattened
+    /// <see cref="KiCadSchematic"/>, resolving Sheetfile references RELATIVE TO THE ROOT'S
+    /// DIRECTORY (the KiCad convention: all sheet files share the project directory), recursively.
+    /// This is the multi-file twin of <see cref="Read"/>; the single-sheet <see cref="Read"/> is
+    /// unchanged and still refuses a hierarchical design by name.
+    ///
+    /// <para>The flattened schematic uses HIERARCHICAL reference designators — a component in a
+    /// sub-sheet placed under sheet "PowerSupply" is named <c>"PowerSupply/U1"</c> (the
+    /// <see cref="Modeling.PartInstance"/> occurrence-path convention), and a sheet instanced twice
+    /// gives DISTINCT instances (<c>"Amp1/U1"</c>, <c>"Amp2/U1"</c>) with distinct internal nets.
+    /// Connectivity is stitched across sheets: a parent SHEET PIN joins the sub-sheet's
+    /// <c>hierarchical_label</c> of the same name; <c>global_label</c>s and power symbols span every
+    /// sheet; local <c>label</c>s stay local to their sheet.</para>
+    /// </summary>
+    /// <param name="rootPath">The root <c>.kicad_sch</c> file.</param>
+    /// <returns>The flattened whole-project schematic; <see cref="KiCadSchematic.SheetName"/> is the
+    /// ROOT sheet's title.</returns>
+    /// <exception cref="FormatException">The root is not a KiCad schematic, a sheet uses buses,
+    /// or the hierarchy is RECURSIVE (a sheet including itself) — refused by name. A missing or
+    /// unreadable sub-sheet file is REPORTED in <see cref="KiCadSchematic.Diagnostics"/>, not thrown
+    /// (the readers-never-throw-on-dirty culture).</exception>
+    public static KiCadSchematic ReadProject(string rootPath)
+    {
+        ArgumentNullException.ThrowIfNull(rootPath);
+        string rootDir = Path.GetDirectoryName(Path.GetFullPath(rootPath)) ?? ".";
+        string rootText = File.ReadAllText(rootPath);
+        return BuildProject(rootText, Path.GetFileName(rootPath), sheetFile =>
+        {
+            string p = Path.Combine(rootDir, sheetFile);
+            return File.Exists(p) ? File.ReadAllText(p) : null;
+        });
+    }
+
+    /// <summary>
+    /// Reads a HIERARCHICAL KiCad project from an IN-MEMORY map of <c>Sheetfile → text</c> — the
+    /// testable core the disk <see cref="ReadProject(string)"/> is a thin wrapper over. A
+    /// <c>(sheet … (property "Sheetfile" "sub.kicad_sch"))</c> is resolved by looking up
+    /// <c>"sub.kicad_sch"</c> in <paramref name="sheetsByFile"/> (a missing key is a reported,
+    /// skipped sub-sheet — never a throw). See <see cref="ReadProject(string)"/> for the flattening
+    /// and cross-sheet stitching rules.
+    /// </summary>
+    /// <param name="rootSheetFile">The map key of the ROOT sheet.</param>
+    /// <param name="sheetsByFile">Every sheet file's text keyed by its Sheetfile name.</param>
+    /// <exception cref="FormatException">The root key is not in the map, the root is not a KiCad
+    /// schematic, a sheet uses buses, or the hierarchy is recursive — refused by name.</exception>
+    public static KiCadSchematic ReadProjectFrom(
+        string rootSheetFile, IReadOnlyDictionary<string, string> sheetsByFile)
+    {
+        ArgumentNullException.ThrowIfNull(rootSheetFile);
+        ArgumentNullException.ThrowIfNull(sheetsByFile);
+        if (!sheetsByFile.TryGetValue(rootSheetFile, out var rootText))
+            throw new FormatException(
+                $"The root sheet '{rootSheetFile}' is not in the supplied sheet map. It has: "
+                + string.Join(", ", sheetsByFile.Keys) + ".");
+        return BuildProject(rootText, rootSheetFile, sf => sheetsByFile.GetValueOrDefault(sf));
+    }
 
     // ======================================================================
     // Net reconstruction — the crux
@@ -396,6 +468,539 @@ public static class KiCadSchReader
         return lb >= 0 && rb > lb && name.AsSpan(lb, rb - lb).Contains("..", StringComparison.Ordinal);
     }
 
+    // ======================================================================
+    // Hierarchical engine — instance tree, per-sheet collection, cross-sheet
+    // stitching. Reuses every leaf geometry/naming helper (Graph, OnSegment,
+    // TryWire/TryAt/TryLabel, ReadPlacement, ReadLibSymbols, MakeUnique, …); only
+    // the multi-instance orchestration is new (necessarily — the flat path knows
+    // exactly one sheet).
+    // ======================================================================
+
+    /// <summary>One placed sheet in the flattened hierarchy. A sheet FILE placed twice gives two
+    /// instances with distinct <see cref="Path"/>s. <see cref="Ports"/> are the sheet-pins on the
+    /// <c>(sheet …)</c> node that placed this instance — they live in the PARENT's coordinate
+    /// space (they are drawn on the parent), which is why they carry the parent's id via
+    /// <see cref="ParentId"/>.</summary>
+    private sealed record SheetInstance(
+        int Id, string Path, int ParentId, IReadOnlyList<(string Name, Vector2d At)> Ports);
+
+    /// <summary>The connection points collected from one sheet instance, tagged by instance so the
+    /// global union-find keeps two sheets' identical coordinates apart.</summary>
+    private sealed class SheetData
+    {
+        public required int Instance { get; init; }
+        public List<(PinRef Pin, Vector2d Anchor)> PinPoints { get; } = [];
+        public List<LabelPoint> LabelPoints { get; } = [];   // local + global + power (by Priority)
+        public List<(Vector2d A, Vector2d B)> Wires { get; } = [];
+        public List<Vector2d> Junctions { get; } = [];
+        public List<Vector2d> NoConnects { get; } = [];
+        public List<(Vector2d At, string Name)> HierLabels { get; } = [];
+    }
+
+    /// <summary>Builds a flattened schematic from a root sheet plus a resolver for its sub-sheet
+    /// files. Walks the instance tree, collects each sheet's connection points, then stitches the
+    /// nets across sheets (see <see cref="BuildHierarchicalNets"/>).</summary>
+    private static KiCadSchematic BuildProject(
+        string rootText, string rootKey, Func<string, string?> resolveChild)
+    {
+        var diagnostics = new List<string>();
+        var once = new HashSet<string>(StringComparer.Ordinal);
+        void Note(string message) { if (once.Add(message)) diagnostics.Add(message); }
+
+        Note("KiCad stores schematic coordinates Y-downward; wire/junction/label points are "
+            + "imported verbatim, and library-local symbol pins (Y-up) are transformed into that "
+            + "same sheet frame.");
+
+        var rootContent = ParseSheet(rootText, rootKey);
+        string rootName = ReadSheetName(rootContent);
+        var schematic = new Schematic(rootName);
+
+        var instances = new List<SheetInstance>();
+        var sheetData = new List<SheetData>();
+        // Definitions are interned per lib_id ACROSS the whole project (two Device:R in different
+        // sheets share one PartDefinition), the same interning the flat path does within one sheet.
+        var partDefs = new Dictionary<string, PartDefinition>(StringComparer.Ordinal);
+        var usedRefs = new HashSet<string>(StringComparer.Ordinal);
+        int[] generated = [0];   // one refdes counter across every instance
+
+        void Walk(SList content, string path, int parentId,
+            IReadOnlyList<(string Name, Vector2d At)> ports, IReadOnlyList<string> fileChain)
+        {
+            int id = instances.Count;
+            instances.Add(new SheetInstance(id, path, parentId, ports));
+            sheetData.Add(CollectSheet(content, id, path, schematic, partDefs, usedRefs, generated, Note));
+
+            var childNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var sheet in content.Lists("sheet"))
+            {
+                string? childFile = SheetProperty(sheet, "Sheetfile");
+                if (string.IsNullOrEmpty(childFile))
+                {
+                    Note("A (sheet ...) has no Sheetfile property and was skipped.");
+                    continue;
+                }
+                if (fileChain.Contains(childFile, StringComparer.Ordinal))
+                    throw new FormatException(
+                        "This KiCad project has a RECURSIVE sheet reference: the chain "
+                        + string.Join(" -> ", fileChain.Append(childFile))
+                        + " includes a sheet inside itself, so the hierarchy cannot be flattened.");
+
+                string? childText = resolveChild(childFile);
+                if (childText is null)
+                {
+                    Note($"The subsheet file '{childFile}' could not be resolved and was skipped "
+                        + "(its components and nets are absent from the flattened schematic).");
+                    continue;
+                }
+
+                SList childContent;
+                try { childContent = ParseSheet(childText, childFile); }
+                catch (FormatException ex)
+                {
+                    Note($"The subsheet file '{childFile}' could not be read ({ex.Message}) and was "
+                        + "skipped.");
+                    continue;
+                }
+
+                string sheetName = SheetProperty(sheet, "Sheetname") is { Length: > 0 } n
+                    ? n : $"Sheet{childNames.Count + 1}";
+                string uniqueName = UniqueChild(sheetName, childNames);
+                string childPath = path.Length == 0 ? uniqueName : $"{path}/{uniqueName}";
+                Walk(childContent, childPath, id, ReadSheetPins(sheet), [.. fileChain, childFile]);
+            }
+        }
+
+        Walk(rootContent, "", -1, [], [rootKey]);
+        BuildHierarchicalNets(schematic, instances, sheetData, Note);
+        return new KiCadSchematic(schematic, rootName, diagnostics);
+    }
+
+    /// <summary>Parses one sheet file, validating its head is <c>kicad_sch</c> and refusing buses
+    /// (but NOT sheets/hierarchical_labels, which are the whole point here).</summary>
+    private static SList ParseSheet(string text, string sourceName)
+    {
+        var root = SExpr.Parse(text);
+        if (!string.Equals(root.Head, "kicad_sch", StringComparison.Ordinal))
+            throw new FormatException(
+                $"Not a KiCad schematic: the sheet '{sourceName}' has top S-expression "
+                + $"'{root.Head ?? "?"}', expected 'kicad_sch'.");
+        RefuseBuses(root, sourceName);
+        return root;
+    }
+
+    /// <summary>Refuses buses in one sheet (the one out-of-scope construct that still applies to the
+    /// hierarchical path).</summary>
+    private static void RefuseBuses(SList sheet, string sourceName)
+    {
+        if (sheet.List("bus") is not null || sheet.List("bus_entry") is not null)
+            throw new FormatException(
+                $"The KiCad sheet '{sourceName}' uses buses ('bus' / 'bus_entry'), which are out of "
+                + "scope. Route the signals as individual wires, or file bus import as a follow-up.");
+        foreach (var label in sheet.Lists("label")
+            .Concat(sheet.Lists("global_label")).Concat(sheet.Lists("hierarchical_label")))
+            if (LooksLikeBus(label.Arg(0)))
+                throw new FormatException(
+                    $"The KiCad sheet '{sourceName}' uses a bus label ('{label.Arg(0)}'), which is "
+                    + "out of scope. Name the signals individually, or file bus import as a follow-up.");
+    }
+
+    /// <summary>The value of a <c>(property "key" "value" …)</c> on a <c>(sheet …)</c> node.</summary>
+    private static string? SheetProperty(SList sheet, string key)
+    {
+        foreach (var property in sheet.Lists("property"))
+            if (string.Equals(property.Arg(0), key, StringComparison.Ordinal))
+                return property.Arg(1);
+        return null;
+    }
+
+    /// <summary>The sheet-pins (ports) on a <c>(sheet …)</c> node: each a name and a position in the
+    /// PARENT sheet's coordinate space. A sheet pin ties the parent net at its position to the
+    /// sub-sheet's <c>hierarchical_label</c> of the same name.</summary>
+    private static IReadOnlyList<(string Name, Vector2d At)> ReadSheetPins(SList sheet)
+    {
+        var ports = new List<(string, Vector2d)>();
+        foreach (var pin in sheet.Lists("pin"))
+        {
+            string name = pin.Arg(0) ?? "";
+            if (name.Length != 0 && TryAt(pin, out var at))
+                ports.Add((name, at));
+        }
+        return ports;
+    }
+
+    /// <summary>Makes a child sheet's path segment unique among its siblings (two <c>(sheet …)</c>
+    /// with the same Sheetname get <c>name</c> / <c>name.2</c> — the assembly occurrence-name rule).</summary>
+    private static string UniqueChild(string name, HashSet<string> used)
+    {
+        if (used.Add(name))
+            return name;
+        int suffix = 2;
+        string candidate;
+        do { candidate = $"{name}.{suffix++}"; } while (!used.Add(candidate));
+        return candidate;
+    }
+
+    /// <summary>Collects one sheet instance's components (into the flattened schematic with a
+    /// hierarchical refdes) and its connection points. Mirrors the flat <see cref="Read"/>'s middle,
+    /// prefixing every reference designator by the instance path and reading this sheet's OWN
+    /// <c>lib_symbols</c>.</summary>
+    private static SheetData CollectSheet(
+        SList content, int instance, string path, Schematic schematic,
+        Dictionary<string, PartDefinition> partDefs, HashSet<string> usedRefs, int[] generated,
+        Action<string> note)
+    {
+        var data = new SheetData { Instance = instance };
+        var libSymbols = ReadLibSymbols(content, note);
+        string prefix = path.Length == 0 ? "" : path + "/";
+
+        foreach (var inst in content.Lists("symbol"))
+        {
+            string? libId = inst.List("lib_id")?.Arg(0);
+            if (string.IsNullOrEmpty(libId))
+            {
+                note("A placed (symbol ...) has no (lib_id ...) and was skipped.");
+                continue;
+            }
+            if (!libSymbols.TryGetValue(libId, out var parsed))
+            {
+                note($"A placed symbol references an unknown lib_symbol '{libId}' and was skipped "
+                    + "(no matching entry in (lib_symbols ...)).");
+                continue;
+            }
+
+            var placement = ReadPlacement(inst);
+            if (parsed.IsPower)
+            {
+                string powerNet = InstanceValue(inst) ?? parsed.Value ?? BareName(libId);
+                foreach (var symPin in parsed.Symbol.Pins)
+                    data.LabelPoints.Add(
+                        new LabelPoint(placement.Place(symPin.Anchor), powerNet, LabelPriority.Power));
+                continue;
+            }
+
+            string localRef = InstanceReference(inst);
+            string refDes;
+            if (localRef.Length == 0 || localRef == "?")
+            {
+                do { refDes = $"{prefix}U{++generated[0]}"; } while (!usedRefs.Add(refDes));
+            }
+            else
+            {
+                refDes = prefix + localRef;
+                if (!usedRefs.Add(refDes))
+                {
+                    string renamed;
+                    do { renamed = $"{refDes}_{++generated[0]}"; } while (!usedRefs.Add(renamed));
+                    note($"Duplicate reference '{refDes}' (a multi-unit symbol?); imported as a "
+                        + $"separate component '{renamed}'. Multi-unit symbols are a filed follow-up.");
+                    refDes = renamed;
+                }
+            }
+
+            if (!partDefs.TryGetValue(libId, out var definition))
+            {
+                definition = new PartDefinition(
+                    BareName(libId), parsed.ReferencePrefix, parsed.Pins,
+                    footprint: null, body: null, symbol: parsed.Symbol);
+                partDefs[libId] = definition;
+            }
+
+            var component = schematic.Add(refDes, definition, InstanceValue(inst) ?? "");
+            foreach (var pin in definition.Pins)
+            {
+                var symPin = parsed.Symbol.PinNumbered(pin.Number);
+                data.PinPoints.Add((component.Pin(pin.Number), placement.Place(symPin.Anchor)));
+            }
+        }
+
+        foreach (var wire in content.Lists("wire"))
+            if (TryWire(wire, out var a, out var b))
+                data.Wires.Add((a, b));
+        foreach (var junction in content.Lists("junction"))
+            if (TryAt(junction, out var at))
+                data.Junctions.Add(at);
+        foreach (var label in content.Lists("label"))
+            if (TryLabel(label, out var at, out var name))
+                data.LabelPoints.Add(new LabelPoint(at, name, LabelPriority.Local));
+        foreach (var label in content.Lists("global_label"))
+            if (TryLabel(label, out var at, out var name))
+                data.LabelPoints.Add(new LabelPoint(at, name, LabelPriority.Global));
+        foreach (var hier in content.Lists("hierarchical_label"))
+            if (TryLabel(hier, out var at, out var name))
+                data.HierLabels.Add((at, name));
+        foreach (var nc in content.Lists("no_connect"))
+            if (TryAt(nc, out var at))
+                data.NoConnects.Add(at);
+
+        return data;
+    }
+
+    /// <summary>The global union-find over every sheet instance's connection points, plus the
+    /// cross-sheet stitching that makes a parent net and its sub-sheet net ONE net. This is the flat
+    /// <see cref="BuildNets"/> rule generalized to many instances with SCOPING: a wire/junction/pin
+    /// joins within an instance; a LOCAL label joins within its instance; a GLOBAL label or a POWER
+    /// symbol joins ACROSS every instance; and a parent SHEET PIN joins the sub-sheet's
+    /// <c>hierarchical_label</c> of the same name.</summary>
+    private static void BuildHierarchicalNets(
+        Schematic schematic, List<SheetInstance> instances, List<SheetData> data, Action<string> note)
+    {
+        var graph = new Graph();
+        var byInstance = data.ToDictionary(d => d.Instance);
+
+        // Phase 1: intern every connection point in its own instance space.
+        foreach (var sd in data)
+        {
+            foreach (var (a, b) in sd.Wires) { graph.Intern(sd.Instance, a); graph.Intern(sd.Instance, b); }
+            foreach (var j in sd.Junctions) graph.Intern(sd.Instance, j);
+            foreach (var (_, anchor) in sd.PinPoints) graph.Intern(sd.Instance, anchor);
+            foreach (var lp in sd.LabelPoints) graph.Intern(sd.Instance, lp.At);
+            foreach (var (at, _) in sd.HierLabels) graph.Intern(sd.Instance, at);
+            foreach (var nc in sd.NoConnects) graph.Intern(sd.Instance, nc);
+        }
+        // A sheet-pin lives in its PARENT instance's geometry.
+        foreach (var inst in instances)
+            if (inst.ParentId >= 0)
+                foreach (var port in inst.Ports)
+                    graph.Intern(inst.ParentId, port.At);
+
+        // Phase 2a: a wire joins its endpoints.
+        foreach (var sd in data)
+            foreach (var (a, b) in sd.Wires)
+                graph.Union(graph.Intern(sd.Instance, a), graph.Intern(sd.Instance, b));
+
+        // Phase 2b: a junction / pin / label / hier-label / sheet-pin lying ON a wire joins it.
+        foreach (var sd in data)
+        {
+            var childPorts = instances
+                .Where(i => i.ParentId == sd.Instance)
+                .SelectMany(i => i.Ports.Select(p => p.At));
+            var attach = sd.Junctions
+                .Concat(sd.PinPoints.Select(p => p.Anchor))
+                .Concat(sd.LabelPoints.Select(l => l.At))
+                .Concat(sd.HierLabels.Select(h => h.At))
+                .Concat(childPorts);
+            foreach (var p in attach)
+                foreach (var (a, b) in sd.Wires)
+                    if (OnSegment(p, a, b))
+                        graph.Union(graph.Intern(sd.Instance, p), graph.Intern(sd.Instance, a));
+        }
+
+        // Phase 2c: LOCAL label equivalence WITHIN an instance (the scoping crux — two sheets' "CLK"
+        // local labels are TWO nets).
+        foreach (var sd in data)
+            foreach (var group in sd.LabelPoints
+                .Where(l => l.Priority == LabelPriority.Local)
+                .GroupBy(l => l.Name, StringComparer.Ordinal))
+                UnionAll(graph, sd.Instance, group.Select(l => l.At));
+
+        // Phase 2d: GLOBAL label + POWER symbol equivalence ACROSS every instance.
+        var globalPoints = data.SelectMany(sd => sd.LabelPoints
+            .Where(l => l.Priority is LabelPriority.Global or LabelPriority.Power)
+            .Select(l => (sd.Instance, l.At, l.Name)));
+        foreach (var group in globalPoints.GroupBy(x => x.Name, StringComparer.Ordinal))
+        {
+            using var e = group.GetEnumerator();
+            if (!e.MoveNext()) continue;
+            int first = graph.Intern(e.Current.Instance, e.Current.At);
+            while (e.MoveNext()) graph.Union(first, graph.Intern(e.Current.Instance, e.Current.At));
+        }
+
+        // Phase 2e: hierarchical-label equivalence WITHIN an instance (same name = the child's one
+        // port of that name).
+        foreach (var sd in data)
+            foreach (var group in sd.HierLabels.GroupBy(h => h.Name, StringComparer.Ordinal))
+                UnionAll(graph, sd.Instance, group.Select(h => h.At));
+
+        // Phase 2f: STITCH — a parent sheet-pin joins the sub-sheet's hierarchical_label of the same
+        // name (name-matched, scoped to THIS child instance).
+        foreach (var child in instances)
+        {
+            if (child.ParentId < 0) continue;
+            var childHier = byInstance[child.Id].HierLabels;
+            var portNames = child.Ports.Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+            foreach (var port in child.Ports)
+            {
+                var matches = childHier
+                    .Where(h => string.Equals(h.Name, port.Name, StringComparison.Ordinal)).ToList();
+                if (matches.Count == 0)
+                {
+                    note($"Sheet pin '{port.Name}' on subsheet '{child.Path}' has no matching "
+                        + "hierarchical label inside it; the port connects nothing across the sheet "
+                        + "boundary.");
+                    continue;
+                }
+                int parentNode = graph.Intern(child.ParentId, port.At);
+                foreach (var hl in matches)
+                    graph.Union(parentNode, graph.Intern(child.Id, hl.At));
+            }
+            foreach (var hl in childHier)
+                if (!portNames.Contains(hl.Name))
+                    note($"Hierarchical label '{hl.Name}' in subsheet '{child.Path}' has no matching "
+                        + "sheet pin on its parent (a dangling hierarchical port).");
+        }
+
+        ResolveHierNets(schematic, instances, data, graph, note);
+    }
+
+    private static void UnionAll(Graph graph, int instance, IEnumerable<Vector2d> points)
+    {
+        using var e = points.GetEnumerator();
+        if (!e.MoveNext()) return;
+        int first = graph.Intern(instance, e.Current);
+        while (e.MoveNext()) graph.Union(first, graph.Intern(instance, e.Current));
+    }
+
+    /// <summary>Groups the pins by their union-find root into the flattened schematic's nets, names
+    /// each net (power &gt; global label &gt; sheet-pin/hier-label port &gt; local label &gt;
+    /// generated), and defers isolated no-connect pins — the flat <see cref="BuildNets"/> resolution
+    /// generalized to instance-tagged points.</summary>
+    private static void ResolveHierNets(
+        Schematic schematic, List<SheetInstance> instances, List<SheetData> data, Graph graph,
+        Action<string> note)
+    {
+        var pathOf = instances.ToDictionary(i => i.Id, i => i.Path);
+
+        var anchorOf = new Dictionary<PinRef, (int Instance, Vector2d At)>();
+        var pinsByRoot = new Dictionary<int, List<PinRef>>();
+        foreach (var sd in data)
+            foreach (var (pin, anchor) in sd.PinPoints)
+            {
+                anchorOf[pin] = (sd.Instance, anchor);
+                int root = graph.Find(graph.Intern(sd.Instance, anchor));
+                (pinsByRoot.TryGetValue(root, out var list) ? list : pinsByRoot[root] = []).Add(pin);
+            }
+
+        var labelByRoot = new Dictionary<int, List<(LabelPriority Priority, int Instance, string Name)>>();
+        var hierByRoot = new Dictionary<int, List<(int Instance, string Name)>>();
+        foreach (var sd in data)
+        {
+            foreach (var lp in sd.LabelPoints)
+            {
+                int root = graph.Find(graph.Intern(sd.Instance, lp.At));
+                (labelByRoot.TryGetValue(root, out var l) ? l : labelByRoot[root] = [])
+                    .Add((lp.Priority, sd.Instance, lp.Name));
+            }
+            foreach (var (at, name) in sd.HierLabels)
+            {
+                int root = graph.Find(graph.Intern(sd.Instance, at));
+                (hierByRoot.TryGetValue(root, out var l) ? l : hierByRoot[root] = [])
+                    .Add((sd.Instance, name));
+            }
+        }
+        var portByRoot = new Dictionary<int, List<string>>();
+        foreach (var inst in instances)
+            if (inst.ParentId >= 0)
+                foreach (var port in inst.Ports)
+                {
+                    int root = graph.Find(graph.Intern(inst.ParentId, port.At));
+                    (portByRoot.TryGetValue(root, out var l) ? l : portByRoot[root] = []).Add(port.Name);
+                }
+
+        var noConnectKeys = new HashSet<(int, long, long)>();
+        foreach (var sd in data)
+            foreach (var nc in sd.NoConnects)
+            {
+                var (x, y) = Graph.Key(nc);
+                noConnectKeys.Add((sd.Instance, x, y));
+            }
+
+        string MinPin(int root) => pinsByRoot[root].Select(p => p.ToString()).Min(StringComparer.Ordinal)!;
+        var roots = pinsByRoot.Keys.ToList();
+        roots.Sort((a, b) => string.CompareOrdinal(MinPin(a), MinPin(b)));
+
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        var deferredNoConnects = new List<PinRef>();
+        foreach (int root in roots)
+        {
+            var pins = pinsByRoot[root];
+            bool named = labelByRoot.TryGetValue(root, out var labels) && labels.Count > 0
+                || hierByRoot.ContainsKey(root) || portByRoot.ContainsKey(root);
+            var ncPins = pins.Where(p =>
+            {
+                var (inst, at) = anchorOf[p];
+                var (x, y) = Graph.Key(at);
+                return noConnectKeys.Contains((inst, x, y));
+            }).ToList();
+
+            if (pins.Count == 1 && ncPins.Count == 1 && !named)
+            {
+                deferredNoConnects.Add(pins[0]);
+                continue;
+            }
+
+            string name = ResolveHierName(
+                root, labels, portByRoot.GetValueOrDefault(root),
+                hierByRoot.GetValueOrDefault(root), pathOf, MinPin, note);
+            name = MakeUnique(name, used);
+
+            if (pins.Count >= 2)
+                schematic.Connect(name, pins);
+            else
+                schematic.Stub(name, pins[0]);
+            used.Add(name);
+
+            if (ncPins.Count > 0)
+                note($"A no_connect at {ncPins[0]} lies on a connected net ('{name}'); the net was "
+                    + "kept (KiCad would flag this).");
+            else if (pins.Count == 1 && !named)
+                note($"Pin {pins[0]} is not connected to anything (a dangling pin); it was recorded "
+                    + "as its own single-terminal net.");
+        }
+
+        deferredNoConnects.Sort((a, b) => string.CompareOrdinal(a.ToString(), b.ToString()));
+        foreach (var pin in deferredNoConnects)
+            schematic.NoConnect(pin);
+    }
+
+    /// <summary>Names a hierarchical net: a power name beats a global label beats a stitched
+    /// sheet-pin/hierarchical-label PORT name beats a hierarchical/local label beats a generated
+    /// name. A GLOBAL name is used bare (global names are globally unique); a LOCAL or a dangling
+    /// hierarchical name is QUALIFIED by its sheet path (<c>"SubA/CLK"</c>) so two sheets' identical
+    /// local names stay two distinct nets.</summary>
+    private static string ResolveHierName(
+        int root,
+        List<(LabelPriority Priority, int Instance, string Name)>? labels,
+        List<string>? ports,
+        List<(int Instance, string Name)>? hier,
+        Dictionary<int, string> pathOf,
+        Func<int, string> minPin,
+        Action<string> note)
+    {
+        labels ??= [];
+        string? power = labels.Where(n => n.Priority == LabelPriority.Power)
+            .Select(n => n.Name).OrderBy(s => s, StringComparer.Ordinal).FirstOrDefault();
+        string? global = labels.Where(n => n.Priority == LabelPriority.Global)
+            .Select(n => n.Name).OrderBy(s => s, StringComparer.Ordinal).FirstOrDefault();
+        string? port = ports?.OrderBy(s => s, StringComparer.Ordinal).FirstOrDefault();
+
+        (int Instance, string Name)? hierPick = null;
+        if (hier is { Count: > 0 })
+            hierPick = hier.OrderBy(h => h.Name, StringComparer.Ordinal).First();
+        (int Instance, string Name)? localPick = null;
+        var locals = labels.Where(n => n.Priority == LabelPriority.Local)
+            .OrderBy(n => n.Name, StringComparer.Ordinal).ToList();
+        if (locals.Count > 0)
+            localPick = (locals[0].Instance, locals[0].Name);
+
+        string result =
+            power ?? global ?? port
+            ?? (hierPick is { } h ? Qualify(pathOf[h.Instance], h.Name) : null)
+            ?? (localPick is { } l ? Qualify(pathOf[l.Instance], l.Name) : null)
+            ?? $"Net-({minPin(root)})";
+
+        var distinct = labels.Select(n => n.Name)
+            .Concat(ports ?? [])
+            .Concat(hier?.Select(x => x.Name) ?? [])
+            .Distinct(StringComparer.Ordinal).ToList();
+        if (distinct.Count > 1)
+            note($"A net carries more than one label ({string.Join(", ", distinct.OrderBy(x => x, StringComparer.Ordinal))}); "
+                + $"used '{result}'.");
+        return result;
+    }
+
+    private static string Qualify(string path, string name) =>
+        path.Length == 0 ? name : $"{path}/{name}";
+
     private static Dictionary<string, KiCadSymbolReader.ParsedSymbol> ReadLibSymbols(
         SList root, Action<string> note)
     {
@@ -536,11 +1141,21 @@ public static class KiCadSchReader
     private sealed class Graph
     {
         private readonly List<int> _parent = [];
-        private readonly Dictionary<(long, long), int> _node = [];
+        private readonly Dictionary<(int, long, long), int> _node = [];
 
-        public int Intern(Vector2d p)
+        /// <summary>Interns a point in the SINGLE coordinate space (the flat single-sheet path):
+        /// instance 0. Kept so <see cref="BuildNets"/> reads exactly as before.</summary>
+        public int Intern(Vector2d p) => Intern(0, p);
+
+        /// <summary>Interns a point in one sheet INSTANCE's coordinate space. Each sheet instance
+        /// has its own space, so two sheets with a wire at the same <c>(x, y)</c> do NOT join —
+        /// the instance id keeps them apart (the crux of hierarchical scoping). The flat path
+        /// stays bit-identical because it interns everything at instance 0, so node ids are
+        /// assigned in the same order.</summary>
+        public int Intern(int instance, Vector2d p)
         {
-            var key = Key(p);
+            var (x, y) = Key(p);
+            var key = (instance, x, y);
             if (!_node.TryGetValue(key, out int id))
             {
                 id = _parent.Count;

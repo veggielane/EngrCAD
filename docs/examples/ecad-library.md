@@ -232,13 +232,83 @@ foreach (var component in sch.Components)
 if (!sch.Check().Ok) throw new Exception(sch.Check().ToString());
 ```
 
-The reader covers a **single sheet**: the embedded `lib_symbols` (mapped to `PartDefinition`s), placed
-`(symbol …)` instances, power symbols (their `Value` is the net name), `wire`, `junction`, local
-`label`, `global_label`, and `no_connect`. **Refused by name** (out of v1 scope, filed): **buses**
-(`bus` / `bus_entry` / bus-vector labels like `D[7..0]`) and **hierarchical sheets** (`sheet`
-subsheets, `hierarchical_label`). A netless wire, an instance referencing an unknown symbol, or a
-dangling pin is **reported** as a diagnostic, not thrown; a non-`(kicad_sch …)` root — a board or a
-symbol library handed here — or a malformed S-expression is refused by name.
+`KiCadSchReader.Read` covers a **single sheet**: the embedded `lib_symbols` (mapped to
+`PartDefinition`s), placed `(symbol …)` instances, power symbols (their `Value` is the net name),
+`wire`, `junction`, local `label`, `global_label`, and `no_connect`. **Refused by name**: **buses**
+(`bus` / `bus_entry` / bus-vector labels like `D[7..0]`), and — in the single-sheet `Read` only —
+**hierarchical sheets** (`sheet` subsheets, `hierarchical_label`), so a flat import cannot silently
+drop a whole subsheet. A netless wire, an instance referencing an unknown symbol, or a dangling pin is
+**reported** as a diagnostic, not thrown; a non-`(kicad_sch …)` root — a board or a symbol library
+handed here — or a malformed S-expression is refused by name.
+
+## Hierarchical / multi-sheet import
+
+Real KiCad schematics are **hierarchical**: a root sheet places `(sheet …)` instances, each
+referencing a sub-sheet FILE, and connectivity is stitched ACROSS sheets. `KiCadSchReader.ReadProject`
+reads the root `.kicad_sch` and resolves its `Sheetfile` references relative to the root's directory,
+recursively; `ReadProjectFrom(rootFile, map)` is the testable IN-MEMORY twin over a `sheetfile → text`
+map. Both flatten the hierarchy into ONE `Schematic`.
+
+**Cross-sheet net stitching is the whole job**, and it is name-matching, not geometry: a parent
+**sheet pin** joins the parent net at its position to the sub-sheet's `hierarchical_label` of the same
+name (scoped to that sheet instance); `global_label`s and power symbols span EVERY sheet; a **local**
+`label` stays local to its sheet — two sheets' "CLK" locals are two nets. Components get
+**hierarchical reference designators** (`"PowerSupply/U1"`, the occurrence-path convention), so a
+sheet placed TWICE gives distinct instances with distinct internal nets.
+
+```csharp run:ecad-schematic-hierarchy
+// A root sheet with one sub-sheet. The root's R1.2 is wired to a sheet pin "VOUT"; the sub-sheet's
+// R2.1 is wired to a hierarchical_label "VOUT". The name match stitches them into ONE net.
+const string lib = """
+  (lib_symbols
+    (symbol "Device:R" (property "Reference" "R" (at 0 0 0)) (property "Value" "R" (at 0 0 0))
+      (symbol "R_1_1"
+        (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+        (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2")))))
+  """;
+
+string root = $$"""
+(kicad_sch (version 20230121) (paper "A4") (title_block (title "top"))
+{{lib}}
+  (symbol (lib_id "Device:R") (at 100 60 0) (property "Reference" "R1" (at 103 60 0)) (property "Value" "10k" (at 103 62 0)))
+  (sheet (at 130 55) (size 30 20)
+    (property "Sheetname" "amp" (at 130 54 0)) (property "Sheetfile" "amp.kicad_sch" (at 130 76 0))
+    (pin "VOUT" input (at 100 70 0)))
+  (wire (pts (xy 100 63.81) (xy 100 70)))
+  (no_connect (at 100 56.19))
+  (sheet_instances (path "/" (page "1"))))
+""";
+
+string amp = $$"""
+(kicad_sch (version 20230121) (paper "A4") (title_block (title "amp"))
+{{lib}}
+  (symbol (lib_id "Device:R") (at 100 60 0) (property "Reference" "R2" (at 103 60 0)) (property "Value" "20k" (at 103 62 0)))
+  (wire (pts (xy 100 56.19) (xy 100 50)))
+  (hierarchical_label "VOUT" (at 100 50 0) (shape input))
+  (no_connect (at 100 63.81))
+  (sheet_instances (path "/" (page "1"))))
+""";
+
+var project = new Dictionary<string, string> { ["root.kicad_sch"] = root, ["amp.kicad_sch"] = amp };
+var read = KiCadSchReader.ReadProjectFrom("root.kicad_sch", project);
+var sch = read.Schematic;
+
+// The sub-sheet's component carries a hierarchical refdes; the two pins are ONE net named "VOUT".
+Console.WriteLine($"{sch.Components.Count} components: {string.Join(", ", sch.Components.Select(c => c.ReferenceDesignator))}");
+var net = sch.ToNetlist().NetOf(sch.Find("R1")!.Pin("2"));
+Console.WriteLine($"stitched net: {net}");
+if (net?.Name != "VOUT") throw new Exception("the sheet pin did not stitch the parent net to the child");
+if (!ReferenceEquals(net, sch.ToNetlist().NetOf(sch.Find("amp/R2")!.Pin("1"))))
+    throw new Exception("R1.2 and amp/R2.1 should share the stitched VOUT net");
+if (!sch.Check().Ok) throw new Exception(sch.Check().ToString());
+```
+
+**Refused / reported by name.** A **recursive** sheet reference (a sheet including itself, directly
+or transitively) is refused by name — a self-including hierarchy cannot be flattened. A **missing or
+unreadable** sub-sheet file is *reported* in `read.Diagnostics` and its subtree skipped (never
+thrown — the readers-never-throw-on-dirty culture), as is a hierarchical label with no matching parent
+sheet pin (a dangling port). Still out of scope: **buses** across sheets, and **multi-unit** symbols
+(a duplicate reference is imported as a separate component with a note).
 
 ## The 3D model — the third view
 
