@@ -1519,14 +1519,25 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     where ISO 5457 fixes a specific count per sheet size in a small table — transcribe it
     (verify-against-datasheet), keeping the nominal-size path as the fallback for a custom
     sheet.
-  - [ ] **PCB fabrication drawing** — the third consumer the shared `DrawingFrame` was
-    designed for (a mechanical `DrawingSheet` and an ECAD `SchematicSheet` already consume
-    it). A sheet of the board OUTLINE, a DRILL TABLE (grouped by size, read off the
-    layout's holes/vias the way `HoleTable.For` reads a part's drills) and fab NOTES, in the
-    shared frame — so a board's fab drawing looks like the project's other drawings. Reuses
-    `DrawingFrame` (paper, border, title block) verbatim; the body is board-specific line
-    work (outline + hole markers + the table), which is why it is a new sheet type rather
-    than a `DrawingSheet` view.
+  - [ ] **Fabrication-drawing follow-ups** (the `PcbFabricationSheet` landed as the shared
+    `DrawingFrame`'s third consumer — board outline + drill map + drill table + stackup table
+    + fab notes on the engineering frame, byte-identical to a mechanical `DrawingSheet`'s
+    frame; `EngrCAD.Ecad/PcbFabricationDrawing.cs`). Residuals: **(a) drill-symbol
+    standardisation** — the map cycles a small hand-rolled `DrillGlyph` palette (plus / cross
+    / square / circle / triangle / …), where a real fab drawing wants a canonical IPC-ish
+    symbol set with a legend; **(b) through-hole component pad drills** — the drill table is
+    scoped to the board's own holes + placed vias (the two things the task names and the
+    closed-form partition proves), while a complete drill map would also table the footprint
+    through-hole pad drills (those live in the Excellon program the fab derives from the
+    copper — including them here means resolving `PcbLayout.PlacedPads()` drills and folding
+    them into the same `(diameter, plated)` partition); **(c) fab-note templates** — the
+    notes are write-only-when-stated over what the board carries (thickness, copper-layer
+    count, copper foil thickness, mask/silk/paste presence), but the board states no
+    material / surface finish / mask colour, so those wait on a `PcbBoard`-level fabrication
+    spec (material, finish, class, colours) to state them rather than have the drawing invent
+    them; **(d) per-layer fabrication plots** — a copper/mask/silk plot per layer beside the
+    drill map (a picture per Gerber), which wants the copper-model geometry the Gerber
+    exporter already builds rendered as sheet line work.
   - [ ] **Detail views** (a scaled-up circle of a region) and **broken views** (a long
     part with its middle removed). Both are clipping problems on top of the existing
     view, not new projections.
