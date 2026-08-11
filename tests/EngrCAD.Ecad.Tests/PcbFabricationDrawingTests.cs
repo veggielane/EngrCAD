@@ -41,6 +41,74 @@ public class PcbFabricationDrawingTests
     private static int FeatureCount(PcbLayout layout) =>
         layout.Board.Holes.Count + layout.PlacedVias().Count;
 
+    // The same board + vias as DrilledLayout(), plus a placed through-hole HEADER J1 (two Ø0.9
+    // plated pads — they join the drill table) and a placed SMD resistor R1 (its lands carry no
+    // drill — the SMD-vs-THT distinction). With extraTestPoint, one more Ø0.9 THT pad (a test point).
+    // Drilled features by (diameter, plating): (0.3,PTH)×2, (0.4,PTH)×1, (0.6,PTH)×1, (0.9,PTH)×2
+    // (+1 with the test point), (3.2,NPTH)×2 — eight features, five sizes.
+    private static PcbLayout DrilledLayoutWithThtParts(bool extraTestPoint = false)
+    {
+        var board = new PcbBoard(
+            [
+                new Vector2d(-25, -20), new Vector2d(25, -20),
+                new Vector2d(25, 20), new Vector2d(-25, 20),
+            ],
+            thickness: 1.6,
+            holes:
+            [
+                new BoardHole(new Vector2d(-20, -15), 3.2, BoardHoleKind.Mounting),
+                new BoardHole(new Vector2d(20, 15), 3.2, BoardHoleKind.Mounting),
+                new BoardHole(new Vector2d(0, 12), 0.6, BoardHoleKind.Via),
+            ]);
+        var sch = new Schematic("drill-demo");
+        sch.Add("J1", PcbFixtures.ThroughHoleHeader());   // two Ø0.9 THT pads
+        sch.Add("R1", PcbFixtures.SmdResistor());          // two SMD pads — NO drill
+        if (extraTestPoint)
+            sch.Add("TP1", new PartDefinition("TP", "TP",
+                [new Pin("1", PinType.Passive)],
+                new Footprint("TP_fp", [Pad.ThroughHole("1", new Vector2d(0, 0), pad: 1.6, drill: 0.9)])));
+        var layout = new PcbLayout(sch, board);
+        layout.AddVia("GND", 5, 5, "Top", "Bottom", drill: 0.3, pad: 0.6);
+        layout.AddVia("GND", -5, 5, "Top", "Bottom", drill: 0.3, pad: 0.6);
+        layout.AddVia("SIG", 0, -5, "Top", "Bottom", drill: 0.4, pad: 0.8);
+        layout.Place("J1", 10, 0, rotationDegrees: 0, side: CopperSide.Top);
+        layout.Place("R1", -10, 0, rotationDegrees: 0, side: CopperSide.Top);
+        if (extraTestPoint)
+            layout.Place("TP1", 0, 8, rotationDegrees: 0, side: CopperSide.Top);
+        return layout;
+    }
+
+    // Every (diameter, plating) source the drill table partitions, counted independently of the
+    // drawing: board holes, placed vias, and placed through-hole COMPONENT pads (SMD lands excluded).
+    private static List<(double Diameter, bool Plated)> DrilledFeatures(PcbLayout layout)
+    {
+        var features = new List<(double Diameter, bool Plated)>();
+        foreach (var h in layout.Board.Holes)
+            features.Add((h.Diameter, h.Kind == BoardHoleKind.Via));
+        foreach (var v in layout.PlacedVias())
+            features.Add((v.DrillDiameter, true));
+        foreach (var p in layout.PlacedPads())
+            if (p.Kind == PadKind.ThroughHole && p.DrillDiameter > 0)
+                features.Add((p.DrillDiameter, true));
+        return features;
+    }
+
+    // A bare board carrying n distinct mounting-hole sizes (0.5, 0.55, …) — for the >palette /
+    // >alphabet legend rule; positions are spread so the board holds them.
+    private static PcbLayout BoardWithDistinctDrillSizes(int n)
+    {
+        var holes = new List<BoardHole>();
+        for (int i = 0; i < n; i++)
+            holes.Add(new BoardHole(new Vector2d(-33 + 2.4 * i, 0), 0.5 + 0.05 * i, BoardHoleKind.Mounting));
+        var board = new PcbBoard(
+            [
+                new Vector2d(-35, -10), new Vector2d(35, -10),
+                new Vector2d(35, 10), new Vector2d(-35, 10),
+            ],
+            thickness: 1.6, holes: holes);
+        return new PcbLayout(new Schematic("many-sizes"), board);
+    }
+
     // ---- 1. the drill table is a closed-form partition of the board's holes + vias --------
 
     [Fact]
@@ -101,6 +169,80 @@ public class PcbFabricationDrawingTests
         Assert.Equal(before.DrillTable.Count, after.DrillTable.Count);
     }
 
+    // ---- 1b. through-hole component pad drills join the partition (SMD excluded) -----------
+
+    [Fact]
+    public void DrillTable_PartitionsHolesViasAndThroughHolePadsExactly()
+    {
+        var layout = DrilledLayoutWithThtParts();
+        var drawing = new PcbFabricationSheet(layout).Compute();
+
+        // Board holes + placed vias + placed THROUGH-HOLE pads, counted independently of the drawing.
+        var features = DrilledFeatures(layout);
+        Assert.Equal(8, features.Count);   // 2 holes + 1 via-hole + 3 vias + 2 THT pads (R1 SMD adds none)
+
+        // Every hole / via / THT pad appears in exactly one row: the row counts sum to the three
+        // sources' total (the count identity, EXTENDED to through-hole pads).
+        Assert.Equal(features.Count, drawing.DrillTable.Sum(r => r.Count));
+
+        // Each row's count equals the features of that (diameter, plating).
+        foreach (var row in drawing.DrillTable)
+            Assert.Equal(features.Count(f => f == (row.Diameter, row.Plated)), row.Count);
+
+        // The header's Ø0.9 plated pads are their own row — the two J1 pads, not a board feature.
+        Assert.DoesNotContain(0.9, layout.Board.Holes.Select(h => h.Diameter));
+        var tht = drawing.DrillTable.Single(r => r.Diameter == 0.9);
+        Assert.True(tht.Plated);
+        Assert.Equal(2, tht.Count);
+
+        // Five sizes, sorted ascending: (0.3,PTH)×2, (0.4,PTH)×1, (0.6,PTH)×1, (0.9,PTH)×2, (3.2,NPTH)×2.
+        Assert.Equal(5, drawing.DrillTable.Count);
+
+        // One drill MARK per drilled feature (through-hole pads included), at its own location.
+        Assert.Equal(features.Count, drawing.DrillMarks.Count);
+    }
+
+    [Fact]
+    public void DrillTable_AddingAThroughHolePadAddsExactlyOneToItsRow()
+    {
+        var before = new PcbFabricationSheet(DrilledLayoutWithThtParts()).Compute();
+        int beforeCount = before.DrillTable.Single(r => r.Diameter == 0.9).Count;   // 2 (the J1 pads)
+
+        // The SAME layout plus ONE extra Ø0.9 through-hole pad (a single-pin test point).
+        var after = new PcbFabricationSheet(DrilledLayoutWithThtParts(extraTestPoint: true)).Compute();
+        int afterCount = after.DrillTable.Single(r => r.Diameter == 0.9).Count;
+
+        Assert.Equal(beforeCount + 1, afterCount);
+        // No other row moved: the total went up by exactly one and the size list is unchanged.
+        Assert.Equal(before.DrillTable.Sum(r => r.Count) + 1, after.DrillTable.Sum(r => r.Count));
+        Assert.Equal(before.DrillTable.Count, after.DrillTable.Count);
+    }
+
+    [Fact]
+    public void SmdPad_ContributesNoDrillRow()
+    {
+        // A board with ONLY a surface-mount component — no holes, no vias.
+        var board = new PcbBoard(
+            [
+                new Vector2d(-15, -10), new Vector2d(15, -10),
+                new Vector2d(15, 10), new Vector2d(-15, 10),
+            ],
+            thickness: 1.6);
+        var sch = new Schematic("smd-only");
+        sch.Add("R1", PcbFixtures.SmdResistor());
+        var layout = new PcbLayout(sch, board);
+        layout.Place("R1", 0, 0, rotationDegrees: 0, side: CopperSide.Top);
+
+        var drawing = new PcbFabricationSheet(layout).Compute();
+
+        // The SMD lands exist as placed pads but carry NO drill — so no drill row, no drill mark
+        // (the classic bug this must not have).
+        Assert.NotEmpty(layout.PlacedPads());
+        Assert.All(layout.PlacedPads(), p => Assert.NotEqual(PadKind.ThroughHole, p.Kind));
+        Assert.Empty(drawing.DrillTable);
+        Assert.Empty(drawing.DrillMarks);
+    }
+
     // ---- 2. the symbol map: one mark per hole, distinct symbols, deterministic ------------
 
     [Fact]
@@ -152,6 +294,71 @@ public class PcbFabricationDrawingTests
         var b = new PcbFabricationSheet(DrilledLayout()).Compute();
         Assert.Equal(a.DrillTable, b.DrillTable);
         Assert.Equal(a.DrillMarks, b.DrillMarks);
+
+        // The same holds with placed through-hole pads in the mix — a board with unchanged features
+        // renders identical symbols.
+        var c = new PcbFabricationSheet(DrilledLayoutWithThtParts()).Compute();
+        var d = new PcbFabricationSheet(DrilledLayoutWithThtParts()).Compute();
+        Assert.Equal(c.DrillTable, d.DrillTable);
+        Assert.Equal(c.DrillMarks, d.DrillMarks);
+    }
+
+    // ---- 2b. the drill legend: a canonical symbol set, one legend entry per row ------------
+
+    [Fact]
+    public void DrillLegend_AssignsAndDrawsADistinctSymbolPerSize()
+    {
+        var drawing = new PcbFabricationSheet(DrilledLayoutWithThtParts()).Compute();
+        // The drill table IS the legend: each row keys a SYMBOL (letter + glyph) to a size's
+        // (diameter, plated, count).
+        var rows = drawing.DrillTable;
+        Assert.Equal(5, rows.Count);
+
+        // Each distinct size gets a DISTINCT symbol — a distinct LETTER and (here, ≤ palette) a
+        // distinct GLYPH from the canonical set — assigned by ASCENDING diameter.
+        Assert.Equal(rows.Count, rows.Select(r => r.Symbol).Distinct().Count());
+        Assert.Equal(rows.Count, rows.Select(r => r.Glyph).Distinct().Count());
+        for (int i = 1; i < rows.Count; i++)
+            Assert.True(rows[i - 1].Diameter <= rows[i].Diameter);
+
+        // The symbols/glyphs are the canonical palette in order: A + glyph[i] for row i.
+        Assert.True(rows.Count <= PcbFabricationSheet.DrillGlyphPalette.Count);
+        for (int i = 0; i < rows.Count; i++)
+        {
+            Assert.Equal((char)('A' + i), rows[i].Symbol);
+            Assert.Equal(PcbFabricationSheet.DrillGlyphPalette[i], rows[i].Glyph);
+        }
+
+        // The legend is DRAWN: a "SYM" header names the column, and every row's letter is text on
+        // the Tables layer (its glyph is line work drawn beside it).
+        Assert.Contains(drawing.Texts, t => t.Text == "SYM" && t.Layer == FabricationLayers.Tables);
+        foreach (var row in rows)
+            Assert.Contains(drawing.Texts,
+                t => t.Text == row.Symbol.ToString() && t.Layer == FabricationLayers.Tables);
+    }
+
+    [Fact]
+    public void DrillLegend_CyclesGlyphsPastThePalette_RefusesPastTheAlphabet()
+    {
+        int palette = PcbFabricationSheet.DrillGlyphPalette.Count;
+
+        // More sizes than the palette but within the alphabet: the LETTERS stay distinct (the
+        // legend key), and the glyph CYCLES the palette (the stated "cycle with a suffix" rule).
+        int n = PcbFabricationSheet.MaxLegendSizes;   // A..Z, the largest keyable set
+        var rows = new PcbFabricationSheet(BoardWithDistinctDrillSizes(n)).Compute().DrillTable;
+        Assert.Equal(n, rows.Count);
+        Assert.Equal(n, rows.Select(r => r.Symbol).Distinct().Count());   // every letter distinct
+        Assert.True(n > palette);   // so the glyph column really does cycle
+        for (int i = 0; i < rows.Count; i++)
+        {
+            Assert.Equal((char)('A' + i), rows[i].Symbol);
+            Assert.Equal(PcbFabricationSheet.DrillGlyphPalette[i % palette], rows[i].Glyph);
+        }
+
+        // One more distinct size exhausts the A..Z legend key: refused BY NAME.
+        var tooMany = BoardWithDistinctDrillSizes(PcbFabricationSheet.MaxLegendSizes + 1);
+        var ex = Assert.Throws<ArgumentException>(() => new PcbFabricationSheet(tooMany).Compute());
+        Assert.Contains((PcbFabricationSheet.MaxLegendSizes + 1).ToString(), ex.Message);
     }
 
     // ---- 3. the outline is the board's own outline, scaled and placed ---------------------
@@ -284,17 +491,24 @@ public class PcbFabricationDrawingTests
     // ---- 7. empty / edge ------------------------------------------------------------------
 
     [Fact]
-    public void BoardWithNoVias_StillTablesItsBoardHoles()
+    public void BoardWithNoVias_TablesItsBoardHolesAndThroughHolePadsTogether()
     {
-        var layout = PcbFixtures.Layout();   // two Ø3 mounting holes, no vias
+        // PcbFixtures.Layout() has two Ø3 mounting holes, no vias, an SMD R1 and a through-hole
+        // header J1 (two Ø0.9 plated pads). The drill table groups the holes AND the THT pads.
+        var layout = PcbFixtures.Layout();
         Assert.Empty(layout.PlacedVias());
         var drawing = new PcbFabricationSheet(layout).Compute();
 
-        Assert.Single(drawing.DrillTable);
-        Assert.Equal(2, drawing.DrillTable[0].Count);
-        Assert.False(drawing.DrillTable[0].Plated);   // mounting holes are non-plated
-        Assert.Equal(3.0, drawing.DrillTable[0].Diameter);
-        Assert.Equal(2, drawing.DrillMarks.Count);
+        // Two sizes: the header's Ø0.9 plated pads, and the Ø3 non-plated mounting holes. R1's SMD
+        // lands add nothing.
+        Assert.Equal(2, drawing.DrillTable.Count);
+        var tht = drawing.DrillTable.Single(r => r.Diameter == 0.9);
+        Assert.True(tht.Plated);
+        Assert.Equal(2, tht.Count);
+        var mount = drawing.DrillTable.Single(r => r.Diameter == 3.0);
+        Assert.False(mount.Plated);   // mounting holes are non-plated
+        Assert.Equal(2, mount.Count);
+        Assert.Equal(4, drawing.DrillMarks.Count);   // two THT pads + two mounting holes, no SMD
     }
 
     [Fact]
