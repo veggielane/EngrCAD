@@ -16,6 +16,12 @@ public enum MidDrcRule
 
     /// <summary>A copper conductor narrower on the surface than the minimum trace width.</summary>
     TraceWidth,
+
+    /// <summary>Two through-shell vias closer than the minimum via-to-via spacing (the drill web) — a
+    /// manufacturing rule that applies regardless of net, reported only by the multi-shell DRC
+    /// (<see cref="MidStack.Check"/>). A single-surface board has no vias, so a single-shell DRC never
+    /// reports it.</summary>
+    ViaSpacing,
 }
 
 /// <summary>What the 3D DRC could say about a pair — the honest three-valued answer the surface

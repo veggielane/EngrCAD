@@ -908,6 +908,7 @@ no chart at all.
 | `MidRouting` | **Places** traces (`Connect`, a **geodesic on the mesh** — `DijkstraGraphDistance` edge path then a straightest-geodesic curve-shortening smoothing) AND **auto-routes** a whole intrinsic board (`Route`). `Verify` runs the 3D DRC. |
 | `SurfaceRouter` / `SurfaceRouteOptions` / `SurfaceRouteResult` | The surface AUTO-ROUTER — the geodesic analogue of the flat `PcbRouter`: a DRC-aware maze search over the mesh vertex graph (A\*, admissible 3D-straight-line heuristic), MST decomposition of each net from the ratsnest, straightening, and rip-up-and-reroute. Every candidate is committed only after the exact 3D DRC (`Mid3dDrc.RouteCandidateClears`) certifies it clean; a net boxed in is reported UNROUTABLE by name; the partial result is always clean. Runs on an INTRINSIC board (`OnMesh`); a global-chart board is refused with a pointer to `OnMesh`. |
 | `Mid3dDrc` / `Mid3dDrcReport` / `MidDrcViolation` | The 3D DRC. On an intrinsic board the clearance is a **geodesic surface distance** (a certified 3D-chord broad phase, then a per-pair local chart); on a global-chart board it runs in the one exp map's `(u, v)`. Three-valued — Clear / Violation / **Uncertain** (a conservative refusal where the distortion cannot certify the verdict). |
+| `MidStack` / `SurfaceVia` | **MULTI-SHELL** MID — an outer `MidBoard` plus inner shells, each the outer mesh offset inward by a dielectric thickness along its ANGLE-WEIGHTED vertex normal (same topology, so a via ties an outer point to its corresponding inner point). `Shell(k)` / `Outer` / `Inner` are the per-shell boards; `AddVia` places a through-shell `SurfaceVia` (a copper pad per shell + a plated barrel across them); `Connectivity` spans shells (a via ties a net's copper across shells); `Check` runs each shell's same-shell DRC + inter-shell via-to-via spacing. A single-shell stack is a plain `MidBoard`, DRC bit-identical. |
 
 **The certified geodesic DRC**: a 3D chord is never longer than a surface geodesic, so a chord
 edge-to-edge distance at or above the clearance *proves* the surface clearance (CLEAR, whatever the
@@ -930,11 +931,19 @@ with the rest routed and clean; a dense knot's **partial result is always DRC-cl
 named; on a developable cylinder the routed **connectivity matches the unrolled flat board's**; and two
 runs are **deterministic** vertex for vertex.
 
-**v1 scope** — a single conductive surface (no drills / edges / vias, which a moulded surface has none
-of); refused / filed **by name**: **topological / shove** routing on the surface (v1 detours but does
-not push obstacles), **multi-shell** MID (traces on an inner moulded shell), **length matching**, and a
-conformal solder mask / pour on the surface (the distortion reason copper pours already refuse curved
-walls). Docs: `examples/ecad-mid.md`.
+**Multi-shell** (`MidStack`) has landed: an inner moulded shell is the outer mesh offset inward by a
+dielectric thickness along its angle-weighted vertex normal (same topology, so a through-shell via ties
+an outer point to its corresponding inner point). The DECISIVE oracle is the developable one — a
+cylinder's inner shell is a concentric cylinder `r − t` to round-off (rim included) — plus the via
+mutation (a via ties a net across shells; remove it and the net splits into a cross-shell ratsnest), the
+per-shell + inter-shell DRC (a same-shell clearance found on the inner shell, a via too close to
+other-net copper on either shell, a via-to-via web, and a single-shell stack bit-identical to
+`Mid3dDrc.Check`), and the self-intersection refusal (a sphere offset past its radius flips its
+signed-volume sign). **Filed by name**: **topological / shove** routing on the surface (v1 detours but
+does not push obstacles), **cross-shell auto-routing** (choosing a net's shell and placing the vias — v1
+routes per shell and places explicit vias), **length matching**, and a conformal solder mask / pour on
+the surface (the distortion reason copper pours already refuse curved walls). v1's single surface has no
+drills / edges of its own. Docs: `examples/ecad-mid.md`.
 
 ## Not yet (later campaign stages)
 

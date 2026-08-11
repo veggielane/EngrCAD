@@ -2801,10 +2801,23 @@ from what was already understood rather than from scratch.
     other, a congested board is completed by RIP-UP, a walled-in pin is unroutable by name, a dense knot's
     partial is always clean, the cylinder's routed CONNECTIVITY matches the unrolled flat board's (both
     clean, not bit-identical), and two runs are deterministic vertex for vertex; the wearable showcase now
-    AUTO-routes (its PNG re-rendered). **Filed follow-ons**: TOPOLOGICAL / SHOVE routing on the surface
-    (v1 detours around obstacles but does not push them), LENGTH MATCHING, MULTI-SHELL MID (traces on an
-    inner moulded copper layer as well as the outer), and a conformal surface SOLDER MASK / POUR (refused
-    for the distortion reason copper pours already refuse curved walls).
+    AUTO-routes (its PNG re-rendered). **MULTI-SHELL MID landed** (`MidStack`/`SurfaceVia` in
+    `MidShell.cs`): an outer `MidBoard` plus inner shells, each the outer mesh offset inward by a
+    dielectric thickness along its ANGLE-WEIGHTED vertex normal (same topology, so a through-shell via ties
+    an outer point to its corresponding inner point). Each shell is its own board with its own exp map, so
+    the per-shell DRC / routing runs unchanged; the multi-shell DRC adds only via-to-via spacing + the
+    cross-shell ratsnest (a via's clearance to other-net copper on both shells falls out, since a via pad
+    IS copper on its shell), and `Connectivity` ties a net across shells via the barrel (a single-shell
+    stack is bit-identical to `Mid3dDrc.Check`). The developable oracle is EXACT (a cylinder's inner shell
+    concentric at r−t to 8.9e-16, rim included); an inward offset self-intersects only where the surface
+    is CONVEX and t exceeds the local radius, caught by a fold test (developable inversions) + a
+    signed-volume sign flip (a sphere turning inside out — the fold test can't see it, since a uniform
+    inward offset is a uniform scale and a cross product is inversion-invariant). **Filed follow-ons**:
+    TOPOLOGICAL / SHOVE routing on the surface (v1 detours around obstacles but does not push them),
+    CROSS-SHELL AUTO-ROUTING (choosing which shell a net rides and placing the vias — v1 routes per shell
+    and places explicit vias), LENGTH MATCHING, a curvature-reach check for an OPEN convex cap over-offset,
+    and a conformal surface SOLDER MASK / POUR (refused for the distortion reason copper pours already
+    refuse curved walls).
   - **ECAD thermal coupling — the genuinely novel MCAD answer, the next stage over the
     enclosure fit that just landed.** Enclosure fit is DONE (`Enclosure`/`EnclosureFit`/
     `PanelCutout`/`FitReport` in `PcbEnclosure.cs`; docs `examples/ecad-enclosure.md`, design.md §6d

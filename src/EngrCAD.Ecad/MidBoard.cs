@@ -39,11 +39,13 @@ namespace EngrCAD.Ecad;
 /// tamper-mesh near-tangency rule). It does NOT mean "exact everywhere" — the distortion is real; it
 /// means the machinery runs and verifies on any surface and is honest about what it cannot certify.</para>
 ///
-/// <para><b>Scope, v1.</b> A SINGLE conductive surface (no multi-shell MID — traces on both the outer and
-/// an inner moulded shell are filed). Auto-routing on the surface (a geodesic maze search) is filed too;
-/// v1 PLACES traces (as geodesics, <see cref="MidRouting"/>) and VERIFIES them. A conformal solder mask /
-/// pour on the surface is refused for the distortion reason, exactly as copper pours already refuse
-/// curved walls. LDS process specifics (laser activation paths) are out of scope.</para>
+/// <para><b>Scope.</b> A single <see cref="MidBoard"/> is ONE conductive surface. MULTI-SHELL MID —
+/// copper on an inner moulded shell as well as the outer, stitched by through-shell vias — is
+/// <see cref="MidStack"/>, an ordered set of these boards offset inward from one another. Auto-routing on
+/// the surface is <see cref="MidRouting.Route"/> (a geodesic maze search); <see cref="MidRouting.Connect"/>
+/// PLACES one trace between two pads. A conformal solder mask / pour on the surface is refused for the
+/// distortion reason, exactly as copper pours already refuse curved walls. LDS process specifics (laser
+/// activation paths) are out of scope.</para>
 /// </summary>
 public sealed class MidBoard
 {

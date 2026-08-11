@@ -8170,8 +8170,8 @@ bit-identity**: a cylinder MID board and its unrolled flat sheet route the SAME 
 fully-routed, both DRC-clean, both connected — a search need not be bit-identical (the two meshes
 differ), so the invariant is what the two produce (connectivity + cleanliness), not the exact
 geodesics. Filed by name: **topological / shove** routing on the surface (v1 detours around obstacles
-but does not push them), and **length matching** — beside the multi-shell and conformal-mask/pour
-follow-ons.
+but does not push them), **cross-shell auto-routing** and **length matching** — beside the
+conformal-mask/pour follow-on (multi-shell MID has since landed, below).
 
 **One trap worth keeping**: the exp map measures the geodesic ACCURATELY along the separation direction
 (the chart's radial coordinate IS geodesic distance from the seed), so the intrinsic clearance rarely
@@ -8184,10 +8184,59 @@ not trust a flat approximation — the honest boundary rather than a knife-edge 
 
 **Two smaller decisions carry over.** A trace's WIDTH is checked against the authored width folded
 through the local scale band rather than re-measured off the region (round joins never pinch a width and
-an opposing-wall measure under-reports on a round cap). **v1 is one conductive surface** — no drills,
-edges or vias (a moulded surface has none); topological / shove routing on the surface, multi-shell MID
-(an inner moulded copper layer), length matching and a conformal solder mask / pour (the distortion
-reason copper pours already refuse curved walls) are all filed by name. Docs: `examples/ecad-mid.md`.
+an opposing-wall measure under-reports on a round cap). A single conductive surface has no drills or
+edges of its own; topological / shove routing on the surface, cross-shell auto-routing, length matching
+and a conformal solder mask / pour (the distortion reason copper pours already refuse curved walls) are
+filed by name. Docs: `examples/ecad-mid.md`.
+
+**Multi-shell MID landed (`MidStack`/`SurfaceVia` in `MidShell.cs`).** A real LDS part carries copper on
+the OUTER moulded wall AND on an INNER shell, stitched by through-shell vias — the multi-layer analogue
+of a `MidBoard`. **The inner shell is the outer mesh with every vertex offset inward by a dielectric
+thickness along its ANGLE-WEIGHTED vertex normal** (the boundary-layer / `MeshSdf` pseudonormal
+convention — never a raw face normal, which tears a shared vertex). **Keeping the same mesh TOPOLOGY is
+the load-bearing decision**: an outer surface point (a face + barycentric weights) has a corresponding
+inner point (the same face + weights, on the offset mesh), so a via is exactly "tie the outer point to
+its corresponding inner point" and needs no matching pass — the correspondence is computed from the
+outer surface's face vertices and the shell's offset, and lands exactly on the inner face by
+construction. **Each shell is its OWN `MidBoard` with its own exp-map machinery** (an inner shell's
+geodesic distances differ from the outer's, because offsetting a curved surface changes them), so the
+existing single-surface placement / routing / DRC runs PER SHELL unchanged and the per-shell DRC measures
+geodesic clearances through THAT shell's charts. **The DRC and connectivity span shells, and most of it
+falls out for free**: a via places a real `MidPad` on each shell it touches, so a via's clearance to
+other-net copper on both shells is the per-shell DRC's ordinary clearance rule (a via pad IS copper on
+its shell); the multi-shell `Check` adds only the inter-shell VIA-TO-VIA spacing rule (the drill web,
+all pairs regardless of net) and the CROSS-SHELL ratsnest. `Connectivity` reconstructs each shell's
+copper with the existing per-surface touch rule and joins a via's own pads across shells (the plated
+barrel), so a net whose copper lies on two shells is ONE connected net iff a via of that net ties them
+(the `PcbConnectivity` cross-layer rule, lifted to surfaces; via pads and traces are connectors, user
+pads are the terminals that must connect), reusing the `NetConnectivity`/`ConnectivityReport` types.
+**A single-shell stack is a plain `MidBoard`**, so its multi-shell `Check` delegates to
+`Mid3dDrc.Check(the one shell)` verbatim — bit-identical, prefixing only the shell name.
+
+**The decisive oracle is the DEVELOPABLE one and it is EXACT.** On a cylinder the inward normal offset is
+an isometry, so the inner shell is a concentric cylinder of radius `r − t` to round-off — MEASURED at
+8.9e-16 over every vertex including the free rim (the angle-weighted vertex normal is exactly radial by
+symmetry, which was not obvious — a rim vertex has its faces on one side only, yet its corner-angle
+weights cancel the azimuthal tilt). **An INWARD offset self-intersects only where the surface is CONVEX
+and the thickness exceeds the local convex curvature radius** (a concave region offset inward merely
+diverges — the naive "concave" intuition is BACKWARDS), and detecting it took TWO complementary
+exact-sign checks because the obvious one misses the primary case: **a raw cross-product fold test
+(`n1·n0 ≤ 0`) catches a DEVELOPABLE inversion** (a tube offset past its section radius scales one
+direction, so the linear sign flips) **and any concave-side fold, but CANNOT see a doubly-convex
+inversion** — a sphere's uniform inward offset is a uniform SCALE, and a cross product is invariant under
+point inversion (`(−u)×(−v) = u×v`), so `n1 = ((R−t)/R)²·n0` keeps its sign even when the sphere turns
+inside out. **The escape is the SIGNED VOLUME**, which is not cross-product-invariant: a closed shell
+that turns inside out flips its signed-volume sign (`(−s)³·V < 0`), so a sphere offset past its radius is
+refused by name. (An OPEN doubly-convex cap over-offset — no signed volume, no linear-sign fold — wants
+a curvature-reach check, filed; a real dielectric is far thinner than a housing wall's curvature radius.)
+**Verified higher than usual**: the developable exactness, the via mutation (a VOUT pad on the outer and
+one on the inner tied by a via is one connected net; remove the via and they split), an inner-shell
+same-shell clearance violation FOUND, a via too close to other-net copper on EITHER shell FOUND, a
+via-to-via web violation, a clean board clean, the single-shell bit-identity, the self-intersection
+refusal by name, the via barrel a closed solid, the endpoints corresponding (and a non-corresponding via
+refused), and determinism. **Filed**: cross-shell AUTO-ROUTING (choosing which shell a net rides and
+placing the vias — v1 routes per shell and places explicit vias), per-via partial spans of a &gt; 2 shell
+stack, a curvature-reach check for open convex caps, and a conformal shell mask / pour.
 
 ### Not in stages 1–9
 
@@ -8198,8 +8247,9 @@ heat capacity), detailed die/package thermal models (v1 spreads a component's po
 footprint, not through a junction-to-case network), airflow/CFD cooling, snap-fit/screw-boss detailing,
 and tolerance stack-up are later stages over this one graph; each reads the
 netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. MID/LDS 3D surface routing
-has landed as stage 9 (see above), and its surface AUTO-router with it; its own filed follow-ons are
-topological / shove routing on the surface, multi-shell MID, length matching and a conformal surface
+has landed as stage 9 (see above), its surface AUTO-router and its MULTI-SHELL form (`MidStack`, an inner
+moulded copper layer stitched by through-shell vias) with it; its own filed follow-ons are topological /
+shove routing on the surface, cross-shell auto-routing, length matching and a conformal surface
 mask/pour. The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. The drawn schematic SHEET has
 landed (see above) as a VIEW of the graph; a good auto-placer and an obstacle-avoiding wire
