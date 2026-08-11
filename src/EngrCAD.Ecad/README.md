@@ -858,8 +858,9 @@ encoding for buried vias, and conductor (trace-midpoint, op `378`) records. Docs
 The Gerbers and the Excellon program are what a board house *machines* from; the **fabrication
 drawing** (`PcbFabricationSheet` → `PcbFabricationDrawing`, `PcbFabricationDrawing.cs`) is what a
 board house *reads* beside them — the board OUTLINE at a fitted scale, a **drill map** with a symbol
-at every drilled feature, a **drill table** grouping the board's holes and vias by size, a **layer
-stackup** table, and a **fabrication notes** block. It is the **third consumer of the shared
+at every drilled feature, a **drill table** (a keyed LEGEND) grouping the board's holes, vias and
+through-hole pad drills by size, a **layer stackup** table, and a **fabrication notes** block. It is
+the **third consumer of the shared
 `DrawingFrame`** (after the mechanical `DrawingSheet` and the ECAD `SchematicSheet`): a fab drawing
 is an engineering drawing, so it uses the same three-band `EngineeringTitleBlock` on the same
 `SheetLayers` — which is why `sheet.Frame().Compute()` given the same paper and title-block fields is
@@ -871,14 +872,21 @@ drawing-sheet one-`Compute` rule), so the three cannot disagree.
 surface (`board.OutlinePoints`, `board.Holes`, `layout.PlacedVias()`, `board.LayerStackup`), so the
 drawing cannot disagree with the board it documents (the one-declaration rule, applied to a drawing).
 
-**The drill table is a closed-form partition, not a picture.** Its rows group the board's holes AND
-vias by an exact `(diameter, plated)` key (a mounting hole is NPTH, a board via and every placed via
-are PTH; the diameter is the board's own value carried verbatim, so exact equality IS the right
-partition). So `Σ row.Count` equals the number of drilled features, each row's count equals the
-number of features of that size and plating, and **adding a hole adds exactly one to its row** — the
-oracle, with the mutation that proves it. Sizes sort ascending (then NPTH before PTH), so the symbol
-assignment is a deterministic function of the board; each distinct size gets a distinct
-`Index`/`Symbol` and a `DrillGlyph` from a small palette. The **drill map** places one `DrillMark` per
+**The drill table is a closed-form partition, not a picture.** Its rows group the board's holes,
+vias AND through-hole COMPONENT PAD drills by an exact `(diameter, plated)` key (a mounting hole is
+NPTH; a board via, every placed via and every through-hole pad are PTH; the diameter is the board's
+own value carried verbatim, so exact equality IS the right partition). A through-hole pad HAS a drill
+and a surface-mount land does NOT — the same SMD-vs-THT distinction the solder-paste layer reads off
+the copper model — so `Σ row.Count` equals the count of holes + placed vias + through-hole pads, each
+row's count equals the features of that size and plating, and **adding a hole OR a through-hole pad
+adds exactly one to its row** (SMD pads add none) — the oracle, with the mutation that proves it.
+Sizes sort ascending (then NPTH before PTH), so the symbol assignment is a deterministic function of
+the board. **The table is a keyed LEGEND**: each size takes a distinct `Index`/`Symbol` — a LETTER
+(`A`, `B`, …), the always-distinct key drawn in the `SYM` column — beside a `DrillGlyph` from the
+CANONICAL, ordered `PcbFabricationSheet.DrillGlyphPalette` (the map marker); the glyph cycles the
+palette past its length with the letter as the distinguishing suffix, and a board with more distinct
+drill sizes than the `A`–`Z` alphabet holds (`MaxLegendSizes` = 26) is refused by name. The **drill
+map** places one `DrillMark` per
 feature at its own location — `mark.SheetLocation == drawing.Project(mark.BoardLocation)`, the same
 board→sheet transform the outline is drawn by, so a test asserts the map cannot omit a hole nor
 invent one. The **stackup table** lists the physical `LayerStackup.Layers` (copper + dielectric); a
@@ -906,10 +914,8 @@ IPC class outside {1, 2, 3}, or an `Other` finish with no name. It is also **pop
 from a `KiCadPcbReader` import** (the board-setup / stackup carries most of these fields) — see the
 whole-board interchange section above.
 
-**v1 scope** (each filed): the drill table is the board's own holes + placed vias (component
-through-hole pad drills belong to the Excellon program, folded in later); the drill glyphs are a
-hand-rolled palette (a canonical IPC symbol set is filed); no per-layer copper/mask/silk plots yet.
-Docs: `examples/ecad-fab-drawing.md`.
+**v1 scope** (filed): no per-layer copper/mask/silk plots yet (a picture per Gerber, wanting the
+copper-model geometry rendered as sheet line work). Docs: `examples/ecad-fab-drawing.md`.
 
 ## Enclosure fit — the MCAD/ECAD boundary
 

@@ -26,10 +26,12 @@ public static class FabricationLayers
 }
 
 /// <summary>
-/// The vector glyph a drill diameter is marked with on the drill map (and in the drill table's
-/// symbol column). A small fixed palette — cycled by symbol index when a board carries more
-/// distinct drills than the palette has shapes, the <see cref="DrillTableRow.Symbol"/> letter
-/// still distinguishing them. A canonical IPC-standardised symbol set is a filed follow-up.
+/// The vector glyph a drill diameter is marked with on the drill map — and, beside its
+/// <see cref="DrillTableRow.Symbol"/> letter, in the drill table's LEGEND column.
+/// <see cref="PcbFabricationSheet.DrillGlyphPalette"/> is the CANONICAL, ordered symbol set a fab
+/// drawing keys its drill sizes to, and sizes take glyphs by ascending diameter. When a board
+/// carries more distinct drill sizes than the palette has shapes the glyph CYCLES, and the row's
+/// letter (A, B, …) is the distinguishing suffix that keeps the legend key unique.
 /// </summary>
 public enum DrillGlyph
 {
@@ -69,7 +71,8 @@ public enum DrillGlyph
 /// <see cref="Index"/> is the stable, always-distinct identifier (sorted by diameter, then
 /// plating); <see cref="Symbol"/> is its display letter (A, B, …) and <see cref="Glyph"/> its
 /// map marker. <see cref="Count"/> is the closed-form oracle: the number of drilled features of
-/// this size and plating, so the rows PARTITION the board's holes and vias exactly.
+/// this size and plating, so the rows PARTITION the board's holes, vias and through-hole pad
+/// drills exactly.
 /// </summary>
 /// <param name="Index">Zero-based, sorted ascending by diameter then plating — always distinct.</param>
 /// <param name="Symbol">Display letter for this size (A for index 0, …).</param>
@@ -108,7 +111,8 @@ public readonly record struct StackupRow(string Name, string Type, double Thickn
 /// <summary>
 /// The FABRICATION DRAWING SHEET for a <see cref="PcbLayout"/> — the drawing a board house
 /// reads alongside the Gerbers: the board outline at a fitted scale, a DRILL MAP with a symbol
-/// at every drilled feature, a DRILL TABLE grouping the board's holes and vias by size, a LAYER
+/// at every drilled feature, a DRILL TABLE with a LEGEND grouping the board's holes, vias and
+/// through-hole pad drills by size, a LAYER
 /// STACKUP table, and a fabrication NOTES block, on the SHARED engineering frame.
 ///
 /// <para><b>It reads the board; it never edits it.</b> Everything derives from the layout's own
@@ -127,6 +131,27 @@ public sealed class PcbFabricationSheet
 {
     /// <summary>The default paper: A3 landscape (a fab drawing needs room for a map and tables).</summary>
     public static SheetFormat DefaultFormat => SheetFormat.A3;
+
+    /// <summary>
+    /// The CANONICAL, ordered drill-symbol set — the vector glyphs a fab drawing keys its drill
+    /// sizes to (a standard rotation a real drill drawing uses: plus, saltire, square, circle,
+    /// triangle, diamond, six-point asterisk, hexagon, down-triangle, pentagon). Distinct
+    /// drilled-feature sizes are assigned glyphs by ASCENDING diameter (NPTH before PTH at equal
+    /// diameter), so the assignment is a deterministic function of the board.
+    ///
+    /// <para>A size's <see cref="DrillTableRow.Symbol"/> LETTER (A, B, …) is the legend's
+    /// always-distinct primary key; the glyph is the map marker. When there are more distinct sizes
+    /// than the palette has shapes the glyph CYCLES this palette and the letter is the distinguishing
+    /// suffix ("cycle with a suffix"), so the legend key <c>(letter, glyph)</c> stays unique up to
+    /// <see cref="MaxLegendSizes"/> sizes; a board with more distinct drill sizes than the letter
+    /// alphabet holds exhausts the legend and is refused by name (a real board carries a handful of
+    /// drill sizes; 27+ distinct sizes is itself a manufacturing red flag).</para>
+    /// </summary>
+    public static IReadOnlyList<DrillGlyph> DrillGlyphPalette => Palette;
+
+    /// <summary>The most distinct drill sizes the drill legend can key to a distinct letter
+    /// (A–Z) — see <see cref="DrillGlyphPalette"/> for the >palette / >alphabet rule.</summary>
+    public const int MaxLegendSizes = 26;
 
     /// <summary>Distance from the paper edge to the border, mm — the mechanical
     /// <see cref="DrawingSheet"/>'s default, so a matched frame is byte-identical.</summary>
@@ -360,6 +385,16 @@ public sealed class PcbFabricationSheet
             order.Sort((a, b) =>
                 a.Diameter != b.Diameter ? a.Diameter.CompareTo(b.Diameter) : a.Plated.CompareTo(b.Plated));
 
+            // The legend keys each distinct drilled size to a LETTER (A, B, …), the always-distinct
+            // primary key. Past the letter alphabet the legend cannot key the sizes uniquely, so the
+            // drawing REFUSES rather than draw an ambiguous legend (the stated >symbols rule).
+            if (order.Count > MaxLegendSizes)
+                throw new ArgumentException(
+                    $"The fabrication drawing's drill legend keys each drilled size to a letter A–Z, "
+                    + $"so it supports at most {MaxLegendSizes} distinct drill sizes; this board has "
+                    + $"{order.Count}. Consolidate the drill schedule (a board with more than "
+                    + $"{MaxLegendSizes} distinct drill sizes is itself a manufacturing red flag).");
+
             var table = new List<DrillTableRow>(order.Count);
             var index = new Dictionary<(double, bool), int>();
             for (int i = 0; i < order.Count; i++)
@@ -395,13 +430,16 @@ public sealed class PcbFabricationSheet
             _texts.Add(Text(new Vector2d(x, y - TableTitleHeight), "DRILL TABLE", TableTitleHeight));
             y -= TableTitleHeight + 3;
 
-            double symX = x + 4;
+            double letterX = x + 1.5;              // the legend key: the size's letter A, B, …
+            double glyphX = x + 5.5;               // beside it, the size's map glyph
             double diaX = x + 9;
             double typeX = x + 26;
             double qtyX = x + Math.Min(46, width - 8);
             double top = y;
 
-            // Header labels and an underline.
+            // Header labels and an underline. "SYM" heads the LEGEND column that ties each row's
+            // drawn symbol (its letter + its drill-map glyph) to the size it marks.
+            _texts.Add(Text(new Vector2d(letterX, y - TableTextHeight), "SYM", TableTextHeight));
             _texts.Add(Text(new Vector2d(diaX, y - TableTextHeight), "DIA (mm)", TableTextHeight));
             _texts.Add(Text(new Vector2d(typeX, y - TableTextHeight), "PLATED", TableTextHeight));
             _texts.Add(Text(new Vector2d(qtyX, y - TableTextHeight), "QTY", TableTextHeight, SheetTextAnchor.Right));
@@ -411,7 +449,10 @@ public sealed class PcbFabricationSheet
             foreach (var row in table)
             {
                 double cy = y - TableTextHeight;
-                foreach (var (a, b) in GlyphSegments(row.Glyph, new Vector2d(symX, y - RowHeight / 2), 1.5))
+                // The legend key: the row's LETTER, then its GLYPH — the same glyph the drill map
+                // draws at every hole of this size, so a reader ties a marked hole to its row.
+                _texts.Add(Text(new Vector2d(letterX, cy), row.Symbol.ToString(), TableTextHeight));
+                foreach (var (a, b) in GlyphSegments(row.Glyph, new Vector2d(glyphX, y - RowHeight / 2), 1.5))
                     _segments.Add((a, b, FabricationLayers.Tables));
                 _texts.Add(Text(new Vector2d(diaX, cy), Num(row.Diameter), TableTextHeight));
                 _texts.Add(Text(new Vector2d(typeX, cy), row.Plated ? "PTH" : "NPTH", TableTextHeight));
@@ -510,11 +551,15 @@ public sealed class PcbFabricationSheet
 
     // ---------------------------------------------------------------- drilled features
 
-    /// <summary>The board's own drilled features — its holes (mounting and via) and the layout's
-    /// placed vias — the two things a fab drill table groups. A mounting hole is non-plated
-    /// (NPTH), a board via and every placed via are plated (PTH). Component through-hole pad
-    /// drills are deliberately NOT included here (they belong to the Excellon program the fab
-    /// derives from the copper); a filed follow-up.</summary>
+    /// <summary>Every drilled feature a fab drill table groups: the board's own holes (mounting and
+    /// via), the layout's placed vias, AND the placed components' THROUGH-HOLE PAD drills. A mounting
+    /// hole is non-plated (NPTH); a board via, every placed via and every through-hole pad are plated
+    /// (PTH).
+    ///
+    /// <para>A through-hole pad HAS a drill; a surface-mount pad does not — the same pad SMD-vs-THT
+    /// distinction the solder-paste layer reads off the copper model, resolved here at its source
+    /// (<see cref="PcbCopperModel.FromLayout"/> adds a drill for exactly the
+    /// <see cref="PadKind.ThroughHole"/> pads), so an SMD pad contributes no drill row.</para></summary>
     internal static List<(Vector2d Center, double Diameter, bool Plated)> CollectFeatures(PcbLayout layout)
     {
         var features = new List<(Vector2d, double, bool)>();
@@ -522,6 +567,9 @@ public sealed class PcbFabricationSheet
             features.Add((hole.Center, hole.Diameter, hole.Kind == BoardHoleKind.Via));
         foreach (var via in layout.PlacedVias())
             features.Add((via.Center, via.DrillDiameter, true));
+        foreach (var pad in layout.PlacedPads())
+            if (pad.Kind == PadKind.ThroughHole && pad.DrillDiameter > 0)
+                features.Add((pad.World, pad.DrillDiameter, true));   // a plated through-hole (PTH)
         return features;
     }
 

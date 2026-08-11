@@ -1522,17 +1522,15 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   - [ ] **Fabrication-drawing follow-ups** (the `PcbFabricationSheet` landed as the shared
     `DrawingFrame`'s third consumer — board outline + drill map + drill table + stackup table
     + fab notes on the engineering frame, byte-identical to a mechanical `DrawingSheet`'s
-    frame; `EngrCAD.Ecad/PcbFabricationDrawing.cs`). Residuals: **(a) drill-symbol
-    standardisation** — the map cycles a small hand-rolled `DrillGlyph` palette (plus / cross
-    / square / circle / triangle / …), where a real fab drawing wants a canonical IPC-ish
-    symbol set with a legend; **(b) through-hole component pad drills** — the drill table is
-    scoped to the board's own holes + placed vias (the two things the task names and the
-    closed-form partition proves), while a complete drill map would also table the footprint
-    through-hole pad drills (those live in the Excellon program the fab derives from the
-    copper — including them here means resolving `PcbLayout.PlacedPads()` drills and folding
-    them into the same `(diameter, plated)` partition); **(c) per-layer fabrication plots** — a copper/mask/silk plot per layer beside the
+    frame; `EngrCAD.Ecad/PcbFabricationDrawing.cs`; the drill-symbol standardisation with a
+    legend and the through-hole component pad drills have since LANDED — the drill table is now
+    a keyed LEGEND over a canonical `DrillGlyphPalette` (a letter + glyph per size, the glyph
+    cycling past the palette with the letter the distinguishing suffix, refused past a 26-size
+    `A`–`Z` alphabet) and its `(diameter, plated)` partition covers holes + placed vias +
+    through-hole component pad drills, the SMD-vs-THT distinction read the paste layer's way).
+    Residuals: **(a) per-layer fabrication plots** — a copper/mask/silk plot per layer beside the
     drill map (a picture per Gerber), which wants the copper-model geometry the Gerber
-    exporter already builds rendered as sheet line work. **(d) fab-spec catalogues + an IPC-class DRC preset** — the `PcbFabricationSpec` states material / mask & silk colour as FREE strings and the class / minimum trace & clearance as loose numbers; a per-fabricator CATALOGUE (the `StandardHoles` / `SheetMaterials` verify-against-datasheet pattern) would let a caller pick a house stack-up rather than typing them, and an IPC-6012-class — `DrcRuleSet` preset (class 1/2/3 to a minimum trace / clearance / annular) would let the STATED class DRIVE the DRC and cross-check the spec's own `MinTraceWidthMm` / `MinClearanceMm` against it. (A `KiCadPcbReader` import now POPULATES the spec from the board-setup / stackup, best-effort and write-only-when-stated.)
+    exporter already builds rendered as sheet line work. **(b) fab-spec catalogues + an IPC-class DRC preset** — the `PcbFabricationSpec` states material / mask & silk colour as FREE strings and the class / minimum trace & clearance as loose numbers; a per-fabricator CATALOGUE (the `StandardHoles` / `SheetMaterials` verify-against-datasheet pattern) would let a caller pick a house stack-up rather than typing them, and an IPC-6012-class — `DrcRuleSet` preset (class 1/2/3 to a minimum trace / clearance / annular) would let the STATED class DRIVE the DRC and cross-check the spec's own `MinTraceWidthMm` / `MinClearanceMm` against it. (A `KiCadPcbReader` import now POPULATES the spec from the board-setup / stackup, best-effort and write-only-when-stated.)
   - [ ] **Detail views** (a scaled-up circle of a region) and **broken views** (a long
     part with its middle removed). Both are clipping problems on top of the existing
     view, not new projections.

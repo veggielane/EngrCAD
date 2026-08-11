@@ -28,8 +28,8 @@
     </g>
     <g id="tables" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
       <path d="M251.99999999999997 276.5 L410 276.5" />
-      <path d="M254.49999999999997 273 L257.5 273" />
-      <path d="M255.99999999999997 271.5 L255.99999999999997 274.5" />
+      <path d="M256 273 L259 273" />
+      <path d="M257.5 271.5 L257.5 274.5" />
       <path d="M251.99999999999997 270.5 L410 270.5" />
       <path d="M410 270.5 L410 281.5" />
       <path d="M410 281.5 L251.99999999999997 281.5" />
@@ -52,9 +52,11 @@
   </g>
   <g id="tables" fill="#111111" stroke="none" font-family="Helvetica, Arial, sans-serif">
     <text x="251.99999999999997" y="-283.5" font-size="5" text-anchor="start">DRILL TABLE</text>
+    <text x="253.49999999999997" y="-278" font-size="3.5714285714285716" text-anchor="start">SYM</text>
     <text x="261" y="-278" font-size="3.5714285714285716" text-anchor="start">DIA (mm)</text>
     <text x="278" y="-278" font-size="3.5714285714285716" text-anchor="start">PLATED</text>
     <text x="298" y="-278" font-size="3.5714285714285716" text-anchor="end">QTY</text>
+    <text x="253.49999999999997" y="-273" font-size="3.5714285714285716" text-anchor="start">A</text>
     <text x="261" y="-273" font-size="3.5714285714285716" text-anchor="start">3.2</text>
     <text x="278" y="-273" font-size="3.5714285714285716" text-anchor="start">NPTH</text>
     <text x="298" y="-273" font-size="3.5714285714285716" text-anchor="end">2</text>
