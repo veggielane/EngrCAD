@@ -2911,7 +2911,8 @@ from what was already understood rather than from scratch.
   invented. **(b) an obstacle-avoiding wire router** — the v1 trunk/L router may cross a symbol
   or another net (a crossing is not a connection), and routing that lays wires in clean lanes
   clear of symbols is a separate router (still NOT the copper autorouter). **(c)** hierarchical
-  sheets / buses / off-page connectors (a schematic that spans pages), and **(d)**
+  sheets / off-page connectors (a schematic that spans pages — bus DRAWING has since landed,
+  `SchematicBus`; bus GROUPS and buses ACROSS sheets stay filed), and **(d)**
   back-annotation (edits made on the drawn sheet flowing back into the graph — but the sheet is
   a VIEW, so this is a different editing model, weighed against keeping the graph the one
   source). Also filed: power/ground *symbols* (a ground triangle, a VCC bar) in place of the

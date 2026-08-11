@@ -620,8 +620,9 @@ one-declaration rule) — the same schematic and placement produce byte-identica
 | `SchematicPlacement` | Where each component's symbol sits (`Place(refdes, position, quarterTurns, mirror)`). Hand-placed in v1; `Grid(schematic, format)` is a deterministic grid PLACEHOLDER (a good auto-layout is a separate problem, not attempted). |
 | `SymbolPose` | A symbol's origin, an orthogonal rotation (90° steps — the schematic convention) and an optional mirror. The transform is EXACT (a quarter turn is a sign swap), so a pin's world anchor coincides with its wire endpoint to the bit. |
 | `SchematicSheetOptions` | The net-label rule (fanout threshold, power-net names) plus a few sizes. |
-| `SchematicDrawing` | The computed sheet: `Segments`/`Junctions`/`Texts`/`Pins`, the `Connectivity`, `Verify()`, and the writers `ToSvg`/`ToDxf`/`ToPdf` (+ `Save*`). |
+| `SchematicDrawing` | The computed sheet: `Segments`/`Junctions`/`Texts`/`Pins`/`Buses`, the `Connectivity`, `Verify()`, and the writers `ToSvg`/`ToDxf`/`ToPdf` (+ `Save*`). |
 | `DrawnConnectivity` / `DrawnConnectivityReport` | The connectivity the drawing EXPRESSES, reconstructed from its primitives (wire segments, pin anchors, net labels) — `AreJoined(a, b)`, `LabelOf(pin)`. `Verify()` asserts the drawn sheet joins exactly the pins the netlist connects, BOTH ways. |
+| `SchematicBus` / `SchematicBusEntry` / `DrawnBus` | A caller-declared bus (`buses:` on the sheet): a thick bundle wire (`Path`), diagonal entry stubs (`Entries`) and a bus-VECTOR label `NAME[m..n]` (member `NAME`+i). DRAWING SUGAR — the members are the signal wires' own labels, so a bus draws a bundle but connects NOTHING; its line-work is kept off the wire graph, so `Verify()` is unaffected and a bus can never merge two nets. |
 
 **Wires** are orthogonal (Manhattan): two pins take an L, three or more a horizontal trunk at
 the pins' median height with a vertical stub from each pin, so interior stubs make **junction
@@ -634,6 +635,16 @@ name) or a net past the fanout threshold (default 4).
 The verification is the house style — every net's connected pins are JOINED (by a wire path or
 a shared label) and no two pins on different nets are joined — reconstructed from the drawn
 primitives so the drawing cannot omit a connection the netlist has nor invent one it does not.
+
+**Buses** are a caller-declared bundle (`SchematicBus`, passed to the sheet with `buses:`): a
+THICK bundle wire, diagonal ENTRY stubs (`SchematicBusEntry`) ripping members off it, and a
+bus-VECTOR label `NAME[m..n]` (member `NAME`+i — the KiCad notation the bus import reads). They
+are **DRAWING SUGAR** on a new `bus` layer: the members are the signal wires' own labels, so a
+bus draws a bundle but **connects nothing** — its line-work is deliberately kept OUT of the wire
+graph, so a bus wire crossing two member wires cannot merge their nets and `Verify()` is
+unaffected. The bus-wire pen is `SchematicSheetOptions.BusWireWidth` (default 0.8 mm, wider than
+a wire's 0.5). A sheet declaring **no** bus is byte-identical (buses are opt-in). Caller-declared,
+never auto-routed. Filed: bus GROUPS (`{…}` aliases) and buses ACROSS sheets.
 
 **The border and title block come from the shared `DrawingFrame`** (Modeling) — the SAME value
 type the mechanical [drawing sheet](../EngrCAD.Modeling/README.md) draws, so a schematic and a

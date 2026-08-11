@@ -1,0 +1,68 @@
+<svg viewBox="0 -110 170 110" width="170mm" height="110mm" xmlns="http://www.w3.org/2000/svg">
+  <g transform="scale(1,-1)">
+    <g id="border" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 10 L160 10" />
+      <path d="M160 10 L160 100" />
+      <path d="M160 100 L10 100" />
+      <path d="M10 100 L10 10" />
+    </g>
+    <g id="titleblock" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 10 L160 10" />
+      <path d="M160 10 L160 50" />
+      <path d="M160 50 L10 50" />
+      <path d="M10 50 L10 10" />
+      <path d="M10 32 L160 32" />
+    </g>
+    <g id="symbols" class="visible" fill="none" stroke="#111111" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M34.92 49.92 L45.08 49.92" />
+      <path d="M45.08 49.92 L45.08 60.08" />
+      <path d="M45.08 60.08 L34.92 60.08" />
+      <path d="M34.92 60.08 L34.92 49.92" />
+      <path d="M114.92 49.92 L125.08 49.92" />
+      <path d="M125.08 49.92 L125.08 60.08" />
+      <path d="M125.08 60.08 L114.92 60.08" />
+      <path d="M114.92 60.08 L114.92 49.92" />
+    </g>
+    <g id="pins" class="visible" fill="none" stroke="#111111" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M32.38 58.81 L34.92 58.81" />
+      <path d="M32.38 56.27 L34.92 56.27" />
+      <path d="M32.38 53.73 L34.92 53.73" />
+      <path d="M32.38 51.19 L34.92 51.19" />
+      <path d="M112.38 58.81 L114.92 58.81" />
+      <path d="M112.38 56.27 L114.92 56.27" />
+      <path d="M112.38 53.73 L114.92 53.73" />
+      <path d="M112.38 51.19 L114.92 51.19" />
+    </g>
+    <g id="wires" class="visible" fill="none" stroke="#111111" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M32.38 58.81 L112.38 58.81" />
+      <path d="M32.38 56.27 L112.38 56.27" />
+      <path d="M32.38 53.73 L112.38 53.73" />
+      <path d="M32.38 51.19 L112.38 51.19" />
+    </g>
+    <g id="bus" class="visible" fill="none" stroke="#111111" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M80 40 L80 78" />
+    </g>
+    <g id="bus" class="visible" fill="none" stroke="#111111" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M80 47 L82.54 49.54" />
+      <path d="M80 52 L82.54 54.54" />
+      <path d="M80 57 L82.54 59.54" />
+      <path d="M80 62 L82.54 64.54" />
+    </g>
+  </g>
+  <g id="titleblock" fill="#111111" stroke="none" font-family="Helvetica, Arial, sans-serif">
+    <text x="12.5" y="-39.6" font-size="4" text-anchor="start">Data bus</text>
+    <text x="12.5" y="-22.3" font-size="2.0571428571428574" text-anchor="start">DWG</text>
+    <text x="12.5" y="-20" font-size="2.857142857142857" text-anchor="start">EX-002</text>
+    <text x="48.75" y="-22.3" font-size="2.0571428571428574" text-anchor="start">DRAWN</text>
+    <text x="48.75" y="-20" font-size="2.857142857142857" text-anchor="start">EngrCAD</text>
+    <text x="85" y="-22.3" font-size="2.0571428571428574" text-anchor="start">DATE</text>
+    <text x="121.25" y="-22.3" font-size="2.0571428571428574" text-anchor="start">REV</text>
+  </g>
+  <g id="references" fill="#111111" stroke="none" font-family="Helvetica, Arial, sans-serif">
+    <text x="38.730000000000004" y="-62.08" font-size="2.857142857142857" text-anchor="middle">U1</text>
+    <text x="118.72999999999999" y="-62.08" font-size="2.857142857142857" text-anchor="middle">U2</text>
+  </g>
+  <g id="bus" fill="#111111" stroke="none" font-family="Helvetica, Arial, sans-serif">
+    <text x="80" y="-80" font-size="2.857142857142857" text-anchor="middle">DATA[0..3]</text>
+  </g>
+</svg>

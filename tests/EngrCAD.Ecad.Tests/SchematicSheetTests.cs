@@ -352,4 +352,182 @@ public class SchematicSheetTests
         Assert.Equal(a.ToSvg(), b.ToSvg());
         Assert.Equal(3, a.Pins.Select(p => p.Pin.ReferenceDesignator).Distinct().Count());
     }
+
+    // ---- buses: a caller-declared bundle drawn as a thick wire + entries + a vector label ----
+
+    /// <summary>A 4-pin IC with four passive data pins on the left (D0..D3, pin numbers 1..4).</summary>
+    private static PartDefinition BusIc(string name)
+    {
+        var symbol = new Symbol(name,
+        [
+            new SymbolPin("1", "D0", new Vector2d(-7.62, 3.81), SymbolPinDirection.Right, 2.54, PinType.Passive),
+            new SymbolPin("2", "D1", new Vector2d(-7.62, 1.27), SymbolPinDirection.Right, 2.54, PinType.Passive),
+            new SymbolPin("3", "D2", new Vector2d(-7.62, -1.27), SymbolPinDirection.Right, 2.54, PinType.Passive),
+            new SymbolPin("4", "D3", new Vector2d(-7.62, -3.81), SymbolPinDirection.Right, 2.54, PinType.Passive),
+        ],
+        [new SymbolRectangle(new Vector2d(-5.08, -5.08), new Vector2d(5.08, 5.08))]);
+        return new PartDefinition(name, "U",
+        [
+            new Pin("1", "D0", PinType.Passive), new Pin("2", "D1", PinType.Passive),
+            new Pin("3", "D2", PinType.Passive), new Pin("4", "D3", PinType.Passive),
+        ], symbol: symbol);
+    }
+
+    /// <summary>Two ICs wired member-by-member over a 4-bit data bus DATA0..DATA3 (each member is
+    /// a 2-pin signal net, drawn as a WIRE), plus a caller-declared <see cref="SchematicBus"/>
+    /// that bundles them cosmetically.</summary>
+    private static (Schematic Schematic, SchematicPlacement Placement, SchematicBus Bus) DataBus()
+    {
+        var sch = new Schematic("data bus");
+        var u1 = sch.Add("U1", BusIc("SRC"));
+        var u2 = sch.Add("U2", BusIc("DST"));
+        for (int i = 0; i < 4; i++)
+            sch.Connect($"DATA{i}", u1.Pin($"{i + 1}"), u2.Pin($"{i + 1}"));
+
+        var placement = new SchematicPlacement()
+            .Place("U1", new Vector2d(40, 60))
+            .Place("U2", new Vector2d(120, 60));
+
+        // A vertical bus wire between the two ICs, with a 45° entry ripping each member off it.
+        const double busX = 80;
+        var path = new List<Vector2d> { new(busX, 40), new(busX, 82) };
+        var entries = new List<SchematicBusEntry>();
+        for (int i = 0; i < 4; i++)
+        {
+            double y = 50 + i * 5;
+            entries.Add(new SchematicBusEntry(new Vector2d(busX, y), new Vector2d(busX + 2.54, y + 2.54)));
+        }
+        var bus = new SchematicBus("DATA", 0, 3, path, entries,
+            labelPosition: new Vector2d(busX, 84), labelAnchor: SheetTextAnchor.Center);
+        return (sch, placement, bus);
+    }
+
+    [Fact]
+    public void ADeclaredBus_DrawsAThickWireDiagonalEntriesAndAVectorLabel()
+    {
+        var (sch, placement, bus) = DataBus();
+        var drawing = new SchematicSheet(sch, placement, buses: [bus]).Draw();
+
+        // The bus is a drawn value carrying the expanded members and the NAME[m..n] label.
+        var drawn = Assert.Single(drawing.Buses);
+        Assert.Equal("DATA", drawn.Name);
+        Assert.Equal(new[] { "DATA0", "DATA1", "DATA2", "DATA3" }, drawn.Members);
+        Assert.Equal("DATA[0..3]", drawn.Label.Text);
+        Assert.Equal(SchematicLayers.Bus, drawn.Label.Layer);
+
+        // The thick bus-wire polyline is exactly the declared path.
+        Assert.Equal(bus.Path, drawn.Path);
+
+        // One diagonal entry per member — neither horizontal nor vertical (a 45° stub here).
+        Assert.Equal(4, drawn.Entries.Count);
+        foreach (var (a, b) in drawn.Entries)
+            Assert.True(Math.Abs(a.X - b.X) > 1e-9 && Math.Abs(a.Y - b.Y) > 1e-9,
+                "a bus entry must be a diagonal stub");
+
+        // The SVG carries a bus layer, the vector label text, and a stroke WIDER than a wire's.
+        string svg = drawing.ToSvg();
+        Assert.Contains("id=\"bus\"", svg);
+        Assert.Contains("DATA[0..3]", svg);
+        Assert.Contains("stroke-width=\"0.8\"", svg);       // the default bus width
+        Assert.Contains("stroke-width=\"0.5\"", svg);       // a signal wire is thinner
+        Assert.True(new SchematicSheetOptions().BusWireWidth > SvgDrawing.SvgPen.For(SvgLineClass.Visible).Width,
+            "the bus wire must be wider than a signal wire");
+
+        // The DXF carries lines on the bus layer and the label text on the bus layer.
+        var dxf = drawing.ToDxf();
+        Assert.Contains(dxf.Entities, e => e is DxfLine line && line.Layer == SchematicLayers.Bus);
+        Assert.Contains(dxf.Entities, e => e is DxfText t && t.Value == "DATA[0..3]" && t.Layer == SchematicLayers.Bus);
+
+        // The PDF is a valid document that carries the label.
+        Assert.StartsWith("%PDF", Encoding.ASCII.GetString(drawing.ToPdf(), 0, 4));
+    }
+
+    [Fact]
+    public void ANoBusSheet_IsByteIdenticalToTheSameSheetWithoutBuses()
+    {
+        var (sch, placement) = LedIndicator();
+        var incumbent = new SchematicSheet(sch, placement).Draw();
+        var nullBuses = new SchematicSheet(sch, placement, buses: null).Draw();
+        var emptyBuses = new SchematicSheet(sch, placement, buses: []).Draw();
+
+        Assert.Equal(incumbent.ToSvg(), nullBuses.ToSvg());
+        Assert.Equal(incumbent.ToSvg(), emptyBuses.ToSvg());
+
+        string Dxf(SchematicDrawing d) { var w = new StringWriter(); d.ToDxf().Save(w); return w.ToString(); }
+        Assert.Equal(Dxf(incumbent), Dxf(emptyBuses));
+        Assert.Equal(incumbent.ToPdf(), emptyBuses.ToPdf());   // byte[] equality
+
+        Assert.Empty(incumbent.Buses);
+        Assert.DoesNotContain("id=\"bus\"", incumbent.ToSvg());
+    }
+
+    [Fact]
+    public void ABus_IsCosmetic_TheDrawingReconstructsTheSameNetsAsAPlainWireSheet()
+    {
+        var (sch, placement, bus) = DataBus();
+        var plain = new SchematicSheet(sch, placement).Draw();               // member wires, no bus
+        var withBus = new SchematicSheet(sch, placement, buses: [bus]).Draw();
+
+        // The bus adds NO wire segments — the connectivity graph is identical.
+        Assert.Equal(plain.WireSegments, withBus.WireSegments);
+
+        // Both verify (join exactly the pins the netlist connects).
+        Assert.True(plain.Verify().Ok, plain.Verify().ToString());
+        Assert.True(withBus.Verify().Ok, withBus.Verify().ToString());
+
+        var u1 = sch.Find("U1")!;
+        var u2 = sch.Find("U2")!;
+        // The teeth: DATA0 and DATA1 are DIFFERENT member nets — the bus wire crossing near both
+        // must NOT merge them; and each member's own pins ARE joined by its wire.
+        Assert.False(withBus.Connectivity.AreJoined(u1.Pin("1"), u1.Pin("2")));   // DATA0 vs DATA1
+        Assert.True(withBus.Connectivity.AreJoined(u1.Pin("1"), u2.Pin("1")));    // DATA0 member wire
+
+        // AreJoined agrees for EVERY pair of schematic pins, with and without the bus.
+        var pins = sch.Components.SelectMany(c => c.AllPins).ToList();
+        foreach (var a in pins)
+            foreach (var b in pins)
+                Assert.Equal(
+                    plain.Connectivity.AreJoined(a, b),
+                    withBus.Connectivity.AreJoined(a, b));
+    }
+
+    [Fact]
+    public void ABusSheet_IsADeterministicFunctionOfTheGraphAndTheBus()
+    {
+        var (sch, placement, bus) = DataBus();
+        string Svg() => new SchematicSheet(sch, placement, buses: [bus]).Draw().ToSvg();
+        Assert.Equal(Svg(), Svg());
+
+        string Dxf()
+        {
+            var w = new StringWriter();
+            new SchematicSheet(sch, placement, buses: [bus]).Draw().ToDxf().Save(w);
+            return w.ToString();
+        }
+        Assert.Equal(Dxf(), Dxf());
+    }
+
+    [Fact]
+    public void AReversedBusRange_ExpandsToTheSameMembersInTheDrawnDirection()
+    {
+        var path = new List<Vector2d> { new(0, 0), new(0, 10) };
+        var fwd = new SchematicBus("D", 0, 3, path);
+        var rev = new SchematicBus("D", 3, 0, path);
+
+        Assert.Equal(new[] { "D0", "D1", "D2", "D3" }, fwd.Members);
+        Assert.Equal(new[] { "D3", "D2", "D1", "D0" }, rev.Members);
+        Assert.Equal("D[0..3]", fwd.Label);
+        Assert.Equal("D[3..0]", rev.Label);
+        // A null label position defaults to the last path point (the bus's open end).
+        Assert.Equal(path[^1], fwd.LabelPosition);
+    }
+
+    [Fact]
+    public void ABusWireWithTooFewPoints_IsRefusedByName()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            new SchematicBus("DATA", 0, 3, [new Vector2d(0, 0)]));
+        Assert.Contains("DATA", ex.Message);
+        Assert.Contains("at least two points", ex.Message);
+    }
 }

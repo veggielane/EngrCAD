@@ -151,6 +151,84 @@ labelled as such — enough to see a schematic at all. A real auto-placer that p
   (`VCC`, `GND`, `+3V3`, …) — **or** when its pin count passes the fanout threshold (default
   4). Both are configurable on `SchematicSheetOptions`.
 
+## Buses — a caller-declared bundle
+
+A **bus** is a labelled bundle of signal nets, drawn as a **thick** wire with diagonal **entry**
+stubs ripping members off it and a bus-vector label `NAME[m..n]` (KiCad's notation — member
+`NAME`+i, so `DATA[0..3]` is `DATA0`…`DATA3`, and a reversed `DATA[3..0]` the same four in the
+drawn direction). It is **DRAWING SUGAR**: the members are the signal wires' *own* labels, so
+the bus draws a bundle but **connects nothing** — its line-work is deliberately kept out of the
+wire graph, so a bus wire crossing two member wires can never merge their nets, and
+`Verify()` is unaffected.
+
+A bus is **caller-declared, never auto-routed** — you give the bus wire polyline and the entry
+stubs, exactly as a `SchematicPlacement` gives symbol poses. Pass a `SchematicBus` (or several)
+to the sheet with `buses:`:
+
+```csharp svg:ecad-schematic-sheet-bus
+// A 4-pin IC with four passive data pins on its left edge (D0..D3, pin numbers 1..4).
+PartDefinition BusIc(string name)
+{
+    var symbol = new Symbol(name,
+    [
+        new SymbolPin("1", "D0", new Vector2d(-7.62, 3.81), SymbolPinDirection.Right, 2.54, PinType.Passive),
+        new SymbolPin("2", "D1", new Vector2d(-7.62, 1.27), SymbolPinDirection.Right, 2.54, PinType.Passive),
+        new SymbolPin("3", "D2", new Vector2d(-7.62, -1.27), SymbolPinDirection.Right, 2.54, PinType.Passive),
+        new SymbolPin("4", "D3", new Vector2d(-7.62, -3.81), SymbolPinDirection.Right, 2.54, PinType.Passive),
+    ],
+    [new SymbolRectangle(new Vector2d(-5.08, -5.08), new Vector2d(5.08, 5.08))]);
+    return new PartDefinition(name, "U",
+    [
+        new Pin("1", "D0", PinType.Passive), new Pin("2", "D1", PinType.Passive),
+        new Pin("3", "D2", PinType.Passive), new Pin("4", "D3", PinType.Passive),
+    ], symbol: symbol);
+}
+
+// Two ICs, wired member-by-member over a 4-bit bus DATA0..DATA3. Each member is an ordinary
+// 2-pin signal wire — the bus does NOT connect them, the member nets do.
+var sch = new Schematic("data bus");
+var u1 = sch.Add("U1", BusIc("SRC"));
+var u2 = sch.Add("U2", BusIc("DST"));
+for (int i = 0; i < 4; i++)
+    sch.Connect($"DATA{i}", u1.Pin($"{i + 1}"), u2.Pin($"{i + 1}"));
+
+var placement = new SchematicPlacement()
+    .Place("U1", new Vector2d(40, 55))
+    .Place("U2", new Vector2d(120, 55));
+
+// Declare the bus: a thick vertical bundle wire between the two ICs, a 45° entry ripping each
+// member off it, and the DATA[0..3] vector label. Caller-placed — never auto-routed.
+double busX = 80;
+var entries = new List<SchematicBusEntry>();
+for (int i = 0; i < 4; i++)
+{
+    double y = 47 + i * 5;
+    entries.Add(new SchematicBusEntry(new Vector2d(busX, y), new Vector2d(busX + 2.54, y + 2.54)));
+}
+var bus = new SchematicBus("DATA", 0, 3,
+    [new Vector2d(busX, 40), new Vector2d(busX, 78)], entries,
+    labelPosition: new Vector2d(busX, 80), labelAnchor: SheetTextAnchor.Center);
+
+var sheet = new SchematicSheet(sch, placement,
+    format: SheetFormat.Custom("A6", 170, 110),
+    title: new TitleBlock { Title = "Data bus", DrawingNumber = "EX-002", Author = "EngrCAD" },
+    buses: [bus]);
+
+var svg = sheet.Draw().ToSvg();
+```
+
+![A schematic sheet with a DATA[0..3] bus](images/ecad-schematic-sheet-bus.svg)
+
+The bus reads off the drawing as `drawing.Buses` — each a `DrawnBus` with the base `Name`, the
+expanded `Members` (`DATA0`…`DATA3`), the `Path` (the thick wire), the `Entries` (the diagonal
+stubs) and the vector `Label`. Because none of it is in the wire graph, the drawing with the bus
+reconstructs **exactly the same nets** as the same sheet drawn with plain labelled wires — the
+member nets do the connecting, the bus is only how they are drawn as a bundle. The bus-wire pen
+width is `SchematicSheetOptions.BusWireWidth` (default 0.8 mm, wider than a wire's 0.5 mm).
+
+> Bus **groups** (`{…}` aliases) and buses **across sheets** are not modelled — one sheet's bus
+> is a member namespace whose taps carry their own labels, which is all a bus needs to draw.
+
 ## Refused, by name
 
 - A component with **no symbol** cannot be drawn (attach one, e.g. imported from KiCad by

@@ -18,6 +18,11 @@ public static class SchematicLayers
     /// <summary>Wires between connected pins.</summary>
     public const string Wires = "wires";
 
+    /// <summary>Bus wires (a thick bundle line), their diagonal entry stubs and the bus-vector
+    /// label. Drawing SUGAR — bus line-work is never part of the wire graph, so it cannot merge
+    /// two signal nets (see <see cref="SchematicBus"/>).</summary>
+    public const string Bus = "bus";
+
     /// <summary>Junction dots where three or more wires meet.</summary>
     public const string Junctions = "junctions";
 
@@ -54,6 +59,26 @@ public static class SchematicLayers
 public readonly record struct DrawnPin(PinRef Pin, Vector2d Anchor, string? Label);
 
 /// <summary>
+/// A bus as it was drawn on the sheet: the base <see cref="Name"/> and expanded
+/// <see cref="Members"/> (<c>NAME</c>+i), the thick bus-wire polyline <see cref="Path"/>, the
+/// diagonal <see cref="Entries"/> ripping members off it, and the vector <see cref="Label"/>
+/// (<c>NAME[m..n]</c>). It is DRAWING SUGAR: none of this geometry is in the wire graph
+/// (<see cref="SchematicDrawing.WireSegments"/>), so a bus can never join two signal nets — which
+/// is why <see cref="SchematicDrawing.Verify"/> is unaffected by it.
+/// </summary>
+/// <param name="Name">The bus base name (<c>"DATA"</c>).</param>
+/// <param name="Members">The expanded member net names (<c>NAME</c>+i), in the drawn direction.</param>
+/// <param name="Path">The bus wire polyline, sheet mm, rendered THICK.</param>
+/// <param name="Entries">The diagonal entry stubs (each a segment from the bus to a signal wire).</param>
+/// <param name="Label">The bus-vector label as drawn.</param>
+public readonly record struct DrawnBus(
+    string Name,
+    IReadOnlyList<string> Members,
+    IReadOnlyList<Vector2d> Path,
+    IReadOnlyList<(Vector2d A, Vector2d B)> Entries,
+    SheetText Label);
+
+/// <summary>
 /// The drawn schematic SHEET: placed symbols, wires, junction dots, net labels, reference
 /// designators, values, a border and a title block — the human-readable VIEW of a
 /// <see cref="Schematic"/> that replaces <see cref="Netlist.ToText"/>.
@@ -78,7 +103,9 @@ public sealed class SchematicDrawing
     private readonly List<(Vector2d A, Vector2d B)> _wireSegments;
     private readonly List<SheetText> _texts;
     private readonly List<DrawnPin> _pins;
+    private readonly List<DrawnBus> _buses;
     private readonly double _junctionDotDiameter;
+    private readonly double _busWireWidth;
 
     internal SchematicDrawing(
         Schematic schematic,
@@ -87,7 +114,9 @@ public sealed class SchematicDrawing
         List<(Vector2d A, Vector2d B)> wireSegments,
         List<SheetText> texts,
         List<DrawnPin> pins,
-        double junctionDotDiameter)
+        List<DrawnBus> buses,
+        double junctionDotDiameter,
+        double busWireWidth)
     {
         Schematic = schematic;
         Format = format;
@@ -95,7 +124,9 @@ public sealed class SchematicDrawing
         _wireSegments = wireSegments;
         _texts = texts;
         _pins = pins;
+        _buses = buses;
         _junctionDotDiameter = junctionDotDiameter;
+        _busWireWidth = busWireWidth;
         Junctions = FindJunctions(wireSegments);
         Connectivity = new DrawnConnectivity(pins, wireSegments);
     }
@@ -121,6 +152,11 @@ public sealed class SchematicDrawing
     /// <summary>The pins as drawn — their world anchors and whether each is wired or
     /// labelled.</summary>
     public IReadOnlyList<DrawnPin> Pins => _pins;
+
+    /// <summary>The buses as drawn — each a thick bundle wire, its diagonal entry stubs and its
+    /// vector label. DRAWING SUGAR: this line-work is deliberately kept OUT of
+    /// <see cref="WireSegments"/>, so a bus can never join two signal nets.</summary>
+    public IReadOnlyList<DrawnBus> Buses => _buses;
 
     /// <summary>Points where three or more wire endpoints meet — drawn as junction dots. A
     /// wire CROSSING (two nets passing over one another mid-segment) is not a junction, which
@@ -157,6 +193,17 @@ public sealed class SchematicDrawing
             foreach (var dot in Junctions)
                 svg.AddPolyline([dot, dot], closed: false, SvgLineClass.Visible, SchematicLayers.Junctions, pen);
         }
+        // Buses on top of the wires they bundle: the bus wire as a THICK line, its entries as
+        // ordinary-width diagonal stubs. Both on the bus layer; the labels ride the text path.
+        if (_buses.Count > 0)
+        {
+            var busPen = new SvgDrawing.SvgPen("#111111", _busWireWidth, null);
+            foreach (var bus in _buses)
+            {
+                svg.AddPolyline(bus.Path, closed: false, SvgLineClass.Visible, SchematicLayers.Bus, busPen);
+                svg.AddSegments(bus.Entries, SvgLineClass.Visible, SchematicLayers.Bus);
+            }
+        }
         foreach (var text in _texts)
             svg.AddText(text.Position, text.Text, text.Height, text.Anchor, text.Layer);
         return svg.ToSvg();
@@ -178,6 +225,17 @@ public sealed class SchematicDrawing
             dxf.Add(new DxfLine(a, b, layer));
         foreach (var dot in Junctions)
             dxf.Add(new DxfCircle(dot, _junctionDotDiameter / 2, SchematicLayers.Junctions));
+        // Bus wires and entries as ordinary lines on the bus layer: the 2D DXF writer carries no
+        // line width, so a bus's thickness is a lineweight the layer confers on read-back — the
+        // same per-format spelling difference the junction dot has (a filled disc vs an outline
+        // circle).
+        foreach (var bus in _buses)
+        {
+            for (int i = 0; i + 1 < bus.Path.Count; i++)
+                dxf.Add(new DxfLine(bus.Path[i], bus.Path[i + 1], SchematicLayers.Bus));
+            foreach (var (a, b) in bus.Entries)
+                dxf.Add(new DxfLine(a, b, SchematicLayers.Bus));
+        }
         foreach (var text in _texts)
             dxf.Add(new DxfText(text.Position, text.Text, text.Height, text.Anchor, text.Layer));
         return dxf;
@@ -200,6 +258,17 @@ public sealed class SchematicDrawing
             var pen = new SvgDrawing.SvgPen("#111111", _junctionDotDiameter, null);
             foreach (var dot in Junctions)
                 pdf.AddPolyline([dot, dot], closed: false, SvgLineClass.Visible, pen);
+        }
+        // Buses: the thick bundle wire plus its ordinary-width entry stubs (PDF has no layers;
+        // the pen carries the distinction). The labels ride the text path.
+        if (_buses.Count > 0)
+        {
+            var busPen = new SvgDrawing.SvgPen("#111111", _busWireWidth, null);
+            foreach (var bus in _buses)
+            {
+                pdf.AddPolyline(bus.Path, closed: false, SvgLineClass.Visible, busPen);
+                pdf.AddSegments(bus.Entries, SvgLineClass.Visible);
+            }
         }
         foreach (var text in _texts)
             pdf.AddText(text.Position, text.Text, text.Height, text.Anchor);
