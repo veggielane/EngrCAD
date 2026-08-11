@@ -7,11 +7,11 @@ namespace EngrCAD.Ecad;
 public enum MidDrcRule
 {
     /// <summary>Copper of different nets closer than the minimum clearance ON THE SURFACE (a near
-    /// miss), the clearance folded through the exp map's distortion.</summary>
+    /// miss), the clearance folded through the surface distortion.</summary>
     Clearance,
 
-    /// <summary>Copper of different nets overlapping in parameter space — a SHORT, definite whatever
-    /// the distortion, and the strongest failure.</summary>
+    /// <summary>Copper of different nets touching / overlapping — a SHORT, definite whatever the
+    /// distortion, and the strongest failure.</summary>
     Short,
 
     /// <summary>A copper conductor narrower on the surface than the minimum trace width.</summary>
@@ -22,33 +22,33 @@ public enum MidDrcRule
 /// distortion forces.</summary>
 public enum MidDrcVerdict
 {
-    /// <summary>The rule is DEFINITELY broken: even the map's most favourable local scale cannot make
-    /// the surface distance meet the rule.</summary>
+    /// <summary>The rule is DEFINITELY broken: even the most favourable local scale cannot make the
+    /// surface distance meet the rule.</summary>
     Violation,
 
-    /// <summary>The DRC CANNOT CERTIFY the pair either way — the distortion band straddles the limit,
-    /// so the surface clearance depends on which local scale is real. Refused rather than passed
+    /// <summary>The DRC CANNOT CERTIFY the pair either way — the distortion band straddles the limit, so
+    /// the surface clearance depends on which local scale is real. Refused rather than passed
     /// false-precise (the tamper-mesh near-tangency rule). A conservative DRC treats this as not
     /// passable, so <see cref="Mid3dDrcReport.Ok"/> is false while any uncertainty remains.</summary>
     Uncertain,
 }
 
 /// <summary>
-/// One finding of the 3D DRC. It NAMES its offenders, LOCATES the finding in parameter AND surface
-/// coordinates, and reports the MEASURED parameter separation against the REQUIRED SURFACE clearance
-/// with the distortion band that connects them — a report that only said "fail" would be useless (the
-/// <c>DrcViolation</c> / <c>PcbLayoutCheck</c> house style).
+/// One finding of the 3D DRC. It NAMES its offenders, LOCATES the finding in surface coordinates, and
+/// reports the MEASURED separation against the REQUIRED SURFACE clearance with the distortion band that
+/// connects them — a report that only said "fail" would be useless (the <c>DrcViolation</c> /
+/// <c>PcbLayoutCheck</c> house style).
 /// </summary>
 /// <param name="Rule">The rule the finding is about.</param>
 /// <param name="Verdict">Whether the rule is definitely broken or merely un-certifiable.</param>
 /// <param name="Message">A human-readable line naming the offending nets / features.</param>
-/// <param name="ParameterLocation">Where it is, in exp-map (u, v) coordinates.</param>
-/// <param name="SurfaceLocation">Where it is on the moulded surface (the lift of
-/// <see cref="ParameterLocation"/>).</param>
-/// <param name="MeasuredParameter">The parameter-space edge-to-edge separation (mm in (u, v)). This is
-/// the quantity the DRC and the flat unrolled DRC share bit for bit, since both measure it on the same
-/// (u, v) geometry.</param>
-/// <param name="Required">The rule's SURFACE limit (mm on the moulded surface).</param>
+/// <param name="ParameterLocation">Where it is, in the measuring chart's (u, v) coordinates (0 for an
+/// intrinsic pair measured in a per-pair local chart).</param>
+/// <param name="SurfaceLocation">Where it is on the moulded surface.</param>
+/// <param name="MeasuredParameter">The measured edge-to-edge separation (mm, in the measuring chart's
+/// coordinates). On a global-chart board this is the (u, v) separation the flat unrolled DRC shares bit
+/// for bit; on an intrinsic board it is the geodesic separation the per-pair chart measured.</param>
+/// <param name="Required">The rule's SURFACE limit (mm).</param>
 /// <param name="MinScale">The smallest local scale (surface / parameter) over the pair — the surface
 /// separation is at least <c>MeasuredParameter × MinScale</c>.</param>
 /// <param name="MaxScale">The largest local scale — the surface separation is at most
@@ -71,23 +71,19 @@ public readonly record struct MidDrcViolation(
 
 /// <summary>
 /// The result of <see cref="Mid3dDrc.Check(MidBoard, DrcRuleSet?)"/>. The <see cref="Violations"/> are
-/// definite faults; the <see cref="Uncertain"/> findings are pairs the map's distortion left
+/// definite faults; the <see cref="Uncertain"/> findings are pairs the surface distortion left
 /// un-certifiable (refused, not passed); the <see cref="Ratsnest"/> is the INVERSE — nets the copper
 /// does not yet connect — reported as INFORMATION.
 /// </summary>
-/// <param name="Violations">Definite rule breaks, each naming and locating its offender.</param>
-/// <param name="Uncertain">Pairs the DRC could not certify — a conservative refusal in the distortion
-/// band.</param>
-/// <param name="Ratsnest">Nets whose copper is not all connected (unrouted), in name order.</param>
 public sealed record Mid3dDrcReport(
     IReadOnlyList<MidDrcViolation> Violations,
     IReadOnlyList<MidDrcViolation> Uncertain,
     IReadOnlyList<string> Ratsnest)
 {
     /// <summary>True when the DRC could CERTIFY the whole board: no definite violation AND nothing left
-    /// uncertain. An un-certifiable pair is not passable — a moulded board the parameterization cannot
-    /// vouch for is not one a conservative DRC signs off (the un-routed ratsnest is not a fault, so it
-    /// does not fail this).</summary>
+    /// uncertain. An un-certifiable pair is not passable — a moulded board the surface cannot vouch for
+    /// is not one a conservative DRC signs off (the un-routed ratsnest is not a fault, so it does not
+    /// fail this).</summary>
     public bool Ok => Violations.Count == 0 && Uncertain.Count == 0;
 
     /// <summary>The findings of one rule (violations and uncertain).</summary>
@@ -116,133 +112,108 @@ public sealed record Mid3dDrcReport(
 }
 
 /// <summary>
-/// The 3D design-rule check for a moulded (MID) board: the flat copper DRC's rules run in the exp
-/// map's (u, v) parameter coordinates, with the surface distortion FOLDED into the clearance.
+/// The 3D design-rule check for a moulded (MID) board — the copper DRC's rules run on the surface, with
+/// the distortion FOLDED into the clearance.
 ///
-/// <para><b>It is the SAME grow-and-intersect the flat DRC uses</b> (<see cref="PcbDrc"/>): a pair of
-/// different-net copper is clear iff, once each is grown by half the clearance, they do not intersect
-/// (an empty intersection PROVES the clearance — the tamper-mesh construction). What the surface adds is
-/// the FOLD: a required SURFACE clearance <c>C</c> becomes a PARAMETER clearance <c>C / scale</c>, and
-/// because the exp map's local scale varies, the check is three-valued rather than two:</para>
-/// <list type="bullet">
-/// <item><b>Clear</b> — even the map's smallest local scale keeps the surface separation at or above
-/// <c>C</c> (the parameter separation is at least <c>C / minScale</c>).</item>
-/// <item><b>Violation</b> — even the map's largest local scale cannot (the parameter separation is
-/// below <c>C / maxScale</c>).</item>
-/// <item><b>Uncertain</b> — the band straddles the limit, so the answer depends on which scale is real.
-/// REFUSED with the band stated, not passed false-precise.</item>
-/// </list>
+/// <para><b>On an INTRINSIC board (any geometry) the clearance is a GEODESIC surface distance</b> between
+/// two different-net conductors, measured on the mesh. The certified broad phase is the theorem that a
+/// 3D chord is never longer than a surface geodesic: a 3D edge-to-edge distance at or above the
+/// clearance PROVES the surface clearance (CLEAR). A closer pair is measured tightly in a LOCAL exp-map
+/// chart built around it — the geodesic-distance approximator, exact on a developable patch — with the
+/// SAME grow-and-intersect the flat copper DRC uses and the local distortion folded in. The result is
+/// three-valued: Clear, Violation, or <b>Uncertain</b> where the distortion band straddles the limit or
+/// the curvature is too high to cover the pair in a chart at all — refused, not passed false-precise.</para>
 ///
-/// <para><b>On a developable surface the band collapses</b> (min scale == max scale == 1), so the
-/// three outcomes reduce to the flat DRC's two and the 3D DRC AGREES with the unrolled 2D DRC — the
-/// decisive oracle (a cylindrical MID board checked here equals its flat unrolled sheet, verdicts and
-/// parameter separations, to the weld tier).</para>
+/// <para><b>On a GLOBAL-chart board (a developable patch) the same rules run in the ONE exp map's
+/// (u, v)</b>, which is the intrinsic geodesic exactly (an isometry), so a cylindrical board's verdicts
+/// and measured separations equal its unrolled flat sheet's bit for bit — the decisive developable
+/// oracle.</para>
 ///
-/// <para><b>The load-bearing rule survives the surface</b>: the DRC reads the NETLIST to decide what
-/// should connect — a short is copper of DIFFERENT nets touching; SAME-net copper touching is the
-/// intended connection and is never flagged. And a net whose copper is not all joined is an unrouted
-/// RATSNEST (information, not a fault).</para>
-///
-/// <para><b>Scope, v1.</b> Clearance, shorts and trace width — the rules a single conductive surface
-/// carries. No drilled holes, board-edge or vias (a moulded surface has none in v1); a copper-to-map-
-/// boundary rule is filed. Multi-shell MID (an inner moulded copper layer) is filed.</para>
+/// <para><b>The load-bearing rule survives the surface</b>: the DRC reads the NETLIST — a short is copper
+/// of DIFFERENT nets touching; SAME-net copper touching is the intended connection and is never flagged.
+/// A net whose copper is not all joined is an unrouted RATSNEST (information, not a fault).</para>
 /// </summary>
 public static class Mid3dDrc
 {
-    /// <summary>Runs the 3D DRC over a MID board against a rule set (null = the flat
-    /// <see cref="DrcRuleSet.Default"/>; only its clearance and trace-width fields apply on a moulded
-    /// surface).</summary>
+    /// <summary>Runs the 3D DRC over a MID board against a rule set (null = <see cref="DrcRuleSet.Default"/>;
+    /// only clearance and trace-width apply on a moulded surface).</summary>
     public static Mid3dDrcReport Check(MidBoard board, DrcRuleSet? rules = null)
     {
         ArgumentNullException.ThrowIfNull(board);
         rules ??= DrcRuleSet.Default;
+        return board.IsIntrinsic ? CheckIntrinsic(board, rules) : CheckGlobal(board, rules);
+    }
 
+    // ======================================================================
+    //  GLOBAL-CHART PATH — the exact (u, v) DRC (bit-for-bit on a developable patch)
+    // ======================================================================
+
+    private static Mid3dDrcReport CheckGlobal(MidBoard board, DrcRuleSet rules)
+    {
         var features = board.Features();
         var violations = new List<MidDrcViolation>();
         var uncertain = new List<MidDrcViolation>();
 
-        CheckClearanceAndShorts(board, features, rules.MinCopperClearance, violations, uncertain);
-        CheckTraceWidths(board, features, rules.MinTraceWidth, violations, uncertain);
-
-        return new Mid3dDrcReport(violations, uncertain, Ratsnest(features));
-    }
-
-    // ---- clearance and shorts ------------------------------------------------
-
-    private static void CheckClearanceAndShorts(
-        MidBoard board, IReadOnlyList<MidFeature> features, double c,
-        List<MidDrcViolation> violations, List<MidDrcViolation> uncertain)
-    {
+        double c = rules.MinCopperClearance;
         for (int i = 0; i < features.Count; i++)
             for (int j = i + 1; j < features.Count; j++)
             {
                 var a = features[i];
                 var b = features[j];
                 if (SameNet(a.Net, b.Net))
-                    continue;   // the intended connection, never a short
-                ClassifyPair(board, a, b, c, violations, uncertain);
+                    continue;
+                ClassifyChartPair(board, a, b, c, violations, uncertain);
             }
+
+        CheckChartTraceWidths(board, features, rules.MinTraceWidth, violations, uncertain);
+        return new Mid3dDrcReport(violations, uncertain, RatsnestChart(features));
     }
 
-    /// <summary>Classifies one different-net pair into Clear / Violation / Uncertain (see the class
-    /// remarks). The distortion band folded in is the COMBINED band of the two features — conservative,
-    /// since it covers the whole region either occupies.</summary>
-    private static void ClassifyPair(
+    private static void ClassifyChartPair(
         MidBoard board, in MidFeature a, in MidFeature b, double c,
         List<MidDrcViolation> violations, List<MidDrcViolation> uncertain)
     {
         double combinedMin = Math.Min(a.MinScale, b.MinScale);
         double combinedMax = Math.Max(a.MaxScale, b.MaxScale);
+        var ra = new[] { a.Region };
+        var rb = new[] { b.Region };
 
-        // Overlap in parameter space is a short whatever the distortion.
-        if (CurvedRegion2dBoolean.Intersection([a.Region], [b.Region]).Count > 0)
+        var outcome = ClearanceOutcome(ra, rb, combinedMin, combinedMax, c, out double s);
+        switch (outcome)
         {
-            violations.Add(Finding(board, MidDrcRule.Short, MidDrcVerdict.Violation, a, b,
-                $"short: net {Display(a.Net)} ({a.Source}) touches net {Display(b.Net)} ({b.Source})",
-                0, c, combinedMin, combinedMax));
-            return;
-        }
-        if (!(c > 0))
-            return;
-
-        // The two parameter thresholds. Below C/maxScale it is too close even best-case (a violation);
-        // at or above C/minScale it is clear even worst-case; between, the band straddles (uncertain).
-        double effViolation = c / combinedMax;
-        double effClear = c / combinedMin;
-
-        // The reported separation is bisected up to a BAND-INDEPENDENT cap, so it is the SAME
-        // deterministic number the flat unrolled DRC measures on the same (u, v) geometry — capping at
-        // the band-dependent effClear would make a developable board's reported clearance differ from
-        // its unrolling by the bisection's own last bits, breaking the bit-identity oracle.
-        double reportCap = 4 * c;
-
-        // Broad phase: a parameter AABB gap at or above the LARGEST threshold proves the pair clear.
-        if (ParameterGap(a.Region.Bounds, b.Region.Bounds) >= effClear)
-            return;
-
-        if (IntersectAfterGrow(a.Region, b.Region, effViolation))
-        {
-            double s = Separation([a.Region], [b.Region], reportCap);
-            violations.Add(Finding(board, MidDrcRule.Clearance, MidDrcVerdict.Violation, a, b,
-                $"surface clearance {SurfaceSpan(s, combinedMin, combinedMax)} < {c:g3} mm: "
-                + $"net {Display(a.Net)} ({a.Source}) and net {Display(b.Net)} ({b.Source})",
-                s, c, combinedMin, combinedMax));
-            return;
-        }
-        if (IntersectAfterGrow(a.Region, b.Region, effClear))
-        {
-            double s = Separation([a.Region], [b.Region], reportCap);
-            uncertain.Add(Finding(board, MidDrcRule.Clearance, MidDrcVerdict.Uncertain, a, b,
-                $"surface clearance {SurfaceSpan(s, combinedMin, combinedMax)} straddles {c:g3} mm "
-                + $"(distortion {(combinedMax / combinedMin - 1) * 100:g2}%): "
-                + $"net {Display(a.Net)} ({a.Source}) and net {Display(b.Net)} ({b.Source})",
-                s, c, combinedMin, combinedMax));
+            case PairOutcome.Short:
+                violations.Add(FindingAt(ChartLocation(board, a, b),
+                    MidDrcRule.Short, MidDrcVerdict.Violation,
+                    $"short: net {Display(a.Net)} ({a.Source}) touches net {Display(b.Net)} ({b.Source})",
+                    0, c, combinedMin, combinedMax));
+                break;
+            case PairOutcome.Violation:
+                violations.Add(FindingAt(ChartLocation(board, a, b),
+                    MidDrcRule.Clearance, MidDrcVerdict.Violation,
+                    $"surface clearance {SurfaceSpan(s, combinedMin, combinedMax)} < {c:g3} mm: "
+                    + $"net {Display(a.Net)} ({a.Source}) and net {Display(b.Net)} ({b.Source})",
+                    s, c, combinedMin, combinedMax));
+                break;
+            case PairOutcome.Uncertain:
+                uncertain.Add(FindingAt(ChartLocation(board, a, b),
+                    MidDrcRule.Clearance, MidDrcVerdict.Uncertain,
+                    $"surface clearance {SurfaceSpan(s, combinedMin, combinedMax)} straddles {c:g3} mm "
+                    + $"(distortion {(combinedMax / combinedMin - 1) * 100:g2}%): "
+                    + $"net {Display(a.Net)} ({a.Source}) and net {Display(b.Net)} ({b.Source})",
+                    s, c, combinedMin, combinedMax));
+                break;
         }
     }
 
-    // ---- trace width ---------------------------------------------------------
+    private static (Vector2d Uv, Vector3d Surface) ChartLocation(MidBoard board, in MidFeature a, in MidFeature b)
+    {
+        var at = (a.Region.Bounds.Center + b.Region.Bounds.Center) * 0.5;
+        var uv = new Vector2d(at.X, at.Y);
+        board.TryLift(uv, out var surface);
+        return (uv, surface);
+    }
 
-    private static void CheckTraceWidths(
+    private static void CheckChartTraceWidths(
         MidBoard board, IReadOnlyList<MidFeature> features, double minWidth,
         List<MidDrcViolation> violations, List<MidDrcViolation> uncertain)
     {
@@ -250,60 +221,29 @@ public static class Mid3dDrc
             return;
         foreach (var feature in features)
         {
-            // The surface width is the authored parameter width folded through the scale band. Checked
-            // directly rather than re-measured, since round joins never pinch a width and an
-            // opposing-wall measure under-reports on a round cap; too thin even at the largest scale is a
-            // violation, thin only at the smaller scale is uncertain.
             double wParam = feature.Width;
             var at = new Vector2d(feature.Region.Bounds.Center.X, feature.Region.Bounds.Center.Y);
+            board.TryLift(at, out var surface);
             if (wParam * feature.MaxScale < minWidth)
-            {
-                board.TryLift(at, out var surface);
-                violations.Add(new MidDrcViolation(
-                    MidDrcRule.TraceWidth, MidDrcVerdict.Violation,
-                    $"surface width {SurfaceSpan(wParam, feature.MinScale, feature.MaxScale)} < {minWidth:g3} mm "
-                    + $"at {feature.Source}",
+                violations.Add(new MidDrcViolation(MidDrcRule.TraceWidth, MidDrcVerdict.Violation,
+                    $"surface width {SurfaceSpan(wParam, feature.MinScale, feature.MaxScale)} < {minWidth:g3} mm at {feature.Source}",
                     at, surface, wParam, minWidth, feature.MinScale, feature.MaxScale));
-            }
             else if (wParam * feature.MinScale < minWidth)
-            {
-                board.TryLift(at, out var surface);
-                uncertain.Add(new MidDrcViolation(
-                    MidDrcRule.TraceWidth, MidDrcVerdict.Uncertain,
-                    $"surface width {SurfaceSpan(wParam, feature.MinScale, feature.MaxScale)} straddles "
-                    + $"{minWidth:g3} mm at {feature.Source}",
+                uncertain.Add(new MidDrcViolation(MidDrcRule.TraceWidth, MidDrcVerdict.Uncertain,
+                    $"surface width {SurfaceSpan(wParam, feature.MinScale, feature.MaxScale)} straddles {minWidth:g3} mm at {feature.Source}",
                     at, surface, wParam, minWidth, feature.MinScale, feature.MaxScale));
-            }
         }
     }
 
-    // ---- ratsnest (unrouted nets) --------------------------------------------
-
-    /// <summary>Nets whose copper is not all in one connected component — unrouted. Two features join
-    /// when their (u, v) copper regions TOUCH (an exact intersection, no tolerance), the same rule the
-    /// clearance check calls a short between different nets and the flat <see cref="PcbConnectivity"/>
-    /// engine uses; here every feature of a net is a terminal, so a net with more than one component has
-    /// copper it does not connect.</summary>
-    private static IReadOnlyList<string> Ratsnest(IReadOnlyList<MidFeature> features)
+    private static IReadOnlyList<string> RatsnestChart(IReadOnlyList<MidFeature> features)
     {
-        var byNet = new Dictionary<string, List<int>>(StringComparer.Ordinal);
-        for (int i = 0; i < features.Count; i++)
-        {
-            if (features[i].Net is not { } net)
-                continue;
-            if (!byNet.TryGetValue(net, out var list))
-                byNet[net] = list = [];
-            list.Add(i);
-        }
-
+        var byNet = GroupByNet(features.Count, i => features[i].Net);
         var unrouted = new List<string>();
         foreach (var (net, indices) in byNet)
         {
             if (indices.Count < 2)
-                continue;   // a single piece of copper cannot be disconnected
-            var parent = new int[indices.Count];
-            for (int i = 0; i < indices.Count; i++)
-                parent[i] = i;
+                continue;
+            var parent = MakeSet(indices.Count);
             for (int a = 0; a < indices.Count; a++)
                 for (int b = a + 1; b < indices.Count; b++)
                 {
@@ -316,44 +256,272 @@ public static class Mid3dDrc
                     if (CurvedRegion2dBoolean.Intersection([ra], [rb]).Count > 0)
                         Union(parent, a, b);
                 }
-            int roots = 0;
-            for (int i = 0; i < indices.Count; i++)
-                if (Find(parent, i) == i)
-                    roots++;
-            if (roots > 1)
+            if (Roots(parent) > 1)
                 unrouted.Add(net);
         }
         unrouted.Sort(StringComparer.Ordinal);
         return unrouted;
     }
 
-    private static int Find(int[] parent, int i)
+    // ======================================================================
+    //  INTRINSIC PATH — geodesic surface distances through per-pair local charts
+    // ======================================================================
+
+    private static Mid3dDrcReport CheckIntrinsic(MidBoard board, DrcRuleSet rules)
     {
-        while (parent[i] != i)
-            i = parent[i] = parent[parent[i]];
-        return i;
+        var features = board.SurfaceFeatures();
+        var violations = new List<MidDrcViolation>();
+        var uncertain = new List<MidDrcViolation>();
+
+        double c = rules.MinCopperClearance;
+        for (int i = 0; i < features.Count; i++)
+            for (int j = i + 1; j < features.Count; j++)
+            {
+                if (SameNet(features[i].Net, features[j].Net))
+                    continue;
+                ClassifySurfacePair(board, features[i], features[j], c, violations, uncertain);
+            }
+
+        CheckSurfaceTraceWidths(board, features, rules.MinTraceWidth, violations, uncertain);
+        return new Mid3dDrcReport(violations, uncertain, RatsnestSurface(features));
     }
 
-    private static void Union(int[] parent, int a, int b)
+    private static void ClassifySurfacePair(
+        MidBoard board, MidSurfaceFeature a, MidSurfaceFeature b, double c,
+        List<MidDrcViolation> violations, List<MidDrcViolation> uncertain)
     {
-        int ra = Find(parent, a), rb = Find(parent, b);
-        if (ra != rb)
-            parent[Math.Max(ra, rb)] = Math.Min(ra, rb);
+        // Certified broad phase: a 3D chord is never longer than a surface geodesic, so a chord edge-to-
+        // edge distance at or above the clearance PROVES the surface clearance, whatever the curvature.
+        double chordCentres = SurfaceGeometry.PolylineDistance(a.Polyline, b.Polyline);
+        double chordEdge = chordCentres - a.Width / 2 - b.Width / 2;
+        if (c > 0 && chordEdge >= c)
+            return;   // CLEAR, certified
+
+        // The pair is 3D-close: measure it in a local exp-map chart. If the surface is so curved that no
+        // chart covers both, the pair cannot be certified — a conservative Uncertain.
+        var location = board.Surface.Locate((a.Centre.Position + b.Centre.Position) * 0.5);
+        if (!TryMeasurePair(board, a, b, location, chordCentres, c,
+                out var ra, out var rb, out double minScale, out double maxScale))
+        {
+            uncertain.Add(FindingAt((Vector2d.Zero, location.Position),
+                MidDrcRule.Clearance, MidDrcVerdict.Uncertain,
+                $"surface too curved to certify the clearance between net {Display(a.Net)} ({a.Source}) "
+                + $"and net {Display(b.Net)} ({b.Source}) — no exp-map chart covers the pair; "
+                + $"chord edge-to-edge {chordEdge:g3} mm < {c:g3} mm",
+                chordEdge, c, 1, 1));
+            return;
+        }
+
+        var outcome = ClearanceOutcome(ra, rb, minScale, maxScale, c, out double s);
+        switch (outcome)
+        {
+            case PairOutcome.Short:
+                violations.Add(FindingAt((Vector2d.Zero, location.Position),
+                    MidDrcRule.Short, MidDrcVerdict.Violation,
+                    $"short: net {Display(a.Net)} ({a.Source}) touches net {Display(b.Net)} ({b.Source})",
+                    0, c, minScale, maxScale));
+                break;
+            case PairOutcome.Violation:
+                violations.Add(FindingAt((Vector2d.Zero, location.Position),
+                    MidDrcRule.Clearance, MidDrcVerdict.Violation,
+                    $"surface clearance {SurfaceSpan(s, minScale, maxScale)} < {c:g3} mm: "
+                    + $"net {Display(a.Net)} ({a.Source}) and net {Display(b.Net)} ({b.Source})",
+                    s, c, minScale, maxScale));
+                break;
+            case PairOutcome.Uncertain:
+                uncertain.Add(FindingAt((Vector2d.Zero, location.Position),
+                    MidDrcRule.Clearance, MidDrcVerdict.Uncertain,
+                    $"surface clearance {SurfaceSpan(s, minScale, maxScale)} straddles {c:g3} mm "
+                    + $"(distortion {(maxScale / minScale - 1) * 100:g2}%): "
+                    + $"net {Display(a.Net)} ({a.Source}) and net {Display(b.Net)} ({b.Source})",
+                    s, c, minScale, maxScale));
+                break;
+        }
     }
 
-    // ---- geometry helpers (parameter space) ----------------------------------
+    /// <summary>Projects both features into a local chart around the pair and reads the chart's local
+    /// scale band. Grows the chart until it covers both (a couple of tries); returns false when even a
+    /// generous chart cannot — the surface is too curved to certify.</summary>
+    private static bool TryMeasurePair(
+        MidBoard board, MidSurfaceFeature a, MidSurfaceFeature b, in SurfacePoint centre,
+        double chordCentres, double c,
+        out CurvedRegion2d[] ra, out CurvedRegion2d[] rb, out double minScale, out double maxScale)
+    {
+        ra = [];
+        rb = [];
+        minScale = 1;
+        maxScale = 1;
+        double span = Math.Max(a.Bounds.Size.Length, b.Bounds.Size.Length);
+        // The chart need only cover the two features and the gap between them — kept as TIGHT as possible,
+        // since an over-large chart on a small closed surface wraps onto itself and its (u, v) degenerates.
+        double baseR = chordCentres + Math.Max(a.Width, b.Width) + 0.5 * span + 2 * board.LongestEdge();
 
-    private static bool IntersectAfterGrow(CurvedRegion2d a, CurvedRegion2d b, double gap) =>
-        CurvedRegion2dBoolean.Intersection(Grow([a], gap / 2), Grow([b], gap / 2)).Count > 0;
+        foreach (double mult in ChartGrowth)
+        {
+            var chart = board.Surface.Chart(centre, baseR * mult);
+            if (chart.IsEmpty)
+                continue;
+            if (!TryProjectFeature(chart, a, out ra) || !TryProjectFeature(chart, b, out rb))
+                continue;
+            if (!chart.TryProject(centre, out var uvCentre))
+                continue;
+            // The distortion that matters to a clearance is the exp map's scale variation over the GAP
+            // being measured, not over a feature: probe a cross whose half-span covers the separation
+            // between the two projected copper regions (plus their own size). On a developable patch the
+            // band collapses (exact); where the clearance is comparable to the curvature radius it spreads.
+            var ca = Bounds(ra).Center;
+            var cb = Bounds(rb).Center;
+            double sep = new Vector2d(ca.X, ca.Y).DistanceTo(new Vector2d(cb.X, cb.Y));
+            double probeSpan = Math.Max(Math.Max(sep, span), baseR * mult * 0.02);
+            (minScale, maxScale) = chart.ScaleBand(uvCentre, probeSpan);
+            FoldFeatureScale(chart, a, probeSpan, ref minScale, ref maxScale);
+            FoldFeatureScale(chart, b, probeSpan, ref minScale, ref maxScale);
+            // A degenerate band (a chart that wrapped a tightly-curved patch) is not a measurement: the
+            // surface is too curved at this scale to certify, so refuse cleanly rather than report
+            // nonsense numbers. A bigger chart only wraps worse, so this is the answer for the pair.
+            if (minScale > 0.5 && maxScale < 2 && maxScale <= 2.5 * minScale)
+                return true;
+            return false;
+        }
+        return false;
+    }
+
+    private static void FoldFeatureScale(LocalExpChart chart, MidSurfaceFeature f, double span, ref double min, ref double max)
+    {
+        if (!chart.TryProject(f.Centre, out var uv))
+            return;
+        var (fmin, fmax) = chart.ScaleBand(uv, Math.Max(f.Width, span * 0.25));
+        min = Math.Min(min, fmin);
+        max = Math.Max(max, fmax);
+    }
+
+    private static bool TryProjectFeature(LocalExpChart chart, MidSurfaceFeature f, out CurvedRegion2d[] regions)
+    {
+        regions = [];
+        if (f.CentreLine.Count == 1)
+        {
+            if (!chart.TryProject(f.CentreLine[0], out var uv))
+                return false;
+            regions = [CurvedRegion2d.Disc(uv, f.Width / 2)];
+            return true;
+        }
+        var pts = new Vector2d[f.CentreLine.Count];
+        for (int i = 0; i < pts.Length; i++)
+        {
+            if (!chart.TryProject(f.CentreLine[i], out pts[i]))
+                return false;
+            if (double.IsNaN(pts[i].X) || double.IsInfinity(pts[i].X))
+                return false;
+        }
+        var strokes = Region2dOffset.Stroke(pts, f.Width, StrokeCap.Round, OffsetJoin.Round);
+        var list = new List<CurvedRegion2d>(strokes.Count);
+        foreach (var stroke in strokes)
+            list.Add(CurvedRegion2d.FromRegion(stroke));
+        if (list.Count == 0)
+            return false;
+        regions = [.. list];
+        return true;
+    }
+
+    private static void CheckSurfaceTraceWidths(
+        MidBoard board, IReadOnlyList<MidSurfaceFeature> features, double minWidth,
+        List<MidDrcViolation> violations, List<MidDrcViolation> uncertain)
+    {
+        if (!(minWidth > 0))
+            return;
+        foreach (var feature in features)
+        {
+            var (min, max) = board.LocalScaleBandAround(feature.Centre, feature.Width, feature.Bounds.Size.Length);
+            double w = feature.Width;
+            if (w * max < minWidth)
+                violations.Add(new MidDrcViolation(MidDrcRule.TraceWidth, MidDrcVerdict.Violation,
+                    $"surface width {SurfaceSpan(w, min, max)} < {minWidth:g3} mm at {feature.Source}",
+                    Vector2d.Zero, feature.Centre.Position, w, minWidth, min, max));
+            else if (w * min < minWidth)
+                uncertain.Add(new MidDrcViolation(MidDrcRule.TraceWidth, MidDrcVerdict.Uncertain,
+                    $"surface width {SurfaceSpan(w, min, max)} straddles {minWidth:g3} mm at {feature.Source}",
+                    Vector2d.Zero, feature.Centre.Position, w, minWidth, min, max));
+        }
+    }
+
+    /// <summary>Same-net copper whose 3D footprints touch (edge-to-edge distance ≤ the weld tier) is
+    /// joined — a trace endpoint lands exactly on its pad, so the two coincide there. Copper the union
+    /// leaves in more than one piece is an unrouted net (information, not a fault).</summary>
+    private static IReadOnlyList<string> RatsnestSurface(IReadOnlyList<MidSurfaceFeature> features)
+    {
+        var byNet = GroupByNet(features.Count, i => features[i].Net);
+        var unrouted = new List<string>();
+        foreach (var (net, indices) in byNet)
+        {
+            if (indices.Count < 2)
+                continue;
+            var parent = MakeSet(indices.Count);
+            for (int a = 0; a < indices.Count; a++)
+                for (int b = a + 1; b < indices.Count; b++)
+                {
+                    if (Find(parent, a) == Find(parent, b))
+                        continue;
+                    var fa = features[indices[a]];
+                    var fb = features[indices[b]];
+                    double edge = SurfaceGeometry.PolylineDistance(fa.Polyline, fb.Polyline)
+                        - fa.Width / 2 - fb.Width / 2;
+                    double weld = 1e-6 * Math.Max(1, Math.Max(fa.Bounds.Size.Length, fb.Bounds.Size.Length));
+                    if (edge <= weld)
+                        Union(parent, a, b);
+                }
+            if (Roots(parent) > 1)
+                unrouted.Add(net);
+        }
+        unrouted.Sort(StringComparer.Ordinal);
+        return unrouted;
+    }
+
+    // ======================================================================
+    //  SHARED classifier and helpers
+    // ======================================================================
+
+    private static readonly double[] ChartGrowth = [1.5, 3.0, 6.0];
+
+    private enum PairOutcome { Clear, Short, Violation, Uncertain }
+
+    /// <summary>The one grow-and-intersect classifier both paths share: two copper region sets in a
+    /// chart's (u, v), a combined scale band and a surface clearance. On the global path each set is one
+    /// region and the numbers are bit-identical to the flat unrolled DRC.</summary>
+    private static PairOutcome ClearanceOutcome(
+        IReadOnlyList<CurvedRegion2d> ra, IReadOnlyList<CurvedRegion2d> rb,
+        double combinedMin, double combinedMax, double c, out double separation)
+    {
+        separation = 0;
+        if (CurvedRegion2dBoolean.Intersection(ra, rb).Count > 0)
+            return PairOutcome.Short;
+        if (!(c > 0))
+            return PairOutcome.Clear;
+
+        double effViolation = c / combinedMax;
+        double effClear = c / combinedMin;
+        double reportCap = 4 * c;
+
+        if (ParameterGap(Bounds(ra), Bounds(rb)) >= effClear)
+            return PairOutcome.Clear;
+        if (IntersectAfterGrow(ra, rb, effViolation))
+        {
+            separation = Separation(ra, rb, reportCap);
+            return PairOutcome.Violation;
+        }
+        if (IntersectAfterGrow(ra, rb, effClear))
+        {
+            separation = Separation(ra, rb, reportCap);
+            return PairOutcome.Uncertain;
+        }
+        return PairOutcome.Clear;
+    }
+
+    private static bool IntersectAfterGrow(IReadOnlyList<CurvedRegion2d> a, IReadOnlyList<CurvedRegion2d> b, double gap) =>
+        CurvedRegion2dBoolean.Intersection(Grow(a, gap / 2), Grow(b, gap / 2)).Count > 0;
 
     private static IReadOnlyList<CurvedRegion2d> Grow(IReadOnlyList<CurvedRegion2d> regions, double delta) =>
         delta <= 0 ? regions : CurvedRegion2dOffset.Offset(regions, delta, OffsetJoin.Round);
 
-    /// <summary>The parameter-space edge-to-edge separation of two disjoint region sets, capped at
-    /// <paramref name="cap"/> — the largest g for which growing each by g/2 keeps them disjoint. The
-    /// SAME grow-and-intersect the pass/fail rests on, so the reported number and the verdict cannot
-    /// disagree; it is what the flat unrolled DRC measures on the same (u, v) geometry, so the two are
-    /// bit-identical on a developable surface.</summary>
     private static double Separation(
         IReadOnlyList<CurvedRegion2d> a, IReadOnlyList<CurvedRegion2d> b, double cap)
     {
@@ -362,7 +530,7 @@ public static class Mid3dDrc
         if (CurvedRegion2dBoolean.Intersection(Grow(a, cap / 2), Grow(b, cap / 2)).Count == 0)
             return cap;
         double lo = 0, hi = cap;
-        for (int i = 0; i < 20; i++)   // relative 1e-6 of the cap
+        for (int i = 0; i < 20; i++)
         {
             double m = (lo + hi) / 2;
             if (CurvedRegion2dBoolean.Intersection(Grow(a, m / 2), Grow(b, m / 2)).Count == 0)
@@ -373,15 +541,18 @@ public static class Mid3dDrc
         return lo;
     }
 
-    private static MidDrcViolation Finding(
-        MidBoard board, MidDrcRule rule, MidDrcVerdict verdict, in MidFeature a, in MidFeature b,
-        string message, double measured, double required, double minScale, double maxScale)
+    private static Aabb Bounds(IReadOnlyList<CurvedRegion2d> regions)
     {
-        var at = (a.Region.Bounds.Center + b.Region.Bounds.Center) * 0.5;
-        var uv = new Vector2d(at.X, at.Y);
-        board.TryLift(uv, out var surface);
-        return new MidDrcViolation(rule, verdict, message, uv, surface, measured, required, minScale, maxScale);
+        var box = Aabb.Empty;
+        foreach (var r in regions)
+            box = box.Union(r.Bounds);
+        return box;
     }
+
+    private static MidDrcViolation FindingAt(
+        (Vector2d Uv, Vector3d Surface) at, MidDrcRule rule, MidDrcVerdict verdict,
+        string message, double measured, double required, double minScale, double maxScale) =>
+        new(rule, verdict, message, at.Uv, at.Surface, measured, required, minScale, maxScale);
 
     private static string SurfaceSpan(double parameter, double min, double max)
     {
@@ -402,4 +573,51 @@ public static class Mid3dDrc
 
     private static bool ParameterBoxesTouch(in Aabb a, in Aabb b) =>
         a.Min.X <= b.Max.X && b.Min.X <= a.Max.X && a.Min.Y <= b.Max.Y && b.Min.Y <= a.Max.Y;
+
+    // ---- union-find ----------------------------------------------------------
+
+    private static Dictionary<string, List<int>> GroupByNet(int count, Func<int, string?> netOf)
+    {
+        var byNet = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        for (int i = 0; i < count; i++)
+        {
+            if (netOf(i) is not { } net)
+                continue;
+            if (!byNet.TryGetValue(net, out var list))
+                byNet[net] = list = [];
+            list.Add(i);
+        }
+        return byNet;
+    }
+
+    private static int[] MakeSet(int n)
+    {
+        var parent = new int[n];
+        for (int i = 0; i < n; i++)
+            parent[i] = i;
+        return parent;
+    }
+
+    private static int Find(int[] parent, int i)
+    {
+        while (parent[i] != i)
+            i = parent[i] = parent[parent[i]];
+        return i;
+    }
+
+    private static void Union(int[] parent, int a, int b)
+    {
+        int ra = Find(parent, a), rb = Find(parent, b);
+        if (ra != rb)
+            parent[Math.Max(ra, rb)] = Math.Min(ra, rb);
+    }
+
+    private static int Roots(int[] parent)
+    {
+        int roots = 0;
+        for (int i = 0; i < parent.Length; i++)
+            if (Find(parent, i) == i)
+                roots++;
+        return roots;
+    }
 }

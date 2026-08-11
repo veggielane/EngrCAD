@@ -7697,59 +7697,96 @@ is an undriven conduction problem refused BY NAME (the `ThermalSolver` conventio
 board is isothermal at its held temperature exactly; a solve is **deterministic** to the bit. Docs:
 `examples/ecad-thermal.md`.
 
-### Stage 9 — MID / LDS 3D surface routing (`MidBoard`/`SurfaceTrace`/`MidRouting`/`Mid3dDrc`)
+### Stage 9 — MID / LDS 3D surface routing (`MidSurface`/`MidBoard`/`SurfaceTrace`/`MidRouting`/`Mid3dDrc`)
 
 The flagship novel capability: routing conductors and seating components on a MOULDED, doubly-curved
-surface (an LDS housing carrying its own circuit on its shaped wall) rather than on a flat board. The
-load-bearing decision is that **the whole thing happens in the surface's exponential-map (u, v)
-parameter space** — `MeshLocalParam`'s discrete exp map from a stated origin flattens the moulded
-surface into `(u, v)`, and the routing and the 3D DRC run there with the *same* grow-and-intersect the
-flat copper DRC uses, so nothing about the surface changes the arithmetic except that the map's own
-distortion is FOLDED into the clearance. A `MidBoard` owns the exp map and its inverse (a BVH over the
-mesh triangles in `(u, v)` plus barycentric interpolation — the same construction `SurfaceDecoration`
-lifts a decoration through, extended to also report the surface NORMAL the conductor lift needs, and
-computed ONCE so every pad, trace and probe reads one consistent map, which is why a trace authored to
-start at a pad's `(u, v)` lifts to exactly that pad's surface point). A `SurfaceTrace` is a `(u, v)`
-polyline lifted onto the surface that REPORTS the distortion it carried (`MinScale`/`MaxScale`, exactly
-as `SurfaceCurve` does), breaks its run where the map ends (`UnmappedPoints`, never inventing surface),
-and exports as a thin conductive `Shape` (a ribbon offset in the tangent plane and extruded along the
-surface normal) that round-trips through STL/STEP.
+surface (an LDS housing carrying its own circuit on its shaped wall) rather than on a flat board. **It
+works on ANY surface — a torus, a bumpy blob, a whole closed shell — not one exp-map chart**, which is
+the generalisation that removes the earlier version's two recorded failures: a single global exp map
+from a seed + radius distorted far from the seed and WRAPPED a closed surface onto itself where it
+degenerates (whole-tube `MaxDistortion` 22.5, whole-sphere 0.99).
 
-**The exp map is exact on a plane, developable-clean on a cylinder and genuinely distorted on a cap,
-so the 3D DRC is THREE-VALUED where the flat one is two.** A required SURFACE clearance `C` becomes a
-PARAMETER clearance `C / scale`, and because the map's local scale varies over a pair the check reports
-Clear (the parameter separation is at least `C / minScale`, so the surface separation clears even
-worst-case), Violation (it is below `C / maxScale`, so it fails even best-case), or **Uncertain** — the
-band straddles the limit, so the answer depends on which scale is real, and it is REFUSED with the band
-stated rather than passed false-precise (the tamper-mesh near-tangency rule). This is the honest
-failure mode: a near-tolerance pair on a high-distortion patch cannot be certified, so it is not signed
-off.
+**The load-bearing decision is that the surface is modelled INTRINSICALLY, with LOCAL charts per
+query.** A `MidSurface` wraps an arbitrary triangle mesh (triangulated, per-vertex normals, a 3D BVH)
+and answers the routing's three questions with no global chart: `Locate(worldPoint)` snaps to the
+nearest surface point (a `SurfacePoint` — position, interpolated normal, face + barycentric weights),
+`Frame` gives the tangent frame a seated component poses in, and `Chart(centre, radius)` builds a
+LOCAL `LocalExpChart` — `MeshLocalParam`'s exp map made per-point, with the FORWARD map (a `SurfacePoint`
+→ `(u, v)`, the barycentric weights carrying over) the DRC needs to express a feature's copper in the
+chart, the INVERSE (a `(u, v)` → surface point + normal) the conductor lift needs, and the local
+`ScaleBand`. The chart is the geodesic-distance approximator: its `(u, v)` planar distance equals the
+geodesic exactly on a developable patch (an isometry) and differs by the map's local scale where
+curvature concentrates. **Because the chart is local and per query, a closed surface never wraps** — no
+chart is ever asked to cover the whole part. The single global chart the earlier board required is now
+just the degenerate case where one chart covers every feature, kept (`MidBoard.OnSurface`) for a
+developable patch where it gives EXACT numbers, but no longer a requirement (`MidBoard.OnMesh` is the
+general path).
 
-**The decisive oracle is the developable one.** On a cylinder the exp map is an isometry, so the
-distortion band collapses (min scale == max scale == 1) and the three outcomes reduce to the flat DRC's
-two: a cylindrical MID board's 3D DRC verdicts and measured parameter separations equal the UNROLLED
-flat 2D DRC's, bit for bit — measured with the reported separation bisected up to a BAND-INDEPENDENT
-cap (capping at the distortion-dependent threshold would make a developable board's clearance differ
-from its unrolling by the bisection's last bits, which is exactly what the oracle would then miss).
-Numbers: cylinder exp-map distortion `1.2e-3`, plane `6.7e-15`, verdicts and `(u, v)` separations
-identical, the cylinder folding the distortion only into the reported surface-clearance BAND
-(`[0.075, 0.0751]` where the flat reports `0.075`). Then on a sphere cap (distortion `~11%`, a
-tangential trace `MinScale ~0.92`) the fold has teeth: a pair spaced just above the flat limit but
-along the shrinking direction reads a worst-case surface clearance below the rule and is REFUSED, while
-the same `(u, v)` on the plane passes clean. The trace-width rule folds the same way (a 0.16 mm trace
-clears the 0.15 mm rule flat but is refused where the surface shrinks it).
+**On an intrinsic board the clearance is a GEODESIC surface distance, and the three-valued verdict is
+CERTIFIED both ways.** The broad phase is a theorem: a 3D chord is never longer than a surface geodesic,
+so a chord edge-to-edge distance at or above the clearance PROVES the surface clearance (CLEAR, whatever
+the curvature) — and that is also what lets a far pair be certified with no chart, and what makes the
+per-pair chart only ever cover a genuinely-close pair. A closer pair is projected into a LOCAL chart
+seeded at the pair midpoint (grown until it covers both, kept as TIGHT as possible since an over-large
+chart on a small closed surface wraps and its `(u, v)` degenerates), and the SAME grow-and-intersect the
+flat copper DRC uses runs there with the local scale band folded in — Violation (too close even
+best-case), Uncertain (the band straddles), or Clear. **The distortion that matters is the scale
+variation over the GAP being measured**, not over a feature, so the band is probed across the separation;
+and a DEGENERATE band (a chart that wrapped a tightly-curved patch, spread > 2.5×) is not a measurement,
+so it is refused cleanly as "too curved to certify" rather than reported as nonsense. This is the honest
+all-geometry behaviour: at small clearance scales on smooth surfaces the geodesic measure is CONFIDENT
+(the exp map is second-order accurate, and the separation is measured along the chart's exact radial
+direction), and it refuses only where the clearance is comparable to the curvature radius — a small
+sphere with a clearance a large fraction of its radius reads a band `[0.947, 1.04]` straddling the
+`1.0` limit (distortion 10%) and is refused, while the same pair on a plane is certified.
 
-**Two smaller decisions.** The map RADIUS is required and explicit — it is the routing PATCH (which
-part of the moulding carries the circuit), and a footgun default that mapped a closed surface past its
-far side would wrap the exp map onto itself where it degenerates; it is a GRAPH distance that
-over-estimates the straight-line one, so a caller states it comfortably above the furthest feature's
-reach. And a trace's WIDTH is checked against the authored width folded through the scale band rather
-than re-measured off the region, because round joins never pinch a width and an opposing-wall measure
-under-reports on a round cap (a 0.25 mm stadium reads 0.147). **v1 is one conductive surface** — no
-drills, edges or vias (a moulded surface has none); auto-routing on the surface (a geodesic maze
-search, the flat grid router not lifting to a distorted metric), multi-shell MID (an inner moulded
-copper layer) and a conformal solder mask / pour (the distortion reason copper pours already refuse
-curved walls) are all filed by name. Docs: `examples/ecad-mid.md`.
+**The decisive PRECISION oracle stays the developable one, preserved bit for bit.** Where a single
+chart IS an isometry (a flat or developable patch) `MidBoard.OnSurface` authors features in one exp
+map's `(u, v)` and the DRC runs there, so a cylindrical board's 3D DRC verdicts and measured separations
+equal the UNROLLED flat 2D DRC's, bit for bit — measured with the reported separation bisected up to a
+BAND-INDEPENDENT cap (capping at the distortion-dependent threshold would make a developable board's
+clearance differ from its unrolling by the bisection's last bits, which is exactly what the oracle would
+then miss). Numbers: cylinder exp-map distortion `1.2e-3`, plane `6.7e-15`, verdicts and `(u, v)`
+separations identical (`0.04999980926513672 == 0.04999980926513672`), the cylinder folding the
+distortion only into the reported surface-clearance BAND (`[0.075, 0.0751]` where the flat reports
+`0.075`). The INTRINSIC route reaches the same cylinder answer to the discretisation grade (measured
+`0.07474` against an arc gap `0.075`), and a SPHERE geodesic matches its great-circle closed form `R·θ`
+(edge-graph path within `[0.98, 1.10]·R·θ`, a chord-inscribed polyline that can fall a chord below the
+smooth arc and staircases up to ~8% above). This keeps the two readings — "bit-for-bit where one chart
+applies" and "to the weld tier on any surface" — as two statements about the same geometry rather than
+one loosened.
+
+**Traces are laid as GEODESICS.** `MidRouting.Connect` between two pads runs `DijkstraGraphDistance`'s
+shortest EDGE path (which stays on the surface) and then STRAIGHTENS it toward the true geodesic — a
+curve-shortening relaxation, each interior point drawn halfway to the midpoint of its neighbours and
+snapped back onto the surface, endpoints pinned to the pads — which removes the edge path's staircase
+(up to ~8% long) and is the straightest-geodesic smoothing the task's own note anticipated. A
+`SurfaceTrace` holds the lifted centre-line either way (a `(u, v)` polyline through a global chart, or
+a surface polyline directly), REPORTS the distortion it carried (`MinScale`/`MaxScale`, measured against
+a local chart on the intrinsic path), and exports as a thin conductive `Shape` ribbon that round-trips
+through STL/STEP. A component seats at a world position (`board.Seat(component, worldPoint)`) or a
+`(u, v)`; a raw `Shape` body (an MCU, an LED, a connector modelled as a small solid) seats the same way
+for the showcase. **The showcase** is a moulded wearable dome — a wide low ellipsoid carrying an MCU,
+two LEDs, a connector and passives seated on the shaped surface, wired by geodesic conductors — that
+SELF-VERIFIES (its render throws if the nets do not connect or the DRC is not clean) and lands as
+`examples/ecad-mid.md`'s `ecad-mid-wearable` render.
+
+**One trap worth keeping**: the exp map measures the geodesic ACCURATELY along the separation direction
+(the chart's radial coordinate IS geodesic distance from the seed), so the intrinsic clearance rarely
+refuses at ordinary board scales — a fact that inverts the naive "curvature shrinks the clearance"
+expectation. The geodesic between two points is ≥ their chord ALWAYS (curvature makes the surface FARTHER
+apart, never closer); the exp map's tangential SHRINK (`MinScale < 1`) is the PARAMETER overestimating the
+geodesic, not the geodesic dropping below the chord. So a robust refuse needs the clearance comparable to
+the curvature radius (or a folded region a chart cannot cover), which is exactly when a designer should
+not trust a flat approximation — the honest boundary rather than a knife-edge one.
+
+**Two smaller decisions carry over.** A trace's WIDTH is checked against the authored width folded
+through the local scale band rather than re-measured off the region (round joins never pinch a width and
+an opposing-wall measure under-reports on a round cap). **v1 is one conductive surface** — no drills,
+edges or vias (a moulded surface has none); auto-routing on the surface (a geodesic maze search, the
+flat grid router not lifting to a distorted metric), multi-shell MID (an inner moulded copper layer) and
+a conformal solder mask / pour (the distortion reason copper pours already refuse curved walls) are all
+filed by name. Docs: `examples/ecad-mid.md`.
 
 ### Not in stages 1–9
 
