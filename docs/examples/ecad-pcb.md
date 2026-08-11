@@ -609,6 +609,57 @@ length-tuning metadata, teardrops, custom pad primitives, the 3D-model reference
 `.kicad_sch` schematic (the component reader and this board reader cover the pieces; a whole
 schematic import is separate). Export of *our* board to `.kicad_pcb` is a different, larger job.
 
+### Recovering the fabrication spec
+
+A `.kicad_pcb`'s `(setup (stackup ...))` block carries the fab-package fields the copper geometry
+cannot — the base material, the copper weight, the surface finish, the mask/silk colours — so the
+reader **also populates the board's `PcbFabricationSpec`** (`layout.Fabrication`), best-effort and
+**write-only-when-stated**: only a field the file actually gives is set, and a board with **no
+stackup imports byte-identically** (`Fabrication` stays null). The finished thickness is the stackup's
+total (sum of every stated layer thickness); the copper weight is the copper layer's thickness ÷
+0.035 mm (**1 oz = 35 µm**, the industry rounding of 34.79 µm and KiCad's own 1 oz thickness); the
+first dielectric's `(material ...)` is the base material; `(copper_finish ...)` maps to a named
+`PcbSurfaceFinish` (an unmapped string carried as `Other`); and any legacy default net class's
+`trace_width`/`clearance` fills the minimum trace / clearance. The populated spec is
+[layout truth](ecad-fab-drawing.md), so it rides the layout file and the fabrication drawing reads it.
+
+```csharp run:ecad-kicad-pcb-fab
+// The same board with a physical stackup: FR4 core + 1 oz copper + green mask + white silk + ENIG.
+var text = """
+(kicad_pcb (version 20221018) (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (stackup
+    (layer "F.SilkS" (type "Top Silk Screen") (color "White"))
+    (layer "F.Mask" (type "Top Solder Mask") (color "Green") (thickness 0.01))
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "core") (thickness 1.51) (material "FR4"))
+    (layer "B.Cu" (type "copper") (thickness 0.035))
+    (layer "B.Mask" (type "Bottom Solder Mask") (color "Green") (thickness 0.01))
+    (copper_finish "ENIG")))
+  (net 0 "")
+  (gr_rect (start 0 0) (end 20 14) (layer "Edge.Cuts") (stroke (width 0.1) (type solid))))
+""";
+
+var fab = KiCadPcbReader.Read(text).Layout.Fabrication
+    ?? throw new Exception("a board with a stackup should carry a fabrication spec");
+Console.WriteLine($"material = {fab.BaseMaterial}, finish = {fab.SurfaceFinish}");
+Console.WriteLine($"copper = {fab.CopperWeightOz} oz, mask = {fab.SolderMaskColour}, silk = {fab.SilkscreenColour}");
+Console.WriteLine($"finished thickness = {fab.FinishedThicknessMm} mm");
+
+// A board with no stackup states no fabrication requirements — Fabrication stays null.
+var bare = KiCadPcbReader.Read("""
+(kicad_pcb (version 20221018) (generator pcbnew) (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (gr_rect (start 0 0) (end 20 14) (layer "Edge.Cuts") (stroke (width 0.1) (type solid))))
+""").Layout;
+Console.WriteLine($"no stackup: Fabrication is null = {bare.Fabrication is null}");
+
+if (fab.BaseMaterial != "FR4" || fab.SurfaceFinish != PcbSurfaceFinish.Enig
+    || fab.CopperWeightOz != 1.0 || bare.Fabrication is not null)
+    throw new Exception("the KiCad import must recover the stackup's fab spec and stay null without one");
+```
+
 ## What is next
 
 Positioning constraints, copper DRC (a region-offset clearance query over the placed pads),

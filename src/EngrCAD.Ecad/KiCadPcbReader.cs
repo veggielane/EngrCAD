@@ -170,6 +170,10 @@ public static class KiCadPcbReader
         foreach (var zone in root.Lists("zone"))
             ImportZone(zone, netTable, copperNames, schematic, layout, Note);
 
+        // ---- fabrication requirements (best-effort, write-only-when-stated) --
+        if (ReadFabricationSpec(root, Note) is { } fabrication)
+            layout.WithFabrication(fabrication);
+
         return new KiCadPcb(layout, boardName, diagnostics);
     }
 
@@ -235,6 +239,151 @@ public static class KiCadPcbReader
             if (int.TryParse(net.Arg(0), out int id))
                 table[id] = net.Arg(1) ?? "";
         return table;
+    }
+
+    // ---- fabrication requirements (board setup / stackup) --------------------
+
+    /// <summary>1 oz copper foil is ~34.79 µm/ft² (0.03479 mm), which the board industry — and KiCad's
+    /// own default copper thickness — rounds to 35 µm = 0.035 mm, so a KiCad 0.035 mm copper layer
+    /// reads exactly 1 oz. ⚠ verify-against-datasheet (the transcribed-table convention).</summary>
+    private const double MillimetresPerCopperOunce = 0.035;
+
+    /// <summary>Recovers the board's FABRICATION REQUIREMENTS from its <c>(setup (stackup ...))</c>
+    /// block (and any legacy default net class), BEST-EFFORT and WRITE-ONLY-WHEN-STATED: each field is
+    /// mapped only when the file actually gives it, and everything else is left unstated. Returns null
+    /// when the file states nothing (no stackup and no net-class rules), so a board with no board-setup
+    /// imports byte-identically to before — its <see cref="PcbLayout.Fabrication"/> stays null.
+    ///
+    /// <para><b>The mapping:</b> the stackup's TOTAL (sum of every stated layer thickness) → finished
+    /// board thickness; the first copper layer's thickness ÷ <see cref="MillimetresPerCopperOunce"/> →
+    /// copper weight in ounces; the first dielectric layer's <c>(material ...)</c> → base material;
+    /// <c>(copper_finish ...)</c> → a named <see cref="PcbSurfaceFinish"/> (an unmapped string →
+    /// <see cref="PcbSurfaceFinish.Other"/> carrying the verbatim string, and noted); the outer
+    /// mask/silk layers' <c>(color ...)</c> → the mask/silk colours; and the legacy default net class's
+    /// <c>trace_width</c>/<c>clearance</c> → the minimum trace width / clearance when present. Every
+    /// numeric field is gated finite-and-positive, so a garbage value is dropped rather than crashing
+    /// the import (the readers-never-throw-on-dirty-geometry culture) and a stated field never trips
+    /// <see cref="PcbFabricationSpec.Validate"/>.</para></summary>
+    private static PcbFabricationSpec? ReadFabricationSpec(SList root, Action<string> note)
+    {
+        var stackup = root.List("setup")?.List("stackup");
+
+        string? material = null;
+        double? finishedThickness = null, copperOz = null;
+        PcbSurfaceFinish? finish = null;
+        string? finishOther = null, maskColour = null, silkColour = null;
+
+        if (stackup is not null)
+        {
+            double total = 0;
+            foreach (var layer in stackup.Lists("layer"))
+            {
+                string name = layer.Arg(0) ?? "";
+                string type = layer.List("type")?.Arg(0) ?? "";
+                double thickness = layer.ChildNumbers("thickness") is { Count: >= 1 } t ? t[0] : 0;
+                if (double.IsFinite(thickness) && thickness > 0)
+                    total += thickness;
+
+                // Outer copper weight — the first copper layer with a thickness (F.Cu, top-first).
+                if (copperOz is null
+                    && string.Equals(type, "copper", StringComparison.OrdinalIgnoreCase)
+                    && double.IsFinite(thickness) && thickness > 0)
+                    copperOz = thickness / MillimetresPerCopperOunce;
+
+                // Base material — the first dielectric (core/prepreg) with a material name.
+                bool isDielectric =
+                    string.Equals(type, "core", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(type, "prepreg", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("dielectric", StringComparison.OrdinalIgnoreCase);
+                if (material is null && isDielectric
+                    && layer.List("material")?.Arg(0) is { Length: > 0 } m)
+                    material = m;
+
+                // Mask / silk colours — the colour on the OUTER mask/silk layer's own block (F first).
+                if (maskColour is null && name.EndsWith(".Mask", StringComparison.Ordinal)
+                    && layer.List("color")?.Arg(0) is { Length: > 0 } mc)
+                    maskColour = mc;
+                if (silkColour is null && name.EndsWith(".SilkS", StringComparison.Ordinal)
+                    && layer.List("color")?.Arg(0) is { Length: > 0 } sc)
+                    silkColour = sc;
+            }
+            if (double.IsFinite(total) && total > 0)
+                finishedThickness = total;
+
+            if (stackup.List("copper_finish")?.Arg(0) is { Length: > 0 } cf)
+            {
+                (finish, finishOther) = MapSurfaceFinish(cf);
+                if (finish == PcbSurfaceFinish.Other)
+                    note($"Copper finish '{cf}' is not a named surface finish; carried as Other.");
+            }
+        }
+
+        // Minimum trace width / clearance from the LEGACY default net class when present (KiCad 6+
+        // keeps these in the project file, so a modern board simply states none here — unstated).
+        double? minTrace = null, minClearance = null;
+        if (DefaultNetClass(root) is { } netClass)
+        {
+            if (netClass.ChildNumbers("trace_width") is { Count: >= 1 } tw
+                && double.IsFinite(tw[0]) && tw[0] > 0)
+                minTrace = tw[0];
+            if (netClass.ChildNumbers("clearance") is { Count: >= 1 } cl
+                && double.IsFinite(cl[0]) && cl[0] > 0)
+                minClearance = cl[0];
+        }
+
+        var spec = new PcbFabricationSpec
+        {
+            BaseMaterial = material,
+            FinishedThicknessMm = finishedThickness,
+            CopperWeightOz = copperOz,
+            SurfaceFinish = finish,
+            SurfaceFinishOther = finishOther,
+            SolderMaskColour = maskColour,
+            SilkscreenColour = silkColour,
+            MinTraceWidthMm = minTrace,
+            MinClearanceMm = minClearance,
+        };
+        return spec.StatesAnything ? spec : null;
+    }
+
+    /// <summary>Maps a KiCad <c>copper_finish</c> string to a named <see cref="PcbSurfaceFinish"/>, or
+    /// <see cref="PcbSurfaceFinish.Other"/> carrying the verbatim string (ENEPIG, hard gold, immersion
+    /// gold, …). Robust to KiCad's spelling variants — HAL / HASL and their lead-free forms, immersion
+    /// silver / tin — by substring, and lead-free is checked BEFORE plain HAL so a leaded
+    /// <c>HAL SnPbHAL</c> maps to <see cref="PcbSurfaceFinish.Hasl"/> and a <c>HAL lead-free</c> to
+    /// <see cref="PcbSurfaceFinish.HaslLeadFree"/>.</summary>
+    private static (PcbSurfaceFinish Finish, string? Other) MapSurfaceFinish(string raw)
+    {
+        string s = raw.Trim();
+        string u = s.ToUpperInvariant();
+        bool leadFree = u.Contains("LEAD-FREE") || u.Contains("LEAD FREE") || u.Contains("LEADFREE")
+            || u.Contains("PB-FREE") || u.Contains("PBFREE");
+        if (u.Contains("HAL") || u.Contains("HASL"))
+            return (leadFree ? PcbSurfaceFinish.HaslLeadFree : PcbSurfaceFinish.Hasl, null);
+        if (u.Contains("ENIG"))
+            return (PcbSurfaceFinish.Enig, null);
+        if (u.Contains("OSP"))
+            return (PcbSurfaceFinish.Osp, null);
+        if (u.Contains("SILVER"))
+            return (PcbSurfaceFinish.ImmersionSilver, null);
+        if (u.Contains("TIN"))
+            return (PcbSurfaceFinish.ImmersionTin, null);
+        return (PcbSurfaceFinish.Other, s);
+    }
+
+    /// <summary>The legacy default net class (<c>(net_class "Default" …)</c>), or the first net class
+    /// when there is none named "Default", or null. KiCad 6+ moved these settings to the project
+    /// file, so a modern board carries none.</summary>
+    private static SList? DefaultNetClass(SList root)
+    {
+        SList? first = null;
+        foreach (var nc in root.Lists("net_class"))
+        {
+            first ??= nc;
+            if (string.Equals(nc.Arg(0), "Default", StringComparison.Ordinal))
+                return nc;
+        }
+        return first;
     }
 
     // ---- outline (Edge.Cuts) -------------------------------------------------

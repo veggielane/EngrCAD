@@ -7133,6 +7133,31 @@ by construction** (a new file, nothing shared moved), pinned by re-asserting a c
 exact geometry. Filed: EXPORT of our board to `.kicad_pcb` (a different, larger job), custom pad
 primitives and differential-pair / length-tuning metadata. Docs: `examples/ecad-pcb.md`.
 
+**The reader also populates the board's FABRICATION SPEC** (`PcbLayout.Fabrication`, a
+`PcbFabricationSpec`) from the `(setup (stackup ...))` block — BEST-EFFORT and WRITE-ONLY-WHEN-STATED,
+which is what keeps a no-stackup board byte-identical: it maps only the fields the file actually gives
+and returns null when the file states nothing, so `Fabrication` stays null and the saved layout has no
+`fabrication` key (the reader only ADDS the spec). The mapping is the stackup's TOTAL (sum of every
+stated layer thickness) → finished board thickness; the first copper layer's thickness ÷ **0.035 mm**
+(1 oz = 35 µm, the industry rounding of 34.79 µm and KiCad's own 1 oz thickness — ⚠
+verify-against-datasheet, so a KiCad 0.035 mm copper reads exactly 1 oz) → copper weight; the first
+dielectric layer's `(material ...)` → base material; `(copper_finish ...)` → a named
+`PcbSurfaceFinish` (substring-mapped so KiCad's HAL/HASL and lead-free spellings resolve, lead-free
+checked BEFORE plain HAL so a leaded `HAL SnPbHAL` → `Hasl`; an unmapped string → `Other` carrying the
+verbatim name, noted); the outer mask/silk layers' `(color ...)` → the mask/silk colours; and any
+legacy default net class's `trace_width`/`clearance` → the minimum trace / clearance (KiCad 6+ keeps
+these in the project file, so a modern board simply states none). **Every numeric field is gated
+finite-and-positive**, so a garbage stackup value is dropped rather than crashing the import (the
+readers-never-throw-on-dirty-geometry culture) and a stated field never trips `PcbFabricationSpec`'s
+own validation. The populated spec **round-trips** as a `save → load → save` byte fixed point through
+the layout file with no writer change (persistence already carries the spec), verified alongside the
+per-field population, the finish-string mapping (ENIG/HASL/HAL-lead-free/OSP/immersion, ENEPIG →
+Other), the copper-weight conversion (0.035 → 1 oz, 0.070 → 2 oz), the write-only-when-stated
+partial-stackup case, the byte-identical no-stackup case, and determinism. Filed under the fab-drawing
+entry: a per-fabricator stack-up CATALOGUE and an IPC-class → `DrcRuleSet` preset that would let a
+caller pick a house stack-up rather than reading one, and cross-check the stated class against the
+spec's `MinTraceWidthMm`/`MinClearanceMm`.
+
 ### KiCad `.kicad_sch` whole-schematic import (`KiCadSchReader`)
 
 The SCHEMATIC twin of the board reader — `KiCadSchReader.Read(text)`/`ReadFile(path)` reconstructs a
