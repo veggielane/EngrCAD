@@ -119,6 +119,11 @@ public sealed record SchematicSheetOptions
     /// <summary>Junction-dot diameter, mm.</summary>
     public double JunctionDotDiameter { get; init; } = 1.0;
 
+    /// <summary>Bus-wire pen width, mm — wider than a signal wire's (0.5) so a declared bus reads
+    /// as a bundle. Only affects sheets that declare a <see cref="SchematicBus"/>; a bus-free
+    /// sheet is byte-identical whatever this is set to.</summary>
+    public double BusWireWidth { get; init; } = 0.8;
+
     /// <summary>Text cap height for reference designators, values and net labels, mm.</summary>
     public double TextHeight { get; init; } = 2.0;
 
@@ -170,10 +175,20 @@ public sealed class SchematicSheet
 
     private readonly SchematicPlacement _placement;
     private readonly SchematicSheetOptions _options;
+    private readonly IReadOnlyList<SchematicBus> _buses;
 
     /// <summary>Builds a sheet. A null placement grid-places every component (a labelled
     /// placeholder — see <see cref="SchematicPlacement.Grid"/>); a null title defaults its title
     /// to the schematic's name.</summary>
+    /// <param name="schematic">The schematic to draw.</param>
+    /// <param name="placement">Where each symbol sits (null grid-places every component).</param>
+    /// <param name="format">The paper (null = A4 landscape).</param>
+    /// <param name="title">The title block (null defaults its title to the schematic's name).</param>
+    /// <param name="options">The drawing rules (null = the defaults).</param>
+    /// <param name="standards">Opt-in sheet-standard furniture (null = none).</param>
+    /// <param name="buses">Caller-declared <see cref="SchematicBus"/>es to draw ON TOP of the
+    /// wires — DRAWING SUGAR that connects nothing. Null (the default) draws no buses and leaves
+    /// the sheet's output byte-identical.</param>
     /// <exception cref="ArgumentException">A component has no symbol, a net connects a pin the
     /// symbol does not draw, or the placement does not cover a component — each named.</exception>
     public SchematicSheet(
@@ -182,7 +197,8 @@ public sealed class SchematicSheet
         SheetFormat? format = null,
         TitleBlock? title = null,
         SchematicSheetOptions? options = null,
-        FrameStandards? standards = null)
+        FrameStandards? standards = null,
+        IReadOnlyList<SchematicBus>? buses = null)
     {
         ArgumentNullException.ThrowIfNull(schematic);
         Schematic = schematic;
@@ -191,6 +207,7 @@ public sealed class SchematicSheet
         _placement = placement ?? SchematicPlacement.Grid(schematic, Format);
         Title = title ?? new TitleBlock { Title = schematic.Name };
         Standards = standards ?? FrameStandards.None;
+        _buses = buses is null ? [] : [.. buses];
         Validate();
     }
 
@@ -206,6 +223,10 @@ public sealed class SchematicSheet
     /// <summary>Opt-in sheet-standard furniture (ISO 5457 zone grid and centring marks);
     /// default <see cref="FrameStandards.None"/> leaves the sheet's output byte-identical.</summary>
     public FrameStandards Standards { get; }
+
+    /// <summary>The caller-declared buses drawn on this sheet (drawing sugar; connects nothing).
+    /// Empty by default, which leaves the sheet's output byte-identical.</summary>
+    public IReadOnlyList<SchematicBus> Buses => _buses;
 
     /// <summary>
     /// The shared <see cref="DrawingFrame"/> this sheet draws its border and title block from —
@@ -281,6 +302,7 @@ public sealed class SchematicSheet
         private readonly List<(Vector2d A, Vector2d B)> _wires = [];
         private readonly List<SheetText> _texts = [];
         private readonly List<DrawnPin> _pins = [];
+        private readonly List<DrawnBus> _buses = [];
 
         internal SheetBuilder(SchematicSheet sheet, SchematicPlacement placement, SchematicSheetOptions options)
         {
@@ -303,9 +325,14 @@ public sealed class SchematicSheet
             // Nets after symbols so wires overlay bodies where they must.
             foreach (var net in _sheet.Schematic.Nets)
                 DrawNet(net);
+            // Buses last, drawn ON TOP of the wires they bundle. They are DRAWING SUGAR: their
+            // geometry never touches the wire graph (_wires), so a bus wire crossing two member
+            // wires cannot merge their nets — which is what leaves Verify() unaffected.
+            foreach (var bus in _sheet.Buses)
+                DrawBus(bus);
             return new SchematicDrawing(
-                _sheet.Schematic, _sheet.Format, _segments, _wires, _texts, _pins,
-                _options.JunctionDotDiameter);
+                _sheet.Schematic, _sheet.Format, _segments, _wires, _texts, _pins, _buses,
+                _options.JunctionDotDiameter, _options.BusWireWidth);
         }
 
         // ---- symbols --------------------------------------------------------
@@ -588,6 +615,21 @@ public sealed class SchematicSheet
             double r = _options.TextHeight * 0.6;
             _segments.Add((anchor + new Vector2d(-r, -r), anchor + new Vector2d(r, r), SchematicLayers.NoConnects));
             _segments.Add((anchor + new Vector2d(-r, r), anchor + new Vector2d(r, -r), SchematicLayers.NoConnects));
+        }
+
+        /// <summary>Records a caller-declared bus as ONE <see cref="DrawnBus"/> — the bundle wire,
+        /// its diagonal entry stubs and its vector label — and puts the label on the text list so
+        /// the writers render it. It deliberately touches NEITHER <c>_wires</c> (the wire graph
+        /// Verify reads) nor <c>_segments</c> (the writers draw the bus geometry from the
+        /// <see cref="DrawnBus"/> directly, with the bus wire's own thick pen), so a bus connects
+        /// nothing and cannot be confused with a signal wire.</summary>
+        private void DrawBus(SchematicBus bus)
+        {
+            var entries = bus.Entries.Select(e => (e.OnBus, e.OnWire)).ToList();
+            var label = new SheetText(
+                bus.LabelPosition, bus.Label, _options.TextHeight, bus.LabelAnchor, SchematicLayers.Bus);
+            _texts.Add(label);
+            _buses.Add(new DrawnBus(bus.Name, bus.Members, [.. bus.Path], entries, label));
         }
 
     }

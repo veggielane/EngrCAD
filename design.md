@@ -7242,8 +7242,8 @@ membership-blind importer would pass the partition test and fail this), with rev
 (forward and reversed expand to the same eight members, so all eight taps validate clean),
 plain-net non-contamination (a bus beside a plain net leaves it exactly what it was, structural since
 the signal union-find never sees a bus point), and the bad-range / non-member / dangling reports each
-pinned. Filed: bus groups / aliases, buses across sheets, and drawing buses on the schematic sheet.
-Docs: `examples/ecad-library.md`.
+pinned. Filed: bus groups / aliases, and buses across sheets (drawing buses on the schematic
+sheet has since landed — see `Drawing the schematic sheet`). Docs: `examples/ecad-library.md`.
 
 **Hierarchical / multi-sheet import** (`KiCadSchReader.ReadProject(rootPath)` /
 `ReadProjectFrom(rootFile, sheetsByFile)`) flattens a real KiCad hierarchy — a root `.kicad_sch` plus
@@ -7700,7 +7700,25 @@ the placement does not cover. **Placement is hand-done in v1** — a `SchematicP
 or `Grid(...)`, a deterministic grid stand-in clearly labelled as such; a real auto-placer
 that produces a *good* layout is a different problem and is deliberately not invented, and the
 v1 wire router may cross a symbol or another net (an obstacle-avoiding route is likewise
-separate). Docs: `examples/ecad-schematic-sheet.md`.
+separate).
+
+**Buses are a caller-declared LAYER, and the load-bearing decision is that a bus connects
+NOTHING** — the mirror of the KiCad bus IMPORT's finding, run the other way: on one sheet a
+ripped tap's net is its OWN local label, so a bus is just how a bundle of already-connected
+member nets is DRAWN. A `SchematicBus` (passed to the
+sheet with `buses:`) is a base `Name` + a vector range `[first..last]` (members `NAME`+i, the
+KiCad `DATA[m..n]` notation, reversed ranges honoured in the drawn direction), a thick bundle
+`Path` and diagonal `Entries` (`SchematicBusEntry`, the 45° rips) — caller-placed, never
+auto-routed, exactly as `SchematicPlacement` gives symbol poses. It draws on a new `bus` layer:
+the wire with a WIDER pen (`SchematicSheetOptions.BusWireWidth`, default 0.8 mm against a wire's
+0.5), the entries at the wire pen, and the vector label as text — following the junction-dot
+precedent (a dedicated `DrawnBus` list drawn by the writers with their own pen, not folded into
+the generic per-layer loop). **The bus line-work is kept OUT of the wire graph** (`_wires`), so
+`DrawnConnectivity`/`Verify()` never see it — a bus wire touching two member wires cannot merge
+their nets — and the same sheet drawn with a bus reconstructs EXACTLY the same nets as the
+plain-wire sheet (the member nets do the connecting; the bus is only how they are drawn as a
+bundle). Buses are OPT-IN, so a sheet declaring none is BYTE-IDENTICAL (asserted). Filed: bus
+GROUPS (`{…}` aliases) and buses ACROSS sheets. Docs: `examples/ecad-schematic-sheet.md`.
 
 ### Stage 6 — Gerber (RS-274X) + Excellon fabrication export (`PcbGerberExport`)
 
