@@ -1512,6 +1512,25 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     and centring marks, the third/first-angle projection SYMBOL as geometry rather than
     the words the title block prints today, an ISO 7200 field layout, and the B-series
     and ANSI A–E paper sizes beside the A series.
+  - [ ] **ONE drawing frame shared by mechanical AND ECAD sheets.** The mechanical
+    `DrawingSheet`/`SheetAnnotation`/`SheetWriter` and the ECAD `SchematicSheet` (which
+    deliberately built its OWN 2D sheet rather than reuse `DrawingSheet`) each carry their
+    own border, title block and sheet-size handling, so a schematic sheet and a mechanical
+    drawing of ONE project can look inconsistent and can DRIFT. Extract a shared drawing
+    FRAME — the paper size (the A series here, plus the B-series/ANSI of the bullet above),
+    the ISO 5457 border with its zone/grid references and centring marks, and an ISO 7200
+    TITLE BLOCK whose fields (title, drawing number, revision, sheet N-of-M, scale, author,
+    date, project) are ONE value type filled per drawing — that BOTH sheets and the future
+    PCB FABRICATION drawing consume, so every drawing the kernel emits shares one look and
+    one parameter set. This is the VEHICLE for the sheet-standards bullet above: do the ISO
+    5457 / ISO 7200 / B-series work ONCE, in the shared frame, not twice. Only the FRAME is
+    shared — the schematic keeps its own BODY (it is caller-placed line work, not a 3D
+    projection, which is why it owns its content). Verify the house way: a schematic and a
+    mechanical sheet built at the SAME size have BYTE-IDENTICAL border + title-block geometry
+    (the frame is one function of the sheet parameters, so the two cannot disagree), the
+    SVG/DXF/PDF writers emit the shared frame identically, and every existing mechanical and
+    schematic sheet stays byte-identical where the frame is unchanged — an ADDITIVE
+    extraction, not a redesign.
   - [ ] **Detail views** (a scaled-up circle of a region) and **broken views** (a long
     part with its middle removed). Both are clipping problems on top of the existing
     view, not new projections.
