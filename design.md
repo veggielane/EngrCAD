@@ -7690,7 +7690,46 @@ exactly), the through-hole and via pads carry NO aperture (the SMD-only assertio
 Gerber round-trips, the full set writes/re-reads (`-Top_Paste.gbr`/`-Bottom_Paste.gbr`), an all-through-hole
 board writes a valid EMPTY paste, and determinism.
 
-**Not in v1** (each filed): step / multi-level stencils, paste-volume optimisation, window-paning of
+**Step (multi-level) stencils landed** (`PasteStencil`/`PasteStep`/`PasteLevelSelector`): a real board
+with mixed geometry needs a foil milled to DIFFERENT thicknesses in different zones — a fine-pitch part
+(a 0.4 mm QFN) wants a thin foil / reduced aperture to hold the paste volume, a large thermal pad or
+connector wants a thick foil / more paste — and since each thickness is a separate milling depth, the fab
+consumes ONE PASTE GERBER PER LEVEL. A `PasteStencil` is an ordered list of `PasteStep` LEVELS, each a foil
+thickness (which NAMES its Gerber file, `_100um`), an aperture expansion, and a `PasteLevelSelector`. **The
+load-bearing decision is that the foil thickness is DELIBERATELY absent from the aperture geometry** — a
+level's aperture is the pad grown by that level's EXPANSION through the SAME exact `CurvedRegion2dOffset`
+machinery the single stencil uses, so a level only changes WHICH expansion and never HOW an aperture is
+computed; the thickness is the level's IDENTITY (its filename), nothing more, which is exactly what keeps
+the aperture-equals-pad-plus-expansion oracle unchanged in both modes (the K-factor-is-absent-from-the-bend
+separation, one domain over). **Every SMD pad is on EXACTLY ONE level (a partition)** — a pad is assigned to
+the FIRST step whose selector covers it (overlapping zones resolve by first-match, a STATED rule not an
+error), else the DEFAULT level (a step with no selector, which every stencil must declare, so no pad is
+ever printed on no level); so no pad is printed twice or dropped, and the union of the levels equals the
+flat single-stencil pad set (asserted by count conservation and set equality). The SMD-only rule survives
+on every level (a through-hole pad and a via get no aperture on ANY level — a step stencil must not start
+pasting a through-hole pad). The three selector kinds: a ZONE (`InRectangle`/`InZone`, a pad whose CENTRE
+lies in it), an explicit PAD SET (`Pads`/`Component`, every pad of a footprint), and the opt-in `FinePitch`
+HEURISTIC (a pad at or below a size threshold) — whose threshold is a REQUIRED engineering input with NO
+silent default (the minimum-member-size rule; a default there would be a process decision made by a
+library). **Backward compatibility is byte-identity, two ways**: passing no stencil is EXACTLY the flat
+path (nothing about it moved, so the whole fab set is byte-identical), and a ONE-LEVEL step at the default
+expansion produces byte-identical paste GERBER CONTENT (the Gerber comment names only the side, so it does
+not carry the level token — the FILENAME does, `-Top_Paste_100um.gbr`), asserted both ways. **A step
+stencil is a FABRICATION-PROCESS parameter, so — like a `DrcRuleSet` — it is passed to the export
+(`PcbGerberExport.Generate`/`Write` gained an optional trailing `PasteStencil`), NOT baked into the layout
+file**, which is why a layout that declares none saves byte-identically (persisting the step declaration is
+filed: a full serializable grammar for its zones/selectors is a separate, larger job than generating the
+stencils). Verified the fab-house way (a stencil that double-prints or pastes a THT pad is a real defect):
+the no-stencil and one-level byte-identity, the partition (count conservation + set equality + no source
+twice + each pad on the RIGHT level), per-level expansion by closed form (a thin level `-0.08` shrinks and
+a thick `+0.05` grows the SAME Ø1.0 pad to `π(0.4)²`/`π(0.6)²` against the default's `π(0.5)²`), the SMD-only
+rule on every level, one Gerber per NON-empty level each round-tripping through the twin decoder, the file
+name carrying the foil thickness, an empty level emitting no file, determinism, and every construction
+refusal by name (non-positive thickness, no default level, two levels of one thickness, a non-finite
+expansion, an empty stencil, a non-positive `FinePitch` threshold). Docs: `examples/ecad-fabrication.md`.
+
+**Not in v1** (each filed): PERSISTING a step-stencil declaration in the layout file, a per-fabricator
+foil-thickness catalogue, paste-volume optimisation, window-paning of
 large apertures, fine mask tenting control beyond
 the tented/opened via policy, curved conformal mask/silk/paste on a MID surface (refused for the
 tamper-mesh distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber

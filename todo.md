@@ -2698,9 +2698,20 @@ from what was already understood rather than from scratch.
     ONLY** (a through-hole pad — one carrying a drill — and a via get NO aperture, the SMD-only rule
     whose classic bug is pasting a THT pad; no via policy is consulted, unlike the mask), and its
     default expansion is slightly **NEGATIVE** (`-0.05 mm`, the aperture a hair smaller than the pad
-    to control paste volume, so it ALLOWS the negative offset the mask refuses). What is STILL filed:
-    STEP / MULTI-LEVEL stencils (thicker paste on some pads via a stepped stencil — needs per-pad
-    aperture thickness the flat model does not carry), PASTE-VOLUME optimisation (aperture area/shape
+    to control paste volume, so it ALLOWS the negative offset the mask refuses). **STEP / MULTI-LEVEL
+    stencils LANDED** (`PasteStencil`/`PasteStep`/`PasteLevelSelector`; docs `examples/ecad-fabrication.md`,
+    design.md §6d stage 6, README): a foil milled to different thicknesses in different zones (a thin foil
+    for a fine-pitch part, a thick foil for a thermal pad), ONE paste Gerber per level, each pad on
+    EXACTLY ONE level (a partition; zone / pad-set / opt-in `FinePitch` selectors, first-match-wins, a
+    required default); the foil thickness is DELIBERATELY absent from the aperture geometry (a level's
+    aperture is the pad grown by its own expansion through the same exact offset machinery), so the
+    aperture-equals-pad-plus-expansion oracle is unchanged; passed to the export like a `DrcRuleSet` (not
+    baked into the layout file), so a layout that declares none saves byte-identically and the flat output
+    is EXACTLY as-is. Its own residuals, filed: PERSISTING a step-stencil declaration in the layout file
+    (a serializable grammar for its zones/selectors is a separate, larger job than generating the
+    stencils), and a per-fabricator FOIL-THICKNESS catalogue (standard 100/120/125/150 µm foils named).
+    What is STILL filed:
+    PASTE-VOLUME optimisation (aperture area/shape
     reduction rules per pad size — a stencil-house recipe, not one fixed expansion), WINDOW-PANING /
     aperture segmentation of large apertures (a big thermal pad's paste is broken into a grid so it
     does not slump). FINE MASK TENTING control beyond the tented/opened via policy (per-via
