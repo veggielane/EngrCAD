@@ -7924,8 +7924,21 @@ bottom-side access point keeps the same board (x, y) as a top one (a plated hole
 which SIDE it is probed from is the ACCESS code, not a coordinate flip. (3) **Access** is `A00` = all
 layers (a through-hole pad or a through via reaches both outer faces), else the 1-based number of the
 top-most copper layer the feature is accessed from — the general IPC layer convention, which reduces to
-the classic `top = 1 / bottom = 2 / all = 0` on a 2-layer board and names an inner layer's own number for
-a buried via. (4) **A drilled feature is op `317`** (a through-hole pad, or a via — which carries a BLANK
+the classic `top = 1 / bottom = 2 / all = 0` on a 2-layer board. **A blind/buried via ALSO carries its
+full layer SPAN**, because the single 2-digit access code cannot: a feature reaching more than one copper
+layer but NOT both outer faces writes an explicit `L<from>-<to>` geometry token (the 1-based inclusive
+copper range), so a buried In1→In2 via is `A02 … L02-03` — the per-inner-layer encoding — recovered into
+`Ipc356AccessPoint.FromLayer`/`ToLayer`; a through feature and an SMD pad write NONE (their reached set is
+implicit in the access code), so those records are BYTE-IDENTICAL to the narrow format. (3b) **An
+over-width identity rides a `379` continuation record**, never a truncation: the fixed fields are 14/6/4
+chars (net/refdes/pin) and a longer identity is carried IN FULL by a preceding op-`379` record
+(letter-tagged `N`/`R`/`P` tokens for the fields that overflow) while the fixed field holds its HEAD, so
+an over-14-char net name is CARRIED (not refused), the columns stay valid, a legacy reader still gets a
+usable — if truncated — name, and `Parse` applies the continuation to the record it precedes so the
+net-reconstruction oracle groups by the full name. Both are the repo's own additive tokens (the standard's
+single fixed field cannot spell a range or an over-width name) in the same letter-prefixed stream the
+format already uses; a board that needs neither is byte-identical, so both mechanisms only change the
+records that require them. (4) **A drilled feature is op `317`** (a through-hole pad, or a via — which carries a BLANK
 component reference, the reader's tell), an SMD pad is op `327` with no hole; every `317` carries a `D`
 drill token and every `327` carries none.
 
@@ -7948,10 +7961,10 @@ topological-naming rule, one level down at the fab file): a net name over the 14
 over 6 / a pin over 4, whitespace in an identity, or a real net colliding with the `N/C-######`
 namespace, all refuse rather than silently squash two nets into one. A drill that rounds below the file's
 1 µm quantum is refused too (a drilled record must spell a positive drill, not an unparseable `D0`). The
-reader refuses an unknown record code / units / a `317` with no drill / a `327` with a drill by name
-(scoped to what the writer emits). **Not in v1** (each filed): wider net-name / refdes fields, per-inner-
-layer access encoding for buried vias, and conductor (trace-midpoint, op `378`) records. Docs:
-`examples/ecad-fabrication.md`.
+reader refuses an unknown record code / units / a `317` with no drill / a `327` with a drill / a malformed
+layer span / a dangling-or-unknown-token continuation by name (scoped to what the writer emits). **Not in
+v1** (filed): conductor (trace-midpoint, op `378`) records — v1 lists access points (pads and vias), not
+the conductor topology. Docs: `examples/ecad-fabrication.md`.
 
 ### The fabrication drawing (the shared frame's third consumer) (`PcbFabricationSheet`)
 
