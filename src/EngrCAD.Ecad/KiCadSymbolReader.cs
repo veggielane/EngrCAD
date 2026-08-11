@@ -77,20 +77,60 @@ public static class KiCadSymbolReader
         }
 
         var diagnostics = new List<string>();
+        var parsed = ParseSymbolList(top, diagnostics);
+        return new KiCadSymbol(
+            parsed.Symbol, parsed.Pins, parsed.ReferencePrefix, parsed.FootprintName, diagnostics);
+    }
+
+    /// <summary>Reads a <c>.kicad_sym</c> file from disk.</summary>
+    public static KiCadSymbol ReadFile(string path, string? symbolName = null) =>
+        Read(File.ReadAllText(path), symbolName);
+
+    // ---- the shared symbol-parsing core --------------------------------------
+
+    /// <summary>
+    /// One <c>(symbol …)</c> list parsed into the pieces a caller needs — the drawn
+    /// <see cref="Ecad.Symbol"/>, its netlist <see cref="Pin"/>s, the reference prefix, the
+    /// referenced footprint name, the <c>Value</c> property, and whether it is a POWER symbol
+    /// (carries a <c>(power)</c> flag). This is the shared core the <c>.kicad_sym</c> reader
+    /// (<see cref="Read"/>) and the <c>.kicad_sch</c> reader (<see cref="KiCadSchReader"/>) both
+    /// use, so symbol parsing lives in ONE place — a schematic's embedded <c>lib_symbols</c> are
+    /// the same grammar as a symbol library's symbols.
+    /// </summary>
+    internal sealed record ParsedSymbol(
+        Symbol Symbol,
+        IReadOnlyList<Pin> Pins,
+        string ReferencePrefix,
+        string? FootprintName,
+        string? Value,
+        bool IsPower);
+
+    /// <summary>Parses one <c>(symbol "name" …)</c> list, appending any ignored/approximated
+    /// features to <paramref name="diagnostics"/> (the <c>StepReader.Diagnostics</c> convention).</summary>
+    internal static ParsedSymbol ParseSymbolList(SList top, List<string> diagnostics)
+    {
         string name = top.Arg(0) ?? throw new FormatException("A (symbol ...) has no name.");
 
-        // Properties (top level only): Reference -> prefix, Footprint -> referenced name.
+        // Properties (top level only): Reference -> prefix, Footprint -> referenced name,
+        // Value -> the value (a power symbol's Value is its net name).
         string prefix = "U";
         string? footprintName = null;
+        string? value = null;
         foreach (var property in top.Lists("property"))
         {
             string? key = property.Arg(0);
-            string? value = property.Arg(1);
-            if (string.Equals(key, "Reference", StringComparison.Ordinal) && !string.IsNullOrEmpty(value))
-                prefix = PrefixOf(value);
-            else if (string.Equals(key, "Footprint", StringComparison.Ordinal) && !string.IsNullOrEmpty(value))
-                footprintName = value;
+            string? propertyValue = property.Arg(1);
+            if (string.Equals(key, "Reference", StringComparison.Ordinal) && !string.IsNullOrEmpty(propertyValue))
+                prefix = PrefixOf(propertyValue);
+            else if (string.Equals(key, "Footprint", StringComparison.Ordinal) && !string.IsNullOrEmpty(propertyValue))
+                footprintName = propertyValue;
+            else if (string.Equals(key, "Value", StringComparison.Ordinal) && !string.IsNullOrEmpty(propertyValue))
+                value = propertyValue;
         }
+
+        // A power symbol carries a bare (power) flag — its pin names the net rather than being a
+        // netlist terminal of a placed component.
+        bool isPower = top.List("power") is not null;
 
         // Graphics and pins: walk the symbol subtree (nested unit symbols hold them).
         var graphics = new List<SymbolGraphic>();
@@ -102,12 +142,8 @@ public static class KiCadSymbolReader
         // The netlist terminals: one Pin per symbol pin, deduped by number in symbol order.
         var pins = symbolPins.Select(p => new Pin(p.Number, p.Name, p.Type)).ToList();
 
-        return new KiCadSymbol(symbol, pins, prefix, footprintName, diagnostics);
+        return new ParsedSymbol(symbol, pins, prefix, footprintName, value, isPower);
     }
-
-    /// <summary>Reads a <c>.kicad_sym</c> file from disk.</summary>
-    public static KiCadSymbol ReadFile(string path, string? symbolName = null) =>
-        Read(File.ReadAllText(path), symbolName);
 
     // ---- collecting graphics and pins ----------------------------------------
 

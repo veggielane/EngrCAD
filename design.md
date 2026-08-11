@@ -7098,9 +7098,41 @@ from the file's mm coordinates including a 90°-rotated footprint; the imported 
 Gerber and re-reads (the twin-decoder oracle, by area and symmetric difference); determinism (two
 reads give byte-identical Gerber); the refusals by name; and the **component reader stays bit-identical
 by construction** (a new file, nothing shared moved), pinned by re-asserting a component-load fixture's
-exact geometry. Filed: EXPORT of our board to `.kicad_pcb` (a different, larger job), the KiCad
-`.kicad_sch` schematic, custom pad primitives and differential-pair / length-tuning metadata. Docs:
-`examples/ecad-pcb.md`.
+exact geometry. Filed: EXPORT of our board to `.kicad_pcb` (a different, larger job), custom pad
+primitives and differential-pair / length-tuning metadata. Docs: `examples/ecad-pcb.md`.
+
+### KiCad `.kicad_sch` whole-schematic import (`KiCadSchReader`)
+
+The SCHEMATIC twin of the board reader — `KiCadSchReader.Read(text)`/`ReadFile(path)` reconstructs a
+whole `Schematic` (components + nets) from a `.kicad_sch` over the same `SExpr` parser, the same
+covered-subset / refuse-by-name discipline, and the SAME symbol-parsing core as the `.kicad_sym`
+reader. That core (`KiCadSymbolReader.ParseSymbolList`, over one `(symbol …)` list) was FACTORED OUT
+of `KiCadSymbolReader.Read` rather than duplicated — a schematic's embedded `lib_symbols` are the
+same grammar as a symbol library's symbols — and `Read` now delegates to it, so the `.kicad_sym`
+path is unchanged (pinned by the component-load fixtures re-asserting the resistor's exact symbol).
+
+**The load-bearing decision is that a schematic never states its netlist — it DRAWS it.** A board
+tags every pad with its net (which is why `KiCadPcbReader` can synthesize a schematic from the pad
+tags); a schematic has no such tag, so the reader RECONSTRUCTS the netlist from the geometry with a
+union-find over the connection POINTS — the same "two things are one net iff they touch" rule
+`PcbConnectivity` uses on copper. A wire joins its two endpoints; a pin anchor, a label, a
+power-symbol pin or a junction lying ON a wire joins that wire (so a junction at an X-crossing joins
+BOTH wires, while a plain crossing with no junction stays two nets — the junction dot is the
+schematic convention); same-name labels are one net; a `no_connect` marks an isolated pin. **This is
+exactly the rule `SchematicDrawing.Verify` asserts, INVERTED** — the drawing writer proves a sheet
+joins the pins the netlist connects, and the reader recovers the netlist a sheet joins.
+
+Two smaller decisions carry it. **Points coincide at a 1e-4 mm weld** (not exact equality): KiCad
+coordinates are exact grid decimals and a placed pin anchor is an exact isometry of them, so points
+that should coincide differ only by IEEE round-off (~1e-13 mm), far below 1e-4 and far below the
+coarsest real connection spacing — the weld welds exactly the points that are the same point. The
+isometry is the **library-Y-up → sheet-Y-down flip plus the instance rotation** (a `Device:R` at
+`(x, y, 0)` puts pin "1" at `(x, y − 3.81)`); the flip is what makes the connectivity the ORACLE for
+the transform — a wrong sign lands the pins off the wires and the partition breaks, which is what
+the mutation test measures. And **power symbols are net-name markers, not components** (their `Value`
+is the net name at their pin anchor), so the schematic's components stay the real parts. Filed:
+hierarchical / multi-sheet import, buses, and multi-unit symbols (a duplicate reference is imported
+as a separate component with a note). Docs: `examples/ecad-library.md`.
 
 ### Stage 3 — placement constraints (`ConstrainedLayout`, `PcbConstraintSolver`)
 

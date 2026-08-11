@@ -470,6 +470,53 @@ Eagle primitives all mapped onto the existing vocabulary, exactly as KiCad's did
 path is BIT-IDENTICAL by construction (nothing shared moved), and an Eagle-loaded part round-trips
 through the schematic file as the same byte-identical fixed point.
 
+## Loading a whole schematic — the KiCad `.kicad_sch` interchange
+
+`KiCadSchReader.Read(text)` / `ReadFile(path)` imports a whole KiCad schematic (`.kicad_sch`) into a
+`KiCadSchematic` (the reconstructed `Schematic` + diagnostics) — the SCHEMATIC twin of the board
+reader (`KiCadPcbReader`), reusing the same `SExpr` parser and the same covered-subset /
+refuse-by-name discipline. Symbol parsing is shared with the `.kicad_sym` reader
+(`KiCadSymbolReader.ParseSymbolList` over the embedded `lib_symbols`), so it lives in ONE place — a
+schematic's `lib_symbols` are the same grammar as a symbol library's symbols, and the `.kicad_sym`
+path stays bit-identical (its `Read` now delegates to the shared core).
+
+**The crux is that a schematic never lists its netlist — it DRAWS it.** A board file tags every pad
+with its net; a schematic file has no such tag, so the reader RECONSTRUCTS connectivity from the
+geometry, the same "two things are one net iff they touch" rule `PcbConnectivity` uses on copper. A
+**union-find over the connection POINTS**:
+
+- a WIRE joins its two endpoints;
+- a component PIN anchor, a LABEL, a POWER-symbol pin or a JUNCTION lying ON a wire joins that wire
+  — so a junction at an X-crossing joins BOTH crossing wires, while a plain crossing with no
+  junction stays two nets (the junction dot is the schematic convention);
+- two points carrying the same net LABEL are one net (label equivalence);
+- a `no_connect` marks an isolated pin as deliberately unconnected.
+
+Points coincide at a weld tolerance (1e-4 mm): KiCad coordinates are exact grid decimals and a
+placed pin's anchor is an exact isometry of them (library Y-up flipped to sheet Y-down, plus the
+rotation), so points that should coincide differ only by IEEE round-off. Power symbols are net-name
+markers (their `Value` is the net name), not components. This is exactly the rule
+`SchematicDrawing.Verify` asserts, run the other way round.
+
+**Coverage** is a single sheet: embedded `lib_symbols` → `PartDefinition`s (interned per `lib_id`,
+so two `Device:R` instances share one definition), placed `(symbol …)` instances (Reference →
+refdes, Value → value), power symbols, `wire`, `junction`, local `label`, `global_label`,
+`no_connect`. **Refused BY NAME** (out of v1 scope, filed): buses (`bus`/`bus_entry`/bus-vector
+labels like `D[7..0]`) and hierarchical sheets (`sheet` subsheets, `hierarchical_label`); a
+`(sheet_instances …)`, present in every flat sheet, is NOT a subsheet and passes. A netless wire, an
+instance referencing an unknown symbol, or a dangling pin is REPORTED (a diagnostic), never thrown;
+a non-`(kicad_sch …)` root or a malformed S-expression is refused by name.
+
+Verified higher than usual (an importer that mislabels nets is a silent failure): the reconstructed
+partition matches the intended one exactly (with `Schematic.Check()` passing); the MUTATION that
+proves the reader reads geometry (move a wire endpoint off a pin → the net splits, the pin
+reported); the junction rule from both sides (a crossing needs a junction to join); label
+equivalence (same label = one net, different = two); no_connect (an isolated marked pin is on no
+signal net); the symbol == netlist pin identity (`PinIdentity`); determinism (two reads save
+byte-identically); and the refusals. Filed follow-ups: hierarchical / multi-sheet import, buses, and
+multi-unit symbols (a duplicate reference is currently imported as a separate component with a
+note). Docs: `examples/ecad-library.md`.
+
 ## Drawing the schematic sheet
 
 The human-readable VIEW of a schematic: a drawn SHEET — placed symbols, orthogonal wires,
