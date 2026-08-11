@@ -20,9 +20,11 @@ public sealed record LoadedPart(
 /// together: the one-declaration identity extended to the drawn symbol, verified by a
 /// <see cref="PinIdentity"/> check whose result travels on the returned <see cref="LoadedPart"/>.
 ///
-/// <para>The <see cref="PartDefinition.Body"/> (the 3D model) stays absent — a KiCad
-/// <c>.wrl</c>/<c>.step</c> model reference is out of v1 scope (its path is noted but not
-/// loaded).</para>
+/// <para>The three-view TRINITY completes here: a KiCad footprint's <c>(model …)</c> becomes the
+/// definition's <see cref="PartDefinition.Model"/> — a <see cref="ComponentModel3D.FromFile"/>
+/// reference carrying the file path plus KiCad's offset/rotate/scale. The file is NOT force-loaded
+/// (an empty or missing library directory is normal, and KiCad's default models are <c>.wrl</c>,
+/// which has no reader); the reference is recorded and loaded only on demand.</para>
 /// </summary>
 public static class ComponentLibrary
 {
@@ -108,7 +110,8 @@ public static class ComponentLibrary
 
         var definition = new PartDefinition(
             symbol.Symbol.Name, symbol.ReferencePrefix, symbol.Pins,
-            footprint: footprint?.Footprint, body: null, symbol: symbol.Symbol);
+            footprint: footprint?.Footprint, body: null, symbol: symbol.Symbol,
+            model: footprint?.Model);
 
         var identity = PinIdentity.Check(definition);
         return new LoadedPart(definition, identity, diagnostics);

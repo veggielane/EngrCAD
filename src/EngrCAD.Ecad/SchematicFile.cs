@@ -209,8 +209,33 @@ internal static class SchematicWriter
         if (definition.Symbol is { } symbol)          // symbol is optional
             record["symbol"] = SaveSymbol(symbol);
 
+        // The 3D model is optional AND only a FILE-referenced one travels as data (write-only-when-
+        // stated). A code model (a Func<Shape>) is opaque — like the legacy Body, it is re-attached
+        // from a PartLibrary — so SaveModel returns null and nothing is written for it.
+        if (definition.Model is { } model && SaveModel(model) is { } modelRecord)
+            record["model"] = modelRecord;
+
         return record;
     }
+
+    // A file-referenced model as { path, offset?, rotate?, scale? } — the placement fields written
+    // only when non-identity (a default placement omits them). A code model returns null (opaque).
+    private static JsonObject? SaveModel(ComponentModel3D model)
+    {
+        if (!model.IsFileReferenced)
+            return null;
+        var record = new JsonObject { ["path"] = model.FilePath };
+        var placement = model.Placement;
+        if (placement.Offset != Vector3d.Zero)
+            record["offset"] = Vec3(placement.Offset);
+        if (placement.RotationDegrees != Vector3d.Zero)
+            record["rotate"] = Vec3(placement.RotationDegrees);
+        if (placement.EffectiveScale != new Vector3d(1, 1, 1))
+            record["scale"] = Vec3(placement.EffectiveScale);
+        return record;
+    }
+
+    private static JsonArray Vec3(Vector3d v) => [v.X, v.Y, v.Z];
 
     private static JsonObject SaveFootprint(Footprint footprint)
     {
@@ -342,8 +367,11 @@ internal static class SchematicReader
             var symbol = record.TryGetPropertyValue("symbol", out var symbolNode)
                 ? ReadSymbol(Object(symbolNode, "a symbol"))
                 : null;
+            var model = record.TryGetPropertyValue("model", out var modelNode)
+                ? ReadModel(Object(modelNode, "a model"))
+                : null;
             var definition = new PartDefinition(
-                name, prefix, pins, footprint, library?.BodyFor(name), symbol);
+                name, prefix, pins, footprint, library?.BodyFor(name), symbol, model);
             if (!defsById.TryAdd(id, definition))
                 throw new FormatException($"Duplicate part-definition id '{id}' in the saved schematic.");
         }
@@ -496,6 +524,29 @@ internal static class SchematicReader
             points.Add(new Vector2d(pair[0]!.GetValue<double>(), pair[1]!.GetValue<double>()));
         }
         return points;
+    }
+
+    // ---- 3D model (a file-referenced ComponentModel3D; a code model does not travel) -------
+
+    private static ComponentModel3D ReadModel(JsonObject model)
+    {
+        string path = String(model, "path");
+        var offset = ReadVec3(model, "offset", Vector3d.Zero);
+        var rotate = ReadVec3(model, "rotate", Vector3d.Zero);
+        var scale = ReadVec3(model, "scale", new Vector3d(1, 1, 1));
+        return ComponentModel3D.FromFile(path, new ModelPlacement(offset, rotate, scale));
+    }
+
+    private static Vector3d ReadVec3(JsonObject o, string key, Vector3d fallback)
+    {
+        if (!o.TryGetPropertyValue(key, out var node))
+            return fallback;
+        var array = node as JsonArray
+            ?? throw new FormatException($"A model's '{key}' must be an [x, y, z] array.");
+        if (array.Count < 3)
+            throw new FormatException($"A model's '{key}' must have three numbers.");
+        return new Vector3d(
+            array[0]!.GetValue<double>(), array[1]!.GetValue<double>(), array[2]!.GetValue<double>());
     }
 
     // ---- typed JSON accessors (delegate to the shared EcadJson helpers) ----

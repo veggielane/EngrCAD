@@ -2796,9 +2796,18 @@ from what was already understood rather than from scratch.
     ingest an existing design (the LIBRARY half — a single component's `.kicad_sym` symbol +
     `.kicad_mod` footprint via `ComponentLibrary`, AND an **Eagle `.lbr`** library via
     `EagleLibraryReader` (XML over `System.Xml.Linq`, the deviceset's `<connect>` map unifying
-    symbol pins and package pads by pad number) — has LANDED; whole-schematic/netlist import of
-    an existing design (KiCad `.kicad_sch`, whole Eagle `.brd`/`.sch`), Eagle 3D package models,
-    the newer Eagle/Fusion XML variants, and IPC-7351 footprint GENERATION remain). **Gerber/Excellon are FABRICATION formats** — copper artwork
+    symbol pins and package pads by pad number) — has LANDED. **The 3D model became the trinity's
+    THIRD first-class view** (`ComponentModel3D`/`ModelPlacement`, `PartDefinition.Model`; a body
+    SOURCE — a FILE reference that travels as data and loads on demand, or a `Func<Shape>` code
+    model — unified with an offset/rotate/scale placement in the footprint frame; the KiCad
+    footprint `(model …)` becomes a `FromFile` reference), so whole-schematic/netlist import of an
+    existing design (KiCad `.kicad_sch`, whole Eagle `.brd`/`.sch`) and IPC-7351 footprint
+    GENERATION remain. **3D-model residuals, filed by name** (each RECORDED as a reference but not
+    loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
+    needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import
+    is a face soup needing `ShapeHealing`, the 3-step read→heal→`Shape.From`), and **Eagle 3D
+    package models** (Eagle's `<packages3d>` reference a model by URN — materially more than the
+    classic `.lbr` carries, alongside the newer Eagle/Fusion XML variants). **Gerber/Excellon are FABRICATION formats** — copper artwork
     for a photoplotter, not a solid model — named here so nobody reaches for them thinking
     "PCB format"; the AUTOROUTER's output, however, does export to them, since that is what
     a fab house consumes.

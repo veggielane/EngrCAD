@@ -363,10 +363,19 @@ public sealed partial class PcbLayout
 
     /// <summary>Builds the board and its placed components as an
     /// <see cref="EngrCAD.Modeling.Assembly"/>: the drilled plate as the base part, plus one
-    /// occurrence per placed component whose definition carries a 3D body (a body-less component
-    /// still places its pads; it just has no 3D occurrence). Bottom-side components share a
-    /// reflected part; identical components on one side share a part (N occurrences), so a
-    /// <c>Bom.For</c> over the flattened instances counts them correctly.</summary>
+    /// occurrence per placed component whose definition carries a 3D <see cref="ComponentModel3D.Model"/>
+    /// or a legacy <see cref="PartDefinition.Body"/> (a body-less component still places its pads; it
+    /// just has no 3D occurrence, as does a file-referenced model whose file cannot be loaded — the
+    /// reference is still recorded). Bottom-side components share a reflected part; identical components
+    /// on one side share a part (N occurrences), so a <c>Bom.For</c> over the flattened instances counts
+    /// them correctly.
+    ///
+    /// <para><b>The model seats into the pose.</b> The definition's <see cref="ModelPlacement"/>
+    /// (offset/rotate/scale relative to the footprint origin) is baked into the body BEFORE the
+    /// side reflection and the placement pose, so it is applied in the footprint's own frame and a
+    /// bottom-side component's model is reflected along with its footprint. An IDENTITY placement
+    /// applies no transform at all, so the legacy <see cref="PartDefinition.Body"/> path (and a code
+    /// model with the identity placement) is bit-identical to before.</para></summary>
     public Assembly ToAssembly(string? name = null)
     {
         var assembly = new Assembly(
@@ -379,12 +388,12 @@ public sealed partial class PcbLayout
         foreach (var placement in _placements)
         {
             var definition = Schematic.Find(placement.Reference)!.Definition;
-            if (definition.Body is null)
+            if (!TryResolveBody(definition, out var body))
                 continue;
             var key = (definition, placement.Side);
             if (!cache.TryGetValue(key, out var part))
             {
-                part = new Part(definition.Name, definition.Body())
+                part = new Part(definition.Name, body)
                 {
                     Transform = PartTransform(placement.Side),
                 };
@@ -393,6 +402,32 @@ public sealed partial class PcbLayout
             assembly.Add(part, OccurrenceFrame(placement), placement.Reference);
         }
         return assembly;
+    }
+
+    /// <summary>Resolves a definition's 3D body for seating: the <see cref="ComponentModel3D.Model"/>
+    /// (file or code, with its placement baked in) if present and loadable, else the legacy
+    /// <see cref="PartDefinition.Body"/> (identity-placed code). Returns false when the definition has
+    /// no body, or a file-referenced model whose file cannot be loaded (a <c>.wrl</c> reference, a
+    /// missing file) — the pads are still placed; there is just no 3D occurrence.</summary>
+    private static bool TryResolveBody(PartDefinition definition, out Shape body)
+    {
+        body = default!;
+        if (definition.Model is { } model)
+        {
+            var shape = model.TryLoad(out _);
+            if (shape is null)
+                return false;
+            // Bake the placement in the footprint frame (identity applies no transform, so a
+            // code model with the identity placement stays bit-identical to a legacy body).
+            body = model.Placement.IsIdentity ? shape : shape.Transform(model.Placement.ToMatrix());
+            return true;
+        }
+        if (definition.Body is { } legacy)
+        {
+            body = legacy();
+            return true;
+        }
+        return false;
     }
 
     // ---- verification -------------------------------------------------------

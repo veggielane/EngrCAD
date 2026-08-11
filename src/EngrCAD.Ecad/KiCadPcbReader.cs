@@ -109,7 +109,8 @@ public static class KiCadPcbReader
         // ---- the synthesized schematic (the pads' nets ARE the intent) -------
         var schematic = new Schematic(boardName);
         foreach (var f in footprints)
-            schematic.Add(f.RefDes, new PartDefinition(f.DefName, f.Prefix, PinsOf(f.Footprint), f.Footprint));
+            schematic.Add(f.RefDes, new PartDefinition(
+                f.DefName, f.Prefix, PinsOf(f.Footprint), f.Footprint, model: f.Model));
 
         // Resolve every numbered pad to a net (first assignment wins; a conflict is named).
         var pinNet = new Dictionary<(string Ref, string Number), string>();
@@ -375,7 +376,7 @@ public static class KiCadPcbReader
     private sealed record ImportedFootprint(
         string RefDes, string DefName, string Prefix, Footprint Footprint,
         CopperSide Side, double X, double Y, double Angle,
-        IReadOnlyList<(string Number, string Net)> PadNets);
+        IReadOnlyList<(string Number, string Net)> PadNets, ComponentModel3D? Model);
 
     private static ImportedFootprint ParseFootprint(
         SList fp, ref int index, HashSet<string> usedRefs, Dictionary<int, string> netTable, Action<string> note)
@@ -414,8 +415,9 @@ public static class KiCadPcbReader
         }
 
         string prefix = PrefixOf(refDes);
+        var model = KiCadFootprintReader.ReadModelReference(fp, refDes, note);
         return new ImportedFootprint(
-            refDes, defName, prefix, new Footprint(defName, pads), side, x, y, angle, padNets);
+            refDes, defName, prefix, new Footprint(defName, pads), side, x, y, angle, padNets, model);
     }
 
     private static string ReadReference(SList fp)
