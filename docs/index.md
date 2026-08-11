@@ -52,3 +52,22 @@ HalfEdgeMesh mesh  = body.ToMesh();      // rendering, FEA, 3D printing
   ([assemblies](examples/assemblies.md)).
 - **A viewer that is a library** — build a `Scene`, call `EngrCad.Show`, or render
   headless PNGs for CI and agents ([viewer](examples/viewer.md)).
+
+## A note on how this was built
+
+EngrCAD is written by one person, with substantial help from AI coding assistants, and
+I would rather say so plainly than have you guess.
+
+A hybrid geometry kernel of this scope — three interoperating engines, a full FEA suite,
+a renderer, and an ECAD stack — is normally the work of a team over many years, and the
+research behind almost any single part of it is worth **multiple PhD-years** on its own.
+**I am one person.** AI assistance is what made attempting that breadth realistic at all.
+
+The counterweight is verification, and it is deliberate. Nothing here is trusted because
+it "looks right": every algorithm is checked against closed-form solutions, exact
+identities, twin-decoder round-trips, and measured convergence orders, and those checks
+live in the test suite and in this documentation — every example on this site is
+compiled, run, and rendered by the build, so it cannot drift from the code. Where the
+kernel cannot do something exactly, it is designed to **refuse by name** rather than
+return a plausible wrong answer. Read the code and the results with their origin in mind,
+and please report anything that looks off.
