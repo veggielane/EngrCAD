@@ -948,8 +948,22 @@ and the 4-layer one is a higher-reliability class-3 build; each states all nine 
 is half-filled) and each is `DrcRuleSet.CheckSpec`-**Conforming** to the class it claims. Vary a
 preset with a record `with` expression.
 
-**v1 scope** (filed): no per-layer copper/mask/silk plots yet (a picture per Gerber, wanting the
-copper-model geometry rendered as sheet line work). Docs: `examples/ecad-fab-drawing.md`.
+**Per-layer plots complete the sheet set** (`PcbFabricationPlots` / `PcbLayerPlot` →
+`PcbLayerPlotDrawing`, `PcbLayerPlot.cs`): the human-readable **plot per layer** a fab package
+ships beside the Gerbers. `PcbFabricationPlots.For(layout)` returns one `PcbLayerPlot` per copper
+layer (in stackup order), then one per **declared** mask / silk / paste side
+(write-only-when-stated, so a bare copper board plots just its copper layers). Each plot
+**consumes the copper model's own regions** — the SAME geometry `PcbGerberExport` builds (a copper
+plot draws exactly the `PcbCopperModel`'s features on that layer, a mask plot the mask windows, a
+paste plot the SMD apertures, a silk plot the line-work) — so a plot and its Gerber cannot disagree
+(the one-declaration rule); the correspondence is the oracle (`drawing.Regions.Count` /
+`drawing.PlottedArea` equal the copper model's own count / total region area for that layer — the
+plot IS the layer's geometry, no re-derivation, no union re-computation). Each plot rides the SAME
+shared `DrawingFrame` (`plot.Frame()` is **byte-identical** to a fab drawing's frame at the same
+paper and fields), and a **bottom-side layer is MIRRORED** — plotted *viewed from the bottom*, the
+fabrication convention — with the plot stating its `ViewSide` / `Mirrored`; the transform reflects
+X about the sheet (same `Y`), asserted. `Compute()` feeds the SVG / DXF / PDF writers from one
+primitive set. Docs: `examples/ecad-fab-drawing.md`.
 
 ## Enclosure fit — the MCAD/ECAD boundary
 

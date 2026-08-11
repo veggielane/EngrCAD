@@ -178,6 +178,72 @@ is no second application path. The spec carries no layer count (that lives on th
 so the two 2-layer entries differ only by finish (HASL vs ENIG) and the 4-layer one is a
 higher-reliability class-3 build; tweak any preset with a record `with` expression.
 
+## The per-layer plots — the sheet set beside the Gerbers
+
+A fab package ships more than the Gerbers and the drill program: a board house also reads a
+**plot per layer** — a human-readable sheet showing one copper / solder-mask / silkscreen /
+solder-paste layer's own geometry as line-work. `PcbFabricationPlots.For(layout)` produces that
+set: one `PcbLayerPlot` per copper layer (in stackup order), then one per **declared** mask,
+silk and paste side (write-only-when-stated, so a bare copper board plots just its copper layers).
+
+Each plot **consumes the copper model's own regions** — the same geometry the
+[Gerber exporter](ecad-fabrication.md) builds — so a plot and its Gerber cannot disagree about
+what is on a layer; a copper plot draws exactly the `PcbCopperModel`'s features for that layer,
+a mask plot the mask windows, a paste plot the SMD apertures, a silk plot the line-work. Each
+plot rides the **same shared frame** (`plot.Frame()` is byte-identical to a fab drawing's frame
+at the same paper and fields), and a **bottom-side layer is mirrored** — plotted *viewed from
+the bottom*, the way a fabricator looks at that side — with the plot stating its `ViewSide` and
+`Mirrored`.
+
+```csharp svg:ecad-fab-plots
+// A small 2-layer board with an SMD resistor and a through-hole header (copper on both layers),
+// with the solder mask declared so the mask sides plot too.
+var sch = new Schematic("blinky");
+var r = sch.Add("R1", new PartDefinition("R_0805", "R",
+    [new Pin("1", PinType.Passive), new Pin("2", PinType.Passive)],
+    new Footprint("R0805", [
+        Pad.Smd("1", new Vector2d(-1.0, 0), 1.2, 1.4),
+        Pad.Smd("2", new Vector2d(1.0, 0), 1.2, 1.4),
+    ])), "330");
+var j = sch.Add("J1", new PartDefinition("HDR_1x2", "J",
+    [new Pin("1", PinType.Passive), new Pin("2", PinType.Passive)],
+    new Footprint("HDR254", [
+        Pad.ThroughHole("1", new Vector2d(-1.27, 0), pad: 1.6, drill: 0.9),
+        Pad.ThroughHole("2", new Vector2d(1.27, 0), pad: 1.6, drill: 0.9),
+    ])));
+sch.Connect("VCC", j.Pin("1"), r.Pin("1"));
+sch.Connect("SIG", r.Pin("2"), j.Pin("2"));
+
+var board = new PcbBoard(
+    [
+        new Vector2d(-15, -10), new Vector2d(15, -10),
+        new Vector2d(15, 10), new Vector2d(-15, 10),
+    ],
+    thickness: 1.6,
+    holes: [new BoardHole(new Vector2d(-12, -7), 3.0, BoardHoleKind.Mounting)]);
+var layout = new PcbLayout(sch, board);
+layout.Place("R1", 6, 2, rotationDegrees: 0, side: CopperSide.Top);
+layout.Place("J1", -6, -2, rotationDegrees: 30, side: CopperSide.Top);
+layout.WithMask(new PcbMaskSettings(Expansion: 0.05));
+
+// Copper Top / Bottom, then mask Top / Bottom — four plots. Each names its layer and side.
+var plots = PcbFabricationPlots.For(layout, SheetFormat.A4,
+    new TitleBlock { Title = "BLINKY PCB", DrawingNumber = "PCB-001", Company = "ACME" });
+
+// Render the TOP COPPER plot. plots[0].Compute() also has ToDxf() and ToPdf().
+var topCopper = plots[0];   // copper layers come first, in stackup order
+var svg = topCopper.Compute().ToSvg();
+```
+
+![The blinky PCB's top-copper fabrication plot.](images/ecad-fab-plots.svg)
+
+The bottom plots are the same geometry viewed from the other side: for a board point `p`,
+`bottomPlot.Compute().Project(p)` maps to the same sheet `Y` as the top plot but a reflected `X`,
+so the two are mirror images about the sheet — the fabrication convention that a bottom layer is
+read looking through the board. Because a plot draws exactly its layer's own regions, the plot's
+`PlottedArea` equals the copper model's total region area for that layer — the plot *is* the
+layer's geometry, not a re-derivation.
+
 ```csharp run:ecad-fab-catalogue
 var board = new PcbBoard(
     [
