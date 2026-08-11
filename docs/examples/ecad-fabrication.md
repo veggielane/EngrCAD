@@ -328,6 +328,96 @@ Console.WriteLine("centroid round trip: every pose recovered exactly");
 The aligned `.pos` (`PcbPickAndPlace.ToPos(layout)`) carries the same rows with a `Package` column —
 each part's footprint name, or (like `D1`) its definition type name when it has no footprint yet.
 
+## IPC-D-356A netlist (electrical test / net compare)
+
+The Gerber set builds the bare board and the centroid populates it; the **IPC-D-356A netlist** is the
+board-house **electrical-test / net-compare** deliverable. It lists, per NET, every conductive **access
+point** — every component pad and every net-carrying via — with its net name, reference designator +
+pin, board-frame midpoint (X, Y), layer/access code, drill (for drilled features) and feature kind. A
+fab net-compares it against the copper Gerbers to prove the etched board matches the intended
+connectivity, and a test house programs a flying-probe or bed-of-nails tester from it. IPC-D-356**A** is
+the netname-carrying revision (the original IPC-D-356 carried none).
+
+`PcbIpc356.Write(layout)` returns the netlist text; `PcbIpc356.WriteFile(layout, dir)` writes
+`<name>.ipc`. The conventions, each **stated** so it cannot drift:
+
+- **Units are metric micrometres**, declared `P UNITS CUST 2`, coordinates written
+  `X<sign><µm>`/`Y<sign><µm>` — the file's own integer quantum, so the round trip is exact and a wrong
+  scale (mm-integers instead of µm) is a 1000× coordinate-magnitude tell.
+- **Coordinates are board-frame verbatim** (no Y-flip — the repo's coordinate honesty). A bottom-side
+  access point keeps the same board (x, y) as a top one (a plated hole serves both faces); which SIDE it
+  is probed from is the **access** code, not a coordinate flip.
+- **Access:** `A00` = all layers (a through-hole pad or a through via reaches both faces); otherwise the
+  1-based number of the top-most copper layer it is accessed from — top pad `A01`, an N-layer board's
+  bottom `A0N`, an inner layer's own number for a buried via. This reduces to the classic
+  `top = 1 / bottom = 2 / all = 0` on a 2-layer board.
+- **Included:** every component pad (op `327` for SMD, `317` for a drilled through-hole pad) and every
+  net-carrying via (op `317`, no component reference). An unconnected / no-connect pad is each its **own
+  single-point net** (a unique `N/C-######` name) — exactly how the copper model treats a null-net
+  feature. Board mounting / legacy holes are **excluded** (they carry no net), and conductor (trace)
+  records are not emitted: this is a bare-board netlist (access points), not a conductor topology.
+
+**The bar is the twin-decoder round trip plus a net reconstruction.** `PcbIpc356.Parse` reads the output
+back, and the net partition it reconstructs — which access points share a net — equals the board's OWN,
+read through the same copper model the DRC reads. A netlist that mislabels an access point is a silent
+fab failure, so the strong form is asserted: the set of component-pad classes grouped by file-net equals
+the copper model's, and a dropped or relabelled record makes them differ.
+
+```csharp run:ecad-ipc356
+// A board with an SMD resistor (2 SMD pads), a through-hole header (2 drilled pads), and a via on VCC.
+PartDefinition Res() => new("R_0805", "R",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("R0805", new[] {
+        Pad.Smd("1", new Vector2d(-1.0, 0), 1.2, 1.4),
+        Pad.Smd("2", new Vector2d(1.0, 0), 1.2, 1.4) }));
+PartDefinition Hdr() => new("HDR_1x2", "J",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("HDR254", new[] {
+        Pad.ThroughHole("1", new Vector2d(-1.27, 0), pad: 1.6, drill: 0.9),
+        Pad.ThroughHole("2", new Vector2d(1.27, 0), pad: 1.6, drill: 0.9) }));
+
+var sch = new Schematic("ipc-demo");
+var r = sch.Add("R1", Res(), "330");
+var j = sch.Add("J1", Hdr());
+sch.Connect("VCC", j.Pin("1"), r.Pin("1"));
+sch.Connect("SIG", r.Pin("2"), j.Pin("2"));
+
+var board = PcbBoard.Rectangle(30, 20, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("R1", 5, 0, 0, CopperSide.Top);
+layout.Place("J1", -6, 3, 90, CopperSide.Top);
+layout.AddVia("VCC", 8, 4, "Top", "Bottom", drill: 0.4, pad: 0.8);   // a probeable VCC via
+
+// Write the IPC-D-356A netlist and print it (317 = drilled, 327 = SMD; A00 = all layers, A01 = top).
+string ipc = PcbIpc356.Write(layout);
+Console.WriteLine(ipc);
+
+// The twin decoder: parse it back and list the nets. A via on VCC shares the net name with the VCC pads.
+var parsed = PcbIpc356.Parse(ipc);
+foreach (var net in PcbIpc356.Nets(parsed))
+    Console.WriteLine($"net {net.Name}: "
+        + string.Join(", ", net.AccessPoints.Select(p => p.IsVia ? "via" : p.PadName)));
+
+// The strong oracle: the file's partition of component pads equals the board's OWN, read through the
+// same copper model the DRC reads (a null-net pad would be its own class, matching a unique N/C name).
+var model = PcbCopperModel.FromLayout(layout);
+var viaSources = new HashSet<string>(model.Vias.Select(v => v.Source));
+var boardPartition = model.Copper
+    .Where(f => !viaSources.Contains(f.Source) && !model.TraceSources.Contains(f.Source)
+        && !model.PourSources.Contains(f.Source))
+    .GroupBy(f => f.Source).Select(g => g.First())                       // one feature per distinct pad
+    .GroupBy(f => f.Net ?? ("nc:" + f.Source))                          // class by net; null = its own
+    .Select(cl => string.Join(",", cl.Select(f => f.Source).OrderBy(s => s)))
+    .ToHashSet();
+var filePartition = parsed.Where(p => !p.IsVia)
+    .GroupBy(p => p.Net)
+    .Select(g => string.Join(",", g.Select(p => p.PadName).OrderBy(s => s)))
+    .ToHashSet();
+if (!boardPartition.SetEquals(filePartition))
+    throw new Exception("the IPC-D-356A netlist did not reconstruct the board's own nets");
+Console.WriteLine($"net reconstruction: {filePartition.Count} net classes match the board's own");
+```
+
 ## Coordinates and scale
 
 The coordinate format (`%FS`) is derived from the board's own coordinate magnitudes, so the
@@ -345,8 +435,11 @@ which RS-274X region contours cannot carry — is refused **by name** rather tha
 the reader (the round-trip oracle, scoped to what the writer emits) refuses a truncated file, a missing
 format spec or an aperture macro by name; a mask/silk/paste on a non-outer layer, or a pad window /
 aperture off the board, are refused by name too. The assembly **pick-and-place (centroid) file** is
-its own output, above. Not in v1, each filed: step / multi-level stencils, paste-volume optimisation,
-window-paning of large apertures, fine mask tenting control beyond the tented/opened via policy, curved
-conformal mask / silk / paste on a MID surface (refused for the distortion reason), a lowercase silk
-font (a value's lowercase advances as a blank), Gerber X2 attributes and the job file, an IPC-D-356
-netlist test-point export, and a Gerber IMPORT of a foreign board (this is export).
+its own output, above, and the **IPC-D-356A netlist** the electrical-test / net-compare one. Not in v1,
+each filed: step / multi-level stencils, paste-volume optimisation, window-paning of large apertures,
+fine mask tenting control beyond the tented/opened via policy, curved conformal mask / silk / paste on a
+MID surface (refused for the distortion reason), a lowercase silk font (a value's lowercase advances as a
+blank), Gerber X2 attributes and the job file, and a Gerber IMPORT of a foreign board (this is export).
+The IPC-D-356A netlist itself files: wider net-name / refdes fields (a name over 14 chars is refused, not
+truncated), per-inner-layer access encoding for adjacency-based test rather than the top-most-layer code,
+and conductor (trace-midpoint, op `378`) records.

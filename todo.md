@@ -2716,11 +2716,20 @@ from what was already understood rather than from scratch.
     matching and differential pairs are later routing stages over the same grid. A CONFORMAL
     mask/silk/paste on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
     MID/surface side's territory).
+  - **IPC-D-356A netlist follow-ups (filed; the netlist itself has LANDED — `PcbIpc356`, see
+    CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`):** WIDER net-name / refdes /
+    pin fields (v1 uses the classic IPC field widths — net 14, refdes 6, pin 4 — and REFUSES an
+    identity over them by name rather than truncating, since the net name is the reconstruction key;
+    modern hierarchical net names exceed 14, so a widened field with a `P`-record declaration, or the
+    IPC-D-356A continuation form, is the follow-up). PER-INNER-LAYER access encoding (v1 emits the
+    top-most reached copper layer's number for a blind/buried via; adjacency-based bed-of-nails test
+    wants each accessible layer named, which needs the record's full access-code vocabulary).
+    CONDUCTOR (trace-midpoint, op `378`) records (v1 lists access points — pads and vias — not the
+    conductor topology; a `378` record traces a net's copper path for a more thorough net-compare).
+    An `.ipc` disk verb / MCP export tool (v1 has `PcbIpc356.WriteFile`; wiring it into the
+    fabrication-export CLI/MCP surface beside the Gerber set is plumbing).
   - **Pick-and-place follow-ups (filed; the centroid file itself has LANDED — `PcbPickAndPlace`,
-    see CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`):** an **IPC-D-356(A)
-    netlist** export (the fab's electrical test-point / bare-board-test file — a different output from
-    the centroid, and the natural next assembly-side artifact, its net/pad access data already in the
-    `PcbConnectivity`/`PcbCopperModel` the copper stages carry). MULTI-VALUE / VARIANT P&P (a
+    see CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`):** MULTI-VALUE / VARIANT P&P (a
     do-not-populate mask, or a configuration's per-variant values — needs an assembly-variant concept
     the layout does not yet carry, and would ride `Configurations` when it reaches ECAD). SEPARATE
     top/bottom centroid FILES (some machines want one file per side; v1 carries a `Side` column, which

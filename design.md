@@ -7630,8 +7630,8 @@ board writes a valid EMPTY paste, and determinism.
 large apertures, fine mask tenting control beyond
 the tented/opened via policy, curved conformal mask/silk/paste on a MID surface (refused for the
 tamper-mesh distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber
-X2 attributes and the job file, an IPC-D-356 netlist test-point export, and a Gerber IMPORT of a foreign
-board (this is export). Docs: `examples/ecad-fabrication.md`.
+X2 attributes and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
+`examples/ecad-fabrication.md`.
 
 ### Assembly pick-and-place (the centroid file) (`PcbPickAndPlace`)
 
@@ -7663,6 +7663,59 @@ round-trippable, fields RFC-4180 quoted only when they carry a comma / quote / n
 `10k, 5%` survives — and it refuses a wrong header / field count / number / side / unterminated quote by
 name (the reader scoped to what the writer emits). `Package` is the component's footprint name, or its
 definition type name when it carries no footprint. Docs: `examples/ecad-fabrication.md`.
+
+### IPC-D-356A netlist (electrical test / net compare) (`PcbIpc356`)
+
+The Gerber set builds the bare board and the centroid populates it; the **IPC-D-356A netlist** is the
+board-house **electrical-test / net-compare** deliverable. It lists, per NET, every conductive **access
+point** — every component pad and every net-carrying via — with its net name, refdes + pin, board-frame
+midpoint (X, Y), layer/access code, drill (drilled features) and feature kind. A fab net-compares it
+against the copper Gerbers; a test house programs a flying-probe / bed-of-nails tester from it.
+IPC-D-356**A** is the netname-carrying revision (the original IPC-D-356 carried none). `PcbIpc356.Write`
+returns the text, `WriteFile` writes `<name>.ipc`.
+
+**Every pad's net is resolved through `PcbCopperModel.FromLayout`** — the SAME tagging the DRC and
+connectivity read, so the netlist cannot drift from the copper (the one-declaration identity). The
+record is a fixed identity prefix (op `317`/`327`, net, refdes, pin) plus a letter-prefixed geometry
+token stream (`A<access> X<±µm> Y<±µm> [D<µm>]`), with `C`/`P` header records and a `999` end.
+
+**Four conventions, each a real choice and each stated so it cannot drift.** (1) **Units are metric
+micrometres** (`P UNITS CUST 2`), coordinates written as an explicit sign plus an integer µm magnitude —
+the file's OWN quantum, so the round trip is EXACT (a parse recovers the same integers a write emitted)
+and a wrong scale (mm-integers instead of µm) is a 1000× coordinate-magnitude tell, the Gerber-`%FS`
+lesson. (2) **Coordinates are board-frame VERBATIM** (no Y-flip — the coordinate-honesty rule): a
+bottom-side access point keeps the same board (x, y) as a top one (a plated hole serves both faces), and
+which SIDE it is probed from is the ACCESS code, not a coordinate flip. (3) **Access** is `A00` = all
+layers (a through-hole pad or a through via reaches both outer faces), else the 1-based number of the
+top-most copper layer the feature is accessed from — the general IPC layer convention, which reduces to
+the classic `top = 1 / bottom = 2 / all = 0` on a 2-layer board and names an inner layer's own number for
+a buried via. (4) **A drilled feature is op `317`** (a through-hole pad, or a via — which carries a BLANK
+component reference, the reader's tell), an SMD pad is op `327` with no hole; every `317` carries a `D`
+drill token and every `327` carries none.
+
+**What is included, and the null-net decision.** Every component pad and every net-carrying via. An
+unconnected / no-connect pad is each its **own single-point net**, given a unique `N/C-######` name —
+which is exactly how the copper model treats a null-net feature, so the reconstructed partition matches.
+Board mounting / legacy holes are EXCLUDED (they carry no net — a netlist lists NET access points), and
+conductor (trace, op `378`) records are not emitted (this is a bare-board netlist — access points, not a
+conductor topology).
+
+**The oracle is the twin-decoder round trip plus a NET RECONSTRUCTION**, because a netlist that mislabels
+an access point is a silent fab failure that a structural validator waves through. `PcbIpc356.Parse` reads
+the output back, and the partition of component pads it induces (the SET-OF-SETS grouped by file-net)
+EQUALS the board's OWN partition — the copper model's, with a null-net pad its own singleton — with a
+dropped or relabelled record making them differ (the mutation that proves it bites). Coordinates recover
+as an exact integer fixed point at every scale, and `Write(Parse(Write(pts))) == Write(pts)` byte for byte.
+
+**Refused by name — an identity is never sanitized, because it IS the reconstruction key** (the
+topological-naming rule, one level down at the fab file): a net name over the 14-char field / a refdes
+over 6 / a pin over 4, whitespace in an identity, or a real net colliding with the `N/C-######`
+namespace, all refuse rather than silently squash two nets into one. A drill that rounds below the file's
+1 µm quantum is refused too (a drilled record must spell a positive drill, not an unparseable `D0`). The
+reader refuses an unknown record code / units / a `317` with no drill / a `327` with a drill by name
+(scoped to what the writer emits). **Not in v1** (each filed): wider net-name / refdes fields, per-inner-
+layer access encoding for buried vias, and conductor (trace-midpoint, op `378`) records. Docs:
+`examples/ecad-fabrication.md`.
 
 ### Copper pours — ground / power planes (`CopperPour`, `CopperPourBuilder`)
 
