@@ -37,6 +37,7 @@ schematic is then a bug in a derivation, not a difference between two hand-kept 
 | `PartLibrary` | Re-attaches 3D bodies by definition name on load (a body is code, so it does not travel in the file). |
 | `ComponentLibrary` / `LoadedPart` | Loads a component from KiCad interchange (`.kicad_sym` + `.kicad_mod`) so it arrives with its symbol, footprint and pins unified by pin number. `LoadedPart` carries the `PartDefinition`, its `PinIdentityReport` and the readers' diagnostics. |
 | `KiCadSymbolReader` / `KiCadFootprintReader` | Hand-rolled dependency-free S-expression readers (`SExpr`) for the KiCad symbol and footprint formats — the common subset mapped, the rest refused/ignored **by name** (the `StepReader`/`IgesReader` ethos). |
+| `EagleLibraryReader` / `EagleLibrary` | Reads an Eagle `.lbr` (XML) into the SAME `LoadedPart`. `Read` → the library's `Devices`; `Load(deviceName)` → one `PartDefinition`. The deviceset's `<connect gate pin pad>` map unifies symbol pins and package pads by PAD number. Rides the BCL `System.Xml.Linq` (dependency-free, the 3MF/AMF precedent). |
 
 ## Declaring one
 
@@ -354,6 +355,39 @@ schematic file as a **byte-identical fixed point**; a symbol-less definition ser
 as before (write-only-when-stated). The 3D body stays code, as always; a KiCad `.wrl`/`.step`
 model reference is out of scope (its path noted, not loaded).
 
+## Loading a component — the Eagle `.lbr` interchange
+
+`EagleLibraryReader` is the SECOND interchange reader, producing the SAME `LoadedPart`. An Eagle
+library is a single XML file, so it rides the BCL's `XDocument` (dependency-free, the
+`ThreeMfWriter`/`AmfWriter` precedent for XML) rather than a hand-rolled parser — same
+refuse-by-name ethos. `Read(xml)` returns an `EagleLibrary` whose `.Devices` lists every loadable
+device by its full name (deviceset + device); `.Load(deviceName)` (or the static
+`EagleLibraryReader.Load(xml, name)`) resolves one into a `PartDefinition`.
+
+```csharp
+var lib = EagleLibraryReader.ReadFile("passives.lbr");   // lib.Devices : the loadable devices
+var part = lib.Load("R-EU_R0805");                        // -> LoadedPart (pins + footprint + symbol)
+```
+
+**The `<connect gate pin pad>` map is what unifies the three, and it is the structural difference
+from KiCad.** An Eagle symbol's pins are named in the symbol's own vocabulary (`"1"`, `"VCC"`), a
+package's pads are numbered, and a **deviceset**'s `<connect>`s bind them — symbol pin `"VCC"` →
+pad `"8"`. So the loaded pin's NUMBER is the pad, its NAME is the symbol pin's name, and its symbol
+pin, footprint pad and netlist pin all carry the same number, which is exactly what
+`PinIdentity.Check` verifies. Eagle stores coordinates in the XML in MILLIMETRES, so pad centres
+and pin anchors are carried EXACTLY (a pin's `rot` gives its direction — `R0` points +x into the
+body — and its `length` token gives its length). Covered: symbol `wire`/`rectangle`/`circle`/
+`polygon`/`text` graphics and `pin`s; package `smd` pads and `pad` plated through-holes of the
+standard shapes (round/square/octagon/long). Ignored/refused BY NAME: a package `<hole>`/`<via>`
+(not a pad), a graphic kind outside the set, a **multi-gate deviceset** (a gate array, refused at
+`Load`), a symbol pin with no `<connect>` (an **unmapped pin**, refused), and whole `.brd`/`.sch`
+board/schematic import (refused at the root).
+
+**No additive change to `Symbol`/`Footprint`/`PartDefinition`/`PinIdentity` was needed** — the
+Eagle primitives all mapped onto the existing vocabulary, exactly as KiCad's did — so the KiCad
+path is BIT-IDENTICAL by construction (nothing shared moved), and an Eagle-loaded part round-trips
+through the schematic file as the same byte-identical fixed point.
+
 ## Drawing the schematic sheet
 
 The human-readable VIEW of a schematic: a drawn SHEET — placed symbols, orthogonal wires,
@@ -526,9 +560,11 @@ uniformly-dissipating board's analytic temperature rise — is the next stage ov
 Thermal coupling, MID/LDS 3D
 routing, and the richer
 interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one
-graph. On the LIBRARY side, **Eagle `.lbr`** (an XML second reader), **IPC-7351 footprint
-GENERATION** from a designation (a generator, not a file import), EDIF, and the KiCad 3D model
-reference (`.wrl`/`.step`) are filed beside the KiCad symbol/footprint import that just landed. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
+graph. On the LIBRARY side, **KiCad `.kicad_sym`/`.kicad_mod` and Eagle `.lbr` both import**; what
+stays filed is **IPC-7351 footprint GENERATION** from a designation (a generator, not a file
+import), EDIF, whole Eagle `.brd`/`.sch` board/schematic import (a different, larger job), Eagle 3D
+package models, the newer Eagle/Fusion XML variants beyond the classic `.lbr`, and the KiCad 3D
+model reference (`.wrl`/`.step`). Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
 drilling the plate is a later refinement). The drawn schematic **sheet** (`SchematicSheet` →
 SVG/DXF/PDF) has landed as a VIEW of the graph (see above); what stays open there is a real
 **auto-placer** (a good layout, not the grid placeholder) and an **obstacle-avoiding** wire

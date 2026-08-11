@@ -6900,10 +6900,36 @@ the interchange one (higher, since interchange fails plausibly): a transcribed r
 and SOIC-8 parse with the pin count/names/numbers round-tripping, the symbol pins and footprint
 pads sharing the numbers, a deliberately mismatched footprint REPORTED by number, pad geometry
 matched EXACTLY to the file, the symbol's primitives and pin anchors matched, malformed input
-refused by name, the persistence fixed point, and determinism. What stays filed: Eagle `.lbr` (an
-XML second reader), IPC-7351 footprint GENERATION from a designation (a generator, not an import),
-EDIF, the drawn schematic SHEET itself (a VIEW that consumes the symbol this provides), and the
-KiCad 3D model reference (`.wrl`/`.step` — its path noted, not loaded).
+refused by name, the persistence fixed point, and determinism. What stays filed: IPC-7351 footprint
+GENERATION from a designation (a generator, not an import), EDIF, and the KiCad 3D model reference
+(`.wrl`/`.step` — its path noted, not loaded).
+
+**The Eagle `.lbr` reader is the SECOND interchange, and its structure — not effort — is the
+finding** (`EagleLibraryReader`, `EagleLibrary`; the KiCad reader's twin). An Eagle library is one
+XML file, so it rides the BCL's `XDocument` (dependency-free, the `ThreeMfWriter`/`AmfWriter`
+precedent for XML formats) rather than a hand-rolled parser, and it produces the SAME `LoadedPart`.
+**The `<connect gate pin pad>` map is what unifies the three, where KiCad's file numbers the pins
+directly.** An Eagle symbol's pins are named in the symbol's own vocabulary (`"1"`, `"VCC"`), a
+package's pads are numbered, and a **deviceset**'s `<connect>`s bind them (`"VCC"` → pad `"8"`) — so
+the loaded pin's NUMBER is the pad, its NAME is the symbol pin's name, and its symbol pin, footprint
+pad and netlist pin all carry that pad number, which is exactly what `PinIdentity.Check` verifies.
+`Read(xml)` returns the library's `Devices` (each named by its deviceset + device); `Load(deviceName)`
+resolves one. Eagle stores coordinates in the XML in MILLIMETRES, so pad centres and pin anchors are
+carried EXACTLY, and a pin's `rot` gives its direction (`R0` points +x into the body, confirmed
+against a real `rcl.lbr` R-EU resistor whose left pin is `R0` and right pin `R180`) and its `length`
+token its length (short/middle/long = 0.1/0.2/0.3 inch). **The deliberately-inconsistent fixture is
+REPORTED, not refused, and comes from the PACKAGE**: the footprint is built from the package's own
+pads while the pins come from the connects, so a device whose connects name pad `"8"` while the
+package defines only `"1".."7"` and a stray `"99"` surfaces as a `PinIdentity` mismatch by number —
+the KiCad missing-pad-8 fixture's exact analogue. What IS refused by name (structural, not a report):
+a multi-gate deviceset (a gate array), a symbol pin with no `<connect>` (an unmapped pin — an Eagle
+symbol pin has only a name, so with no connect it has no number and cannot become a pin), malformed
+XML, a file whose root is not `<eagle>`, and a `.brd`/`.sch` rather than a `<library>`. **No additive
+change to `Symbol`/`Footprint`/`PartDefinition`/`PinIdentity` was needed** — the Eagle primitives all
+mapped onto the existing vocabulary (the same finding KiCad reported for `Footprint`/`Pad`) — so the
+KiCad path is BIT-IDENTICAL by construction, nothing shared having moved. Filed beside it: whole
+Eagle `.brd`/`.sch` import (a different, larger job), Eagle 3D package models, and the newer
+Eagle/Fusion XML variants beyond the classic `.lbr` schema. Docs `examples/ecad-library.md`.
 
 ### Stage 2 — the board and its parts (`PcbBoard`, `PcbLayout`, IDF import)
 

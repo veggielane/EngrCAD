@@ -2732,8 +2732,11 @@ from what was already understood rather than from scratch.
     → IPC-2581 and ODB++ (richer, heavier; filed behind the first two). And for the
     connectivity side, a **KiCad schematic/netlist** import so a code-defined schematic can
     ingest an existing design (the LIBRARY half — a single component's `.kicad_sym` symbol +
-    `.kicad_mod` footprint via `ComponentLibrary` — has LANDED; whole-schematic/netlist import
-    of an existing design, plus **Eagle `.lbr`** and IPC-7351 footprint GENERATION, remain). **Gerber/Excellon are FABRICATION formats** — copper artwork
+    `.kicad_mod` footprint via `ComponentLibrary`, AND an **Eagle `.lbr`** library via
+    `EagleLibraryReader` (XML over `System.Xml.Linq`, the deviceset's `<connect>` map unifying
+    symbol pins and package pads by pad number) — has LANDED; whole-schematic/netlist import of
+    an existing design (KiCad `.kicad_sch`, whole Eagle `.brd`/`.sch`), Eagle 3D package models,
+    the newer Eagle/Fusion XML variants, and IPC-7351 footprint GENERATION remain). **Gerber/Excellon are FABRICATION formats** — copper artwork
     for a photoplotter, not a solid model — named here so nobody reaches for them thinking
     "PCB format"; the AUTOROUTER's output, however, does export to them, since that is what
     a fab house consumes.
