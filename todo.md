@@ -2820,9 +2820,17 @@ from what was already understood rather than from scratch.
     THIRD first-class view** (`ComponentModel3D`/`ModelPlacement`, `PartDefinition.Model`; a body
     SOURCE — a FILE reference that travels as data and loads on demand, or a `Func<Shape>` code
     model — unified with an offset/rotate/scale placement in the footprint frame; the KiCad
-    footprint `(model …)` becomes a `FromFile` reference), so whole-schematic/netlist import of an
-    existing design (KiCad `.kicad_sch`, whole Eagle `.brd`/`.sch`) and IPC-7351 footprint
-    GENERATION remain. **3D-model residuals, filed by name** (each RECORDED as a reference but not
+    footprint `(model …)` becomes a `FromFile` reference). **Whole KiCad `.kicad_sch` schematic
+    import has LANDED** (`KiCadSchReader`/`KiCadSchematic`, the schematic twin of `KiCadPcbReader`,
+    reconstructing the netlist from the wire GEOMETRY with a union-find over the connection points —
+    since a schematic never lists its netlist, it draws it — sharing the `.kicad_sym` reader's
+    symbol-parsing core; see design.md §6d, docs `examples/ecad-library.md`), with these `.kicad_sch`
+    RESIDUALS filed: **hierarchical / multi-sheet designs** (`sheet` subsheets, `hierarchical_label`,
+    sheet pins — refused by name today; the big one, since it needs cross-sheet net stitching),
+    **buses** (`bus`/`bus_entry`/bus-vector labels — refused by name), and **multi-unit symbols** (a
+    duplicate reference is imported as a separate component with a note — proper support merges the
+    units' pins). Whole Eagle `.brd`/`.sch` import and IPC-7351 footprint GENERATION remain.
+    **3D-model residuals, filed by name** (each RECORDED as a reference but not
     loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
     needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import
     is a face soup needing `ShapeHealing`, the 3-step read→heal→`Shape.From`), and **Eagle 3D

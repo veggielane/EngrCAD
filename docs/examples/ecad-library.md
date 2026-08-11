@@ -170,6 +170,76 @@ kind outside the set, a multi-gate deviceset (a gate array), and a symbol pin wi
 (an unmapped pin) are each **ignored with a diagnostic or refused by name**; whole `.brd`/`.sch`
 board/schematic import is out of scope, refused at the root.
 
+## Loading a whole schematic (`.kicad_sch`)
+
+Loading a component gives one part; loading a `.kicad_sch` gives a whole **schematic** — the
+connectivity. The board twin (`.kicad_pcb`) already exists; `KiCadSchReader.Read` is the schematic
+member of the KiCad set. The crux is that a schematic **never lists its netlist** — it draws it, so
+the connectivity is IMPLICIT in the geometry. The reader reconstructs it with a **union-find over the
+connection points**, the same "two things are one net iff they touch" rule the copper connectivity
+uses: a wire joins its two endpoints; a pin, a label, a power-symbol pin or a junction lying on a wire
+joins it (a junction at a crossing joins *both* crossing wires); two points carrying the same label are
+one net; a `no_connect` marks a pin unconnected. Two wires crossing with **no** junction stay two nets:
+
+```csharp run:ecad-schematic-import
+// A minimal KiCad schematic (.kicad_sch): a two-resistor divider between VCC and GND, with the
+// mid-point wire named by a local label. Nothing in the file lists the netlist — the reader works
+// out which pins share a net from the WIRE GEOMETRY (a placed Device:R at (x, y, 0) puts pin "1" at
+// (x, y - 3.81) and pin "2" at (x, y + 3.81), so a wire endpoint there connects that pin).
+var schText = """
+(kicad_sch (version 20230121) (generator eeschema) (paper "A4") (title_block (title "divider"))
+  (lib_symbols
+    (symbol "Device:R" (property "Reference" "R" (at 2.032 0 90)) (property "Value" "R" (at 0 0 90))
+      (symbol "R_1_1"
+        (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+        (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2"))))
+    (symbol "power:VCC" (power) (property "Reference" "#PWR" (at 0 0 0)) (property "Value" "VCC" (at 0 3.556 0))
+      (symbol "VCC_1_1" (pin power_in line (at 0 0 90) (length 0) (name "VCC") (number "1"))))
+    (symbol "power:GND" (power) (property "Reference" "#PWR" (at 0 0 0)) (property "Value" "GND" (at 0 -3.81 0))
+      (symbol "GND_1_1" (pin power_in line (at 0 0 270) (length 0) (name "GND") (number "1")))))
+
+  (symbol (lib_id "Device:R") (at 50 40 0) (property "Reference" "R1" (at 53 40 0)) (property "Value" "10k" (at 53 42 0)))
+  (symbol (lib_id "Device:R") (at 50 60 0) (property "Reference" "R2" (at 53 60 0)) (property "Value" "20k" (at 53 62 0)))
+  (symbol (lib_id "power:VCC") (at 50 30 0) (property "Reference" "#PWR01" (at 50 27 0)) (property "Value" "VCC" (at 50 26 0)))
+  (symbol (lib_id "power:GND") (at 50 70 0) (property "Reference" "#PWR02" (at 50 74 0)) (property "Value" "GND" (at 50 75 0)))
+
+  (wire (pts (xy 50 30) (xy 50 36.19)))
+  (wire (pts (xy 50 43.81) (xy 50 56.19)))
+  (wire (pts (xy 50 63.81) (xy 50 70)))
+  (label "MID" (at 50 50 0) (effects (font (size 1.27 1.27))))
+  (sheet_instances (path "/" (page "1"))))
+""";
+
+var read = KiCadSchReader.Read(schText);
+var sch = read.Schematic;
+
+// Power symbols name nets, they are not components — so three symbols place two components.
+Console.WriteLine($"{sch.Name}: {sch.Components.Count} components, {sch.Nets.Count} nets");
+Console.WriteLine(sch.ToNetlist().ToText());
+
+// The MID label names the wire joining R1.2 and R2.1 — reconstructed from the geometry.
+var netlist = sch.ToNetlist();
+var mid = netlist.NetOf(sch.Find("R1")!.Pin("2"));
+if (mid?.Name != "MID") throw new Exception("MID net not reconstructed");
+if (!ReferenceEquals(mid, netlist.NetOf(sch.Find("R2")!.Pin("1"))))
+    throw new Exception("R1.2 and R2.1 should share the MID net");
+
+// Every component's pins come from its lib_symbol, so the symbol == netlist identity holds by number.
+foreach (var component in sch.Components)
+    if (!PinIdentity.Check(component.Definition).Ok) throw new Exception("pin identity");
+
+// The counting identity holds — every pin is on exactly one net.
+if (!sch.Check().Ok) throw new Exception(sch.Check().ToString());
+```
+
+The reader covers a **single sheet**: the embedded `lib_symbols` (mapped to `PartDefinition`s), placed
+`(symbol …)` instances, power symbols (their `Value` is the net name), `wire`, `junction`, local
+`label`, `global_label`, and `no_connect`. **Refused by name** (out of v1 scope, filed): **buses**
+(`bus` / `bus_entry` / bus-vector labels like `D[7..0]`) and **hierarchical sheets** (`sheet`
+subsheets, `hierarchical_label`). A netless wire, an instance referencing an unknown symbol, or a
+dangling pin is **reported** as a diagnostic, not thrown; a non-`(kicad_sch …)` root — a board or a
+symbol library handed here — or a malformed S-expression is refused by name.
+
 ## The 3D model — the third view
 
 The third view is the **3D model**, a first-class `ComponentModel3D` peer of the symbol and
