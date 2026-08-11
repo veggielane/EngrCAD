@@ -60,10 +60,18 @@ public sealed record KiCadSchematic(
 ///
 /// <para><b>Covered:</b> a single sheet's embedded <c>lib_symbols</c> (mapped to
 /// <see cref="PartDefinition"/>s), placed <c>(symbol …)</c> instances (Reference → refdes, Value →
-/// value, <c>lib_id</c> → definition), power symbols (their <c>Value</c> is the net name),
-/// <c>wire</c>, <c>junction</c>, local <c>label</c>, <c>global_label</c>, <c>no_connect</c>, and
-/// <b>buses</b> — bus wires (<c>bus</c>), bus entries (<c>bus_entry</c>) and bus-VECTOR labels
-/// (<c>DATA[0..7]</c>).</para>
+/// value, <c>lib_id</c> → definition, <c>(unit N)</c> → which unit), power symbols (their
+/// <c>Value</c> is the net name), <c>wire</c>, <c>junction</c>, local <c>label</c>,
+/// <c>global_label</c>, <c>no_connect</c>, and <b>buses</b> — bus wires (<c>bus</c>), bus entries
+/// (<c>bus_entry</c>) and bus-VECTOR labels (<c>DATA[0..7]</c>).</para>
+///
+/// <para><b>Multi-unit symbols merge.</b> A multi-unit part (a dual op-amp drawn as several symbols
+/// under one package) is placed as several <c>(symbol …)</c> instances SHARING ONE reference
+/// designator, each with a distinct <c>(unit N)</c>. They MERGE into one <see cref="Component"/> whose
+/// pins span every unit, and each instance places only its own unit's pins at that unit's location —
+/// so a net wired to amp A's output and one wired to amp B's input are distinct nets on the same
+/// component. A repeated placement of one unit, or two different symbols under one reference
+/// designator, is reported and skipped.</para>
 ///
 /// <para><b>Buses are SUGAR that EXPANDS to member nets; the net of a ripped signal is its own
 /// local label.</b> KiCad requires a wire ripped off a bus (via a bus entry) to be LABELLED with a
@@ -135,7 +143,11 @@ public static class KiCadSchReader
         var partDefs = new Dictionary<string, PartDefinition>(StringComparer.Ordinal);
         var pinPoints = new List<(PinRef Pin, Vector2d Anchor)>();
         var labelPoints = new List<LabelPoint>();
-        var usedRefs = new HashSet<string>(StringComparer.Ordinal);
+        // MULTI-UNIT MERGE: a multi-unit component is placed as several (symbol …) instances sharing
+        // one reference designator, each carrying a (unit N). They merge into ONE Component here, and
+        // each instance places only its own unit's pins (at that unit's location).
+        var componentsByRef = new Dictionary<string, Component>(StringComparer.Ordinal);
+        var placedUnits = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
         int generated = 0;
 
         foreach (var instance in root.Lists("symbol"))
@@ -167,32 +179,14 @@ public static class KiCadSchReader
             // An ordinary component.
             string refDes = InstanceReference(instance);
             if (refDes.Length == 0 || refDes == "?")
-            {
-                do { refDes = $"U{++generated}"; } while (!usedRefs.Add(refDes));
-            }
-            else if (!usedRefs.Add(refDes))
-            {
-                string renamed;
-                do { renamed = $"{refDes}_{++generated}"; } while (!usedRefs.Add(renamed));
-                Note($"Duplicate reference '{refDes}' (a multi-unit symbol?); imported as a "
-                    + $"separate component '{renamed}'. Multi-unit symbols are a filed follow-up.");
-                refDes = renamed;
-            }
+                do { refDes = $"U{++generated}"; } while (componentsByRef.ContainsKey(refDes));
 
             if (!partDefs.TryGetValue(libId, out var definition))
-            {
-                definition = new PartDefinition(
-                    BareName(libId), parsed.ReferencePrefix, parsed.Pins,
-                    footprint: null, body: null, symbol: parsed.Symbol);
-                partDefs[libId] = definition;
-            }
+                partDefs[libId] = definition = BuildDefinition(libId, parsed);
 
-            var component = schematic.Add(refDes, definition, InstanceValue(instance) ?? "");
-            foreach (var pin in definition.Pins)
-            {
-                var symPin = parsed.Symbol.PinNumbered(pin.Number);
-                pinPoints.Add((component.Pin(pin.Number), placement.Place(symPin.Anchor)));
-            }
+            PlaceInstance(
+                schematic, refDes, InstanceValue(instance) ?? "", parsed, definition,
+                InstanceUnit(instance), placement, componentsByRef, placedUnits, pinPoints, Note);
         }
 
         // ---- wires, junctions, labels, no-connects ----------------------------
@@ -756,7 +750,10 @@ public static class KiCadSchReader
         // Definitions are interned per lib_id ACROSS the whole project (two Device:R in different
         // sheets share one PartDefinition), the same interning the flat path does within one sheet.
         var partDefs = new Dictionary<string, PartDefinition>(StringComparer.Ordinal);
-        var usedRefs = new HashSet<string>(StringComparer.Ordinal);
+        // Multi-unit merge across the whole project (keyed by the hierarchical refdes, so a subsheet
+        // placed twice keeps its instances apart while a part's units under one path merge).
+        var componentsByRef = new Dictionary<string, Component>(StringComparer.Ordinal);
+        var placedUnits = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
         int[] generated = [0];   // one refdes counter across every instance
 
         void Walk(SList content, string path, int parentId,
@@ -764,7 +761,8 @@ public static class KiCadSchReader
         {
             int id = instances.Count;
             instances.Add(new SheetInstance(id, path, parentId, ports));
-            sheetData.Add(CollectSheet(content, id, path, schematic, partDefs, usedRefs, generated, Note));
+            sheetData.Add(CollectSheet(
+                content, id, path, schematic, partDefs, componentsByRef, placedUnits, generated, Note));
 
             var childNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var sheet in content.Lists("sheet"))
@@ -882,8 +880,8 @@ public static class KiCadSchReader
     /// <c>lib_symbols</c>.</summary>
     private static SheetData CollectSheet(
         SList content, int instance, string path, Schematic schematic,
-        Dictionary<string, PartDefinition> partDefs, HashSet<string> usedRefs, int[] generated,
-        Action<string> note)
+        Dictionary<string, PartDefinition> partDefs, Dictionary<string, Component> componentsByRef,
+        Dictionary<string, HashSet<int>> placedUnits, int[] generated, Action<string> note)
     {
         var data = new SheetData { Instance = instance };
         var libSymbols = ReadLibSymbols(content, note);
@@ -917,36 +915,18 @@ public static class KiCadSchReader
             string localRef = InstanceReference(inst);
             string refDes;
             if (localRef.Length == 0 || localRef == "?")
-            {
-                do { refDes = $"{prefix}U{++generated[0]}"; } while (!usedRefs.Add(refDes));
-            }
+                do { refDes = $"{prefix}U{++generated[0]}"; } while (componentsByRef.ContainsKey(refDes));
             else
-            {
                 refDes = prefix + localRef;
-                if (!usedRefs.Add(refDes))
-                {
-                    string renamed;
-                    do { renamed = $"{refDes}_{++generated[0]}"; } while (!usedRefs.Add(renamed));
-                    note($"Duplicate reference '{refDes}' (a multi-unit symbol?); imported as a "
-                        + $"separate component '{renamed}'. Multi-unit symbols are a filed follow-up.");
-                    refDes = renamed;
-                }
-            }
 
             if (!partDefs.TryGetValue(libId, out var definition))
-            {
-                definition = new PartDefinition(
-                    BareName(libId), parsed.ReferencePrefix, parsed.Pins,
-                    footprint: null, body: null, symbol: parsed.Symbol);
-                partDefs[libId] = definition;
-            }
+                partDefs[libId] = definition = BuildDefinition(libId, parsed);
 
-            var component = schematic.Add(refDes, definition, InstanceValue(inst) ?? "");
-            foreach (var pin in definition.Pins)
-            {
-                var symPin = parsed.Symbol.PinNumbered(pin.Number);
-                data.PinPoints.Add((component.Pin(pin.Number), placement.Place(symPin.Anchor)));
-            }
+            // MULTI-UNIT MERGE (the flat path's rule, keyed by the hierarchical refdes): a part's
+            // units under one path merge into one component, each placing only its own unit's pins.
+            PlaceInstance(
+                schematic, refDes, InstanceValue(inst) ?? "", parsed, definition,
+                InstanceUnit(inst), placement, componentsByRef, placedUnits, data.PinPoints, note);
         }
 
         foreach (var wire in content.Lists("wire"))
@@ -1279,8 +1259,81 @@ public static class KiCadSchReader
         return null;
     }
 
+    /// <summary>The KiCad unit number of a placed instance's <c>(unit N)</c> — which schematic unit
+    /// of a multi-unit part it draws (1-based). Absent (a plain single-unit part) means unit 1.</summary>
+    private static int InstanceUnit(SList instance) =>
+        instance.List("unit")?.Numbers() is { Count: >= 1 } n ? (int)n[0] : 1;
+
     private static string BareName(string libId) =>
         libId.Contains(':') ? libId[(libId.IndexOf(':') + 1)..] : libId;
+
+    /// <summary>Builds the part definition for a placed lib_symbol — MULTI-UNIT (its per-unit symbols
+    /// under <c>Units</c>, pins the union) when the symbol draws several units, else the incumbent
+    /// single-symbol definition (byte-identical).</summary>
+    private static PartDefinition BuildDefinition(string libId, KiCadSymbolReader.ParsedSymbol parsed) =>
+        parsed.Units.Count > 1
+            ? new PartDefinition(BareName(libId), parsed.ReferencePrefix, parsed.Pins,
+                footprint: null, body: null, symbol: null, units: parsed.Units)
+            : new PartDefinition(BareName(libId), parsed.ReferencePrefix, parsed.Pins,
+                footprint: null, body: null, symbol: parsed.Symbol);
+
+    /// <summary>The drawn symbol of one unit of a placed part (unit N selects the unit whose number
+    /// is N). A single-unit part is always unit 1 whatever the instance's <c>(unit …)</c> says.</summary>
+    private static Symbol? UnitSymbolFor(KiCadSymbolReader.ParsedSymbol parsed, int unit)
+    {
+        if (parsed.Units.Count == 1)
+            return parsed.Units[0];
+        for (int i = 0; i < parsed.UnitNumbers.Count; i++)
+            if (parsed.UnitNumbers[i] == unit)
+                return parsed.Units[i];
+        return null;
+    }
+
+    /// <summary>
+    /// Places one <c>(symbol …)</c> instance onto its <see cref="Component"/>, MERGING the several
+    /// instances of a multi-unit part (which share one reference designator, each carrying a
+    /// <c>(unit N)</c>) into a single component and placing ONLY that instance's unit's pins at that
+    /// instance's location. The first instance of a reference designator creates the component; a
+    /// later one adds another unit's pins (a single-unit part places its one unit here and is
+    /// byte-identical). A second placement of the same unit, or two symbols under one reference
+    /// designator, is reported and skipped (no rename — same reference designator is one component).
+    /// </summary>
+    private static void PlaceInstance(
+        Schematic schematic, string refDes, string value, KiCadSymbolReader.ParsedSymbol parsed,
+        PartDefinition definition, int unit, Placement placement,
+        Dictionary<string, Component> componentsByRef, Dictionary<string, HashSet<int>> placedUnits,
+        List<(PinRef Pin, Vector2d Anchor)> pinPoints, Action<string> note)
+    {
+        if (!componentsByRef.TryGetValue(refDes, out var component))
+        {
+            component = schematic.Add(refDes, definition, value);
+            componentsByRef[refDes] = component;
+            placedUnits[refDes] = [];
+        }
+        else if (!ReferenceEquals(component.Definition, definition))
+        {
+            note($"Reference '{refDes}' is placed as two different symbols "
+                + $"('{component.Definition.Name}' and '{definition.Name}'); the second placement was "
+                + "skipped.");
+            return;
+        }
+
+        var unitSymbol = UnitSymbolFor(parsed, unit);
+        if (unitSymbol is null)
+        {
+            note($"Component '{refDes}' unit {unit} is not defined by symbol '{definition.Name}' "
+                + $"(it draws {parsed.Units.Count} unit(s)); the instance's pins were not placed.");
+            return;
+        }
+        if (!placedUnits[refDes].Add(unit))
+        {
+            note($"Component '{refDes}' unit {unit} is placed more than once; the extra placement was "
+                + "skipped.");
+            return;
+        }
+        foreach (var symPin in unitSymbol.Pins)
+            pinPoints.Add((component.Pin(symPin.Number), placement.Place(symPin.Anchor)));
+    }
 
     private static bool TryWire(SList wire, out Vector2d a, out Vector2d b)
     {

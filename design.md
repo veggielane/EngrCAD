@@ -7162,9 +7162,36 @@ isometry is the **library-Y-up → sheet-Y-down flip plus the instance rotation*
 `(x, y, 0)` puts pin "1" at `(x, y − 3.81)`); the flip is what makes the connectivity the ORACLE for
 the transform — a wrong sign lands the pins off the wires and the partition breaks, which is what
 the mutation test measures. And **power symbols are net-name markers, not components** (their `Value`
-is the net name at their pin anchor), so the schematic's components stay the real parts. Filed:
-multi-unit symbols (a duplicate reference is imported as a separate component with a note). Docs:
+is the net name at their pin anchor), so the schematic's components stay the real parts. Docs:
 `examples/ecad-library.md`.
+
+**Multi-unit symbols merge.** A dual op-amp is ONE physical package (one footprint, one reference
+designator) drawn as SEVERAL schematic symbols — amp A, amp B, a power unit. **A `PartDefinition`
+gains `Units` — one `Symbol` per unit, each with its own pins at its own anchors — while `Pins` is
+their UNION** (the netlist terminals of the whole package), and the pin NUMBER identity spans the
+units (`PinIdentity.Check` takes the union of every unit's symbol pins). The restructure is minimal
+and byte-identical: `units` is an OPTIONAL LAST constructor parameter passed INSTEAD of `symbol` (both
+is refused), `Symbol` stays the FIRST unit (or null), and a single-unit / symbol-less definition
+derives `Units` from `symbol` so every incumbent construction is unchanged (asserted). **The
+`.kicad_sym` reader splits the unit sub-symbols by their `<name>_<unit>_<style>` suffix** — unit `0`
+is common to every unit (its graphics/pins go into all of them), a `style` ≥ 2 (De Morgan alternate)
+is ignored with a named diagnostic, and two units disagreeing about one pin are reported by name and
+reconciled to the first (a reader never throws on dirty input). The single-unit case reproduces the
+old flatten exactly, because a lone unit's symbol is `common ∪ unit`, which is what the flatten
+already produced. **The `.kicad_sch` reader MERGES the same-refdes `(unit N)` instances into one
+`Component`** (keyed by reference designator, the hierarchical refdes in the multi-sheet path), and
+places ONLY that instance's unit's pins at THAT instance's location — so a net wired to amp A's output
+and one wired to amp B's input are distinct nets on one IC, and a net that physically spans the two
+amp units is the discriminating test (had the merge placed both units at one location, the wire
+between their true positions could not reach both). This REPLACES the old "duplicate reference →
+separate component with a note" behaviour; a repeated placement of one unit, or two different symbols
+under one reference designator, is reported and skipped (no rename — one reference designator is one
+component). **The board side is unaffected**: a multi-unit component is one component with one
+footprint and all pads, since `Pins` is the union and units are a schematic-drawing/placement concern.
+Persistence writes the per-unit symbols under a `units` key (a single-unit definition keeps the
+incumbent `symbol` key, so it saves byte-identically); `save → load → save` is a byte fixed point.
+Filed: De Morgan / alternate unit BODIES (`unit_style` 2 — carrying the alternate needs a per-instance
+style selector), and multi-unit schematic DRAWING (`SchematicSheet` places one symbol per component).
 
 **Single-sheet BUS import.** A bus is a labelled bundle of signal nets — a bus-VECTOR label
 `DATA[m..n]` on a `(bus …)` wire declares the members `DATA`+m..`DATA`+n (`DATA[0..7]` is
@@ -7225,8 +7252,9 @@ asserted exactly PLUS the mutation that proves the stitch is name-matched** — 
 hierarchical label off the parent sheet pin's name and the cross-sheet net SPLITS (a name-blind
 stitcher would pass the first assertion and fail this), with the local-vs-global scoping tested both
 ways (two local "CLK" = two nets, two global "CLK" = one) and a sub-sheet placed twice giving four
-distinct components and two distinct internal nets. Still filed: buses across sheets, multi-unit
-symbols. Docs: `examples/ecad-library.md`.
+distinct components and two distinct internal nets. Still filed: buses across sheets (multi-unit
+symbols merge in the hierarchical path too, keyed by the hierarchical refdes). Docs:
+`examples/ecad-library.md`.
 
 ### Stage 3 — placement constraints (`ConstrainedLayout`, `PcbConstraintSolver`)
 

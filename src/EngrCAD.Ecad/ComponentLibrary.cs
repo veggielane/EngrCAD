@@ -108,10 +108,18 @@ public static class ComponentLibrary
             }
         }
 
-        var definition = new PartDefinition(
-            symbol.Symbol.Name, symbol.ReferencePrefix, symbol.Pins,
-            footprint: footprint?.Footprint, body: null, symbol: symbol.Symbol,
-            model: footprint?.Model);
+        // A MULTI-UNIT symbol (a dual op-amp: amp A, amp B, a power unit) becomes one definition
+        // whose Pins are the UNION and whose Units carry the per-unit symbols; a single-unit part
+        // takes the incumbent single-symbol path (byte-identical).
+        var definition = symbol.Units.Count > 1
+            ? new PartDefinition(
+                symbol.Symbol.Name, symbol.ReferencePrefix, symbol.Pins,
+                footprint: footprint?.Footprint, body: null, symbol: null,
+                model: footprint?.Model, units: symbol.Units)
+            : new PartDefinition(
+                symbol.Symbol.Name, symbol.ReferencePrefix, symbol.Pins,
+                footprint: footprint?.Footprint, body: null, symbol: symbol.Symbol,
+                model: footprint?.Model);
 
         var identity = PinIdentity.Check(definition);
         return new LoadedPart(definition, identity, diagnostics);

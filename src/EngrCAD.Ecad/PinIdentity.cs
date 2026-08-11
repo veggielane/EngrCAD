@@ -75,7 +75,6 @@ public static class PinIdentity
         ArgumentNullException.ThrowIfNull(definition);
 
         var pins = definition.Pins.Select(p => p.Number).ToHashSet(StringComparer.Ordinal);
-        var symbol = definition.Symbol;
         var footprint = definition.Footprint;
 
         var pinsWithoutSymbolPin = new List<string>();
@@ -85,15 +84,23 @@ public static class PinIdentity
         var symbolPinsWithoutPad = new List<string>();
         var padsWithoutSymbolPin = new List<string>();
 
+        // The symbol side spans the UNITS: a multi-unit part's drawn pins are the UNION of every
+        // unit's pins (amp A's "1", amp B's "5", the power unit's "4"/"8"). A single-unit part has
+        // one unit, so this is exactly the incumbent Symbol.PinNumbers set.
         HashSet<string>? symbolNumbers = null;
-        if (symbol is not null)
+        var symbolNumbersInOrder = new List<string>();   // first appearance across units, in order
+        if (definition.Units.Count > 0)
         {
-            symbolNumbers = symbol.PinNumbers.ToHashSet(StringComparer.Ordinal);
+            symbolNumbers = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var unit in definition.Units)
+                foreach (var number in unit.PinNumbers)
+                    if (symbolNumbers.Add(number))
+                        symbolNumbersInOrder.Add(number);
             // Walk the DEFINITION's pins so the offenders are reported in declaration order.
             foreach (var number in definition.Pins.Select(p => p.Number))
                 if (!symbolNumbers.Contains(number))
                     pinsWithoutSymbolPin.Add(number);
-            foreach (var number in symbol.PinNumbers)
+            foreach (var number in symbolNumbersInOrder)
                 if (!pins.Contains(number))
                     symbolPinsNotAPin.Add(number);
         }
@@ -110,10 +117,11 @@ public static class PinIdentity
                     padsNotAPin.Add(pad.Number);
         }
 
-        // The direct symbol <-> pad cross-check (only meaningful when both are present).
-        if (symbol is not null && footprint is not null && padNumbers is not null && symbolNumbers is not null)
+        // The direct symbol <-> pad cross-check (only meaningful when both are present). The symbol
+        // side is the union across units (a symbol pin lacking a pad, and a pad lacking a symbol pin).
+        if (footprint is not null && padNumbers is not null && symbolNumbers is not null)
         {
-            foreach (var number in symbol.PinNumbers)
+            foreach (var number in symbolNumbersInOrder)
                 if (!padNumbers.Contains(number))
                     symbolPinsWithoutPad.Add(number);
             foreach (var pad in footprint.Pads)

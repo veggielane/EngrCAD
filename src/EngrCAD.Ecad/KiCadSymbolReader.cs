@@ -8,9 +8,13 @@ namespace EngrCAD.Ecad;
 /// <see cref="ReferencePrefix"/> and the referenced <see cref="FootprintName"/>, plus the
 /// diagnostics naming anything the reader could not carry.
 /// </summary>
-/// <param name="Symbol">The drawn symbol — graphics plus <see cref="SymbolPin"/>s.</param>
-/// <param name="Pins">The netlist terminals implied by the symbol's pins (number, name, type),
-/// deduplicated by number in symbol order.</param>
+/// <param name="Symbol">The FIRST unit's drawn symbol — graphics plus <see cref="SymbolPin"/>s. For
+/// a single-unit part this is the whole drawn symbol; for a MULTI-UNIT part it is a representative and
+/// <see cref="Units"/> carries them all.</param>
+/// <param name="Pins">The netlist terminals implied by the symbol's pins (number, name, type) — the
+/// UNION across every unit, deduplicated by number in unit order.</param>
+/// <param name="Units">The per-unit drawn symbols (a dual op-amp has several — amp A, amp B, a power
+/// unit), ordered by unit number ascending; a single-unit part has exactly one.</param>
 /// <param name="ReferencePrefix">The reference-designator prefix from the <c>Reference</c>
 /// property (<c>"R"</c>, <c>"U"</c>).</param>
 /// <param name="FootprintName">The footprint the symbol references (<c>"Lib:Name"</c>), or null
@@ -20,6 +24,7 @@ namespace EngrCAD.Ecad;
 public sealed record KiCadSymbol(
     Symbol Symbol,
     IReadOnlyList<Pin> Pins,
+    IReadOnlyList<Symbol> Units,
     string ReferencePrefix,
     string? FootprintName,
     IReadOnlyList<string> Diagnostics);
@@ -79,7 +84,8 @@ public static class KiCadSymbolReader
         var diagnostics = new List<string>();
         var parsed = ParseSymbolList(top, diagnostics);
         return new KiCadSymbol(
-            parsed.Symbol, parsed.Pins, parsed.ReferencePrefix, parsed.FootprintName, diagnostics);
+            parsed.Symbol, parsed.Pins, parsed.Units, parsed.ReferencePrefix, parsed.FootprintName,
+            diagnostics);
     }
 
     /// <summary>Reads a <c>.kicad_sym</c> file from disk.</summary>
@@ -89,16 +95,24 @@ public static class KiCadSymbolReader
     // ---- the shared symbol-parsing core --------------------------------------
 
     /// <summary>
-    /// One <c>(symbol …)</c> list parsed into the pieces a caller needs — the drawn
-    /// <see cref="Ecad.Symbol"/>, its netlist <see cref="Pin"/>s, the reference prefix, the
-    /// referenced footprint name, the <c>Value</c> property, and whether it is a POWER symbol
-    /// (carries a <c>(power)</c> flag). This is the shared core the <c>.kicad_sym</c> reader
-    /// (<see cref="Read"/>) and the <c>.kicad_sch</c> reader (<see cref="KiCadSchReader"/>) both
-    /// use, so symbol parsing lives in ONE place — a schematic's embedded <c>lib_symbols</c> are
-    /// the same grammar as a symbol library's symbols.
+    /// One <c>(symbol …)</c> list parsed into the pieces a caller needs — the per-unit
+    /// <see cref="Ecad.Symbol"/>s (<see cref="Units"/>, one per schematic unit — a dual op-amp has
+    /// three: amp A, amp B, a power unit), the netlist <see cref="Pin"/>s (their UNION), the
+    /// reference prefix, the referenced footprint name, the <c>Value</c> property, and whether it is
+    /// a POWER symbol (carries a <c>(power)</c> flag). This is the shared core the <c>.kicad_sym</c>
+    /// reader (<see cref="Read"/>) and the <c>.kicad_sch</c> reader (<see cref="KiCadSchReader"/>)
+    /// both use, so symbol parsing lives in ONE place — a schematic's embedded <c>lib_symbols</c>
+    /// are the same grammar as a symbol library's symbols.
     /// </summary>
+    /// <param name="Symbol">The FIRST unit's drawn symbol (a representative — <see cref="Units"/>
+    /// carries them all). For a single-unit part it is the sole unit.</param>
+    /// <param name="Units">The per-unit symbols, ordered by unit number ascending.</param>
+    /// <param name="UnitNumbers">The KiCad unit number of each entry of <see cref="Units"/>, parallel
+    /// to it — a placed instance's <c>(unit N)</c> selects the unit with number N.</param>
     internal sealed record ParsedSymbol(
         Symbol Symbol,
+        IReadOnlyList<Symbol> Units,
+        IReadOnlyList<int> UnitNumbers,
         IReadOnlyList<Pin> Pins,
         string ReferencePrefix,
         string? FootprintName,
@@ -106,7 +120,14 @@ public static class KiCadSymbolReader
         bool IsPower);
 
     /// <summary>Parses one <c>(symbol "name" …)</c> list, appending any ignored/approximated
-    /// features to <paramref name="diagnostics"/> (the <c>StepReader.Diagnostics</c> convention).</summary>
+    /// features to <paramref name="diagnostics"/> (the <c>StepReader.Diagnostics</c> convention).
+    /// <para>A KiCad symbol is drawn as one or more UNIT sub-symbols named
+    /// <c>&lt;name&gt;_&lt;unit&gt;_&lt;style&gt;</c>: unit <c>0</c> is graphics/pins COMMON to every
+    /// unit, unit <c>1</c>… are the distinct schematic units (a dual op-amp's amp A / amp B / power),
+    /// and <c>style</c> <c>1</c> is the default body while <c>2</c> is the De Morgan alternate (out of
+    /// scope — ignored with a named diagnostic). Each unit's <see cref="Ecad.Symbol"/> carries the
+    /// common pins plus its own, so a schematic can place each unit at its own location while the
+    /// part stays ONE component whose <see cref="ParsedSymbol.Pins"/> are the union.</para></summary>
     internal static ParsedSymbol ParseSymbolList(SList top, List<string> diagnostics)
     {
         string name = top.Arg(0) ?? throw new FormatException("A (symbol ...) has no name.");
@@ -132,24 +153,131 @@ public static class KiCadSymbolReader
         // netlist terminal of a placed component.
         bool isPower = top.List("power") is not null;
 
-        // Graphics and pins: walk the symbol subtree (nested unit symbols hold them).
-        var graphics = new List<SymbolGraphic>();
-        var symbolPins = new List<SymbolPin>();
-        var seenPinNumbers = new HashSet<string>(StringComparer.Ordinal);
-        Collect(top, graphics, symbolPins, seenPinNumbers, diagnostics, name);
+        // Collect graphics and pins PER UNIT. Direct items under the top symbol, and any unit-0
+        // sub-symbol, are COMMON (shared by every unit). Each numbered unit sub-symbol is its own.
+        var common = new UnitCollector();
+        CollectDirect(top, common, diagnostics, name);
+        var units = new SortedDictionary<int, UnitCollector>();
+        foreach (var sub in top.Lists("symbol"))
+        {
+            var (unit, style) = ParseUnitStyle(sub.Arg(0));
+            if (style >= 2)
+            {
+                diagnostics.Add(
+                    $"Symbol '{name}': a De Morgan / alternate body style (unit_style {style}) is not "
+                    + "supported and was ignored.");
+                continue;
+            }
+            var target = unit == 0
+                ? common
+                : units.TryGetValue(unit, out var c) ? c : units[unit] = new UnitCollector();
+            CollectDirect(sub, target, diagnostics, name);
+        }
 
-        var symbol = new Symbol(name, symbolPins, graphics);
-        // The netlist terminals: one Pin per symbol pin, deduped by number in symbol order.
-        var pins = symbolPins.Select(p => new Pin(p.Number, p.Name, p.Type)).ToList();
+        // Build one Symbol per unit (common graphics/pins + the unit's own, deduped by number — a
+        // repeated number within a unit is reported and dropped, so a dirty file never throws from the
+        // Symbol ctor). A part with no numbered unit (only common, or nothing) is a single unit — the
+        // common alone.
+        var unitSymbols = new List<Symbol>();
+        var unitNumbers = new List<int>();
+        if (units.Count == 0)
+        {
+            unitSymbols.Add(new Symbol(name, DedupPins(name, 1, common.Pins, diagnostics), common.Graphics));
+            unitNumbers.Add(1);
+        }
+        else
+        {
+            foreach (var (unitNo, collector) in units)   // SortedDictionary iterates ascending
+            {
+                var graphics = new List<SymbolGraphic>(common.Graphics);
+                graphics.AddRange(collector.Graphics);
+                unitSymbols.Add(new Symbol(
+                    name, DedupPins(name, unitNo, common.Pins.Concat(collector.Pins), diagnostics), graphics));
+                unitNumbers.Add(unitNo);
+            }
+        }
 
-        return new ParsedSymbol(symbol, pins, prefix, footprintName, value, isPower);
+        // The netlist terminals: the UNION of every unit's pins, deduped by number in unit order.
+        // Two units claiming one number with DIFFERENT pin data is an inconsistency reported BY NAME
+        // (a reader never throws on dirty input — reconcile to the first, so the part stays loadable).
+        var pinList = new List<Pin>();
+        var byNumber = new Dictionary<string, SymbolPin>(StringComparer.Ordinal);
+        foreach (var unitSym in unitSymbols)
+            foreach (var pin in unitSym.Pins)
+            {
+                if (byNumber.TryGetValue(pin.Number, out var first))
+                {
+                    if (!string.Equals(first.Name, pin.Name, StringComparison.Ordinal) || first.Type != pin.Type)
+                        diagnostics.Add(
+                            $"Symbol '{name}': its units disagree about pin '{pin.Number}' "
+                            + $"(one is '{first.Name}'/{first.Type}, another '{pin.Name}'/{pin.Type}); "
+                            + "the first was used.");
+                    continue;
+                }
+                byNumber[pin.Number] = pin;
+                pinList.Add(new Pin(pin.Number, pin.Name, pin.Type));
+            }
+
+        return new ParsedSymbol(
+            unitSymbols[0], unitSymbols, unitNumbers, pinList, prefix, footprintName, value, isPower);
     }
 
-    // ---- collecting graphics and pins ----------------------------------------
+    /// <summary>The unit and body-style of a unit sub-symbol name
+    /// <c>&lt;parent&gt;_&lt;unit&gt;_&lt;style&gt;</c> — the LAST two underscore-separated integer
+    /// tokens (the base name may itself contain underscores, e.g. <c>R_0805_0_1</c>). A name that does
+    /// not end in two integers falls back to unit 1, style 1 (a plain single-unit symbol).</summary>
+    private static (int Unit, int Style) ParseUnitStyle(string? subName)
+    {
+        if (subName is not null)
+        {
+            int last = subName.LastIndexOf('_');
+            if (last > 0)
+            {
+                int prev = subName.LastIndexOf('_', last - 1);
+                if (prev >= 0
+                    && int.TryParse(subName.AsSpan(prev + 1, last - prev - 1), out int unit)
+                    && int.TryParse(subName.AsSpan(last + 1), out int style))
+                    return (unit, style);
+            }
+        }
+        return (1, 1);
+    }
 
-    private static void Collect(
-        SList node, List<SymbolGraphic> graphics, List<SymbolPin> pins,
-        HashSet<string> seenPinNumbers, List<string> diagnostics, string symbolName)
+    /// <summary>Deduplicates one unit's pins by number (keep the first, report the rest), so a dirty
+    /// file with a repeated pin number is reconciled rather than throwing from the <see cref="Symbol"/>
+    /// constructor.</summary>
+    private static List<SymbolPin> DedupPins(
+        string name, int unitNo, IEnumerable<SymbolPin> pins, List<string> diagnostics)
+    {
+        var result = new List<SymbolPin>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var pin in pins)
+        {
+            if (seen.Add(pin.Number))
+                result.Add(pin);
+            else
+                diagnostics.Add(
+                    $"Symbol '{name}' unit {unitNo}: pin number '{pin.Number}' appears more than once; "
+                    + "the extra was ignored.");
+        }
+        return result;
+    }
+
+    /// <summary>The graphics and pins collected from ONE unit's sub-symbol (or the common/top level),
+    /// before the union dedup.</summary>
+    private sealed class UnitCollector
+    {
+        public List<SymbolGraphic> Graphics { get; } = [];
+        public List<SymbolPin> Pins { get; } = [];
+    }
+
+    // ---- collecting graphics and pins from one node's DIRECT items -----------
+
+    /// <summary>Collects the graphic primitives and pins DIRECTLY under <paramref name="node"/> into
+    /// <paramref name="into"/>. A nested <c>(symbol …)</c> is NOT recursed — units are gathered by the
+    /// caller, keyed by the sub-symbol's own unit number.</summary>
+    private static void CollectDirect(
+        SList node, UnitCollector into, List<string> diagnostics, string symbolName)
     {
         foreach (var item in node.Items.OfType<SList>())
         {
@@ -157,39 +285,35 @@ public static class KiCadSymbolReader
             {
                 case "rectangle":
                     if (TryRectangle(item, out var rect))
-                        graphics.Add(rect);
+                        into.Graphics.Add(rect);
                     break;
                 case "circle":
                     if (TryCircle(item, out var circle))
-                        graphics.Add(circle);
+                        into.Graphics.Add(circle);
                     break;
                 case "arc":
                     if (TryArc(item, out var arc))
-                        graphics.Add(arc);
+                        into.Graphics.Add(arc);
                     break;
                 case "polyline":
                     if (TryPolyline(item, out var poly))
-                        graphics.Add(poly);
+                        into.Graphics.Add(poly);
                     break;
                 case "text":
                     if (TryText(item, out var text))
-                        graphics.Add(text);
+                        into.Graphics.Add(text);
                     break;
                 case "pin":
-                    if (TryPin(item, seenPinNumbers, diagnostics, out var pin))
-                        pins.Add(pin);
-                    break;
-                case "symbol":
-                    // A nested unit sub-symbol: recurse for its graphics and pins.
-                    Collect(item, graphics, pins, seenPinNumbers, diagnostics, symbolName);
+                    if (TryPin(item, diagnostics, out var pin))
+                        into.Pins.Add(pin);
                     break;
                 case "bezier":
                 case "gr_curve":
                     diagnostics.Add(
                         $"Symbol '{symbolName}': graphic '{item.Head}' is not supported and was ignored.");
                     break;
-                    // property/pin_names/pin_numbers/in_bom/on_board/effects/stroke/fill etc. carry
-                    // no drawn geometry we model — silently skipped.
+                    // A nested (symbol …) is a unit — handled by the caller. property/pin_names/
+                    // pin_numbers/in_bom/on_board/effects/stroke/fill carry no geometry we model.
             }
         }
     }
@@ -269,8 +393,7 @@ public static class KiCadSymbolReader
         return true;
     }
 
-    private static bool TryPin(
-        SList list, HashSet<string> seenPinNumbers, List<string> diagnostics, out SymbolPin pin)
+    private static bool TryPin(SList list, List<string> diagnostics, out SymbolPin pin)
     {
         pin = default;
         // Positional atoms: <electrical_type> <graphic_style>.
@@ -288,12 +411,6 @@ public static class KiCadSymbolReader
         if (number.Length == 0)
         {
             diagnostics.Add("A symbol pin has no number and was ignored.");
-            return false;
-        }
-        if (!seenPinNumbers.Add(number))
-        {
-            // A stacked/duplicate pin number (e.g. multi-unit): keep the first, note the rest.
-            diagnostics.Add($"Symbol pin number '{number}' appears more than once; the extra was ignored.");
             return false;
         }
         if (!known)
