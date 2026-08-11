@@ -2672,13 +2672,20 @@ from what was already understood rather than from scratch.
     less the openings; silk = a text/graphic layer; paste = the SMD pad set) — each a new layer
     the same `GerberWriter` emits once the model exists. GERBER X2 attributes (`%TF`/`%TA`/`%TO`)
     and the JOB FILE (`.gbrjob`) carry per-object net/component metadata a modern fab reads. A
-    copper POUR / ground plane (a hatched or solid region with thermal-relief clearances — a region
-    boolean, the tamper-mesh fill's shape; `RunLinker` links a hatched pour's segments) is a
-    ROUTING feature; the exporter already region-fills an arbitrary pour region faithfully (tested
-    via the model path), so it is a router deliverable rather than an exporter one. A Gerber
-    IMPORT of a foreign board is a different project (this is EXPORT; the reader is the round-trip
-    oracle scoped to what the writer emits). Topological / shove / push routing, length matching
-    and differential pairs are later routing stages over the same grid.
+    Gerber IMPORT of a foreign board is a different project (this is EXPORT; the reader is the
+    round-trip oracle scoped to what the writer emits). Topological / shove / push routing, length
+    matching and differential pairs are later routing stages over the same grid.
+  - **Copper-pour follow-ups (filed, the pour itself has LANDED — see CLAUDE.md's ECAD status,
+    design.md §6d, `examples/ecad-pcb.md`):** POUR PRIORITY / ordering when several pours overlap
+    (v1 fills each pour against the base copper, not other pours, so two overlapping same-layer
+    different-net pours would short — priority resolves which wins where); CUSTOM RELIEF geometry
+    beyond the four-spoke default (a different spoke count is a parameter, but a non-radial relief —
+    a solid-with-notches, a keep-out-shaped relief — is filed); a POUR that clears other-net copper
+    at the acute-angle rule's own default 90° threshold robustly (thermal-relief spokes meet the
+    plane at ~90° corners, borderline on the strict-`<` test — a splayed/filleted spoke, or a
+    thermal-relief-aware DRC exemption, would let the default rule pass); and a CONFORMAL pour on a
+    doubly-curved MID wall (refused for the tamper-mesh reason — `MeshLocalParam`'s 2–5% distortion
+    would land in the clearance).
   - **3D component placement for MID/LDS — the novel capability, and it fits because the
     kernel ALREADY routes conductors on a moulded surface.** Moulded Interconnect Devices /
     Laser Direct Structuring put conductive traces directly on a 3D moulded plastic part,

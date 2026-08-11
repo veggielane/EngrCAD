@@ -117,7 +117,59 @@ internal static class PcbLayoutWriter
             root["traces"] = traces;
         }
 
+        // Pours are layout truth (a ground / power plane is part of the design), so they ride in the
+        // file — write-only-when-stated (every field omitted when it equals the pour's own default),
+        // so a pour-free layout stays byte-identical and a poured one is a save → load → save fixed
+        // point.
+        if (layout.Pours.Count > 0)
+        {
+            var pours = new JsonArray();
+            foreach (var pour in layout.Pours)
+                pours.Add(SavePour(pour));
+            root["pours"] = pours;
+        }
+
         return root;
+    }
+
+    private static JsonObject SavePour(CopperPour pour)
+    {
+        var def = new CopperPour(pour.Net, pour.Layer);   // the defaults, drift-proof
+        var record = new JsonObject { ["net"] = pour.Net, ["layer"] = pour.Layer };
+        if (pour.Fill != def.Fill)
+            record["fill"] = pour.Fill.ToString();
+        if (pour.Outline is not null)
+        {
+            var outline = new JsonArray();
+            foreach (var p in pour.Outline)
+                outline.Add(new JsonObject { ["x"] = p.X, ["y"] = p.Y });
+            record["outline"] = outline;
+        }
+        if (pour.Clearance != def.Clearance)
+            record["clearance"] = pour.Clearance;
+        if (pour.DrillClearance != def.DrillClearance)
+            record["drillClearance"] = pour.DrillClearance;
+        if (pour.EdgeClearance != def.EdgeClearance)
+            record["edgeClearance"] = pour.EdgeClearance;
+        if (pour.Relief is { } relief)
+            record["relief"] = new JsonObject
+            {
+                ["spokes"] = relief.Spokes,
+                ["spokeWidth"] = relief.SpokeWidth,
+                ["gap"] = relief.Gap,
+                ["startAngle"] = relief.StartAngleDegrees,
+            };
+        if (pour.Hatch is { } hatch)
+            record["hatch"] = new JsonObject
+            {
+                ["spacing"] = hatch.Spacing,
+                ["lineWidth"] = hatch.LineWidth,
+                ["angle"] = hatch.AngleDegrees,
+                ["crossHatch"] = hatch.CrossHatch,
+            };
+        if (pour.DeadCopper != def.DeadCopper)
+            record["deadCopper"] = pour.DeadCopper.ToString();
+        return record;
     }
 
     private static JsonObject SaveBoard(PcbBoard board)
@@ -265,7 +317,60 @@ internal static class PcbLayoutReader
                     EcadJson.Double(record, "width"), points));
             }
 
+        if (root.TryGetPropertyValue("pours", out var poursNode) && poursNode is JsonArray poursArray)
+            foreach (var node in poursArray)
+                layout.AddLoadedPour(ReadPour(EcadJson.Object(node, "a pour")));
+
         return layout;
+    }
+
+    private static CopperPour ReadPour(JsonObject record)
+    {
+        var def = new CopperPour(EcadJson.String(record, "net"), EcadJson.String(record, "layer"));
+
+        var fill = record.TryGetPropertyValue("fill", out var fillNode)
+            ? EcadJson.Enum<PourFill>(fillNode?.GetValue<string>(), "a pour fill")
+            : def.Fill;
+
+        IReadOnlyList<Vector2d>? outline = null;
+        if (record.TryGetPropertyValue("outline", out var outlineNode) && outlineNode is JsonArray outlineArray)
+        {
+            var points = new List<Vector2d>();
+            foreach (var n in outlineArray)
+            {
+                var p = EcadJson.Object(n, "a pour outline point");
+                points.Add(new Vector2d(EcadJson.Double(p, "x"), EcadJson.Double(p, "y")));
+            }
+            outline = points;
+        }
+
+        ThermalRelief? relief = null;
+        if (record.TryGetPropertyValue("relief", out var reliefNode) && reliefNode is JsonObject r)
+            relief = new ThermalRelief(
+                EcadJson.Int(r, "spokes"), EcadJson.Double(r, "spokeWidth"),
+                EcadJson.Double(r, "gap"), EcadJson.Double(r, "startAngle"));
+
+        HatchStyle? hatch = null;
+        if (record.TryGetPropertyValue("hatch", out var hatchNode) && hatchNode is JsonObject h)
+            hatch = new HatchStyle(
+                EcadJson.Double(h, "spacing"), EcadJson.Double(h, "lineWidth"),
+                EcadJson.Double(h, "angle"), h["crossHatch"]?.GetValue<bool>() ?? true);
+
+        var deadCopper = record.TryGetPropertyValue("deadCopper", out var deadNode)
+            ? EcadJson.Enum<DeadCopperPolicy>(deadNode?.GetValue<string>(), "a pour dead-copper policy")
+            : def.DeadCopper;
+
+        return def with
+        {
+            Fill = fill,
+            Outline = outline,
+            Clearance = record["clearance"]?.GetValue<double>() ?? def.Clearance,
+            DrillClearance = record["drillClearance"]?.GetValue<double>() ?? def.DrillClearance,
+            EdgeClearance = record["edgeClearance"]?.GetValue<double>() ?? def.EdgeClearance,
+            Relief = relief,
+            Hatch = hatch,
+            DeadCopper = deadCopper,
+        };
     }
 
     private static PcbBoard ReadBoard(JsonObject record)
