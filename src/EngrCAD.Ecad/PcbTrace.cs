@@ -79,6 +79,23 @@ public sealed partial class PcbLayout
     public PcbLayout AddTrace(string net, string layer, double width, IReadOnlyList<Vector2d> points) =>
         AddTrace(new PcbTrace(net, layer, width, points));
 
+    /// <summary>
+    /// Replaces the trace at <paramref name="index"/> — the seam a length-match tuner
+    /// (<see cref="LengthMatch"/>) applies its tuned geometry through. The replacement is validated
+    /// exactly as <see cref="AddTrace(PcbTrace)"/> validates, so it is refused by name for the same
+    /// reasons; its position (and hence its <c>trace{N}</c> source id) is unchanged.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is out of range.</exception>
+    public PcbLayout ReplaceTrace(int index, PcbTrace trace)
+    {
+        if (index < 0 || index >= _traces.Count)
+            throw new ArgumentOutOfRangeException(nameof(index),
+                $"Trace index {index} is out of range (the layout has {_traces.Count} traces).");
+        ValidateTrace(trace);
+        _traces[index] = trace;
+        return this;
+    }
+
     // Used by the loader to reconstruct a trace verbatim (the same validation, so a saved-then-loaded
     // trace is refused for the same reasons a freshly-declared one is).
     internal void AddLoadedTrace(PcbTrace trace)

@@ -697,9 +697,21 @@ grid, the exact check wins and the candidate is rejected.
 component pads end up in one copper component. **Rip-up** routes a blocked net across the traces that
 block it, rips those up, and re-queues them (negotiated congestion), bounded so a boxed-in net
 terminates and is reported unroutable. Deterministic — a fixed net order and grid give bit-identical
-routes. **v1 scope**: through-vias (all copper layers); NOT topological/shove routing, length
-matching, differential pairs, copper pours, teardrops, or cavity walls as obstacles. Docs:
-`examples/ecad-routing.md`.
+routes. **v1 scope**: through-vias (all copper layers); NOT topological/shove routing, differential
+pairs, teardrops, or cavity walls as obstacles. Docs: `examples/ecad-routing.md`.
+
+**Length matching (serpentine tuning).** `LengthMatch.Tune(layout, traceIndex, target, tolerance,
+rules)` lengthens a routed trace to a target by inserting a serpentine on its longest segment — a comb
+of rectangular **bumps** (90° corners, no 180° hairpin, so the copper is DRC-clean where a naive
+square wave pinches), where more teeth means a smaller amplitude (`A = add / 2N`) and hence the
+DRC-friendliest comb. Each candidate is committed only after `PcbDrc.Violates` confirms it adds no
+clearance violation (the router's exact-DRC-is-truth rule), and the added length is **measured** off
+the built geometry, never claimed. `MatchGroup(layout, indices, …)` tunes a set to its longest member,
+each checked against the others' current (tuned-so-far) copper so two serpentines cannot collide.
+Endpoints and net never move (connectivity unchanged); `ReplaceTrace` applies the tuned geometry. A
+target shorter than the current length is `Refused`, an already-matched one is `Unchanged`, and a
+boxed-in trace is `Untunable` with how much it could add. Filed: multi-segment combs, one-sided teeth,
+rip-up-to-make-room, and differential-pair coupled tuning.
 
 ## Copper pours — ground / power planes
 

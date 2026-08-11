@@ -7651,10 +7651,33 @@ write-only-when-stated (an un-routed layout stays byte-identical).
 
 **v1 scope, each boundary stated**: through-vias only (spanning all copper layers — always valid,
 exactly right for a 2-layer board; blind/buried/microvia routing is a later stage); 45°/90° grid;
-rip-up-reroute; 2-pin MST decomposition. NOT in v1: topological / shove / push-and-route; length
-matching and differential pairs; copper POUR / ground planes with thermal reliefs (a region boolean,
-the tamper-mesh fill's shape); teardrops; and cavity walls as routing obstacles.
-Docs: `examples/ecad-routing.md`.
+rip-up-reroute; 2-pin MST decomposition. NOT in v1: topological / shove / push-and-route; differential
+pairs; teardrops; and cavity walls as routing obstacles. Docs: `examples/ecad-routing.md`.
+
+**Length matching (serpentine tuning)** landed on top of the router (`LengthMatch`). A routed trace
+is lengthened to a target by REPLACING its longest segment with a serpentine — a comb of `N`
+rectangular BUMPS, each rising at 90° from the baseline, running flat, and dropping back. The bump
+geometry is the load-bearing choice: a naive up-then-down SQUARE WAVE puts a 180° hairpin at each
+tooth tip, which the acute-angle rule and the pinched neck between anti-parallel copper rightly flag
+(measured — the square-wave version reached only 3.5 mm of an 8 mm ask before violating), whereas a
+90°-cornered bump with a baseline between bumps is DRC-clean and a round-joined 90° corner passes the
+acute rule with nothing arranged. Each bump adds exactly `2·A` of centre-line length, so `N` bumps add
+`2·N·A` and setting `A = (target − current) / (2N)` hits the target BY CONSTRUCTION — verified by
+MEASURING the built polyline, never by a claimed number. `N` is MAXIMISED (subject to a pitch floor of
+four trace widths, so a bump's two vertical sides clear at `cell/2 ≥ 2·width`), because more teeth
+means a smaller amplitude and hence the DRC-friendliest comb; the whole tuned trace is then committed
+only after `PcbDrc.Violates` certifies it adds no clearance violation against the board's OTHER copper
+(the router's exact-DRC-is-truth rule, so a tuned trace is DRC-clean or the tuning is refused). The
+trace's endpoints and net never move — only the middle lengthens — so connectivity is unchanged, and
+the tuner does NOT mutate the layout (it returns the tuned trace; `PcbLayout.ReplaceTrace` applies it,
+the deliberate-act rule). `MatchGroup` tunes a set to the longest member, each checked against the
+others' current (tuned-so-far) copper so two serpentines from one group cannot collide unnoticed.
+Outcomes are named rather than fudged: `Refused` (a target shorter than the current — a serpentine
+only adds), `Unchanged` (already within tolerance), and `Untunable` (no DRC-clean room, reporting how
+much it COULD add via a bisection on the largest clean amplitude). v1 scope: one uniform comb on the
+one longest segment, teeth to alternating sides; filed — spreading over several segments, teeth to
+only the OPEN side, ripping up a neighbour to make room, and differential-pair coupled tuning
+(matching within a pair while holding the gap). Docs: `examples/ecad-routing.md`.
 
 ### Drawing the schematic sheet (`SchematicSheet`, `SchematicDrawing`)
 

@@ -90,11 +90,60 @@ nothing to route (every signal net already connected) returns unchanged, so `res
 is byte-identical to the input's. Routed traces are **layout truth** and round-trip in the
 [layout file](ecad-pcb.md).
 
+## Length matching (serpentine tuning)
+
+High-speed buses want their nets matched in **length** (equal propagation delay). `LengthMatch.Tune`
+lengthens a routed trace to a target by inserting a serpentine — a comb of rectangular bumps on the
+trace's longest segment — and `MatchGroup` tunes a set to the longest member. The comb is the
+**square-wave-free** kind (90° corners, no 180° hairpin), and each candidate is committed only after
+the exact DRC certifies it adds no clearance violation: a tuned trace is DRC-clean, or the tuning is
+refused by name. The added length is measured off the built geometry, never claimed.
+
+```csharp run:ecad-lengthmatch
+PartDefinition Tp(string n) => new(n, "TP", new[] { new Pin("1", PinType.Passive) },
+    new Footprint(n + "_fp", new[] { Pad.Smd("1", new Vector2d(0, 0), 0.6, 0.6) }));
+
+var sch = new Schematic("t");
+var a = sch.Add("A", Tp("A")); var b = sch.Add("B", Tp("B"));
+sch.Connect("N", a.Pin("1"), b.Pin("1"));
+var board = new PcbBoard(new[] {
+    new Vector2d(0, 0), new Vector2d(24, 0), new Vector2d(24, 24), new Vector2d(0, 24) }, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("A", 4, 12); layout.Place("B", 20, 12);
+
+var rules = new DrcRuleSet(
+    MinCopperClearance: 0.3, MinTraceWidth: 0.2, MinAnnularRing: 0.2,
+    MinDrillToCopper: 0.3, MinCopperToEdge: 0.3, MinAcuteAngleDegrees: 80);
+var routed = PcbRouter.Route(layout, rules,
+    new RouterOptions { GridResolution = 1.0, TraceWidth = 0.4, Clearance = 0.3 }).Layout;
+
+int idx = Enumerable.Range(0, routed.Traces.Count).First(i => routed.Traces[i].Net == "N");
+double current = LengthMatch.Length(routed.Traces[idx]);
+var result = LengthMatch.Tune(routed, idx, current + 8.0, tolerance: 0.05, rules);
+
+routed.ReplaceTrace(idx, result.Trace);                       // apply the tuning
+var report = PcbDrc.Check(routed, rules);
+
+Console.WriteLine($"{result.Outcome}: {current:0.000} -> {result.AchievedLength:0.000} mm");
+Console.WriteLine($"DRC clean after tuning: {report.Ok}");
+
+if (result.Outcome != LengthTuneOutcome.Reached || !report.Ok
+    || System.Math.Abs(result.AchievedLength - (current + 8.0)) > 0.05)
+    throw new Exception("the tuner must reach the target AND leave the board DRC-clean");
+```
+
+The endpoints and net never move — only the middle path lengthens — so connectivity is unchanged. A
+target **shorter** than the current length is `Refused` (a serpentine only adds), a target already at
+the length is an `Unchanged` no-op, and a trace boxed in on both sides is reported `Untunable` with
+how much it *could* add. Filed follow-ups: spreading the comb over several segments, teeth to only the
+open side, ripping up a neighbour to make room, and **differential-pair coupled tuning**.
+
 ## v1 scope
 
 An honest v1: a grid/maze A* with rip-up-reroute, **through-vias** (spanning all copper layers) for
 layer changes, and 2-pin MST decomposition of multi-pin nets. Deterministic — a fixed net order and
-grid give bit-identical routes. Not in v1 (each filed): topological / shove / push routing, length
-matching and differential pairs, teardrops, and cavity walls as routing obstacles.
+grid give bit-identical routes. **[Length matching](#length-matching-serpentine-tuning)** has landed.
+Not in v1 (each filed): topological / shove / push routing, differential pairs (coupled routing),
+teardrops, and cavity walls as routing obstacles.
 **[Copper pours / ground planes with thermal reliefs](ecad-pcb.md)** and **[Gerber / Excellon
 fabrication export](ecad-fabrication.md)** of the routed board — the fab output — have landed.
