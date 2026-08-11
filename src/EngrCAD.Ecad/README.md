@@ -498,14 +498,45 @@ rotation), so points that should coincide differ only by IEEE round-off. Power s
 markers (their `Value` is the net name), not components. This is exactly the rule
 `SchematicDrawing.Verify` asserts, run the other way round.
 
-**Coverage** is a single sheet: embedded `lib_symbols` → `PartDefinition`s (interned per `lib_id`,
-so two `Device:R` instances share one definition), placed `(symbol …)` instances (Reference →
-refdes, Value → value), power symbols, `wire`, `junction`, local `label`, `global_label`,
-`no_connect`. **Refused BY NAME** (out of v1 scope, filed): buses (`bus`/`bus_entry`/bus-vector
-labels like `D[7..0]`) and hierarchical sheets (`sheet` subsheets, `hierarchical_label`); a
-`(sheet_instances …)`, present in every flat sheet, is NOT a subsheet and passes. A netless wire, an
-instance referencing an unknown symbol, or a dangling pin is REPORTED (a diagnostic), never thrown;
-a non-`(kicad_sch …)` root or a malformed S-expression is refused by name.
+**Coverage** of `Read` is a single sheet: embedded `lib_symbols` → `PartDefinition`s (interned per
+`lib_id`, so two `Device:R` instances share one definition), placed `(symbol …)` instances (Reference
+→ refdes, Value → value), power symbols, `wire`, `junction`, local `label`, `global_label`,
+`no_connect`. **Refused BY NAME**: buses (`bus`/`bus_entry`/bus-vector labels like `D[7..0]`), and —
+in the single-sheet `Read` only — hierarchical sheets (`sheet` subsheets, `hierarchical_label`), so a
+flat import cannot silently drop a whole subsheet; a `(sheet_instances …)`, present in every flat
+sheet, is NOT a subsheet and passes. A netless wire, an instance referencing an unknown symbol, or a
+dangling pin is REPORTED (a diagnostic), never thrown; a non-`(kicad_sch …)` root or a malformed
+S-expression is refused by name.
+
+### Hierarchical / multi-sheet import
+
+`KiCadSchReader.ReadProject(rootPath)` reads a **hierarchical** design — a root `.kicad_sch` plus the
+sub-sheet FILES it references through `(sheet … (property "Sheetfile" …))`, resolved relative to the
+root's directory, recursively — into ONE flattened `Schematic`; `ReadProjectFrom(rootFile, sheetsByFile)`
+is the testable IN-MEMORY twin over a `sheetfile → text` map (the disk entry point is a thin wrapper
+over it). The single-sheet `Read`/`ReadFile` are unchanged and still refuse a hierarchical design by
+name.
+
+**Cross-sheet net stitching is the whole job, and it is NAME-matching layered on the same geometric
+union-find.** Each sheet instance's local connectivity is reconstructed with the flat rule (wires,
+on-wire attachments), tagged by INSTANCE so two sheets with a wire at the same `(x, y)` do not join;
+then the nets are stitched across sheets:
+
+- a parent **sheet pin** joins the parent net at its position to the sub-sheet's `hierarchical_label`
+  of the **same name** (name-matched, scoped to that child instance);
+- a **`global_label`** or a **power symbol** joins every sheet that carries that name;
+- a **local `label`** stays LOCAL to its sheet — two sheets' "CLK" locals are two nets (the scoping
+  crux; a local net's name is qualified by its sheet path so the two stay distinct).
+
+Components get **hierarchical reference designators** — `"PowerSupply/U1"` (the `PartInstance`
+occurrence-path convention) — so a sheet placed TWICE gives distinct instances (`"Amp1/U1"`,
+`"Amp2/U1"`) with distinct internal nets. **Refused / reported by name**: a **recursive** sheet
+reference (a sheet including itself, directly or transitively) is refused by name (a self-including
+hierarchy cannot be flattened); a **missing / unreadable** sub-sheet file is reported and its subtree
+skipped (never thrown), as is a hierarchical label with no matching parent sheet pin (a dangling
+port). Still out of scope: buses across sheets, and multi-unit symbols. The oracle is the same
+"reconstructed from geometry + name-matching" partition asserted exactly, plus the MUTATION that
+proves the stitch bites — rename the sub-sheet's hierarchical label and the parent/child net SPLITS.
 
 Verified higher than usual (an importer that mislabels nets is a silent failure): the reconstructed
 partition matches the intended one exactly (with `Schematic.Check()` passing); the MUTATION that

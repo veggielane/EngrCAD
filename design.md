@@ -7163,8 +7163,43 @@ isometry is the **library-Y-up → sheet-Y-down flip plus the instance rotation*
 the transform — a wrong sign lands the pins off the wires and the partition breaks, which is what
 the mutation test measures. And **power symbols are net-name markers, not components** (their `Value`
 is the net name at their pin anchor), so the schematic's components stay the real parts. Filed:
-hierarchical / multi-sheet import, buses, and multi-unit symbols (a duplicate reference is imported
-as a separate component with a note). Docs: `examples/ecad-library.md`.
+buses, and multi-unit symbols (a duplicate reference is imported as a separate component with a
+note). Docs: `examples/ecad-library.md`.
+
+**Hierarchical / multi-sheet import** (`KiCadSchReader.ReadProject(rootPath)` /
+`ReadProjectFrom(rootFile, sheetsByFile)`) flattens a real KiCad hierarchy — a root `.kicad_sch` plus
+the sub-sheet FILES it references through `(sheet … (property "Sheetfile" …))`, resolved relative to
+the root's directory, recursively — into ONE `Schematic`; the in-memory map overload is the testable
+core the disk entry wraps, and the single-sheet `Read` is untouched (it still refuses a hierarchy by
+name, so a flat import cannot silently drop a subsheet). **The load-bearing decision is that the flat
+union-find GENERALISES with an INSTANCE dimension rather than forking** — `Graph.Intern(instance, p)`
+keys the weld cell by `(instance, x, y)`, so two sheets with a wire at the same `(x, y)` do NOT join
+(the flat path is bit-identical: it interns everything at instance 0, so node ids are assigned in the
+same order), and every leaf geometry/naming helper (`OnSegment`, `TryWire`/`TryLabel`, `ReadPlacement`,
+`ReadLibSymbols`, `MakeUnique`) is reused verbatim — only the multi-instance orchestration is new,
+because the flat path knows exactly one sheet. **Cross-sheet stitching is NAME-matching layered on the
+geometry**: a parent SHEET PIN (drawn on the `(sheet …)` node in the parent's coordinate space, so it
+joins the parent net by position) joins the sub-sheet's `hierarchical_label` of the SAME NAME (scoped
+to that child instance) — so the parent net and the child net become one; a `global_label` or a power
+symbol joins ACROSS every instance by name; a local `label` stays WITHIN its instance. **The scoping
+is the crux, and it is not enough to scope the union — the NAME must scope too**, since two sheets'
+"CLK" local nets named "CLK" would be re-merged by `Schematic.Connect`'s create-or-extend-by-name
+rule; so a local net's name is QUALIFIED by its sheet path (`"SubB/CLK"`), which keeps the two nets
+distinct both in the graph and in the flattened schematic. Components take **hierarchical reference
+designators** (`"PowerSupply/U1"`, the `PartInstance` occurrence-path convention), so a sheet placed
+TWICE gives distinct instances (`"Amp1/U1"`, `"Amp2/U1"`) with distinct internal nets. Naming
+precedence: power &gt; global label &gt; stitched sheet-pin/hierarchical-label PORT name (used bare —
+a clean hierarchical net name) &gt; hierarchical / local label (qualified by path) &gt; a generated
+`Net-(minPin)`. Refused / reported by name: a RECURSIVE sheet reference (a sheet including itself,
+detected by a Sheetfile chain and refused — it cannot be flattened); a missing/unreadable sub-sheet
+file (reported, subtree skipped — the readers-never-throw-on-dirty culture); a dangling hierarchical
+port / an unmatched sheet pin (both reported). **The oracle is the reconstructed cross-sheet partition
+asserted exactly PLUS the mutation that proves the stitch is name-matched** — rename the sub-sheet's
+hierarchical label off the parent sheet pin's name and the cross-sheet net SPLITS (a name-blind
+stitcher would pass the first assertion and fail this), with the local-vs-global scoping tested both
+ways (two local "CLK" = two nets, two global "CLK" = one) and a sub-sheet placed twice giving four
+distinct components and two distinct internal nets. Still filed: buses across sheets, multi-unit
+symbols. Docs: `examples/ecad-library.md`.
 
 ### Stage 3 — placement constraints (`ConstrainedLayout`, `PcbConstraintSolver`)
 
