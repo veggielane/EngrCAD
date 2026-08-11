@@ -2807,12 +2807,19 @@ from what was already understood rather than from scratch.
     concentric at r−t to 8.9e-16, rim included); an inward offset self-intersects only where the surface
     is CONVEX and t exceeds the local radius, caught by a fold test (developable inversions) + a
     signed-volume sign flip (a sphere turning inside out — the fold test can't see it, since a uniform
-    inward offset is a uniform scale and a cross product is inversion-invariant). **Filed follow-ons**:
+    inward offset is a uniform scale and a cross product is inversion-invariant). **CROSS-SHELL
+    AUTO-ROUTING landed** (`CrossShellRouter`/`MidRouting.Route(stack, …)`) — the surface analogue of the
+    flat router's layer-changing via: one A* over the union of both shells' vertex graphs plus VIA EDGES
+    tying corresponding vertices `(k, v) ↔ (k±1, v)` chooses which shell each segment rides and drops a
+    through-shell via at the transition (trivial to enumerate because the shells share topology); the exact
+    multi-shell DRC certifies every commit (per-shell trace + per-shell via-pad clearance + via-to-via web),
+    so a same-shell net gets NO via, a cross-shell 2-pin ONE, an obstacle hop TWO, and the single-shell
+    router stays bit-identical (a new file + a new `Route(MidStack)` overload). **Filed follow-ons**:
     TOPOLOGICAL / SHOVE routing on the surface (v1 detours around obstacles but does not push them),
-    CROSS-SHELL AUTO-ROUTING (choosing which shell a net rides and placing the vias — v1 routes per shell
-    and places explicit vias), LENGTH MATCHING, a curvature-reach check for an OPEN convex cap over-offset,
-    and a conformal surface SOLDER MASK / POUR (refused for the distortion reason copper pours already
-    refuse curved walls).
+    OPTIMAL via minimisation (v1 uses a fixed via penalty), PARTIAL-SPAN vias for a > 2 shell stack (v1
+    routes a two-shell stack with full-stack vias), LENGTH MATCHING, a curvature-reach check for an OPEN
+    convex cap over-offset, and a conformal surface SOLDER MASK / POUR (refused for the distortion reason
+    copper pours already refuse curved walls).
   - **ECAD thermal coupling — the genuinely novel MCAD answer, the next stage over the
     enclosure fit that just landed.** Enclosure fit is DONE (`Enclosure`/`EnclosureFit`/
     `PanelCutout`/`FitReport` in `PcbEnclosure.cs`; docs `examples/ecad-enclosure.md`, design.md §6d

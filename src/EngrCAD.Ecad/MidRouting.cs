@@ -190,6 +190,49 @@ public static class MidRouting
     }
 
     /// <summary>
+    /// AUTO-ROUTES a MULTI-SHELL MID board — the surface analogue of the flat PCB router's LAYER-CHANGING
+    /// via. A net whose pads are on DIFFERENT shells, or that must hop to the other shell to pass an
+    /// obstacle, is routed over the UNION of both shells' vertex graphs plus "via edges" tying corresponding
+    /// vertices across the dielectric; where the chosen path uses a via edge, a through-shell
+    /// <see cref="SurfaceVia"/> is PLACED at that vertex and the route splits into per-shell surface traces.
+    ///
+    /// <para><b>The exact multi-shell DRC is the source of truth.</b> A candidate route + via is committed
+    /// only after each per-shell trace and each new via pad CLEARS the existing copper on its shell
+    /// (<see cref="Mid3dDrc"/>) AND the via-to-via web is met — so a graph-resolution error can never ship
+    /// a clearance-violating trace or via. A net that cannot be routed even by hopping is reported
+    /// UNROUTABLE by name, and a partial result is still clean. Rip-up-and-reroute handles congestion
+    /// exactly as the single-shell router does.</para>
+    /// </summary>
+    /// <param name="stack">The two-shell stack to route (mutated with the committed traces AND vias). The
+    /// nets to route are its cross-shell ratsnest (<see cref="MidStack.Connectivity"/>).</param>
+    /// <param name="rules">The design rules to route to and certify against (null = the defaults).</param>
+    /// <param name="options">The router options (null = the defaults); the via knobs
+    /// (<see cref="SurfaceRouteOptions.ViaPadDiameter"/>, <see cref="SurfaceRouteOptions.ViaPenalty"/>)
+    /// apply here.</param>
+    /// <exception cref="ArgumentException">The stack has ONE shell (there is nothing to hop to — use the
+    /// single-shell <see cref="Route(MidBoard, DrcRuleSet?, SurfaceRouteOptions?)"/> on
+    /// <see cref="MidStack.Outer"/>), or MORE THAN TWO shells (v1 routes a two-shell stack; a &gt; 2 shell
+    /// stack needs partial-span vias, filed).</exception>
+    public static StackRouteResult Route(
+        MidStack stack, DrcRuleSet? rules = null, SurfaceRouteOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(stack);
+        if (stack.ShellCount < 2)
+            throw new ArgumentException(
+                "Cross-shell auto-routing needs at least two shells — a one-shell stack has nothing to hop "
+                + "to. Route its single surface with MidRouting.Route(stack.Outer, rules, options), the "
+                + "single-shell path.", nameof(stack));
+        if (stack.ShellCount > 2)
+            throw new ArgumentException(
+                $"Cross-shell auto-routing v1 routes a TWO-shell stack; this stack has {stack.ShellCount} "
+                + "shells. A > 2 shell stack needs PARTIAL-SPAN vias (a via between two adjacent shells "
+                + "rather than the full-stack barrel AddVia places), which is filed as a follow-on. Route "
+                + "each shell with MidRouting.Route(stack.Shell(k)) and place the vias explicitly.",
+                nameof(stack));
+        return new CrossShellRouter(stack, rules ?? DrcRuleSet.Default, options ?? new SurfaceRouteOptions()).Run();
+    }
+
+    /// <summary>
     /// Straightens a raw surface polyline toward the geodesic, endpoints PINNED — the auto-router's
     /// trace-quality pass, the same curve-shortening <see cref="Geodesic"/> uses (densify then relax to
     /// the midpoint of neighbours, snapped back onto the surface). Unconstrained, so a straightened path
@@ -238,6 +281,20 @@ public sealed record SurfaceRouteOptions
     /// A straightened trace that fails the exact DRC falls back to the raw obstacle-avoiding edge
     /// path.</summary>
     public bool Straighten { get; init; } = true;
+
+    /// <summary>The land diameter (mm) of a through-shell via the CROSS-SHELL router drops where a route
+    /// hops between shells (default 0.5, matching <see cref="MidStack.AddVia(string?, in Vector3d,
+    /// double)"/>). Ignored by the single-shell <see cref="MidRouting.Route(MidBoard, DrcRuleSet?,
+    /// SurfaceRouteOptions?)"/>, which places no vias.</summary>
+    public double ViaPadDiameter { get; init; } = 0.5;
+
+    /// <summary>The cost the cross-shell search charges for a via edge — the reluctance that makes the
+    /// router prefer staying on one shell unless a hop pays (0 = derive a modest default from the
+    /// dielectric span and the mesh scale). It must be at least the barrel's 3D chord for the
+    /// straight-line heuristic to stay admissible, which the derived default guarantees. The exact 3D DRC
+    /// certifies every commit regardless, so this only steers the search. Ignored by the single-shell
+    /// router.</summary>
+    public double ViaPenalty { get; init; }
 }
 
 /// <summary>
@@ -272,5 +329,46 @@ public sealed record SurfaceRouteResult(
             ? $"routed {RoutedNets.Count} nets ({TracesAdded} traces)"
               + (RipUps > 0 ? $" after {RipUps} rip-up(s)" : "")
             : $"routed {RoutedNets.Count} nets ({TracesAdded} traces); "
+              + $"UNROUTED: {string.Join(", ", UnroutedNets)}";
+}
+
+/// <summary>
+/// The result of <see cref="MidRouting.Route(MidStack, DrcRuleSet?, SurfaceRouteOptions?)"/>: which nets
+/// routed and which did NOT, the committed per-shell traces and the through-shell vias the router dropped
+/// to hop between shells, and the counts. The stack is guaranteed 3D-DRC-clean against the rule set it
+/// was routed with (every commit is certified by the exact multi-shell DRC), so a PARTIAL result — one
+/// that could not route every net — is still clean, with the unroutable nets NAMED rather than faked.
+/// </summary>
+/// <param name="Stack">The routed stack (mutated in place with the committed traces and vias).</param>
+/// <param name="RoutedNets">The nets that were routed (had ≥ 2 terminal pads to join and got connected),
+/// in routing order.</param>
+/// <param name="UnroutedNets">The nets that could NOT be routed even by hopping shells, in ordinal order
+/// — reported, not faked.</param>
+/// <param name="Traces">The committed surface traces (one or more per routed net, across both
+/// shells).</param>
+/// <param name="Vias">The through-shell vias the router placed where a route changes shell.</param>
+/// <param name="TracesAdded">The number of trace segments added.</param>
+/// <param name="ViasAdded">The number of through-shell vias added.</param>
+/// <param name="RipUps">How many times a net was routed across another and the blocking net ripped up and
+/// re-routed (0 = every net found a clean route the first time).</param>
+public sealed record StackRouteResult(
+    MidStack Stack,
+    IReadOnlyList<string> RoutedNets,
+    IReadOnlyList<string> UnroutedNets,
+    IReadOnlyList<SurfaceTrace> Traces,
+    IReadOnlyList<SurfaceVia> Vias,
+    int TracesAdded,
+    int ViasAdded,
+    int RipUps)
+{
+    /// <summary>True when every net that needed routing was routed.</summary>
+    public bool FullyRouted => UnroutedNets.Count == 0;
+
+    /// <summary>A human-readable summary.</summary>
+    public override string ToString() =>
+        FullyRouted
+            ? $"routed {RoutedNets.Count} nets ({TracesAdded} traces, {ViasAdded} vias)"
+              + (RipUps > 0 ? $" after {RipUps} rip-up(s)" : "")
+            : $"routed {RoutedNets.Count} nets ({TracesAdded} traces, {ViasAdded} vias); "
               + $"UNROUTED: {string.Join(", ", UnroutedNets)}";
 }

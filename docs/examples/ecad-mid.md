@@ -391,6 +391,86 @@ concave region offset inward merely diverges); a sphere offset inward past its r
 and is **refused by name** (the offset's signed volume flips sign), as is a developable inversion (an
 offset triangle folds through itself).
 
+## Cross-shell auto-routing
+
+`MidRouting.Route(stack, …)` **auto-routes a two-shell stack** — the surface analogue of the flat PCB
+router's **layer-changing via**. A net whose pads are on **different shells**, or that must **hop to the
+other shell to pass an obstacle**, is routed over the **union of both shells' vertex graphs plus via
+edges** tying corresponding vertices across the dielectric; where the chosen path uses a via edge, a
+through-shell `SurfaceVia` is **placed** there and the route splits into per-shell traces.
+
+```csharp render:ecad-mid-crossshell
+HalfEdgeMesh Tube(double rr, double h, int around, int along) {
+    var pos = new List<Vector3d>();
+    for (int j = 0; j <= along; j++)
+        for (int i = 0; i < around; i++) {
+            double a = 2 * Math.PI * i / around;
+            pos.Add(new Vector3d(rr * Math.Cos(a), rr * Math.Sin(a), h * j / along));
+        }
+    var faces = new List<int[]>();
+    for (int j = 0; j < along; j++)
+        for (int i = 0; i < around; i++) {
+            int p = j * around + i, q = j * around + (i + 1) % around;
+            faces.Add(new[] { p, q, q + around });
+            faces.Add(new[] { p, q + around, p + around });
+        }
+    return HalfEdgeMesh.Build(pos, faces);
+}
+
+double r = 8, t = 0.9;
+var stack = MidStack.TwoShell(Tube(r, 14, 96, 60), t);
+double ir = r - t;
+Vector3d Out(double a, double z) => new(r * Math.Cos(a), r * Math.Sin(a), z);
+Vector3d In(double a, double z) => new(ir * Math.Cos(a), ir * Math.Sin(a), z);
+
+// A cross-shell SIG net (an OUTER pad and an INNER pad) and a GND net on the outer shell SIG must clear.
+stack.Outer.PlacePad("SIG", Out(0, 3), 0.7, "SIG.out");
+stack.Inner.PlacePad("SIG", In(1.4, 11), 0.7, "SIG.in");
+stack.Outer.PlacePad("GND", Out(0.7, 3), 0.7, "GND.a");
+stack.Outer.PlacePad("GND", Out(0.7, 11), 0.7, "GND.b");
+
+// AUTO-ROUTE the stack: the router chooses which shell each segment rides and drops the through-shell via.
+var rules = DrcRuleSet.Default with { MinCopperClearance = 0.4, MinTraceWidth = 0.25 };
+var result = MidRouting.Route(stack, rules, new SurfaceRouteOptions { TraceWidth = 0.5, ViaPadDiameter = 0.7 });
+// Self-checking: both nets route, SIG connects across the shells through the via, and the DRC is clean.
+if (!result.FullyRouted || !stack.Connectivity().Of("SIG").IsConnected || !stack.Check(rules).Ok)
+    throw new Exception("the cross-shell auto-route did not verify: " + result);
+
+var scene = new Scene();
+scene.Add(new Part("outer wall", Shape.From(stack.Outer.Mesh), Palette.Steel) { DisplayMode = DisplayMode.Translucent });
+scene.Add(new Part("inner shell", Shape.From(stack.Inner.Mesh), new PartColor(0.42f, 0.48f, 0.54f)) { DisplayMode = DisplayMode.Translucent });
+int ti = 0;
+foreach (var trace in result.Traces)
+    scene.Add(new Part($"trace{ti++}", trace.Conductor(0.2), trace.Net == "GND" ? Palette.Plum : Palette.Brass));
+int vi = 0;
+foreach (var via in result.Vias)
+    scene.Add(new Part($"via{vi++}", via.Barrel(0.7), Palette.Coral));
+var camera = new CameraState(-Math.PI / 2 + 0.85, 0.42, 52, (0, 0, 7));
+```
+
+![A two-shell moulded cylinder auto-routed cross-shell — a SIG net changing shell through a placed via, and a same-shell GND net](images/ecad-mid-crossshell.png)
+
+**The combined graph.** A node is `(shell, vertex)`. A mesh edge on shell `k` connects two of that
+shell's vertices at that shell's geodesic edge length; a **via edge** connects `(k, v)` to `(k±1, v)` —
+trivial to enumerate because the shells share mesh topology, so vertex `v` corresponds across shells — at
+a fixed **via penalty**, which biases the router toward staying on one shell unless a hop pays. The
+straight-line heuristic stays admissible because every edge costs at least the 3D chord it spans (the via
+penalty is at least the barrel chord). When the A\* path uses a via edge, the router places a through-shell
+via at that vertex (the existing `AddVia` machinery) and splits the route into per-shell surface traces —
+so a **same-shell** net routes with **no via** at all, a net with pads **on two shells** with **one**, and
+an **obstacle hop** with **two** (out and back).
+
+**The exact multi-shell DRC is the source of truth** (the flat router's own rule, lifted): a candidate
+route + via is committed only after each per-shell trace CLEARS the existing other-net copper on its shell
+(`Mid3dDrc`), each new via pad CLEARS other-net copper on **every shell it touches**, and the
+inter-shell **via-to-via** web is met — so a graph-resolution error can never ship a clearance-violating
+trace or via, and a partial result is still clean. **Rip-up-and-reroute** is the single-shell router's
+verbatim over the combined graph, so a net boxed in on **both** shells is reported UNROUTABLE by name.
+
+A **one-shell** stack handed to this entry is refused, pointing at the single-shell
+`MidRouting.Route(stack.Outer, …)`; a **> 2 shell** stack is refused too, since it needs partial-span vias
+(a via between two adjacent shells rather than the full-stack barrel `AddVia` places) — filed.
+
 ## Scope, v1
 
 `MidRouting.Route` **auto-routes** an intrinsic board and `MidRouting.Connect` **places** one trace
@@ -398,9 +478,11 @@ between two given pads; both lay geodesics on the mesh and both are certified by
 auto-router runs on an **intrinsic** board (`OnMesh`); a global-chart board (`OnSurface`, kept for the
 exact developable DRC oracle) is refused by name with a pointer to `OnMesh`. **Multi-shell** MID (copper
 on an inner moulded shell as well as the outer, stitched by through-shell vias) has landed as `MidStack`
-(see above). Filed as later stages: **topological / shove** routing on the surface (v1 detours around
-obstacles but does not push them), **cross-shell auto-routing** (choosing which shell a net rides and
-placing the vias — v1 routes per shell and places explicit vias), **length matching**, and a conformal
+(see above), and **cross-shell auto-routing** — `MidRouting.Route(stack, …)`, the layer-changing via on
+surfaces — chooses which shell a net rides and places the vias (see above). Filed as later stages:
+**topological / shove** routing on the surface (v1 detours around obstacles but does not push them),
+**optimal via minimisation** (v1 uses a fixed via penalty) and **partial-span vias for a > 2 shell
+stack** (v1 routes a two-shell stack with full-stack vias), **length matching**, and a conformal
 **solder mask / pour** on the surface (refused for the distortion reason, exactly as copper pours already
 refuse curved walls). LDS process specifics (laser activation paths) are out of scope.
 
@@ -434,3 +516,13 @@ they split into a cross-shell ratsnest. The two-shell DRC finds a same-shell cle
 spacing violation, and passes a well-spaced board clean; a **single-shell** stack's DRC is bit-identical
 to `Mid3dDrc.Check`; the self-intersection guard is **refused by name** on a sphere offset past its
 radius; the via barrel is a **closed solid**; and the build is **deterministic**.
+
+**Cross-shell auto-routing** clears the flat router's bar on the surface. A cross-shell 2-pin net (an
+outer pad and an inner pad) routes with **exactly one via**, both per-shell segments clean and the net
+connected; a same-shell net with a clear path routes with **no via** (the via penalty keeps it on one
+shell); an **obstacle hop** — a net whose straight outer path is blocked by a full ring of other-net
+copper — routes through the inner shell with **two vias**, and the **mutation** that proves the
+cross-shell capability is what routed it is that the *same* fixture on a single shell is **unroutable by
+name**. Every committed route + via passes the exact multi-shell DRC; a pin walled in on **both** shells
+is **unroutable by name** with the rest routed and clean; a one-shell stack and a > 2 shell stack are
+**refused by name**; and two runs are **deterministic** vertex for vertex.

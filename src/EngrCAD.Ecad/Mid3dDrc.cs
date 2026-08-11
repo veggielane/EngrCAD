@@ -547,12 +547,25 @@ public static class Mid3dDrc
                 return false;
         }
 
-        double c = rules.MinCopperClearance;
+        return RouteClearanceClears(board, candidate, existing, rules.MinCopperClearance);
+    }
+
+    /// <summary>
+    /// Whether a candidate surface conductor CLEARS every existing OTHER-net feature by
+    /// <paramref name="clearance"/> — the clearance half of <see cref="RouteCandidateClears"/> without the
+    /// trace-width rule. This is what a VIA PAD is certified with (a via pad is copper that must clear
+    /// other-net copper, but it is not a trace, so its diameter is not a trace-width offender), and it is
+    /// the same certified broad phase + local-chart grow-and-intersect the report uses, so a pair
+    /// certified here cannot come back a violation in <see cref="Check"/>.
+    /// </summary>
+    internal static bool RouteClearanceClears(
+        MidBoard board, MidSurfaceFeature candidate, IReadOnlyList<MidSurfaceFeature> existing, double clearance)
+    {
         foreach (var e in existing)
         {
             if (SameNet(candidate.Net, e.Net))
                 continue;   // same-net copper is the intended connection, never a violation
-            if (RoutePairClear(board, candidate, e, c) != PairOutcome.Clear)
+            if (RoutePairClear(board, candidate, e, clearance) != PairOutcome.Clear)
                 return false;
         }
         return true;

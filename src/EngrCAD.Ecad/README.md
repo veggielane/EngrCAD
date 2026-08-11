@@ -991,8 +991,9 @@ no chart at all.
 | `MidBoard` | A moulded routing surface. `OnMesh(mesh)` is **INTRINSIC** (no chart, any geometry); `OnSurface(mesh, seed, ref, radius)` is the **global-chart** mode for a developable patch (exact numbers, the bit-for-bit oracle). Holds pads, routed `SurfaceTrace`s, seated components. `MaxDistortion` reports per-region (intrinsic) or per-chart (global); `PlacePad`/`PlacePin` at a world position or a `(u, v)`; `Seat` poses a `HardwareComponent` OR a raw `Shape` body on the surface tangent frame. |
 | `MidPad` | A copper land — a surface point, a net, a land width (and a `(u, v)` on a global-chart board). |
 | `SurfaceTrace` / `SurfaceRun` | A net's conductor — a centre-line lifted onto the surface. **Reports the distortion it carried** (`MinScale`/`MaxScale`/`Distortion`); `Conductor(thickness)` is a thin conductive `Shape` (a ribbon along the surface) that round-trips through STL/STEP. |
-| `MidRouting` | **Places** traces (`Connect`, a **geodesic on the mesh** — `DijkstraGraphDistance` edge path then a straightest-geodesic curve-shortening smoothing) AND **auto-routes** a whole intrinsic board (`Route`). `Verify` runs the 3D DRC. |
-| `SurfaceRouter` / `SurfaceRouteOptions` / `SurfaceRouteResult` | The surface AUTO-ROUTER — the geodesic analogue of the flat `PcbRouter`: a DRC-aware maze search over the mesh vertex graph (A\*, admissible 3D-straight-line heuristic), MST decomposition of each net from the ratsnest, straightening, and rip-up-and-reroute. Every candidate is committed only after the exact 3D DRC (`Mid3dDrc.RouteCandidateClears`) certifies it clean; a net boxed in is reported UNROUTABLE by name; the partial result is always clean. Runs on an INTRINSIC board (`OnMesh`); a global-chart board is refused with a pointer to `OnMesh`. |
+| `MidRouting` | **Places** traces (`Connect`, a **geodesic on the mesh** — `DijkstraGraphDistance` edge path then a straightest-geodesic curve-shortening smoothing) AND **auto-routes** a whole intrinsic board (`Route(MidBoard)`) OR a two-shell stack across shells (`Route(MidStack)`). `Verify` runs the 3D DRC. |
+| `SurfaceRouter` / `SurfaceRouteOptions` / `SurfaceRouteResult` | The single-shell surface AUTO-ROUTER — the geodesic analogue of the flat `PcbRouter`: a DRC-aware maze search over the mesh vertex graph (A\*, admissible 3D-straight-line heuristic), MST decomposition of each net from the ratsnest, straightening, and rip-up-and-reroute. Every candidate is committed only after the exact 3D DRC (`Mid3dDrc.RouteCandidateClears`) certifies it clean; a net boxed in is reported UNROUTABLE by name; the partial result is always clean. Runs on an INTRINSIC board (`OnMesh`); a global-chart board is refused with a pointer to `OnMesh`. |
+| `CrossShellRouter` / `StackRouteResult` | The CROSS-SHELL auto-router — the surface analogue of the flat router's layer-changing via. Searches the union of both shells' vertex graphs plus VIA EDGES tying corresponding vertices `(k, v) ↔ (k±1, v)` at a via penalty, so one A\* both routes a net across shells and chooses where to change shell; a via edge becomes a placed through-shell `SurfaceVia` and the route splits into per-shell traces. The exact multi-shell DRC certifies every commit (per-shell trace clearance + per-shell via-pad clearance + inter-shell via-to-via web), so a same-shell net gets **no via**, a cross-shell 2-pin **one**, an obstacle hop **two**; rip-up carries over. A one-shell / > 2 shell stack is refused by name. |
 | `Mid3dDrc` / `Mid3dDrcReport` / `MidDrcViolation` | The 3D DRC. On an intrinsic board the clearance is a **geodesic surface distance** (a certified 3D-chord broad phase, then a per-pair local chart); on a global-chart board it runs in the one exp map's `(u, v)`. Three-valued — Clear / Violation / **Uncertain** (a conservative refusal where the distortion cannot certify the verdict). |
 | `MidStack` / `SurfaceVia` | **MULTI-SHELL** MID — an outer `MidBoard` plus inner shells, each the outer mesh offset inward by a dielectric thickness along its ANGLE-WEIGHTED vertex normal (same topology, so a via ties an outer point to its corresponding inner point). `Shell(k)` / `Outer` / `Inner` are the per-shell boards; `AddVia` places a through-shell `SurfaceVia` (a copper pad per shell + a plated barrel across them); `Connectivity` spans shells (a via ties a net's copper across shells); `Check` runs each shell's same-shell DRC + inter-shell via-to-via spacing. A single-shell stack is a plain `MidBoard`, DRC bit-identical. |
 
@@ -1025,11 +1026,21 @@ mutation (a via ties a net across shells; remove it and the net splits into a cr
 per-shell + inter-shell DRC (a same-shell clearance found on the inner shell, a via too close to
 other-net copper on either shell, a via-to-via web, and a single-shell stack bit-identical to
 `Mid3dDrc.Check`), and the self-intersection refusal (a sphere offset past its radius flips its
-signed-volume sign). **Filed by name**: **topological / shove** routing on the surface (v1 detours but
-does not push obstacles), **cross-shell auto-routing** (choosing a net's shell and placing the vias — v1
-routes per shell and places explicit vias), **length matching**, and a conformal solder mask / pour on
-the surface (the distortion reason copper pours already refuse curved walls). v1's single surface has no
-drills / edges of its own. Docs: `examples/ecad-mid.md`.
+signed-volume sign).
+
+**Cross-shell auto-routing** (`MidRouting.Route(stack, …)`) has landed — the surface analogue of the flat
+router's layer-changing via. One A\* over the union of both shells' vertex graphs plus VIA EDGES tying
+corresponding vertices chooses which shell each segment rides and drops a through-shell via at the
+transition; the exact multi-shell DRC certifies every commit, so a graph-resolution error can never ship a
+clearance-violating trace or via. A cross-shell 2-pin net routes with **one via**, a same-shell net with a
+clear path with **none** (the via penalty keeps it on one shell), an **obstacle hop** with **two** — and
+the mutation proves it: the same blocked fixture on a single shell is unroutable. A pin boxed in on
+**both** shells is unroutable by name; a one-shell / > 2 shell stack is refused by name; the build is
+deterministic. **Filed by name**: **topological / shove** routing on the surface (v1 detours but does not
+push obstacles), **optimal via minimisation** (v1 uses a fixed via penalty) and **partial-span vias for a
+> 2 shell stack** (v1 routes a two-shell stack with full-stack vias), **length matching**, and a conformal
+solder mask / pour on the surface (the distortion reason copper pours already refuse curved walls). v1's
+single surface has no drills / edges of its own. Docs: `examples/ecad-mid.md`.
 
 ## Not yet (later campaign stages)
 
