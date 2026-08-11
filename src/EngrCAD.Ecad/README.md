@@ -634,6 +634,7 @@ returns the same as text.
 | `PcbMask` / `PcbMaskSettings` / `MaskOpening` | The solder mask, derived from the copper model: a window (the pad grown by the `Expansion`) over every solderable pad on each outer layer; vias tented or opened. The whole board is mask except these windows. |
 | `PcbSilkscreen` / `PcbSilkscreenSettings` / `SilkStroke` / `SilkFont` | The silkscreen, derived from the placements: a reference designator (and optionally value) as stroke-font TEXT and a body/courtyard OUTLINE per surface component, plus board-level marks. `OverExposedCopper` reports silk on a solderable pad by name. |
 | `PcbPaste` / `PcbPasteSettings` / `PasteAperture` | The solder-paste (stencil) layer, derived from the copper model: an aperture (the pad grown by the `Expansion`, default slightly negative) over every **SMD** pad on each outer layer — a through-hole pad and a via get none (the SMD-only rule). |
+| `PasteStencil` / `PasteStep` / `PasteLevelSelector` | A **step (multi-level) stencil** — a foil milled to different thicknesses in different zones, one paste Gerber per level. Each `PasteStep` has a foil thickness (which names its Gerber file), an aperture expansion, and a selector (a zone, a pad set / `Component`, or the opt-in `FinePitch` heuristic). Every SMD pad is on exactly one level (a partition); a pad no level claims falls to the `Default` level. |
 | `PcbGerberExport` / `FabricationOutput` / `GerberExportResult` | Composes the whole fab set for a `PcbLayout` (or a raw `PcbCopperModel` for pours), sharing one coordinate format. |
 
 ### Solder mask, silkscreen and solder paste
@@ -658,6 +659,27 @@ twin decoder. The mask/silk/paste **settings are layout truth** (`PcbLayout.Mask
 `SilkscreenSettings` / `PasteSettings`, write-only-when-stated), and the layers are **additive** — the
 copper Gerbers, outline and drill are byte-identical whether or not they are requested.
 
+**A step (multi-level) stencil** — a foil milled to different thicknesses in different zones — is a
+`PasteStencil`, an ordered list of foil-thickness **levels** (`PasteStep`): a fine-pitch part wants a
+thin foil / reduced aperture, a large thermal pad a thick foil / more paste, and each thickness is a
+separate milling depth, so the fab consumes **one paste Gerber per level**. Each level has its own foil
+thickness (which NAMES its Gerber file, e.g. `_100um`), its own aperture expansion, and a
+`PasteLevelSelector` for the pads it covers — a **zone** (`InRectangle` / `InZone`, a pad whose centre lies
+in it; ordered, first-match-wins), an explicit **pad set** (`Pads` / `Component` — every pad of a
+footprint), or the opt-in **`FinePitch`** heuristic (a pad at or below a *required* size threshold; there
+is no silent default — a default there would be a process decision made by a library). A pad no level
+claims falls to the **`Default`** level (a step with no selector, which every stencil must declare), so
+**every SMD aperture is on exactly one level** — a partition, no pad printed twice or dropped — and a
+level's aperture is still the pad grown by *that level's* expansion (the foil thickness only names the
+level, it never touches an aperture, so the aperture-equals-pad-plus-expansion oracle is unchanged, and
+the SMD-only rule survives on every level). A step stencil is a **fabrication-process** parameter, so —
+like a `DrcRuleSet` — it is passed to the export (`PcbGerberExport.Generate(layout, name, stencil)`), not
+baked into the layout file, and a layout that declares none saves byte-identically. When no steps are
+declared the output is EXACTLY the single stencil (a one-level step at the default expansion is
+byte-identical to plain paste, asserted); the per-level file name appends the foil-thickness token
+(`-Top_Paste_100um.gbr`), an empty level emits no file, and a non-positive thickness / a missing default /
+two levels of one thickness (a file collision) are each refused **by name**.
+
 **The oracle is the twin-decoder round trip** (the repo's rule — the geometry must survive the round
 trip, not merely a structural validator pass): the copper written is parsed *back* and the recovered
 copper equals the copper model's on each layer to the region-area grade (by area **and** by a
@@ -669,7 +691,9 @@ lays all the solid copper down, then clears exactly the holes of the final union
 format is derived from the board's own magnitudes, so it is scale-invariant. An unrepresentable
 boundary (a Bézier edge in a copper region) is refused **by name**, and the reader refuses a
 truncated file / missing format spec / aperture macro by name (the `StepReader`/`IgesReader` ethos).
-**Not in v1** (each filed): step / multi-level stencils, paste-volume optimisation, window-paning of
+**Not in v1** (each filed): PERSISTING a step-stencil declaration in the layout file (a step stencil is
+passed to the export, not saved — a full serializable grammar for its zones/selectors is a separate job),
+a per-fabricator foil-thickness catalogue, paste-volume optimisation, window-paning of
 large apertures, fine mask tenting control beyond
 the tented/opened via policy, curved conformal mask / silk / paste on a MID surface (refused for the
 distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber X2 attributes

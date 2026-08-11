@@ -260,6 +260,106 @@ if (sym > 1e-4 * apAll)
     throw new Exception("the solder paste did not survive the round trip");
 ```
 
+## Step (multi-level) stencils
+
+A real board with mixed geometry wants **different paste volumes on different pads**: a fine-pitch part
+(a 0.4 mm QFN, an 0201) wants a *thin* foil / reduced aperture so its bricks do not bridge, while a large
+thermal pad or a connector wants a *thick* foil / more paste. A **step stencil** is a single foil milled
+to different thicknesses in different zones — and because each thickness is a separate milling depth, the
+fab consumes **one paste Gerber per level**.
+
+A `PasteStencil` is an ordered list of foil-thickness **levels** (`PasteStep`), each with its own foil
+thickness (which names the level's Gerber file, e.g. `_100um`), its own aperture **expansion**, and a
+**selector** for the pads it covers:
+
+- **A zone** — `PasteLevelSelector.InRectangle(min, max)` / `InZone(region)`: a pad whose *centre* lies in
+  the zone. Zones are ordered; **first match wins** (an overlap is a stated rule, not an error).
+- **A pad set** — `PasteLevelSelector.Pads("U1.1", "U1.2")` / `Component("U1")` (every pad of a footprint).
+- **A fine-pitch heuristic** (opt-in) — `PasteLevelSelector.FinePitch(maxPadSizeMm)`: a pad whose bounding
+  box is at or below the threshold. The threshold is a *required* engineering input — there is no silent
+  default (a default here would be a process decision made by a library).
+
+A pad no level claims falls to the **default** level (`PasteStep.Default`, a step with no selector, which
+every stencil must declare). So **every SMD aperture is on exactly one level** — a partition: no pad
+printed twice, none dropped. And a level's aperture is still the pad grown by *that level's* expansion
+through the same exact `CurvedRegion2dOffset` machinery — the foil thickness only names the level, it never
+touches an aperture — so the aperture-equals-pad-plus-expansion oracle is unchanged. The SMD-only rule
+survives too: a through-hole pad and a via get no aperture on any level.
+
+A step stencil is a **fabrication-process** parameter (which pads get thick / thin foil), so — like a
+`DrcRuleSet` — it is passed to the export rather than baked into the layout file, and a layout that
+declares none saves byte-identically. **When no steps are declared the output is exactly the single
+stencil above** (a one-level step at the default expansion is byte-identical to plain paste).
+
+```csharp run:ecad-fab-steppaste
+// A fine-pitch QFN (four 0.3 mm pads), a power pad (one 3 mm pad) and an ordinary resistor (two 0.6 mm
+// pads), plus a through-hole header — the spread of pads a step stencil exists for.
+PartDefinition Qfn() => new("QFN4", "U",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive),
+            new Pin("3", PinType.Passive), new Pin("4", PinType.Passive) },
+    new Footprint("qfn4", new[] {
+        Pad.Smd("1", new Vector2d(-0.3, -0.3), 0.3, 0.3), Pad.Smd("2", new Vector2d(0.3, -0.3), 0.3, 0.3),
+        Pad.Smd("3", new Vector2d(0.3, 0.3), 0.3, 0.3), Pad.Smd("4", new Vector2d(-0.3, 0.3), 0.3, 0.3) }));
+
+var sch = new Schematic("step-demo");
+var u = sch.Add("U1", Qfn());
+var p = sch.Add("P1", new PartDefinition("POW", "P", new[] { new Pin("1", PinType.Power) },
+    new Footprint("pow", new[] { Pad.Smd("1", new Vector2d(0, 0), 3.0, 3.0, PadShape.Rectangular) })));
+var r = sch.Add("R1", new PartDefinition("RES", "R",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("res", new[] { Pad.Smd("1", new Vector2d(-0.5, 0), 0.6, 0.6),
+                                 Pad.Smd("2", new Vector2d(0.5, 0), 0.6, 0.6) })));
+sch.Stub("N1", u.Pin("1")); sch.Stub("N2", u.Pin("2"));
+sch.Stub("N3", u.Pin("3")); sch.Stub("N4", u.Pin("4"));
+sch.Connect("PWR", p.Pin("1"), r.Pin("1"));
+sch.Stub("NR2", r.Pin("2"));
+
+var layout = new PcbLayout(sch, PcbBoard.Rectangle(40, 30, 1.6));
+layout.Place("U1", 10, 0); layout.Place("P1", -10, 0); layout.Place("R1", 0, 8);
+
+// Three levels: a THIN foil for the fine-pitch pads (reduced aperture), a THICK foil for the power pad
+// (extra paste), and a DEFAULT for everything else.
+var stencil = new PasteStencil(
+    PasteStep.For(0.10, -0.08, PasteLevelSelector.FinePitch(0.4)),   // U1's 0.3 mm pads
+    PasteStep.For(0.20, +0.05, PasteLevelSelector.Component("P1")),   // P1's 3 mm power pad
+    PasteStep.Default(0.15, -0.05));                                 // R1's 0.6 mm pads
+
+var model = PcbCopperModel.FromLayout(layout);
+var paste = PcbPaste.For(model, stencil);
+var fab = PcbGerberExport.Generate(layout, "step-demo", stencil);
+
+// One paste Gerber per non-empty level (three on top; the bottom side has no SMD pads).
+Console.WriteLine($"paste levels: {fab.PasteLayers.Count} Gerber(s)");
+foreach (var content in paste.Layers)
+    Console.WriteLine($"  {content.Layer} {content.Level!.ThicknessToken}: "
+        + string.Join(", ", content.Apertures.Select(a => a.Source).OrderBy(s => s)));
+
+// The partition: every SMD aperture is on exactly one level, and the union equals the flat stencil's set.
+var stepSources = paste.Layers.SelectMany(l => l.Apertures).Select(a => a.Source).ToList();
+if (stepSources.Count != stepSources.Distinct().Count())
+    throw new Exception("a pad was printed on more than one level (the partition was broken)");
+var flatSources = PcbPaste.For(model).Top.Apertures.Select(a => a.Source).ToHashSet();
+if (!flatSources.SetEquals(stepSources))
+    throw new Exception("the step levels do not cover exactly the flat stencil's pads");
+if (stepSources.Any(s => s.StartsWith("J")))    // (there is no J here, but the rule must hold)
+    throw new Exception("a through-hole pad was pasted (the SMD-only rule was broken)");
+
+// Each level's Gerber round-trips (the twin decoder), and the fine-pitch level's apertures are SMALLER
+// than the thick level's (the per-level expansion).
+foreach (var content in paste.Layers)
+{
+    var gerber = fab.PasteLayers.Single(
+        l => l.Layer == content.Layer && l.PasteLevelToken == content.Level!.ThicknessToken).Gerber;
+    var decoded = GerberReader.Read(gerber).Copper;
+    var model2 = content.Apertures.Select(a => a.Region).ToList();
+    var sym = CurvedRegion2dBoolean.Difference(model2, decoded).Sum(x => x.Area)
+            + CurvedRegion2dBoolean.Difference(decoded, model2).Sum(x => x.Area);
+    if (sym > 1e-4 * Math.Max(model2.Sum(x => x.Area), 1e-9))
+        throw new Exception($"level {content.Level!.ThicknessToken} did not survive the round trip");
+}
+Console.WriteLine("every level round-trips and every SMD pad is on exactly one level");
+```
+
 ## Pick and place (the assembly centroid file)
 
 The copper set (Gerber + Excellon) builds the bare board; the **pick-and-place (centroid) file** is

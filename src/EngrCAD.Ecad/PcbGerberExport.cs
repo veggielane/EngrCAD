@@ -3,10 +3,14 @@ using EngrCAD.Core.Geometry2;
 
 namespace EngrCAD.Ecad;
 
-/// <summary>One copper layer's fabrication Gerber — its layer name and the RS-274X text.</summary>
-/// <param name="Layer">The copper layer name (<c>"Top"</c>, <c>"Bottom"</c>).</param>
+/// <summary>One layer's fabrication Gerber — its layer name and the RS-274X text, plus (for a
+/// step-stencil paste level) the foil-thickness token that disambiguates its filename.</summary>
+/// <param name="Layer">The copper / side layer name (<c>"Top"</c>, <c>"Bottom"</c>).</param>
 /// <param name="Gerber">The RS-274X Gerber for that layer.</param>
-public readonly record struct GerberLayerFile(string Layer, string Gerber);
+/// <param name="PasteLevelToken">For a step-stencil paste level, the foil-thickness token
+/// (e.g. <c>"100um"</c>) appended to the file name so two levels of one side do not collide; <c>null</c>
+/// for every other layer (copper / mask / silk / a flat single-stencil paste).</param>
+public readonly record struct GerberLayerFile(string Layer, string Gerber, string? PasteLevelToken = null);
 
 /// <summary>
 /// The complete fabrication output for a board, as text (no disk touched) — one Gerber per copper
@@ -95,8 +99,11 @@ public sealed record GerberExportResult(
 public static class PcbGerberExport
 {
     /// <summary>Generates the fabrication set (as text) for a routed layout — copper as pad flashes,
-    /// trace draws and via annuli, plus the outline and drill.</summary>
-    public static FabricationOutput Generate(PcbLayout layout, string? name = null)
+    /// trace draws and via annuli, plus the outline and drill. Pass a <paramref name="stencil"/> for a STEP
+    /// (multi-level) solder-paste stencil (one paste Gerber per foil-thickness level); with none the paste
+    /// is the SINGLE (flat) stencil the layout's <see cref="PcbLayout.PasteSettings"/> describe, and the
+    /// output is byte-identical to before.</summary>
+    public static FabricationOutput Generate(PcbLayout layout, string? name = null, PasteStencil? stencil = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
         var model = PcbCopperModel.FromLayout(layout);
@@ -121,7 +128,7 @@ public static class PcbGerberExport
 
         var mask = PcbMask.For(model, layout.MaskSettings);
         var silk = PcbSilkscreen.For(layout, layout.SilkscreenSettings);
-        var paste = PcbPaste.For(model, layout.PasteSettings);
+        var paste = stencil is null ? PcbPaste.For(model, layout.PasteSettings) : PcbPaste.For(model, stencil);
         return Build(design, model, layers, format,
             MaskGerbers(mask, format), SilkGerbers(silk, format), PasteGerbers(paste, format));
     }
@@ -129,8 +136,9 @@ public static class PcbGerberExport
     /// <summary>Generates the fabrication set (as text) for a raw copper model — every copper feature
     /// is classified into a flash or a region fill (a copper pour and a trace stroke both region-fill,
     /// since a model carries no trace centre-lines to draw), plus the outline and drill. This is the
-    /// path for a hand-built model with copper pours the layout does not yet carry.</summary>
-    public static FabricationOutput Generate(PcbCopperModel model, string? name = null)
+    /// path for a hand-built model with copper pours the layout does not yet carry. Pass a
+    /// <paramref name="stencil"/> for a STEP (multi-level) solder-paste stencil.</summary>
+    public static FabricationOutput Generate(PcbCopperModel model, string? name = null, PasteStencil? stencil = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         var format = FormatFor(model, []);
@@ -147,9 +155,10 @@ public static class PcbGerberExport
         }
 
         // The raw-model path has no placements, so no silk (an empty, well-formed Gerber per side); the
-        // mask and paste are well-defined over the model's pad features and derived with the defaults.
+        // mask and paste are well-defined over the model's pad features and derived with the defaults (or
+        // the step stencil, when one is supplied).
         var mask = PcbMask.For(model);
-        var paste = PcbPaste.For(model);
+        var paste = stencil is null ? PcbPaste.For(model) : PcbPaste.For(model, stencil);
         return Build(design, model, layers, format,
             MaskGerbers(mask, format), EmptySilk(model, format), PasteGerbers(paste, format));
     }
@@ -171,10 +180,15 @@ public static class PcbGerberExport
         [.. mask.Layers.Select(m => new GerberLayerFile(
             m.Layer, GerberWriter.MaskLayer(m.Layer, m.Openings.Select(o => o.Region), format)))];
 
-    /// <summary>One solder-paste (stencil) Gerber per side (the SMD-pad apertures imaged dark).</summary>
+    /// <summary>One solder-paste (stencil) Gerber per layer (the SMD-pad apertures imaged dark) — one per
+    /// side for a flat stencil, one per (side, level) for a step stencil. A step level carries its
+    /// foil-thickness token so its file NAME does not collide; the Gerber content itself is named only by
+    /// the side, so a one-level step at the default expansion is byte-identical to a flat stencil.</summary>
     private static IReadOnlyList<GerberLayerFile> PasteGerbers(PcbPaste paste, GerberFormat format) =>
         [.. paste.Layers.Select(p => new GerberLayerFile(
-            p.Layer, GerberWriter.PasteLayer(p.Layer, p.Apertures.Select(a => a.Region), format)))];
+            p.Layer,
+            GerberWriter.PasteLayer(p.Layer, p.Apertures.Select(a => a.Region), format),
+            p.Level?.ThicknessToken))];
 
     /// <summary>One silkscreen Gerber per side (reference / value / outline line-work).</summary>
     private static IReadOnlyList<GerberLayerFile> SilkGerbers(PcbSilkscreen silk, GerberFormat format) =>
@@ -198,12 +212,14 @@ public static class PcbGerberExport
     /// (created if needed) — one <c>&lt;name&gt;-&lt;Layer&gt;.gbr</c> per copper layer, a
     /// <c>&lt;name&gt;-Edge_Cuts.gbr</c> outline, and a <c>&lt;name&gt;.drl</c> drill program — and
     /// reports what it wrote.</summary>
-    public static GerberExportResult Write(PcbLayout layout, string directory, string? name = null) =>
-        WriteOutput(Generate(layout, name), directory);
+    public static GerberExportResult Write(
+        PcbLayout layout, string directory, string? name = null, PasteStencil? stencil = null) =>
+        WriteOutput(Generate(layout, name, stencil), directory);
 
     /// <summary>Writes the fabrication set for a raw copper model to files (see the layout overload).</summary>
-    public static GerberExportResult Write(PcbCopperModel model, string directory, string? name = null) =>
-        WriteOutput(Generate(model, name), directory);
+    public static GerberExportResult Write(
+        PcbCopperModel model, string directory, string? name = null, PasteStencil? stencil = null) =>
+        WriteOutput(Generate(model, name, stencil), directory);
 
     private static GerberExportResult WriteOutput(FabricationOutput output, string directory)
     {
@@ -231,7 +247,10 @@ public static class PcbGerberExport
         }
         foreach (var layer in output.PasteLayers)
         {
-            string path = Path.Combine(directory, $"{output.Name}-{Sanitize(layer.Layer)}_Paste.gbr");
+            // A step-stencil level appends its foil-thickness token (e.g. `_100um`) so two levels of one
+            // side write distinct files; a flat single-stencil paste has none (byte-identical file name).
+            string suffix = string.IsNullOrEmpty(layer.PasteLevelToken) ? "" : "_" + layer.PasteLevelToken;
+            string path = Path.Combine(directory, $"{output.Name}-{Sanitize(layer.Layer)}_Paste{suffix}.gbr");
             File.WriteAllText(path, layer.Gerber);
             files.Add(path);
         }
