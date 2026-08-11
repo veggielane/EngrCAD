@@ -2697,27 +2697,31 @@ from what was already understood rather than from scratch.
     thermal-relief-aware DRC exemption, would let the default rule pass); and a CONFORMAL pour on a
     doubly-curved MID wall (refused for the tamper-mesh reason — `MeshLocalParam`'s 2–5% distortion
     would land in the clearance).
-  - **MID / LDS 3D surface routing — LANDED (stage 9)** (`MidBoard`/`SurfaceTrace`/`MidRouting`/
-    `Mid3dDrc` in `EngrCAD.Ecad`; docs `examples/ecad-mid.md`, design.md §6d stage 9, README,
-    CLAUDE.md ECAD status): routing conductors and seating components on a MOULDED, doubly-curved
-    surface, entirely in the exp map's (u, v) parameter space, with the map's distortion FOLDED into
-    the clearance (a three-valued Clear/Violation/Uncertain DRC, refusing the band it cannot certify).
-    The decisive oracle held: a cylindrical MID board's 3D DRC verdicts and measured (u, v)
-    separations equal the unrolled flat 2D DRC's BIT FOR BIT (cylinder exp-map distortion 1.2e-3);
-    on a sphere cap (distortion ~11%) a pair passing flat is refused where the surface shrinks it. A
-    trace's lifted endpoint lands exactly on its pad; the conductor exports as a closed solid; a
-    `HardwareComponent` seats in the surface tangent frame. Findings baked into CLAUDE.md/design.md:
-    the reported separation must bisect to a BAND-INDEPENDENT cap (or a developable board's clearance
-    drifts from its unrolling by the last bits); the map radius is REQUIRED (a footgun default wraps a
-    closed surface's exp map onto itself — whole-tube `MaxDistortion` 22.5) and is a GRAPH distance
-    that over-estimates the straight-line one; a trace width is checked against the AUTHORED width
-    folded through the scale band, not re-measured (an opposing-wall measure under-reports on a round
-    cap, a 0.25 stadium reading 0.147). **Filed follow-ons**: surface AUTO-routing (a geodesic maze
-    search — the flat grid router does not lift to the distorted metric), MULTI-SHELL MID (traces on
-    an inner moulded copper layer as well as the outer), a conformal surface SOLDER MASK / POUR
-    (refused for the distortion reason copper pours already refuse curved walls), a copper-to-map-
-    boundary DRC rule, and PER-REGION (rather than per-feature) distortion bands for a tighter
-    Uncertain verdict.
+  - **MID / LDS 3D surface routing — LANDED (stage 9), now INTRINSIC (works on ANY surface)**
+    (`MidSurface`/`SurfacePoint`/`LocalExpChart`/`MidBoard`/`SurfaceTrace`/`MidRouting`/`Mid3dDrc` in
+    `EngrCAD.Ecad`; docs `examples/ecad-mid.md` incl. the `ecad-mid-wearable` self-verifying showcase
+    render, design.md §6d stage 9, README, CLAUDE.md ECAD status): routing conductors and seating
+    components on a MOULDED, doubly-curved surface — a torus, a bumpy blob, a whole closed shell, NOT
+    one exp-map chart. A `MidSurface` wraps an arbitrary mesh and answers the routing intrinsically with
+    LOCAL charts per query (`Locate` snaps a pad/seat to a `SurfacePoint`, `Chart` is a per-pair
+    `LocalExpChart` with the forward `SurfacePoint`→(u,v) map the DRC needs), so a CLOSED surface no
+    longer wraps (a global chart there read `MaxDistortion` 22.5; the intrinsic torus routes and
+    verifies clean). The clearance is a GEODESIC surface distance, certified both ways (a 3D chord is
+    never longer than a geodesic → a chord ≥ clearance PROVES CLEAR; a closer pair is measured in a
+    tight local chart with the grow-and-intersect and the local band folded, refusing a degenerate band
+    as "too curved to certify"). Traces are laid as GEODESICS (`MidRouting.Connect` = the Dijkstra edge
+    path then a straightest-geodesic curve-shortening smoothing). The DEVELOPABLE bit-for-bit oracle is
+    PRESERVED (`MidBoard.OnSurface`, unchanged): a cylinder's 3D DRC still equals its unrolled flat
+    sheet's to the last bit, and the intrinsic route reaches the same answer to the discretisation grade
+    (0.07474 vs arc 0.075); a sphere geodesic matches `R·θ` within [0.98,1.10]. A component seats at a
+    world position or a (u,v), a raw `Shape` body too (the showcase's MCU/LEDs/connector/passives).
+    Findings baked into CLAUDE.md/design.md: the exp map measures the geodesic ACCURATELY along the
+    separation (radial coord = geodesic), so the intrinsic DRC is CONFIDENT at board scales and refuses
+    only where the clearance is comparable to the curvature radius — the naive "curvature shrinks the
+    clearance" is INVERTED (geodesic ≥ chord always). **Filed follow-ons**: surface AUTO-routing (a
+    geodesic maze search — the flat grid router does not lift to the distorted metric), MULTI-SHELL MID
+    (traces on an inner moulded copper layer as well as the outer), and a conformal surface SOLDER MASK
+    / POUR (refused for the distortion reason copper pours already refuse curved walls).
   - **ECAD thermal coupling — the genuinely novel MCAD answer, the next stage over the
     enclosure fit that just landed.** Enclosure fit is DONE (`Enclosure`/`EnclosureFit`/
     `PanelCutout`/`FitReport` in `PcbEnclosure.cs`; docs `examples/ecad-enclosure.md`, design.md §6d

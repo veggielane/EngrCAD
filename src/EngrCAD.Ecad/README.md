@@ -600,27 +600,37 @@ detailed die/package models. Docs: `examples/ecad-thermal.md`.
 ## MID / LDS — routing on a moulded surface
 
 The flagship: routing conductors and seating components on a **moulded, doubly-curved surface**
-(a plastic housing carrying its own circuit on its shaped wall) — the MID / LDS construction.
-**Everything happens in the surface's exponential-map (u, v) parameter space**: `MeshLocalParam`'s
-discrete exp map from a stated origin gives every point of the surface a flat `(u, v)` coordinate,
-and the routing and 3D DRC run there with the **same grow-and-intersect** the flat copper DRC uses,
-with the surface distortion the map carries **folded into the clearance** — never averaged away.
+(a plastic housing carrying its own circuit on its shaped wall) — the MID / LDS construction. **It
+works on ANY surface — a torus, a bumpy blob, a whole closed shell — not one exp-map chart.** A
+`MidSurface` wraps an arbitrary triangle mesh and answers the routing's three questions
+*intrinsically*: where the nearest surface point is (a pad states its world position and snaps to the
+shell), what tangent frame sits there (a component poses on the surface), and what the surface does
+*locally* — a small exp-map `LocalExpChart` around a point, the geodesic-distance approximator the DRC
+measures a clearance in. **No feature depends on a chart covering the whole part**; every chart is
+local and per query, so a closed surface a single global exp map would wrap onto itself is routed with
+no chart at all.
 
 | Type | What it is |
 | --- | --- |
-| `MidBoard` | A moulded routing surface (a mesh) parameterized by the exp map from a stated seed / reference / radius (the routing **patch**, a real design parameter). Holds pads (net-tagged `(u, v)` points), routed `SurfaceTrace`s, and seated components. `MaxDistortion` reports how developable the patch is; `PlacePad`/`PlacePin` (the one-declaration net from a `Schematic` pin); `Seat` poses a `HardwareComponent` on the surface tangent frame. |
-| `MidPad` | A copper land — a `(u, v)` point, a net, a land width, its lift onto the surface. |
-| `SurfaceTrace` / `SurfaceRun` | A net's conductor routed in `(u, v)` and lifted onto the surface. **Reports the distortion it carried** (`MinScale`/`MaxScale`/`Distortion`, exactly as `SurfaceCurve` does); a point past the map **breaks the run** (`UnmappedPoints`, counted, never inventing surface); `Conductor(thickness)` is a thin conductive `Shape` (a ribbon along the surface) that round-trips through STL/STEP. |
-| `MidRouting` | v1 **places** traces (`Connect`) and **verifies** them (`Verify` = the 3D DRC). `Route` refuses auto-routing by name (a geodesic maze search is filed). |
-| `Mid3dDrc` / `Mid3dDrcReport` / `MidDrcViolation` | The 3D DRC: clearance / short / trace-width in `(u, v)` with the distortion folded in. Three-valued — Clear / Violation / **Uncertain** (a conservative refusal in the band the parameterization cannot certify). |
+| `MidSurface` / `SurfacePoint` / `LocalExpChart` | The intrinsic surface model: `Locate(worldPoint)` snaps to the surface, `Frame` gives the tangent frame, `Chart` builds a local exp map (forward `TryProject` and inverse `TryLift`, with the local `ScaleBand`). |
+| `MidBoard` | A moulded routing surface. `OnMesh(mesh)` is **INTRINSIC** (no chart, any geometry); `OnSurface(mesh, seed, ref, radius)` is the **global-chart** mode for a developable patch (exact numbers, the bit-for-bit oracle). Holds pads, routed `SurfaceTrace`s, seated components. `MaxDistortion` reports per-region (intrinsic) or per-chart (global); `PlacePad`/`PlacePin` at a world position or a `(u, v)`; `Seat` poses a `HardwareComponent` OR a raw `Shape` body on the surface tangent frame. |
+| `MidPad` | A copper land — a surface point, a net, a land width (and a `(u, v)` on a global-chart board). |
+| `SurfaceTrace` / `SurfaceRun` | A net's conductor — a centre-line lifted onto the surface. **Reports the distortion it carried** (`MinScale`/`MaxScale`/`Distortion`); `Conductor(thickness)` is a thin conductive `Shape` (a ribbon along the surface) that round-trips through STL/STEP. |
+| `MidRouting` | v1 **places** traces and **verifies** them. `Connect` lays a trace between two pads as a **geodesic on the mesh** (`DijkstraGraphDistance` edge path, then a straightest-geodesic curve-shortening smoothing) so it follows the shell. `Route` refuses auto-routing by name (a geodesic maze search is filed). |
+| `Mid3dDrc` / `Mid3dDrcReport` / `MidDrcViolation` | The 3D DRC. On an intrinsic board the clearance is a **geodesic surface distance** (a certified 3D-chord broad phase, then a per-pair local chart); on a global-chart board it runs in the one exp map's `(u, v)`. Three-valued — Clear / Violation / **Uncertain** (a conservative refusal where the distortion cannot certify the verdict). |
 
-**The decisive oracle is the developable one**: on a cylinder the exp map is an isometry, so the 3D
-DRC verdicts and measured separations equal the **unrolled flat 2D DRC**'s — bit for bit (measured:
-cylinder exp-map distortion `~1.2e-3`, verdicts and `(u, v)` separations identical). Then on a
-**sphere cap** (distortion `~11%`, a tangential trace `MinScale ~0.92`) the distortion is **reported**
-and **folded**: a pair that passes flat but whose worst-case surface clearance drops below the rule is
-**refused** (an `Uncertain` finding), not passed false-precise. A trace's lifted endpoint lands
-**exactly** on its pad point; the conductor is a **closed solid**; the check is **deterministic**.
+**The certified geodesic DRC**: a 3D chord is never longer than a surface geodesic, so a chord
+edge-to-edge distance at or above the clearance *proves* the surface clearance (CLEAR, whatever the
+curvature); a closer pair is measured in a local exp-map chart with the distortion folded in. A near
+pair is a VIOLATION; a near-limit pair on a high-curvature patch (a small sphere with a clearance a
+large fraction of its radius) is **refused** (Uncertain) while the same pair on a plane is certified.
+**The decisive precision oracle stays the developable one**: on a cylinder (a single exp map is an
+isometry) the 3D DRC verdicts and measured separations equal the **unrolled flat 2D DRC**'s — bit for
+bit — and the intrinsic route reaches the same answer to the discretisation grade. A **sphere geodesic**
+matches its great-circle closed form `R·θ`; a geodesic trace's endpoints land **exactly** on their
+pads; the conductor is a **closed solid**; the check is **deterministic**. The showcase is a moulded
+wearable dome (an MCU, two LEDs, a connector, passives seated on the shaped surface, wired by geodesic
+conductors) that **self-verifies**.
 
 **v1 scope** — a single conductive surface (no drills / edges / vias, which a moulded surface has
 none of); refused / filed **by name**: auto-routing on the surface (a geodesic maze search),

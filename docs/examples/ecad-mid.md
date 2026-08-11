@@ -2,33 +2,119 @@
 title: "MID / LDS — routing on a moulded surface"
 ---
 
-Stage 8 of the ECAD campaign is the flagship: routing conductors and seating components on a
-**moulded, doubly-curved surface** rather than a flat board — the **MID** (moulded interconnect
-device) / **LDS** (laser direct structuring) construction, where a plastic housing carries its own
-circuit on its shaped wall.
+The flagship of the ECAD campaign: routing conductors and seating components on a **moulded,
+doubly-curved surface** rather than a flat board — the **MID** (moulded interconnect device) / **LDS**
+(laser direct structuring) construction, where a plastic housing carries its own circuit on its shaped
+wall.
 
-The whole idea in one sentence: **everything happens in the surface's exponential-map (u, v)
-parameter space.** `MeshLocalParam`'s discrete exp map
-from a stated origin gives every point of the moulded surface a flat `(u, v)` coordinate; a pad is a
-point in `(u, v)`, a `SurfaceTrace` is a polyline in `(u, v)`, and the routing and the 3D DRC run
-there with the **same grow-and-intersect** the [flat copper DRC](ecad-drc.md) uses — with the surface
-distortion the map carries **folded into the clearance** rather than averaged away.
+**It works on *any* surface — a torus, a bumpy blob, a whole closed shell — not one exp-map chart.** A
+`MidSurface` wraps an arbitrary triangle mesh and answers the
+three questions the routing asks *intrinsically*: where the nearest surface point is (a pad states its
+world position and snaps to the shell), what tangent frame sits there (a component poses on the
+surface), and what the surface does *locally* — a small exponential-map chart around a point, the
+geodesic-distance approximator the DRC measures a clearance in and reads the distortion from. **No
+feature depends on a chart covering the whole part**; every chart is local and per query, so a closed
+surface that a single global exp map would wrap onto itself is routed with no chart at all.
 
-## The exp map is exact on a plane, developable-clean on a cylinder, distorted on a cap
+## The showcase: a moulded wearable
 
-That is the whole design. On a **plane** the exp map is the identity; on a **developable** surface (a
-cylinder, a cone) it unrolls with a few `1e-4` of distortion; and where Gaussian curvature
-concentrates (a sphere cap) it genuinely distorts — a full ring's circumference is shorter than
-`2π·(geodesic radius)`, which no map can avoid. So the honest failure mode of the 3D DRC is a
-**conservative refusal**: a near-tolerance pair on a high-distortion patch is refused *with its
-uncertainty stated*, not passed false-precise — exactly the near-tangency rule the
-[anti-drill tamper mesh](tamper-mesh.md) refuses conformal placement over.
+A wide, low ellipsoidal **wearable dome** — a moulded pebble — carrying its own circuit: an MCU, two
+LEDs, a connector and passives **seated on the shaped surface**, wired by conductors **routed as
+geodesics along the dome**. The whole layout is verified on the surface — every net connects its pads
+and the 3D DRC is clean — before it is rendered.
 
-## The developable oracle: the 3D DRC equals the unrolled 2D DRC
+```csharp render:ecad-mid-wearable
+// The moulded shell: a wide, low ellipsoidal dome (a wearable puck), genuinely doubly-curved so no
+// single exp-map chart is an isometry — exactly what the intrinsic model exists for.
+double R = 10; var scale = new Vector3d(1.5, 1.5, 0.62);
+var shell = MeshPrimitives.UvSphere(R, 200, 100).Transformed(Matrix4d.CreateScale(scale));
+var board = MidBoard.OnMesh(shell);              // INTRINSIC: no seed, no radius, works on any geometry
 
-On a developable surface the distortion band collapses, so the 3D DRC reduces to the flat one. The
-decisive test builds a **cylindrical** MID board and the **flat unrolled sheet**, routes the *same*
-nets on both, and asserts the verdicts and measured separations agree — bit for bit.
+// A dome surface point above a footprint (x, y) — "place this here on the wearable's top".
+Vector3d Above(double x, double y) {
+    double rx = R * scale.X, rz = R * scale.Z;
+    double z = rz * Math.Sqrt(Math.Max(1 - (x * x + y * y) / (rx * rx), 0));
+    return new Vector3d(x, y, z + 0.01);
+}
+
+// Small electronic-component bodies, modeled +Z out of the surface with the seating datum at the
+// origin, so the seat convention drops them onto the dome pointing outward.
+Shape Qfn()       => Shape.Box(5, 5, 1.1).Translate(new Vector3d(0, 0, 0.55));
+Shape Connector() => Shape.Box(6, 3.2, 2.6).Translate(new Vector3d(0, 0, 1.3));
+Shape Led()       => Shape.Cylinder(1.0, 0.7).Translate(new Vector3d(0, 0, 0.35))
+                         .Union(Shape.Sphere(1.0).Scale(1, 1, 0.7).Translate(new Vector3d(0, 0, 0.7)));
+Shape Passive()   => Shape.Box(1.6, 0.8, 0.45).Translate(new Vector3d(0, 0, 0.225));
+
+// Seat the components on the surface (Z = surface normal), each snapped to the dome. The whole scene
+// is displayed offset from the origin so the world axis gizmo stays out of the composition.
+var chip = new PartColor(0.16f, 0.18f, 0.22f);
+var dark = new PartColor(0.24f, 0.26f, 0.30f);
+var brown = new PartColor(0.35f, 0.30f, 0.26f);
+var move = Matrix4d.CreateTranslation(new Vector3d(0, 24, 0));
+Part P(string name, Shape s, PartColor c) => new(name, s, c, move);
+var scene = new Scene();
+scene.Add(new Part("shell", shell, new PartColor(0.30f, 0.55f, 0.62f), move));
+scene.Add(P("mcu",   board.Seat(Qfn(),       Above(0, 0)).Body,        chip));
+scene.Add(P("conn",  board.Seat(Connector(), Above(0, -9.5)).Body,     dark));
+scene.Add(P("led1",  board.Seat(Led(),       Above(-9.5, 2.5)).Body,   Palette.Coral));
+scene.Add(P("led2",  board.Seat(Led(),       Above(9.5, 2.5)).Body,    Palette.Sky));
+scene.Add(P("r1",    board.Seat(Passive(),   Above(-2.6, 4.8)).Body,   brown));
+scene.Add(P("r2",    board.Seat(Passive(),   Above(0, 5.2)).Body,      brown));
+scene.Add(P("r3",    board.Seat(Passive(),   Above(2.6, 4.8)).Body,    brown));
+
+// Pads and single-trace nets, radiating from the central MCU so the routed geodesics do not cross:
+// connector power/ground to the MCU's south pads, and each LED to a side pad.
+var nets = new[] {
+    ("5V",  Above(-1.7, -9.0), Above(-1.7, -3.2)),
+    ("GND", Above( 1.7, -9.0), Above( 1.7, -3.2)),
+    ("D1",  Above(-3.2,  0.9), Above(-8.8,  2.5)),
+    ("D2",  Above( 3.2,  0.9), Above( 8.8,  2.5)),
+};
+foreach (var (net, a, b) in nets) {
+    var pa = board.PlacePad(net, a, 0.6, $"{net}.a");
+    var pb = board.PlacePad(net, b, 0.6, $"{net}.b");
+    var trace = MidRouting.Connect(board, pa, pb, 0.35);          // a GEODESIC path on the dome
+    scene.Add(P($"copper-{net}", trace.Conductor(0.06), Palette.Brass));
+}
+
+// Verify on the surface: every routed net connects its pads, the 3D DRC is clean. Self-checking, so
+// this example cannot rot.
+var report = MidRouting.Verify(board);
+Console.WriteLine($"nets connected: {report.Ratsnest.Count == 0}; DRC ok: {report.Ok}");
+if (!report.Ok || report.Ratsnest.Count != 0)
+    throw new Exception("the wearable did not verify: " + report);
+
+var camera = new CameraState(-Math.PI / 2 + 0.5, 0.66, 50, (0, 23, 3.4));
+```
+
+![A moulded wearable dome — an MCU, two LEDs, a connector and passives seated on the shaped surface, wired by copper conductors routed as geodesics along the dome](images/ecad-mid-wearable.png)
+
+## The certified geodesic DRC
+
+On an intrinsic board the clearance between two different-net conductors is a **geodesic surface
+distance**, measured on the mesh. Two certified facts make the three-valued verdict honest:
+
+- **A 3D chord is never longer than a surface geodesic**, so a chord edge-to-edge distance at or above
+  the clearance *proves* the surface clearance whatever the curvature — the broad phase, and the
+  reason a pair on the far side of the dome is certified **Clear** with no chart at all.
+- A closer pair is measured tightly in a **local exp-map chart** built around it (the
+  geodesic-distance approximator, exact on a developable patch) with the **same grow-and-intersect**
+  the [flat copper DRC](ecad-drc.md) uses and the local distortion folded in.
+
+The result is three-valued: **Clear**, **Violation**, or **Uncertain** — where the distortion band
+straddles the limit (the clearance is comparable to the curvature radius) or the curvature is too high
+to cover the pair in a chart, the pair is **refused**, not passed false-precise (the near-tangency rule
+the [anti-drill tamper mesh](tamper-mesh.md) refuses conformal placement over). A **plane never
+straddles**; a small sphere with a clearance a large fraction of its radius does — and the DRC says so
+rather than guessing.
+
+## Exact where one chart applies — the developable oracle
+
+Where a single chart *is* an isometry — a flat or **developable** patch (a cylinder, a cone) —
+`MidBoard.OnSurface` authors features in one exp map's `(u, v)`,
+which is the intrinsic geodesic exactly. The decisive test builds a **cylindrical** MID board and the
+**flat unrolled sheet**, routes the *same* nets on both, and asserts the verdicts and measured
+separations agree — bit for bit.
 
 ```csharp run:ecad-mid
 // A finely tessellated CYLINDER WALL (a developable moulded surface), and a flat unrolled sheet.
@@ -97,15 +183,20 @@ Console.WriteLine($"the cylinder folds the distortion into the surface clearance
 
 The verdicts and the measured `(u, v)` separations are identical because both run the *same*
 grow-and-intersect on the *same* `(u, v)` geometry; the only thing the cylinder adds is the surface
-clearance **band** the fold reports, which on a developable surface is a hair wide.
+clearance **band** the fold reports, which on a developable surface is a hair wide. The **intrinsic**
+board reaches the same answer on a cylinder to the discretisation grade — the developable oracle under
+the general formulation.
 
 ## Conductors lifted onto the moulded surface
 
-A `SurfaceTrace` is routed in `(u, v)` and lifted onto the surface, so its endpoints land **exactly**
-on the pad points it connects. Its exported form is a thin conductive `Shape` — a ribbon offset
-laterally in the surface tangent plane and extruded along the surface normal — that round-trips
-through STL / STEP like any part, and each trace **reports the distortion it carried**
-(`MinScale`, `MaxScale`).
+A `SurfaceTrace` is a centre-line lifted onto the surface, so its endpoints land **exactly** on the pad
+points it connects. On an intrinsic board it is a **geodesic path on the mesh**
+(`MidRouting.Connect` uses `DijkstraGraphDistance`'s edge-graph
+geodesic), so a straight `(u, v)` line does not cut through a curved shell; on a global-chart board it
+is the straight `(u, v)` line, which on a developable patch *is* the geodesic. Its exported form
+(`Conductor`) is a thin conductive `Shape` — a ribbon offset in the surface tangent plane and extruded
+along the surface normal — that round-trips through STL / STEP like any part, and each trace **reports
+the distortion it carried** (`MinScale`, `MaxScale`).
 
 ```csharp render:ecad-mid-conductors
 HalfEdgeMesh Tube(double r, double h, int around, int along) {
@@ -148,33 +239,39 @@ scene.Add(new Part("GND", gnd.Conductor(0.25), Palette.Plum));
 
 ## Seating a component
 
-A catalogue `HardwareComponent` seats on the surface at a `(u, v)` point, its body posed in the
-surface's own tangent frame (Z the surface normal, X the exp-map `+u`) — the component's seating
-convention transported onto the moulded wall:
+A catalogue `HardwareComponent` — or a raw `Shape` body (an MCU, an LED, a connector modelled as a
+small solid) — seats on the surface at a world position, its body posed in the surface's own tangent
+frame (Z the surface normal), on **any** geometry:
 
 ```csharp
-var board = MidBoard.OnSurface(mesh, seed, Vector3d.UnitY, radius: 4);
-var seated = board.Seat(StandardComponents.CapScrew(6, 12), new Vector2d(0.5, 0.5));
-// seated.Body is the screw posed on the surface, ready to be an assembly occurrence.
+var board = MidBoard.OnMesh(mesh);
+var located = board.Locate(worldPoint);                          // snap to the surface
+var seated = board.Seat(StandardComponents.CapScrew(6, 12), worldPoint);
+var chip   = board.Seat(Shape.Box(5, 5, 1), worldPoint);         // a raw electronic-component body
+// seated.Body is the component posed on the surface, ready to be an assembly occurrence.
 ```
+
+The global-chart board seats by `(u, v)` instead (`board.Seat(component, new Vector2d(u, v))`).
 
 ## Scope, v1
 
-`MidRouting` **places** traces and **verifies** them; it does **not auto-route**. Auto-routing on a
-surface is a *geodesic maze search* (the flat grid autorouter does not lift, since the metric is the
-distorted `(u, v)` space) — filed as a later stage, and `MidRouting.Route` refuses it by name. Also
-filed: **multi-shell** MID (traces on an inner moulded shell as well as the outer), and a conformal
-**solder mask / pour** on the surface (refused for the distortion reason, exactly as copper pours
-already refuse curved walls). LDS process specifics (laser activation paths) are out of scope.
+`MidRouting` **places** traces (as geodesics on the mesh) and **verifies** them; it does **not
+auto-route**. Auto-routing on a surface is a *geodesic maze search* (the flat grid autorouter does not
+lift, since the metric is the surface's own distorted geometry) — filed as a later stage, and
+`MidRouting.Route` refuses it by name. Also filed: **multi-shell** MID (traces on an inner moulded
+shell as well as the outer), and a conformal **solder mask / pour** on the surface (refused for the
+distortion reason, exactly as copper pours already refuse curved walls). LDS process specifics (laser
+activation paths) are out of scope.
 
 ## Verification
 
-The bar is higher than usual because ECAD fails plausibly. The decisive oracle is the **developable
-agreement** above (the cylinder's 3D DRC verdicts and measured separations equal the unrolled sheet's,
-bit for bit, with the cylinder's exp-map distortion `~1.2e-3`). Then, on a **sphere cap** (distortion
-`~11%`, a tangential trace reading `MinScale ~0.92`): the distortion is **reported**, and a pair that
-passes flat but whose worst-case surface clearance drops below the rule is **refused** (an
-`Uncertain` finding), never passed false-precise. A trace's lifted endpoint lands **exactly** on its
-pad point; a run reaching past the map **breaks and is counted** (never inventing surface); the
-exported conductor is a **closed solid** that round-trips through STL; and the whole check is
-**deterministic**.
+The bar is higher than usual because ECAD fails plausibly. **On any surface**: a **torus** (a closed
+surface a single global chart would wrap — measured `MaxDistortion > 1`) is routed and verified with no
+chart; a **sphere geodesic** matches its great-circle closed form `R·θ` to the edge-graph discretisation
+grade; a **bumpy blob** routes clean with its distortion reported per region; a pair on the far side is
+certified **Clear**, a near pair a **Violation**, and a near-limit pair on a high-curvature patch
+**refused** (`Uncertain`) while the same pair on a plane is certified. **Where one chart applies**: the
+cylinder's 3D DRC verdicts and measured separations equal the unrolled sheet's, **bit for bit**. A
+geodesic trace's endpoints land **exactly** on their pads; the exported conductor is a **closed solid**
+that round-trips through STL; the whole check is **deterministic**; and the **showcase itself
+self-verifies** (its render throws if the nets do not connect or the DRC is not clean).

@@ -8,57 +8,58 @@ namespace EngrCAD.Ecad;
 /// <summary>
 /// A <b>MID (moulded interconnect device) board</b>: a conductive circuit routed and seated on a
 /// MOULDED, doubly-curved surface rather than on a flat board — the LDS (laser direct structuring)
-/// construction, and the flagship of the ECAD campaign's stage 8.
+/// construction, and the flagship of the ECAD campaign's stage 9.
 ///
-/// <para><b>Everything happens in the exp map's (u, v) parameter space.</b> The routing surface is a
-/// mesh, and <see cref="MeshLocalParam"/>'s discrete exponential map from a stated origin gives every
-/// point of the surface a flat (u, v) coordinate. A pad is a POINT in (u, v) with a net; a
-/// <see cref="SurfaceTrace"/> is a polyline in (u, v) with a width. The 2D routing and the 3D DRC
-/// (<see cref="Mid3dDrc"/>) run in this parameter space with the SAME grow-and-intersect the flat
-/// copper DRC uses (<see cref="PcbDrc"/>), and the surface distortion the map carries is FOLDED into
-/// the clearance — never averaged away.</para>
+/// <para><b>It works on ANY surface, not one exp-map chart.</b> The routing surface is an arbitrary
+/// triangle mesh — a torus, a bumpy blob, a whole moulded shell, a closed surface a single global exp
+/// map would wrap onto itself. A <see cref="MidSurface"/> owns it and answers three questions
+/// intrinsically: where the nearest surface point is (so a pad states its world position and snaps to
+/// the shell), what tangent frame sits there (so a component poses on the surface), and what the surface
+/// does LOCALLY (a small exp-map <see cref="LocalExpChart"/> around a point, the geodesic-distance
+/// approximator the DRC measures a clearance in and reads the distortion from). No feature depends on a
+/// chart covering the whole part; every chart is local and per query.</para>
 ///
-/// <para><b>The exp map is exact on a plane, near-exact on a developable surface (a cylinder, a cone)
-/// and genuinely distorted where Gaussian curvature concentrates.</b> So the honest failure mode of
-/// the 3D DRC is a CONSERVATIVE REFUSAL: a near-tolerance pair on a high-distortion patch is refused
-/// with its uncertainty stated, not passed false-precise (the tamper-mesh near-tangency rule). On a
-/// developable surface the distortion band collapses and the 3D DRC agrees with the unrolled 2D DRC —
-/// the decisive oracle (<c>Mid3dDrcTests</c>).</para>
+/// <para><b>Two ways to place features, one surface model.</b>
+/// <list type="bullet">
+/// <item><see cref="OnMesh"/> — the INTRINSIC mode. Pads, traces and seats are placed at world
+/// positions snapped to the surface; the DRC measures clearances as geodesic surface distances through
+/// LOCAL charts built around each pair. This is what works on any geometry, including closed
+/// surfaces.</item>
+/// <item><see cref="OnSurface"/> — the GLOBAL-CHART mode. A single exp map from a seed+radius covers a
+/// developable patch, and features are authored in its (u, v). Where one chart is exact (a flat or
+/// developable patch) this gives EXACT numbers — the decisive developable oracle, a cylinder's 3D DRC
+/// equal to its unrolled flat sheet's bit for bit — so it is kept for that case; it is not required, and
+/// on a closed or strongly-curved part the intrinsic mode is the one to use.</item>
+/// </list></para>
 ///
-/// <para><b>The inverse of the map</b> — which <see cref="MeshLocalParam"/> gives per VERTEX and a MID
-/// board needs per POINT — is a BVH over the mesh triangles in (u, v) plus barycentric interpolation,
-/// legal because a triangle's own map is affine both ways. It is the same construction
-/// <see cref="SurfaceDecoration"/> uses to lay a decoration onto a surface, extended here to also
-/// report the surface NORMAL (which the conductor lift needs) and shared across every pad, trace and
-/// probe so the map is computed ONCE and every feature's (u, v) coordinates are consistent — a pad and
-/// a trace authored at the same (u, v) lift to the SAME surface point, so a trace's endpoint lands
-/// exactly on its pad.</para>
+/// <para><b>The honest failure mode is a CONSERVATIVE REFUSAL.</b> The exp map (any chart's) is exact on
+/// a plane, near-exact on a developable surface and genuinely distorted where Gaussian curvature
+/// concentrates. So the 3D DRC (<see cref="Mid3dDrc"/>) is THREE-valued: a near-tolerance pair on a
+/// high-distortion patch is REFUSED with its uncertainty stated rather than passed false-precise (the
+/// tamper-mesh near-tangency rule). It does NOT mean "exact everywhere" — the distortion is real; it
+/// means the machinery runs and verifies on any surface and is honest about what it cannot certify.</para>
 ///
-/// <para><b>Scope, v1.</b> A SINGLE conductive surface (no multi-shell MID — traces on both the outer
-/// and an inner moulded shell are filed). Auto-routing on the surface (a geodesic maze search) is
-/// filed too; v1 PLACES traces and VERIFIES them (<see cref="MidRouting"/>). A conformal solder mask /
+/// <para><b>Scope, v1.</b> A SINGLE conductive surface (no multi-shell MID — traces on both the outer and
+/// an inner moulded shell are filed). Auto-routing on the surface (a geodesic maze search) is filed too;
+/// v1 PLACES traces (as geodesics, <see cref="MidRouting"/>) and VERIFIES them. A conformal solder mask /
 /// pour on the surface is refused for the distortion reason, exactly as copper pours already refuse
 /// curved walls. LDS process specifics (laser activation paths) are out of scope.</para>
 /// </summary>
 public sealed class MidBoard
 {
-    private readonly MidSurfaceMap _map;
     private readonly Dictionary<PinRef, string>? _netOfPin;
     private readonly List<MidPad> _pads = [];
     private readonly List<SurfaceTrace> _traces = [];
     private readonly List<MidSeatedComponent> _seated = [];
     private double? _maxDistortion;
 
-    private MidBoard(
-        HalfEdgeMesh mesh, int seedVertex, Vector3d referenceDirection, double radius,
-        MeshLocalParam parameterization, MidSurfaceMap map, Schematic? schematic)
+    private MidBoard(MidSurface surface, LocalExpChart? globalChart, int seedVertex, Vector3d referenceDirection, double radius, Schematic? schematic)
     {
-        Mesh = mesh;
+        Surface = surface;
+        _globalChart = globalChart;
         SeedVertex = seedVertex;
         ReferenceDirection = referenceDirection;
         MapRadius = radius;
-        Parameterization = parameterization;
-        _map = map;
         Schematic = schematic;
         if (schematic is not null)
         {
@@ -70,27 +71,34 @@ public sealed class MidBoard
         }
     }
 
-    /// <summary>The routing surface.</summary>
-    public HalfEdgeMesh Mesh { get; }
+    private readonly LocalExpChart? _globalChart;
 
-    /// <summary>The exp map's origin — the vertex the parameterization is seeded from, at (u, v) =
-    /// (0, 0).</summary>
+    /// <summary>The intrinsic surface model — the mesh, its normals and the locate/frame/chart machinery
+    /// every feature reads.</summary>
+    public MidSurface Surface { get; }
+
+    /// <summary>The routing surface (triangulated; vertex indices preserved).</summary>
+    public HalfEdgeMesh Mesh => Surface.Mesh;
+
+    /// <summary>True for a board built by <see cref="OnMesh"/> (no global chart): features are surface
+    /// points and the DRC measures geodesic distances through local charts. False for a
+    /// <see cref="OnSurface"/> global-chart board.</summary>
+    public bool IsIntrinsic => _globalChart is null;
+
+    /// <summary>The global chart's origin (the vertex the parameterization is seeded from). −1 for an
+    /// intrinsic board.</summary>
     public int SeedVertex { get; }
 
-    /// <summary>The +u direction (projected into the seed's tangent plane), so the (u, v) coordinates
-    /// mean the same thing every time — pass a meaningful reference, since an arbitrary perpendicular
-    /// is stable but not meaningful.</summary>
+    /// <summary>The global chart's +u direction. Meaningless (zero) for an intrinsic board.</summary>
     public Vector3d ReferenceDirection { get; }
 
-    /// <summary>The geodesic radius the map covers.</summary>
+    /// <summary>The global chart's geodesic radius. Not applicable (∞) for an intrinsic board.</summary>
     public double MapRadius { get; }
 
-    /// <summary>The exp map itself (the per-vertex parameterization).</summary>
-    public MeshLocalParam Parameterization { get; }
+    /// <summary>The global exp map, or null for an intrinsic board.</summary>
+    public LocalExpChart? GlobalChart => _globalChart;
 
-    /// <summary>The schematic that names the nets, or null when pads carry explicit net names. When
-    /// present, <see cref="PlacePin"/> resolves a pad's net from its pin — the one-declaration
-    /// identity: a pad's net IS its pin's net.</summary>
+    /// <summary>The schematic that names the nets, or null when pads carry explicit net names.</summary>
     public Schematic? Schematic { get; }
 
     /// <summary>The placed pads, in placement order.</summary>
@@ -102,22 +110,30 @@ public sealed class MidBoard
     /// <summary>The seated components, in placement order.</summary>
     public IReadOnlyList<MidSeatedComponent> Seated => _seated;
 
+    // ---- construction --------------------------------------------------------
+
     /// <summary>
-    /// Parameterizes a moulded routing surface by the exp map from <paramref name="seedVertex"/>.
+    /// Wraps a moulded mesh for INTRINSIC routing — the general case, working on ANY geometry (a torus, a
+    /// bumpy blob, a closed shell). No seed or radius: pads, traces and seats are placed at world
+    /// positions and snapped to the surface, and the DRC measures geodesic clearances through local
+    /// charts built where they are needed.
     /// </summary>
-    /// <param name="mesh">The routing surface (triangulated internally; vertex indices preserved, so
-    /// <paramref name="seedVertex"/> means the same either way).</param>
-    /// <param name="seedVertex">Where the (u, v) origin lands.</param>
-    /// <param name="referenceDirection">Projected into the seed's tangent plane to become +u — pass a
-    /// meaningful direction, since without one the coordinates are stable but arbitrary.</param>
-    /// <param name="radius">The geodesic radius to map — the ROUTING PATCH, a real design parameter
-    /// (which part of the moulding carries the circuit) and deliberately explicit rather than a
-    /// footgun default: on a CLOSED surface (a cylinder, a cone shell) a radius past the far side wraps
-    /// the exp map onto itself where it degenerates, and the distortion there is meaningless. State a
-    /// radius that covers your features and stays local; <see cref="MaxDistortion"/> reports how
-    /// developable that patch turned out.</param>
-    /// <param name="schematic">Optional net source. With it, <see cref="PlacePin"/> resolves a pad's
-    /// net from the schematic (the one-declaration rule).</param>
+    public static MidBoard OnMesh(HalfEdgeMesh mesh, Schematic? schematic = null)
+    {
+        var surface = MidSurface.Wrap(mesh);
+        return new MidBoard(surface, null, -1, Vector3d.Zero, double.PositiveInfinity, schematic);
+    }
+
+    /// <summary>
+    /// Parameterizes a developable routing patch by ONE exp map from <paramref name="seedVertex"/> — the
+    /// global-chart mode, kept for the case where a single chart is exact (a flat or developable patch,
+    /// where it gives the exact developable oracle). On a closed or strongly-curved part use
+    /// <see cref="OnMesh"/> instead: a global chart there wraps onto itself where it degenerates.
+    /// </summary>
+    /// <param name="radius">The geodesic radius to map — a real design parameter (which part of the
+    /// moulding carries the circuit) and deliberately explicit, since a footgun default that mapped a
+    /// closed surface past its far side would wrap. State one that covers your features and stays
+    /// local.</param>
     public static MidBoard OnSurface(
         HalfEdgeMesh mesh, int seedVertex, Vector3d referenceDirection,
         double radius, Schematic? schematic = null)
@@ -125,212 +141,315 @@ public sealed class MidBoard
         ArgumentNullException.ThrowIfNull(mesh);
         if (!(radius > 0) || !double.IsFinite(radius))
             throw new ArgumentOutOfRangeException(nameof(radius), "The map radius must be positive and finite.");
-        var param = MeshLocalParam.Compute(mesh, seedVertex, radius, referenceDirection);
-        var map = new MidSurfaceMap(mesh, param);
-        return new MidBoard(mesh, seedVertex, referenceDirection, radius, param, map, schematic);
+        var surface = MidSurface.Wrap(mesh);
+        var param = MeshLocalParam.Compute(surface.Mesh, seedVertex, radius, referenceDirection);
+        var chart = new LocalExpChart(surface, param);
+        return new MidBoard(surface, chart, seedVertex, referenceDirection, radius, schematic);
     }
 
+    // ---- distortion ----------------------------------------------------------
+
     /// <summary>
-    /// The worst departure from length-preservation the parameterization carries over the whole mapped
-    /// region — <c>max |edge3DLength / edgeUvLength − 1|</c> over every mapped mesh edge. This is the
-    /// number that says how DEVELOPABLE the surface is: ~0 on a plane, a few 1e-4 on a cylinder, and
-    /// several percent on a strongly curved cap (the same distortion <see cref="SurfaceCurve"/> reports
-    /// on a laid curve, measured here on the map's own edges). The 3D DRC folds this — per feature —
-    /// into its clearance, so a caller can read it to know how much the surface will cost the routing.
+    /// The worst departure from length-preservation the routing carries. On a GLOBAL-chart board this is
+    /// the exp map's worst edge distortion over the whole mapped patch (<c>max |edge3DLength /
+    /// edgeUvLength − 1|</c>); on an INTRINSIC board there is no single chart, so it is the worst LOCAL
+    /// distortion measured around any placed feature — computed per region rather than assuming one chart
+    /// covers everything. ~0 on a plane, a few 1e-4 on a developable surface, several percent on a
+    /// strongly curved cap.
     /// </summary>
     public double MaxDistortion => _maxDistortion ??= MeasureMaxDistortion();
 
-    /// <summary>Lifts a parameter point onto the surface — the exp-map inverse. Returns false when the
-    /// point falls outside the mapped region (a run reaching past the map BREAKS there rather than
-    /// inventing surface).</summary>
-    public bool TryLift(in Vector2d uv, out Vector3d point) => _map.TryLift(uv, out point, out _);
-
-    /// <summary>Lifts a parameter point onto the surface, reporting the surface NORMAL there (the
-    /// interpolated vertex normal of the containing triangle) — what the conductor ribbon is extruded
-    /// along.</summary>
-    public bool TryLift(in Vector2d uv, out Vector3d point, out Vector3d normal) =>
-        _map.TryLift(uv, out point, out normal);
-
-    /// <summary>
-    /// The local scale band the map carries in a neighbourhood of <paramref name="uv"/> spanning
-    /// <paramref name="span"/> in each direction — <c>[minScale, maxScale]</c> of
-    /// (surface length / parameter length), probed on a small cross. On a developable surface the two
-    /// are ~equal (the band collapses); where curvature concentrates they spread, and the DRC folds the
-    /// spread into its clearance. A point with nothing measurable (off the map) returns <c>[1, 1]</c>.
-    /// </summary>
-    public (double Min, double Max) LocalScaleBand(in Vector2d uv, double span)
+    private double MeasureMaxDistortion()
     {
-        double min = double.PositiveInfinity, max = 0;
-        void Probe(in Vector2d a, in Vector2d b)
+        if (_globalChart is { } chart)
         {
-            double flat = a.DistanceTo(b);
-            if (!(flat > 0))
-                return;
-            if (!_map.TryLift(a, out var pa, out _) || !_map.TryLift(b, out var pb, out _))
-                return;
-            double scale = pa.DistanceTo(pb) / flat;
-            min = Math.Min(min, scale);
-            max = Math.Max(max, scale);
+            double worst = 0;
+            var param = chart.Parameterization;
+            foreach (var edge in Mesh.Edges)
+            {
+                int a = edge.Origin.Index, b = edge.Twin.Origin.Index;
+                if (!param.HasUv(a) || !param.HasUv(b))
+                    continue;
+                double uvLen = param.Uv(a).DistanceTo(param.Uv(b));
+                if (!(uvLen > 0))
+                    continue;
+                double len = Mesh.GetPosition(a).DistanceTo(Mesh.GetPosition(b));
+                worst = Math.Max(worst, Math.Abs(len / uvLen - 1));
+            }
+            return worst;
         }
-        double h = Math.Max(span, 1e-12);
-        var c = uv;
-        Probe(new Vector2d(c.X - h, c.Y), c);
-        Probe(c, new Vector2d(c.X + h, c.Y));
-        Probe(new Vector2d(c.X, c.Y - h), c);
-        Probe(c, new Vector2d(c.X, c.Y + h));
-        return max <= 0 ? (1, 1) : (min, max);
+
+        // Intrinsic: the worst local distortion around any feature.
+        double d = 0;
+        foreach (var pad in _pads)
+            d = Math.Max(d, LocalDistortion(pad.Located, pad.LandWidth));
+        foreach (var trace in _traces)
+            d = Math.Max(d, trace.Distortion);
+        return d;
     }
+
+    /// <summary>The local distortion (band spread) a small chart around a surface point carries — the
+    /// distortion "per region" an intrinsic board reports instead of one global figure.</summary>
+    internal double LocalDistortion(in SurfacePoint at, double featureSize)
+    {
+        var (min, max) = LocalScaleBandAround(at, featureSize, 0);
+        return Math.Max(max - 1, 1 / min - 1);
+    }
+
+    /// <summary>The local surface-to-parameter scale band a small exp-map chart around a surface point
+    /// carries — <c>[min, max]</c>. The chart's radius clears the feature and a few mesh edges, so the
+    /// band is never starved; probed at the point over the feature's own extent.</summary>
+    internal (double Min, double Max) LocalScaleBandAround(in SurfacePoint at, double featureSize, double extent)
+    {
+        double radius = ChartRadius(featureSize) + extent;
+        var chart = Surface.Chart(at, radius);
+        if (chart.IsEmpty || !chart.TryProject(at, out var uv))
+            return (1, 1);
+        return chart.ScaleBand(uv, Math.Max(featureSize, radius * 0.25));
+    }
+
+    /// <summary>A generous local-chart radius for measuring around a feature of the given size — a few
+    /// mesh edges at least, so the chart is never starved, and comfortably above the feature so the scale
+    /// band has room to spread.</summary>
+    internal double ChartRadius(double featureSize) =>
+        Math.Max(featureSize * 6, LongestEdge() * 4);
+
+    private double? _longestEdge;
+
+    internal double LongestEdge()
+    {
+        if (_longestEdge is { } cached)
+            return cached;
+        double longest = 0;
+        foreach (var edge in Mesh.Edges)
+            longest = Math.Max(longest,
+                Mesh.GetPosition(edge.Origin.Index).DistanceTo(Mesh.GetPosition(edge.Twin.Origin.Index)));
+        return (_longestEdge = longest).Value;
+    }
+
+    // ---- global-chart lift / frame (OnSurface only) --------------------------
+
+    /// <summary>Lifts a global-chart (u, v) onto the surface. Throws on an intrinsic board (there is no
+    /// global chart). Returns false when the point falls outside the mapped patch.</summary>
+    public bool TryLift(in Vector2d uv, out Vector3d point) => RequireChart().TryLift(uv, out point);
+
+    /// <summary>Lifts a global-chart (u, v) onto the surface with the normal there.</summary>
+    public bool TryLift(in Vector2d uv, out Vector3d point, out Vector3d normal) =>
+        RequireChart().TryLift(uv, out point, out normal);
+
+    /// <summary>The local scale band the global chart carries around a (u, v).</summary>
+    public (double Min, double Max) LocalScaleBand(in Vector2d uv, double span) =>
+        RequireChart().ScaleBand(uv, span);
+
+    /// <summary>The surface tangent frame at a global-chart (u, v).</summary>
+    public Frame3d SeatFrame(in Vector2d uv)
+    {
+        var chart = RequireChart();
+        if (!chart.TryLift(uv, out var point, out var normal))
+            throw new ArgumentException(
+                $"Cannot seat at parameter ({uv.X:g4}, {uv.Y:g4}): it falls outside the exp map.", nameof(uv));
+        var xHint = chart.TryLift(new Vector2d(uv.X + 1e-3, uv.Y), out var ahead)
+            ? ahead - point : ReferenceDirection;
+        return Frame3d.FromZX(point, normal, xHint);
+    }
+
+    private LocalExpChart RequireChart() => _globalChart ?? throw new InvalidOperationException(
+        "This MID board is intrinsic (built with MidBoard.OnMesh), so it has no global exp-map chart and "
+        + "no (u, v) coordinates. Place features at world positions instead (PlacePad/PlaceTrace/Seat "
+        + "taking a Vector3d) and read them as surface points.");
+
+    // ---- intrinsic locate ----------------------------------------------------
+
+    /// <summary>Snaps a world point onto the surface — where an intrinsic pad, trace point or seat lands.</summary>
+    public SurfacePoint Locate(in Vector3d near) => Surface.Locate(near);
 
     // ---- placing pads --------------------------------------------------------
 
-    /// <summary>
-    /// Places a net PAD at <paramref name="uv"/> — a small circular land of diameter
-    /// <paramref name="landWidth"/> (a SURFACE dimension). The net is explicit here; use
-    /// <see cref="PlacePin"/> to resolve it from a schematic pin instead.
-    /// </summary>
-    /// <param name="net">The net this pad belongs to, or null for a pad on no electrical net (its own
-    /// net — it must still clear every other pad, since two floating pads are electrically distinct).</param>
-    /// <param name="uv">The land centre in parameter (u, v) coordinates.</param>
-    /// <param name="landWidth">The land diameter on the surface (mm).</param>
-    /// <param name="source">A name for reports (<c>"R1.1"</c>).</param>
+    /// <summary>Places a net PAD at a global-chart <paramref name="uv"/> — a small circular land of
+    /// diameter <paramref name="landWidth"/> (a surface dimension). Global-chart board only.</summary>
     public MidPad PlacePad(string? net, in Vector2d uv, double landWidth, string source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        if (!(landWidth > 0) || !double.IsFinite(landWidth))
-            throw new ArgumentOutOfRangeException(nameof(landWidth), "A pad's land width must be positive.");
-        if (!_map.TryLift(uv, out _, out _))
+        RequireLand(landWidth);
+        var chart = RequireChart();
+        if (!chart.TryLift(uv, out var point, out var normal))
             throw new ArgumentException(
                 $"Pad '{source}' at parameter ({uv.X:g4}, {uv.Y:g4}) falls outside the exp map around "
                 + $"vertex {SeedVertex} (radius {MapRadius}): there is no surface to seat it on. Seed the "
-                + "map where the surface reaches it, or raise the radius.",
-                nameof(uv));
-        var pad = new MidPad(this, net, uv, landWidth, source);
+                + "map where the surface reaches it, or raise the radius.", nameof(uv));
+        var located = Surface.Locate(point) with { Position = point, Normal = normal };
+        var pad = new MidPad(this, net, located, landWidth, source, uv);
         _pads.Add(pad);
         return pad;
     }
 
-    /// <summary>
-    /// Places a pad for a schematic PIN — the one-declaration path: the pad's net is resolved from the
-    /// pin through the board's <see cref="Schematic"/> (a Signal/Stub net's name, or null for a
-    /// NoConnect / unconnected pin), and its source is the pin's <c>"R1.2"</c> spelling.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">The board carries no schematic.</exception>
-    public MidPad PlacePin(in PinRef pin, in Vector2d uv, double landWidth)
+    /// <summary>Places a net PAD at a WORLD position, snapped onto the surface — the intrinsic path,
+    /// working on any geometry. <paramref name="near"/> need only be near the surface; it lands on the
+    /// nearest point.</summary>
+    public MidPad PlacePad(string? net, in Vector3d near, double landWidth, string source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        RequireLand(landWidth);
+        var located = Surface.Locate(near);
+        var pad = new MidPad(this, net, located, landWidth, source, null);
+        _pads.Add(pad);
+        return pad;
+    }
+
+    /// <summary>Places a pad for a schematic PIN in global-chart (u, v) — the one-declaration path: the
+    /// pad's net is resolved from the pin through the board's <see cref="Schematic"/>.</summary>
+    public MidPad PlacePin(in PinRef pin, in Vector2d uv, double landWidth) =>
+        PlacePad(NetOfPin(pin), uv, landWidth, pin.ToString());
+
+    /// <summary>Places a pad for a schematic PIN at a world position (intrinsic).</summary>
+    public MidPad PlacePin(in PinRef pin, in Vector3d near, double landWidth) =>
+        PlacePad(NetOfPin(pin), near, landWidth, pin.ToString());
+
+    private string? NetOfPin(in PinRef pin)
     {
         if (_netOfPin is null)
             throw new InvalidOperationException(
-                "This MID board carries no schematic, so a pad cannot be placed by pin. Build it with "
-                + "MidBoard.OnSurface(..., schematic: sch), or use PlacePad with an explicit net.");
-        string? net = _netOfPin.TryGetValue(pin, out var n) ? n : null;
-        return PlacePad(net, uv, landWidth, pin.ToString());
+                "This MID board carries no schematic, so a pad cannot be placed by pin. Build it with a "
+                + "schematic (MidBoard.OnMesh(mesh, sch) / OnSurface(..., schematic: sch)), or use PlacePad "
+                + "with an explicit net.");
+        return _netOfPin.TryGetValue(pin, out var n) ? n : null;
+    }
+
+    private static void RequireLand(double landWidth)
+    {
+        if (!(landWidth > 0) || !double.IsFinite(landWidth))
+            throw new ArgumentOutOfRangeException(nameof(landWidth), "A pad's land width must be positive.");
     }
 
     // ---- placing traces ------------------------------------------------------
 
-    /// <summary>
-    /// Routes a surface trace along a parameter (u, v) centre-line — the place-traces API v1 offers
-    /// (auto-routing is filed; see <see cref="MidRouting"/>). The width is a PARAMETER-space stroke
-    /// width; the SURFACE width the map carries is reported by the returned trace's distortion band. A
-    /// trace whose centre-line runs at the same (u, v) as a pad lands EXACTLY on that pad.
-    /// </summary>
+    /// <summary>Routes a surface trace along a global-chart (u, v) centre-line. Global-chart board
+    /// only.</summary>
     public SurfaceTrace PlaceTrace(string? net, IReadOnlyList<Vector2d> centreLine, double width, string source)
+    {
+        ArgumentNullException.ThrowIfNull(centreLine);
+        ArgumentNullException.ThrowIfNull(source);
+        RequireChart();
+        if (centreLine.Count < 2)
+            throw new ArgumentException("A surface trace needs at least two centre-line points.", nameof(centreLine));
+        RequireWidth(width);
+        var trace = SurfaceTrace.OnChart(this, net, [.. centreLine], width, source);
+        _traces.Add(trace);
+        return trace;
+    }
+
+    /// <summary>Routes a surface trace along a SURFACE centre-line — a polyline of points already ON the
+    /// mesh (a geodesic path from <see cref="MidRouting"/>, or caller control points snapped to the
+    /// surface). The intrinsic path: the lift and the length are correct on any surface, and the
+    /// distortion is measured locally.</summary>
+    public SurfaceTrace PlaceSurfaceTrace(string? net, IReadOnlyList<SurfacePoint> centreLine, double width, string source)
     {
         ArgumentNullException.ThrowIfNull(centreLine);
         ArgumentNullException.ThrowIfNull(source);
         if (centreLine.Count < 2)
             throw new ArgumentException("A surface trace needs at least two centre-line points.", nameof(centreLine));
-        if (!(width > 0) || !double.IsFinite(width))
-            throw new ArgumentOutOfRangeException(nameof(width), "A trace width must be positive.");
-        var trace = new SurfaceTrace(this, net, [.. centreLine], width, source);
+        RequireWidth(width);
+        var trace = SurfaceTrace.OnSurface(this, net, [.. centreLine], width, source);
         _traces.Add(trace);
         return trace;
     }
 
+    private static void RequireWidth(double width)
+    {
+        if (!(width > 0) || !double.IsFinite(width))
+            throw new ArgumentOutOfRangeException(nameof(width), "A trace width must be positive.");
+    }
+
     // ---- seating a component -------------------------------------------------
 
-    /// <summary>
-    /// Seats a catalogue <see cref="HardwareComponent"/> at <paramref name="uv"/> on the surface,
-    /// posing its body in the surface's own local frame at that point — the component's seating
-    /// convention (its body modeled +Z out of the host with its origin at the seating datum,
-    /// <see cref="HardwareComponent.SeatDepth"/> below the surface) TRANSPORTED onto the moulded
-    /// surface. The tangent frame's Z is the surface normal there; +X is the exp-map +u direction, so
-    /// the seat is oriented by the same coordinates the routing uses.
-    /// </summary>
+    /// <summary>Seats a catalogue <see cref="HardwareComponent"/> at a global-chart <paramref name="uv"/>
+    /// on the surface, posing its body in the surface's own tangent frame. Global-chart board only.</summary>
     public MidSeatedComponent Seat(HardwareComponent component, in Vector2d uv)
     {
         ArgumentNullException.ThrowIfNull(component);
         var frame = SeatFrame(uv);
-        var seatFrame = component.SeatFrame(new SketchPlane(frame), Vector2d.Zero);
-        var body = component.Body.Transform(seatFrame.ToMatrix());
-        var seated = new MidSeatedComponent(component, uv, frame, seatFrame, body);
+        return SeatBody(component, component.Body, frame);
+    }
+
+    /// <summary>Seats a catalogue <see cref="HardwareComponent"/> at a WORLD position, snapped onto the
+    /// surface — the intrinsic path, working on any geometry. The tangent frame's Z is the surface normal
+    /// there; +X is <paramref name="xHint"/> projected in (or a stable perpendicular).</summary>
+    public MidSeatedComponent Seat(HardwareComponent component, in Vector3d near, in Vector3d? xHint = null)
+    {
+        ArgumentNullException.ThrowIfNull(component);
+        var located = Surface.Locate(near);
+        var frame = Surface.Frame(located, xHint);
+        return SeatBody(component, component.Body, frame);
+    }
+
+    /// <summary>Seats an arbitrary <see cref="Shape"/> body at a WORLD position on the surface — the way
+    /// a non-catalogue part (an MCU, an LED, a connector modelled as a small solid) is placed on a
+    /// moulded shell. The body is posed in the surface tangent frame at the located point (Z = normal,
+    /// +X = <paramref name="xHint"/> projected in), so it is modeled +Z out of the surface with its
+    /// seating datum at its own origin.</summary>
+    public MidSeatedComponent Seat(Shape body, in Vector3d near, in Vector3d? xHint = null)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        var located = Surface.Locate(near);
+        var frame = Surface.Frame(located, xHint);
+        var posed = body.Transform(frame.ToMatrix());
+        var seated = new MidSeatedComponent(null, default, frame, frame, posed);
         _seated.Add(seated);
         return seated;
     }
 
-    /// <summary>The surface tangent frame at <paramref name="uv"/> — origin on the surface, Z the
-    /// surface normal, X the exp-map +u direction (the routing's own reference). What a seated body is
-    /// posed on.</summary>
-    public Frame3d SeatFrame(in Vector2d uv)
+    private MidSeatedComponent SeatBody(HardwareComponent component, Shape body, in Frame3d surfaceFrame)
     {
-        if (!_map.TryLift(uv, out var point, out var normal))
-            throw new ArgumentException(
-                $"Cannot seat at parameter ({uv.X:g4}, {uv.Y:g4}): it falls outside the exp map.",
-                nameof(uv));
-        // +X = the exp-map +u tangent projected into the surface tangent plane, so the seat's own x
-        // axis is the routing's +u. A nearby +u probe gives the direction on the surface.
-        var xHint = _map.TryLift(new Vector2d(uv.X + 1e-3, uv.Y), out var ahead, out _)
-            ? ahead - point
-            : ReferenceDirection;
-        return Frame3d.FromZX(point, normal, xHint);
+        var seatFrame = component.SeatFrame(new SketchPlane(surfaceFrame), Vector2d.Zero);
+        var posed = body.Transform(seatFrame.ToMatrix());
+        var seated = new MidSeatedComponent(component, Vector2d.Zero, surfaceFrame, seatFrame, posed);
+        _seated.Add(seated);
+        return seated;
     }
 
     // ---- the DRC's feature view ----------------------------------------------
 
-    /// <summary>The board's copper as parameter-space features the DRC reasons about — each a region in
-    /// (u, v), its net, its source, and the local scale band the exp map carries there. Pads become
-    /// discs; traces become stroked centre-lines.</summary>
+    /// <summary>The board's copper as global-chart parameter-space features (global board only).</summary>
     internal IReadOnlyList<MidFeature> Features()
     {
         var features = new List<MidFeature>(_pads.Count + _traces.Count);
         foreach (var pad in _pads)
-            features.Add(pad.Feature());
+            features.Add(pad.ChartFeature());
         foreach (var trace in _traces)
-            features.AddRange(trace.Features());
+            features.AddRange(trace.ChartFeatures());
         return features;
     }
 
-    private double MeasureMaxDistortion()
+    /// <summary>The board's copper as intrinsic SURFACE features — a centre-line of surface points and a
+    /// copper width, the footprint the geodesic DRC measures.</summary>
+    internal IReadOnlyList<MidSurfaceFeature> SurfaceFeatures()
     {
-        double worst = 0;
-        foreach (var edge in Mesh.Edges)
-        {
-            int a = edge.Origin.Index, b = edge.Twin.Origin.Index;
-            if (!Parameterization.HasUv(a) || !Parameterization.HasUv(b))
-                continue;
-            double uvLen = Parameterization.Uv(a).DistanceTo(Parameterization.Uv(b));
-            if (!(uvLen > 0))
-                continue;
-            double len = Mesh.GetPosition(a).DistanceTo(Mesh.GetPosition(b));
-            worst = Math.Max(worst, Math.Abs(len / uvLen - 1));
-        }
-        return worst;
+        var features = new List<MidSurfaceFeature>(_pads.Count + _traces.Count);
+        foreach (var pad in _pads)
+            features.Add(pad.SurfaceFeature());
+        foreach (var trace in _traces)
+            features.AddRange(trace.SurfaceFeatures());
+        return features;
     }
 }
 
 /// <summary>
-/// One copper pad of a <see cref="MidBoard"/>: a small circular land at a parameter (u, v) point, on
-/// a net. It knows its board, so it can report where it lands on the surface and the local scale the
-/// map carries there.
+/// One copper pad of a <see cref="MidBoard"/>: a small circular land at a surface point, on a net. On a
+/// global-chart board it also carries the authored (u, v); on an intrinsic board it is a surface point
+/// with no parameter.
 /// </summary>
 public sealed class MidPad
 {
     private readonly MidBoard _board;
+    private readonly SurfacePoint _located;
+    private readonly Vector2d? _parameter;
 
-    internal MidPad(MidBoard board, string? net, in Vector2d uv, double landWidth, string source)
+    internal MidPad(MidBoard board, string? net, in SurfacePoint located, double landWidth, string source, Vector2d? parameter)
     {
         _board = board;
+        _located = located;
+        _parameter = parameter;
         Net = net;
-        Parameter = uv;
         LandWidth = landWidth;
         Source = source;
     }
@@ -338,174 +457,94 @@ public sealed class MidPad
     /// <summary>The net this pad belongs to, or null for a pad on no electrical net.</summary>
     public string? Net { get; }
 
-    /// <summary>The land centre in parameter (u, v).</summary>
-    public Vector2d Parameter { get; }
-
     /// <summary>The land diameter on the surface (mm).</summary>
     public double LandWidth { get; }
 
     /// <summary>A name for reports.</summary>
     public string Source { get; }
 
-    /// <summary>Where the pad lands on the moulded surface — the exp-map lift of its (u, v). Exact at
-    /// the map's origin and an affine interpolation of the containing triangle elsewhere, so a trace
-    /// authored to start here lands on exactly this point.</summary>
-    public Vector3d SurfacePoint =>
-        _board.TryLift(Parameter, out var p) ? p
-            : throw new InvalidOperationException($"Pad '{Source}' is off the map.");
+    /// <summary>Where the pad lands on the moulded surface — its 3D point. On both modes a trace authored
+    /// to start here lands on exactly this point.</summary>
+    public Vector3d SurfacePoint => _located.Position;
 
-    internal MidFeature Feature()
+    /// <summary>The surface normal at the pad.</summary>
+    public Vector3d Normal => _located.Normal;
+
+    /// <summary>The located surface point (position, normal, face, barycentric).</summary>
+    internal SurfacePoint Located => _located;
+
+    /// <summary>The pad's authored (u, v) on a global-chart board. Throws on an intrinsic pad.</summary>
+    public Vector2d Parameter => _parameter ?? throw new InvalidOperationException(
+        $"Pad '{Source}' was placed intrinsically (at a world position), so it has no (u, v) parameter.");
+
+    /// <summary>Whether the pad carries a global-chart (u, v).</summary>
+    public bool HasParameter => _parameter is not null;
+
+    internal MidFeature ChartFeature()
     {
-        var region = CurvedRegion2d.Disc(Parameter, LandWidth / 2);
-        var band = _board.LocalScaleBand(Parameter, LandWidth / 2);
+        var uv = Parameter;
+        var region = CurvedRegion2d.Disc(uv, LandWidth / 2);
+        var band = _board.LocalScaleBand(uv, LandWidth / 2);
         return new MidFeature(Net, Source, region, LandWidth, band.Min, band.Max);
     }
+
+    internal MidSurfaceFeature SurfaceFeature() =>
+        new(Net, Source, LandWidth, [_located]);
 }
 
-/// <summary>One component seated on a <see cref="MidBoard"/>: which component, where (its parameter
-/// point and the surface tangent frame it sits in), and its posed 3D <see cref="Body"/> ready to be
-/// an assembly occurrence.</summary>
-/// <param name="Component">The catalogue component.</param>
-/// <param name="Parameter">The seating point in parameter (u, v).</param>
+/// <summary>One component seated on a <see cref="MidBoard"/>: which component (null for a raw-body seat),
+/// where, the surface tangent frame, the posed body pose and the body itself.</summary>
+/// <param name="Component">The catalogue component, or null for a raw <see cref="Shape"/> seat.</param>
+/// <param name="Parameter">The seating point in global-chart (u, v), or (0, 0) for an intrinsic seat.</param>
 /// <param name="SurfaceFrame">The surface tangent frame at the seat (Z = surface normal, X = +u).</param>
 /// <param name="SeatFrame">The pose of the component's body (the surface frame dropped
-/// <see cref="HardwareComponent.SeatDepth"/> below the surface).</param>
+/// <see cref="HardwareComponent.SeatDepth"/> below the surface for a catalogue part).</param>
 /// <param name="Body">The component body posed on the surface.</param>
 public sealed record MidSeatedComponent(
-    HardwareComponent Component, Vector2d Parameter, Frame3d SurfaceFrame, Frame3d SeatFrame, Shape Body);
+    HardwareComponent? Component, Vector2d Parameter, Frame3d SurfaceFrame, Frame3d SeatFrame, Shape Body);
 
-/// <summary>One piece of copper the 3D DRC reasons about, in PARAMETER (u, v) space — a region, its
-/// net (the load-bearing tag), a source name, the authored parameter WIDTH (a trace's stroke width or a
-/// pad's land diameter), and the local scale band the exp map carries over it (the distortion folded
-/// into the clearance). Pads and traces both reduce to this.</summary>
-/// <param name="Net">The net, or null for copper on no electrical net (its own net).</param>
-/// <param name="Source">A name for reports.</param>
-/// <param name="Region">The copper outline in parameter (u, v) coordinates.</param>
-/// <param name="Width">The authored parameter width — a trace's stroke width, a pad's land diameter.
-/// The surface width is <c>Width × scale</c>; the DRC checks it directly rather than re-measuring the
-/// region (round joins never pinch a width, and an opposing-wall measure under-reports on a round
-/// cap).</param>
-/// <param name="MinScale">The smallest surface-to-parameter length ratio over the region — how much
-/// the map SHRANK it (a guaranteed-pitch reading).</param>
-/// <param name="MaxScale">The largest — how much the map STRETCHED it (a guaranteed-clearance reading).</param>
+/// <summary>One piece of copper the GLOBAL-chart 3D DRC reasons about, in PARAMETER (u, v) space — a
+/// region, its net, a source name, the authored parameter WIDTH, and the local scale band the exp map
+/// carries over it.</summary>
 internal readonly record struct MidFeature(
     string? Net, string Source, CurvedRegion2d Region, double Width, double MinScale, double MaxScale);
 
-/// <summary>
-/// The exp-map inverse (u, v) → surface point + normal — <see cref="MeshLocalParam"/> gives the map
-/// per VERTEX and a MID board needs it per POINT. A BVH over the mesh triangles in (u, v) plus
-/// barycentric interpolation, exactly as <see cref="SurfaceDecoration"/>'s own (internal)
-/// <c>UvTriangles</c> lifts a decoration, extended here to also interpolate the surface NORMAL (which
-/// the conductor lift needs and which the decoration path does not report). Computed ONCE per board, so
-/// every pad, trace and probe reads one consistent map.
-/// </summary>
-internal sealed class MidSurfaceMap
+/// <summary>One piece of copper the INTRINSIC 3D DRC reasons about — a centre-line of surface points and
+/// a copper width. A pad is a one-point centre-line (a disc); a trace is its polyline (a stroke). The
+/// geodesic DRC measures clearance between these through local charts built around each pair.</summary>
+internal sealed class MidSurfaceFeature
 {
-    private readonly Vector2d[] _a;
-    private readonly Vector2d[] _b;
-    private readonly Vector2d[] _c;
-    private readonly Vector3d[] _pa;
-    private readonly Vector3d[] _pb;
-    private readonly Vector3d[] _pc;
-    private readonly Vector3d[] _na;
-    private readonly Vector3d[] _nb;
-    private readonly Vector3d[] _nc;
-    private readonly Core.Spatial.Bvh _bvh;
-
-    public MidSurfaceMap(HalfEdgeMesh mesh, MeshLocalParam param)
+    public MidSurfaceFeature(string? net, string source, double width, IReadOnlyList<SurfacePoint> centreLine)
     {
-        var triangulated = mesh.Triangulated();
-        var normals = triangulated.ComputeVertexNormals();
-        var (positions, faces) = triangulated.ToIndexed();
-
-        var a = new List<Vector2d>();
-        var b = new List<Vector2d>();
-        var c = new List<Vector2d>();
-        var pa = new List<Vector3d>();
-        var pb = new List<Vector3d>();
-        var pc = new List<Vector3d>();
-        var na = new List<Vector3d>();
-        var nb = new List<Vector3d>();
-        var nc = new List<Vector3d>();
-        var boxes = new List<Aabb>();
-
-        foreach (var face in faces)
-        {
-            if (face.Length != 3)
-                continue;
-            if (!param.HasUv(face[0]) || !param.HasUv(face[1]) || !param.HasUv(face[2]))
-                continue;
-            var ua = param.Uv(face[0]);
-            var ub = param.Uv(face[1]);
-            var uc = param.Uv(face[2]);
-            a.Add(ua);
-            b.Add(ub);
-            c.Add(uc);
-            pa.Add(positions[face[0]]);
-            pb.Add(positions[face[1]]);
-            pc.Add(positions[face[2]]);
-            na.Add(normals[face[0]]);
-            nb.Add(normals[face[1]]);
-            nc.Add(normals[face[2]]);
-            var box = Aabb.Empty
-                .Union(new Vector3d(ua.X, ua.Y, 0))
-                .Union(new Vector3d(ub.X, ub.Y, 0))
-                .Union(new Vector3d(uc.X, uc.Y, 0));
-            boxes.Add(box);
-        }
-
-        _a = [.. a];
-        _b = [.. b];
-        _c = [.. c];
-        _pa = [.. pa];
-        _pb = [.. pb];
-        _pc = [.. pc];
-        _na = [.. na];
-        _nb = [.. nb];
-        _nc = [.. nc];
-        _bvh = Core.Spatial.Bvh.Build(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(boxes));
+        Net = net;
+        Source = source;
+        Width = width;
+        CentreLine = centreLine;
+        var box = Aabb.Empty;
+        foreach (var p in centreLine)
+            box = box.Union(p.Position);
+        Bounds = box.Expanded(width / 2);
+        var poly = new Vector3d[centreLine.Count];
+        for (int i = 0; i < centreLine.Count; i++)
+            poly[i] = centreLine[i].Position;
+        Polyline = poly;
     }
 
-    public bool TryLift(in Vector2d uv, out Vector3d point, out Vector3d normal)
-    {
-        point = Vector3d.Zero;
-        normal = Vector3d.UnitZ;
-        var probe = new Aabb(new Vector3d(uv.X, uv.Y, 0), new Vector3d(uv.X, uv.Y, 0));
-        var hits = new List<int>();
-        _bvh.Query(probe, hits);
-        foreach (int t in hits)
-        {
-            if (!Barycentric(uv, _a[t], _b[t], _c[t], out double wa, out double wb, out double wc))
-                continue;
-            point = _pa[t] * wa + _pb[t] * wb + _pc[t] * wc;
-            var n = _na[t] * wa + _nb[t] * wb + _nc[t] * wc;
-            normal = n.TryNormalize(Tolerance.Default, out var unit) ? unit : Vector3d.UnitZ;
-            return true;
-        }
-        return false;
-    }
+    public string? Net { get; }
+    public string Source { get; }
 
-    /// <summary>Barycentric coordinates of a point in a uv triangle, accepting the CLOSED triangle —
-    /// the degeneracy guard is RELATIVE (an area against the triangle's own squared extent) and the
-    /// containment band is a fraction of the area, so a point on a shared edge is claimed by one of the
-    /// two triangles that meet there, and both give the same surface point (the shared edge). The same
-    /// rule <see cref="SurfaceDecoration"/>'s inverse uses.</summary>
-    private static bool Barycentric(
-        in Vector2d p, in Vector2d a, in Vector2d b, in Vector2d c,
-        out double wa, out double wb, out double wc)
-    {
-        wa = wb = wc = 0;
-        var v0 = b - a;
-        var v1 = c - a;
-        double area = v0.Cross(v1);
-        double scale = Math.Max(v0.LengthSquared, Math.Max(v1.LengthSquared, (c - b).LengthSquared));
-        if (Math.Abs(area) <= 1e-13 * scale)
-            return false;
-        var v2 = p - a;
-        wb = v2.Cross(v1) / area;
-        wc = v0.Cross(v2) / area;
-        wa = 1 - wb - wc;
-        const double band = 1e-9;
-        return wa >= -band && wb >= -band && wc >= -band;
-    }
+    /// <summary>The copper width (land diameter for a pad, trace width for a trace).</summary>
+    public double Width { get; }
+
+    /// <summary>The centre-line of surface points (one for a pad).</summary>
+    public IReadOnlyList<SurfacePoint> CentreLine { get; }
+
+    /// <summary>The centre-line's 3D polyline (its positions).</summary>
+    public IReadOnlyList<Vector3d> Polyline { get; }
+
+    /// <summary>The 3D bounds of the copper footprint (centre-line grown by half the width).</summary>
+    public Aabb Bounds { get; }
+
+    /// <summary>A point near the middle of the footprint — a good seed for a local chart.</summary>
+    public SurfacePoint Centre => CentreLine[CentreLine.Count / 2];
 }
