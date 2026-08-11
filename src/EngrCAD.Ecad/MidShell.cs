@@ -237,6 +237,43 @@ public sealed class MidStack
         return via;
     }
 
+    /// <summary>
+    /// Places a through-shell VIA whose foot is a mesh VERTEX (corresponding across all shells, since the
+    /// shells share topology) — the surface auto-router's via, dropped where a cross-shell route transitions
+    /// between shells. It ties the outer vertex to its corresponding inner point and places a pad of
+    /// <paramref name="padDiameter"/> on each shell, exactly as <see cref="AddVia(string?, in Vector3d,
+    /// double)"/> does, so the route's per-shell traces stitch through it.
+    /// </summary>
+    internal SurfaceVia AddViaAtVertex(string? net, int vertex, double padDiameter)
+    {
+        RequirePadDiameter(padDiameter);
+        var sp = OuterVertexPoint(vertex);
+        return PlaceViaAt(net, sp, padDiameter);
+    }
+
+    /// <summary>
+    /// The via foot points a via at mesh <paramref name="vertex"/> would land on, one per shell — the
+    /// corresponding (same face + barycentric) points on each offset mesh. This is the candidate barrel the
+    /// router certifies (via-to-via) BEFORE committing, computed by the SAME <see cref="ShellPoint"/>
+    /// machinery <see cref="PlaceViaAt"/> uses, so a certified span equals the placed via's
+    /// <see cref="SurfaceVia.SpanPolyline"/>.
+    /// </summary>
+    internal Vector3d[] ViaSpanAtVertex(int vertex)
+    {
+        var sp = OuterVertexPoint(vertex);
+        var fv = _shells[0].Surface.Faces[sp.Face];
+        var span = new Vector3d[_shells.Length];
+        for (int k = 0; k < _shells.Length; k++)
+            span[k] = ShellPoint(k, fv, sp.Wa, sp.Wb, sp.Wc);
+        return span;
+    }
+
+    /// <summary>The outer shell's surface point AT a mesh vertex — its position located back onto the
+    /// surface, so the barycentric weights place it exactly on that vertex's corner. Both via helpers seed
+    /// from this so the placed via and its certified span agree.</summary>
+    private SurfacePoint OuterVertexPoint(int vertex) =>
+        _shells[0].Surface.Locate(_shells[0].Mesh.GetPosition(vertex));
+
     /// <summary>The point on shell <paramref name="shell"/> corresponding to the outer surface point with
     /// the given face vertices and barycentric weights — the SAME (face, barycentric) location on the
     /// offset mesh. Lands exactly on that shell's face by construction.</summary>

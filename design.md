@@ -8334,9 +8334,42 @@ one on the inner tied by a via is one connected net; remove the via and they spl
 same-shell clearance violation FOUND, a via too close to other-net copper on EITHER shell FOUND, a
 via-to-via web violation, a clean board clean, the single-shell bit-identity, the self-intersection
 refusal by name, the via barrel a closed solid, the endpoints corresponding (and a non-corresponding via
-refused), and determinism. **Filed**: cross-shell AUTO-ROUTING (choosing which shell a net rides and
-placing the vias — v1 routes per shell and places explicit vias), per-via partial spans of a &gt; 2 shell
-stack, a curvature-reach check for open convex caps, and a conformal shell mask / pour.
+refused), and determinism. **Filed**: per-via partial spans of a &gt; 2 shell stack, a curvature-reach
+check for open convex caps, and a conformal shell mask / pour.
+
+**Cross-shell auto-routing landed (`CrossShellRouter` in `MidCrossShellRouter.cs`, `MidRouting.Route(stack,
+…)`).** It is the surface analogue of the flat PCB router's LAYER-CHANGING via, and the design is exactly
+that idea lifted, so it reuses everything. **The search graph is the UNION of both shells' vertex graphs
+plus "via edges" tying corresponding vertices** — a node is `(shell, vertex)`; a mesh edge on shell `k`
+carries that shell's geodesic edge length; a VIA EDGE connects `(k, v)` to `(k±1, v)` at a fixed via
+PENALTY. **The via edge is trivial to enumerate precisely because the multi-shell decision kept the shells'
+mesh TOPOLOGY shared** — vertex `v` corresponds across shells — so the layer-change is one edge, not a
+matching pass. ONE A\* over this graph both routes a net between shells and CHOOSES where to change shell;
+where the chosen path uses a via edge, the router places a through-shell via at that vertex (the existing
+`AddVia` machinery, full-stack on a two-shell stack) and splits the route into per-shell traces — so a
+same-shell net gets NO via, a net with pads on two shells ONE, an obstacle hop TWO (out and back). **The
+straight-line heuristic stays admissible** because every edge costs at least the 3D chord it spans and the
+via penalty is at least the barrel chord (the derived default guarantees it). **The exact multi-shell DRC
+is the source of truth** (the flat router's own rule, lifted): a candidate route + via is committed only
+after each per-shell trace CLEARS the existing other-net copper on its shell (`Mid3dDrc.RouteCandidateClears`),
+each new via pad CLEARS other-net copper on every shell it touches (`Mid3dDrc.RouteClearanceClears`, the
+new clearance-only gate so a via pad is not measured against the trace-WIDTH rule), and the inter-shell
+via-to-via web is met — so a graph-resolution error can never ship a clearance-violating trace or via, and
+a partial result is still clean. Rip-up-and-reroute is the single-shell router's verbatim over the combined
+graph (committed traces AND vias are one rippable unit per net). **The single-shell router is untouched and
+bit-identical** — the cross-shell path is a NEW file and a NEW `Route(MidStack)` overload; the only shared
+change is extracting `RouteClearanceClears` out of `RouteCandidateClears` (behaviour-preserving). Refused by
+name: a ONE-shell stack (nothing to hop to — pointed at the single-shell `Route(stack.Outer)`) and a &gt; 2
+shell stack (needs partial-span vias, filed). **Verified to the flat router's bar** (`MidCrossShellRouteTests`):
+a cross-shell 2-pin routes with EXACTLY ONE via, both segments clean and the net connected, the via's feet
+on the outer / inner walls; a same-shell net with a clear path routes with NO via (the penalty keeps it on
+one shell); an OBSTACLE HOP (a net whose straight outer path is blocked by a full ring of other-net copper)
+routes through the inner shell with TWO vias, and the MUTATION that proves the cross-shell capability is
+what routed it is that the SAME fixture on a single shell is unroutable by name; several cross-shell nets
+route clean and connected; a pin boxed in on BOTH shells is unroutable by name with the rest routed and
+clean; the one-shell / &gt; 2 shell refusals; and two runs deterministic vertex for vertex. **Filed**:
+TOPOLOGICAL / SHOVE routing (v1 detours around obstacles but does not push them), OPTIMAL via minimisation
+(v1 uses a fixed via penalty), partial-span vias for a &gt; 2 shell stack, and length matching.
 
 ### Not in stages 1–9
 
@@ -8347,10 +8380,11 @@ heat capacity), detailed die/package thermal models (v1 spreads a component's po
 footprint, not through a junction-to-case network), airflow/CFD cooling, snap-fit/screw-boss detailing,
 and tolerance stack-up are later stages over this one graph; each reads the
 netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. MID/LDS 3D surface routing
-has landed as stage 9 (see above), its surface AUTO-router and its MULTI-SHELL form (`MidStack`, an inner
-moulded copper layer stitched by through-shell vias) with it; its own filed follow-ons are topological /
-shove routing on the surface, cross-shell auto-routing, length matching and a conformal surface
-mask/pour. The richer interchange
+has landed as stage 9 (see above), its surface AUTO-router, its MULTI-SHELL form (`MidStack`, an inner
+moulded copper layer stitched by through-shell vias) and its CROSS-SHELL auto-router (choosing which shell
+a net rides and placing the vias) with it; its own filed follow-ons are topological / shove routing on the
+surface, optimal via minimisation, partial-span vias for a &gt; 2 shell stack, length matching and a
+conformal surface mask/pour. The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. The drawn schematic SHEET has
 landed (see above) as a VIEW of the graph; a good auto-placer and an obstacle-avoiding wire
 router are the open follow-ons there, plus hierarchical sheets, buses, off-page connectors and
