@@ -234,6 +234,7 @@ document.addEventListener('click', function (event) {
             { label: 'Copper design-rule check', slug: 'examples/ecad-drc' },
             { label: 'Autorouting', slug: 'examples/ecad-routing' },
             { label: 'Gerber & Excellon fabrication export', slug: 'examples/ecad-fabrication' },
+            { label: 'Fabrication drawing (drill map + notes)', slug: 'examples/ecad-fab-drawing' },
             { label: 'Enclosure fit', slug: 'examples/ecad-enclosure' },
             { label: 'Board thermal coupling', slug: 'examples/ecad-thermal' },
             { label: 'MID / LDS — routing on a moulded surface', slug: 'examples/ecad-mid' },

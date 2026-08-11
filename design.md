@@ -7781,6 +7781,51 @@ reader refuses an unknown record code / units / a `317` with no drill / a `327` 
 layer access encoding for buried vias, and conductor (trace-midpoint, op `378`) records. Docs:
 `examples/ecad-fabrication.md`.
 
+### The fabrication drawing (the shared frame's third consumer) (`PcbFabricationSheet`)
+
+The Gerbers and the Excellon program are what a board house *machines* from; the **fabrication
+drawing** is what a board house *reads* beside them. `PcbFabricationSheet` → `PcbFabricationDrawing`
+(`PcbFabricationDrawing.cs`) is a drawing SHEET for a `PcbLayout`: the board OUTLINE at a fitted scale,
+a **drill map** (a symbol at every drilled feature), a **drill table** grouping the board's holes and
+vias by size, a **layer stackup** table, and a **fabrication notes** block — on the SHARED
+`DrawingFrame` (§6c). It is that frame's **third consumer** after the mechanical `DrawingSheet` and the
+ECAD `SchematicSheet`, and the decision that makes it one is that a fab drawing IS an engineering
+drawing: it uses the SAME three-band `EngineeringTitleBlock` on the SAME `SheetLayers`, so
+`sheet.Frame().Compute()` given the same paper and title-block fields is **byte-identical to a
+mechanical `DrawingSheet`'s frame** (asserted directly — the payoff of one shared frame, that a
+drawing and its fab drawing of one board cannot draw different furniture). `Compute()` feeds the
+**SVG / DXF / PDF** writers from one set of primitives (the one-`Compute` rule), so the three cannot
+disagree.
+
+**It reads the board; it never edits it** — the outline, holes, placed vias and stackup all come from
+the layout's own public read surface, so the drawing cannot disagree with the board it documents (the
+one-declaration rule, applied to a drawing).
+
+**The drill table is a closed-form PARTITION, and stating it that way is most of the design.** Its
+rows group the board's holes and vias by an exact `(diameter, plated)` key — a mounting hole is NPTH,
+a board via and every placed via are PTH, and the diameter is the board's own value carried verbatim,
+so **exact equality IS the right partition** (a data-derived value, not a computed one; the
+exact-semantic rung of the epsilon ladder). So `Σ row.Count` equals the number of drilled features,
+each row's count equals the number of features of that size and plating, and **adding a board hole
+adds exactly one to its row** — the oracle, with the mutation that proves it bites, where "a picture
+looks right" would prove nothing. Sizes sort ascending (then NPTH before PTH), so the symbol
+assignment is a **deterministic function of the board**: each distinct size gets a distinct
+`Index`/`Symbol` and a `DrillGlyph` from a small palette. The **drill map** places one `DrillMark` per
+feature at its own location — `mark.SheetLocation == drawing.Project(mark.BoardLocation)`, the SAME
+board→sheet transform the outline is drawn by — so the map cannot omit a hole nor invent one, asserted
+as an identity rather than eyeballed. The **stackup table** lists the physical `LayerStackup.Layers`
+(copper + dielectric); a copper-only board carries no physical stackup, so its table is empty and a
+note states the copper count instead. The **notes** are write-only-when-stated: finished thickness,
+copper-layer count, copper foil thickness (only when a stackup gives one), the drill summary, and any
+mask/silk/paste the layout declares — a value the board does not carry (material, surface finish, mask
+colour) is **omitted, not invented**, since `PcbBoard` states none of them.
+
+**v1 scope**, each filed as a follow-up: the drill table is the board's own holes + placed vias
+(component through-hole pad drills belong to the Excellon program the fab derives, folded in later);
+the drill glyphs cycle a hand-rolled palette (a canonical IPC symbol set with a legend is filed); no
+per-layer copper/mask/silk plots yet; a `PcbBoard`-level fabrication spec (material/finish/class/
+colour) is what a full notes block wants. Docs: `examples/ecad-fab-drawing.md`.
+
 ### Copper pours — ground / power planes (`CopperPour`, `CopperPourBuilder`)
 
 A copper pour floods a layer on one net. It is **layout truth** (`layout.AddPour`), it round-trips in
