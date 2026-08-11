@@ -2586,7 +2586,8 @@ from what was already understood rather than from scratch.
     routing costs a candidate route with. Verified from both sides of every limit against the
     closed-form gap, scale-invariant, deterministic; the placed stage-2 fixture is DRC-clean
     with an unrouted ratsnest. See CLAUDE.md's ECAD status paragraph and design.md §6d for the
-    findings. The OPEN stages below (MID/LDS, interchange) are next (enclosure fit landed —
+    findings. The OPEN stage below (interchange) is next; MID/LDS 3D surface routing landed as stage 9
+    (see below). Enclosure fit landed —
     stage 7; thermal coupling landed — stage 8: `PcbThermal.Solve` couples per-component power
     into the landed FEA thermal solver over an effective copper-smeared slab conductivity,
     verified against the analytic conduction parabola (3.16e-12 relative), the series-resistance
@@ -2692,30 +2693,27 @@ from what was already understood rather than from scratch.
     thermal-relief-aware DRC exemption, would let the default rule pass); and a CONFORMAL pour on a
     doubly-curved MID wall (refused for the tamper-mesh reason — `MeshLocalParam`'s 2–5% distortion
     would land in the clearance).
-  - **3D component placement for MID/LDS — the novel capability, and it fits because the
-    kernel ALREADY routes conductors on a moulded surface.** Moulded Interconnect Devices /
-    Laser Direct Structuring put conductive traces directly on a 3D moulded plastic part,
-    so the "board" is a doubly-curved surface rather than a plate. The two pieces this needs
-    both exist: the tamper mesh lays an exact conductive serpentine on a surface, and the
-    space-filling SURFACE-DECORATION consumer lays a curve on a doubly-curved surface via
-    `MeshLocalParam`'s discrete exp map — which carries a STATED distortion (exact on planes,
-    ≤2% on a developable tube, ≤5% radially on a 35° sphere cap) that a trace's width and
-    clearance inherit and that MUST be reported, never averaged away, because on a MID part
-    the clearance guarantee is only as good as the parameterization. So MID routing is
-    2D routing in the surface's exp-map parameter space, lifted onto the moulded body, with
-    the distortion reported per trace; a 3D component (an LGA, a connector) is seated on the
-    surface by its `HardwareComponent` seating convention transported into the local frame.
-    The trace's exported form is a thin conductive `Shape` on the surface (extrude along the
-    surface normal), so it round-trips through STL/STEP and renders like any other part.
-  - **3D DRC** is the 2D rules run in the surface's exp-map parameters with the distortion
-    folded into the clearance: a trace-to-trace clearance on a MID part is the geodesic
-    distance on the surface, which the exp map approximates to its stated bound, so the DRC
-    reports its own uncertainty band rather than a false-precise pass/fail near the tolerance
-    — the honest failure mode is a conservative refusal in the band where the
-    parameterization cannot certify the clearance, exactly the tamper mesh's near-tangency
-    rule. Verified against a developable surface (a cylinder, where the exp map is EXACT and
-    the 3D DRC must agree with the unrolled 2D DRC bit for bit) before any doubly-curved
-    part.
+  - **MID / LDS 3D surface routing — LANDED (stage 9)** (`MidBoard`/`SurfaceTrace`/`MidRouting`/
+    `Mid3dDrc` in `EngrCAD.Ecad`; docs `examples/ecad-mid.md`, design.md §6d stage 9, README,
+    CLAUDE.md ECAD status): routing conductors and seating components on a MOULDED, doubly-curved
+    surface, entirely in the exp map's (u, v) parameter space, with the map's distortion FOLDED into
+    the clearance (a three-valued Clear/Violation/Uncertain DRC, refusing the band it cannot certify).
+    The decisive oracle held: a cylindrical MID board's 3D DRC verdicts and measured (u, v)
+    separations equal the unrolled flat 2D DRC's BIT FOR BIT (cylinder exp-map distortion 1.2e-3);
+    on a sphere cap (distortion ~11%) a pair passing flat is refused where the surface shrinks it. A
+    trace's lifted endpoint lands exactly on its pad; the conductor exports as a closed solid; a
+    `HardwareComponent` seats in the surface tangent frame. Findings baked into CLAUDE.md/design.md:
+    the reported separation must bisect to a BAND-INDEPENDENT cap (or a developable board's clearance
+    drifts from its unrolling by the last bits); the map radius is REQUIRED (a footgun default wraps a
+    closed surface's exp map onto itself — whole-tube `MaxDistortion` 22.5) and is a GRAPH distance
+    that over-estimates the straight-line one; a trace width is checked against the AUTHORED width
+    folded through the scale band, not re-measured (an opposing-wall measure under-reports on a round
+    cap, a 0.25 stadium reading 0.147). **Filed follow-ons**: surface AUTO-routing (a geodesic maze
+    search — the flat grid router does not lift to the distorted metric), MULTI-SHELL MID (traces on
+    an inner moulded copper layer as well as the outer), a conformal surface SOLDER MASK / POUR
+    (refused for the distortion reason copper pours already refuse curved walls), a copper-to-map-
+    boundary DRC rule, and PER-REGION (rather than per-feature) distortion bands for a tighter
+    Uncertain verdict.
   - **ECAD thermal coupling — the genuinely novel MCAD answer, the next stage over the
     enclosure fit that just landed.** Enclosure fit is DONE (`Enclosure`/`EnclosureFit`/
     `PanelCutout`/`FitReport` in `PcbEnclosure.cs`; docs `examples/ecad-enclosure.md`, design.md §6d
