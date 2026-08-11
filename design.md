@@ -7447,10 +7447,53 @@ an aperture macro. **Not in v1** (each filed): solder-mask / silkscreen / paste 
 carries no mask/silk model yet), Gerber X2 attributes and the job file, and a Gerber IMPORT of a
 foreign board (this is export). Docs: `examples/ecad-fabrication.md`.
 
-### Not in stages 1–6
+### Stage 7 — enclosure fit (the MCAD/ECAD boundary) (`PcbEnclosure`)
 
-Panel cutouts and enclosure fit,
-thermal coupling, and MID/LDS 3D routing are later stages over this one graph; each reads the
+Does the placed board go in the box? An `Enclosure` is a housing built from the ordinary `Shape`
+API — a shelled box with the panel cutouts drilled, deliberately NOT a new solid type — carrying a
+rectangular interior cavity, a wall/floor thickness, a board seating height (the standoffs), a lid
+at a stated height (the headroom ceiling), named panel cutouts and interior keep-out volumes.
+`EnclosureFit.Check(enclosure, layout)` returns a `FitReport` naming, locating and measuring every
+problem (the `DrcViolation`/`PcbLayoutCheck` house style — a report that only said "does not fit"
+would be useless).
+
+**It reuses the LANDED clash machinery rather than a new one** — the entry's own framing, that
+"enclosure fit is `Bvh.QueryOverlap` + `MeshIntersection.Crosses` + the mechanism sweep's clash
+reporting, already landed and already knowing a SEATED part is not a clash." Every body is pulled
+into the enclosure's interior frame and tested with an instance-bounds broad phase then the
+transversal `MeshIntersection.Crosses` narrow phase, so **a part resting flush on the lid or seated
+on its standoffs is not a clash** (the meshes touch — a coplanar top face, a one-sided side
+contact — but do not interpenetrate, which `Crosses` reads as `Transversal = false`). The one place
+that rule is exercised at the boundary — a part whose top is exactly the lid underside — reads
+headroom exactly 0 and no collision.
+
+**Where the geometry is a plane or a rectangle the number is closed-form, not meshed**, because
+that is the exact tool: the board outline against the four cavity walls (each too-large wall NAMED
+with its overhang), and a part's top against the lid (the clearance deficit is `top − lidZ`, exact
+for a box body, and always reported as the scalar `Headroom`). The mesh clash is used where the tool
+is right — a component body against an arbitrary wall/floor, and a keep-out (surface crossing OR
+full containment via a winding-number test, since a small part wholly inside a keep-out crosses no
+surface). Panel connectors are EXCLUDED from the wall clash — passing through a wall is what they
+are for — and checked instead against the cutout whose `For` names them: the body must reach the
+wall AND its cross-section fit through the opening, or it is named (the centre offset, the reach
+deficit).
+
+**One declaration, one geometry.** `Enclosure.SeatFrame()` is where the board mounts; passing it as
+the layout's `boardFrame` seats the board in the cavity, so the fit check reads one geometry rather
+than two hand-kept poses — and because the fit pulls every body back through `Enclosure.Frame`, the
+enclosure's own placement and the board's need not be the same and nothing is assumed about where
+either sits. `Enclosure.SmallestFor(layout, clearance, standoff, headroom, wall)` sizes AND places
+the smallest box the layout fits in place — a starting point to refine, not an enclosure generator
+(this is a fit-check stage). Refused by name at construction: a seat outside the cavity, a lid below
+the seat, non-positive dimensions, a non-positive cutout. Round panel cutouts are checked against
+their bounding box in v1 (exact round-hole corner fit is filed). Docs: `examples/ecad-enclosure.md`.
+
+### Not in stages 1–7
+
+Thermal coupling (per-component power as a Generation load into the thermal solver, verified against
+a uniformly-dissipating board's analytic temperature rise — its own stage, since it wants that
+analytic oracle rather than a geometric one), airflow/CFD cooling, snap-fit/screw-boss detailing,
+tolerance stack-up, and MID/LDS 3D routing are later stages over this one graph; each reads the
 netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. The drawn schematic SHEET has
 landed (see above) as a VIEW of the graph; a good auto-placer and an obstacle-avoiding wire
