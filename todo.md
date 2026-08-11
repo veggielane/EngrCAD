@@ -2673,14 +2673,18 @@ from what was already understood rather than from scratch.
     count overflowed the field and decoded a 1e-3-scale board 10^5 too large — a format bug the
     area oracle caught as a 10-orders-of-magnitude miss). A Bézier copper boundary is refused by
     name; the reader refuses a truncated file / missing spec / aperture macro by name.
-  - **Fabrication follow-ups (filed):** SOLDER-MASK / SILKSCREEN / PASTE-STENCIL layers need a
-    mask/silk/paste MODEL the board does not carry yet (mask = the copper grown by a stated dam
-    less the openings; silk = a text/graphic layer; paste = the SMD pad set) — each a new layer
-    the same `GerberWriter` emits once the model exists. GERBER X2 attributes (`%TF`/`%TA`/`%TO`)
+  - **Fabrication follow-ups (filed; SOLDER MASK + SILKSCREEN have LANDED — see CLAUDE.md's ECAD
+    status, design.md §6d stage 6, `examples/ecad-fabrication.md`):** the PASTE / STENCIL layer
+    (the SMD pad set) is the one remaining derived layer the same `GerberWriter` emits once its
+    model exists; FINE MASK TENTING control beyond the tented/opened via policy (per-via tenting, a
+    mask dam width); and a LOWERCASE silk font (v1's `SilkFont` covers uppercase + digits +
+    punctuation, so a value's lowercase advances as a blank). GERBER X2 attributes (`%TF`/`%TA`/`%TO`)
     and the JOB FILE (`.gbrjob`) carry per-object net/component metadata a modern fab reads. A
     Gerber IMPORT of a foreign board is a different project (this is EXPORT; the reader is the
     round-trip oracle scoped to what the writer emits). Topological / shove / push routing, length
-    matching and differential pairs are later routing stages over the same grid.
+    matching and differential pairs are later routing stages over the same grid. A CONFORMAL
+    mask/silk on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
+    MID/surface side's territory).
   - **Copper-pour follow-ups (filed, the pour itself has LANDED — see CLAUDE.md's ECAD status,
     design.md §6d, `examples/ecad-pcb.md`):** POUR PRIORITY / ordering when several pours overlap
     (v1 fills each pour against the base copper, not other pours, so two overlapping same-layer

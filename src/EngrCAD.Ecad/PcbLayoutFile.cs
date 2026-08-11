@@ -129,7 +129,59 @@ internal static class PcbLayoutWriter
             root["pours"] = pours;
         }
 
+        // Solder-mask / silkscreen settings are LAYOUT TRUTH like a pour — write ONLY when the caller
+        // set them (non-null), and within, write only non-default fields, so a layout that states none
+        // saves byte-identically to a pre-fabrication one and a set one is a save->load->save fixed point.
+        if (layout.MaskSettings is { } mask)
+            root["mask"] = SaveMask(mask);
+        if (layout.SilkscreenSettings is { } silk)
+            root["silk"] = SaveSilk(silk);
+
         return root;
+    }
+
+    private static JsonObject SaveMask(PcbMaskSettings mask)
+    {
+        var def = PcbMaskSettings.Default;
+        var record = new JsonObject();
+        if (mask.Expansion != def.Expansion)
+            record["expansion"] = mask.Expansion;
+        if (mask.Vias != def.Vias)
+            record["vias"] = mask.Vias.ToString();
+        return record;
+    }
+
+    private static JsonObject SaveSilk(PcbSilkscreenSettings silk)
+    {
+        var def = PcbSilkscreenSettings.Default;
+        var record = new JsonObject();
+        if (silk.TextHeight != def.TextHeight)
+            record["textHeight"] = silk.TextHeight;
+        if (silk.LineWidth != def.LineWidth)
+            record["lineWidth"] = silk.LineWidth;
+        if (silk.CourtyardMargin != def.CourtyardMargin)
+            record["courtyardMargin"] = silk.CourtyardMargin;
+        if (silk.ShowReferences != def.ShowReferences)
+            record["showReferences"] = silk.ShowReferences;
+        if (silk.ShowValues != def.ShowValues)
+            record["showValues"] = silk.ShowValues;
+        if (silk.ShowCourtyards != def.ShowCourtyards)
+            record["showCourtyards"] = silk.ShowCourtyards;
+        if (silk.BoardMarks.Count > 0)
+        {
+            var marks = new JsonArray();
+            foreach (var m in silk.BoardMarks)
+            {
+                var mr = new JsonObject { ["text"] = m.Text, ["x"] = m.Position.X, ["y"] = m.Position.Y };
+                if (m.Side != CopperSide.Top)
+                    mr["side"] = m.Side.ToString();
+                if (m.Height is { } h)
+                    mr["height"] = h;
+                marks.Add(mr);
+            }
+            record["marks"] = marks;
+        }
+        return record;
     }
 
     private static JsonObject SavePour(CopperPour pour)
@@ -321,7 +373,59 @@ internal static class PcbLayoutReader
             foreach (var node in poursArray)
                 layout.AddLoadedPour(ReadPour(EcadJson.Object(node, "a pour")));
 
+        if (root.TryGetPropertyValue("mask", out var maskNode) && maskNode is JsonObject maskObj)
+            layout.SetLoadedMaskSettings(ReadMask(maskObj));
+        if (root.TryGetPropertyValue("silk", out var silkNode) && silkNode is JsonObject silkObj)
+            layout.SetLoadedSilkscreenSettings(ReadSilk(silkObj));
+
         return layout;
+    }
+
+    private static PcbMaskSettings ReadMask(JsonObject r)
+    {
+        var def = PcbMaskSettings.Default;
+        var vias = r.TryGetPropertyValue("vias", out var viasNode)
+            ? EcadJson.Enum<ViaMaskPolicy>(viasNode?.GetValue<string>(), "a via mask policy")
+            : def.Vias;
+        return def with
+        {
+            Expansion = r["expansion"]?.GetValue<double>() ?? def.Expansion,
+            Vias = vias,
+        };
+    }
+
+    private static PcbSilkscreenSettings ReadSilk(JsonObject r)
+    {
+        var def = PcbSilkscreenSettings.Default;
+
+        IReadOnlyList<SilkMark>? marks = null;
+        if (r.TryGetPropertyValue("marks", out var marksNode) && marksNode is JsonArray marksArray)
+        {
+            var list = new List<SilkMark>();
+            foreach (var node in marksArray)
+            {
+                var m = EcadJson.Object(node, "a silk mark");
+                var side = m.TryGetPropertyValue("side", out var sideNode)
+                    ? EcadJson.Enum<CopperSide>(sideNode?.GetValue<string>(), "a silk mark side")
+                    : CopperSide.Top;
+                double? height = m["height"]?.GetValue<double>();
+                list.Add(new SilkMark(
+                    EcadJson.String(m, "text"),
+                    new Vector2d(EcadJson.Double(m, "x"), EcadJson.Double(m, "y")), side, height));
+            }
+            marks = list;
+        }
+
+        return def with
+        {
+            TextHeight = r["textHeight"]?.GetValue<double>() ?? def.TextHeight,
+            LineWidth = r["lineWidth"]?.GetValue<double>() ?? def.LineWidth,
+            CourtyardMargin = r["courtyardMargin"]?.GetValue<double>() ?? def.CourtyardMargin,
+            ShowReferences = r["showReferences"]?.GetValue<bool>() ?? def.ShowReferences,
+            ShowValues = r["showValues"]?.GetValue<bool>() ?? def.ShowValues,
+            ShowCourtyards = r["showCourtyards"]?.GetValue<bool>() ?? def.ShowCourtyards,
+            Marks = marks,
+        };
     }
 
     private static CopperPour ReadPour(JsonObject record)

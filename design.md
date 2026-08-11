@@ -7476,9 +7476,39 @@ placement rotation never has to be threaded through, and correctness never depen
 (an unrecognised feature region-fills, exact for any shape). Refused BY NAME: a Bézier copper
 boundary (RS-274X region contours carry only lines and circular arcs), and — in the reader, the
 round-trip oracle scoped to what the writer emits — a truncated file, a missing format/unit spec, or
-an aperture macro. **Not in v1** (each filed): solder-mask / silkscreen / paste layers (the board
-carries no mask/silk model yet), Gerber X2 attributes and the job file, and a Gerber IMPORT of a
-foreign board (this is export). Docs: `examples/ecad-fabrication.md`.
+an aperture macro.
+
+**Solder mask and silkscreen complete the manufacturable set** (`PcbMask`/`PcbMaskSettings`,
+`PcbSilkscreen`/`PcbSilkscreenSettings`/`SilkFont`; both emitted through the SAME `GerberWriter` and
+verified by the SAME twin-decoder oracle). The mask covers the whole board EXCEPT a window over each
+solderable pad, and **the window is EXACT — the pad grown by a stated EXPANSION** (`CurvedRegion2dOffset`,
+round joins): a round pad's window is a disc of radius `r + e`, so its area is `π(r+e)²` to ~1e-12
+relative (the offset of a disc is an exact disc, not the region grade), and a rectangular pad's is a
+rounded rectangle. **Which features get a window is read from the copper model's own tags** rather than
+re-decided — a trace and a pour stay covered, a via is tented or opened by policy — so the mask cannot
+disagree with the copper about what a pad is, and a through-hole pad (on every layer) gets a window on
+both outer faces. **The Gerber convention is the standard positive-openings form** (as KiCad/Eagle):
+the mask images the WINDOWS as dark, so a decoded mask Gerber recovers the openings, not the coverage —
+which is what makes the round-trip oracle the same one the copper uses. **Silk is line-work** because a
+Gerber has no text primitive: a reference designator (and optionally a value) is drawn in a single-stroke
+vector font (`SilkFont`, transcribed from the viewer's stroke font since the ECAD side cannot reference
+the viewer) and a body/courtyard outline from the pads' bounding box, all drawn with a round aperture
+EXACTLY as a trace draws, so silk strokes back through the reader too. **Silk on a solderable pad is a
+real defect**, so `PcbSilkscreen.OverExposedCopper(mask)` intersects the silk footprint (stroked to its
+pen width) with the mask windows and reports every overlap BY NAME (the silk element and the pad) — a
+check the caller runs, like the DRC, not a throw. **The mask/silk are ADDITIVE**: derived from the
+copper model and the placements without touching the copper path, so the copper Gerbers, outline and
+drill are byte-identical whether or not they are present (asserted); their settings ride on the layout
+as LAYOUT TRUTH (`PcbLayout.MaskSettings`/`SilkscreenSettings`, write-only-when-stated, a save→load→save
+fixed point, a layout that states none byte-identical to a pre-fabrication one). Refused BY NAME: a
+mask/silk on a non-outer layer, a mask window entirely off the board (a pad placed off it), and a
+negative mask expansion (a mask-defined pad).
+
+**Not in v1** (each filed): paste/stencil layers (the SMD pad set), fine mask tenting control beyond
+the tented/opened via policy, curved conformal mask/silk on a MID surface (refused for the tamper-mesh
+distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber X2
+attributes and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
+`examples/ecad-fabrication.md`.
 
 ### Copper pours — ground / power planes (`CopperPour`, `CopperPourBuilder`)
 

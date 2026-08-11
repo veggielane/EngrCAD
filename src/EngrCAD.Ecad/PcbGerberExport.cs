@@ -20,36 +20,48 @@ public readonly record struct GerberLayerFile(string Layer, string Gerber);
 /// <param name="Drill">The Excellon NC-drill program (all holes).</param>
 /// <param name="DrillHitCount">How many holes the drill program carries.</param>
 /// <param name="Format">The shared coordinate format.</param>
+/// <param name="MaskLayers">One solder-mask Gerber per outer copper side (top, bottom) — the pad
+/// windows imaged dark; additive, so the copper Gerbers are byte-identical whether or not the mask is
+/// present.</param>
+/// <param name="SilkLayers">One silkscreen Gerber per outer copper side (top, bottom) — reference /
+/// value / outline line-work; empty on the raw-copper-model path (silk needs placements).</param>
 public sealed record FabricationOutput(
     string Name,
     IReadOnlyList<GerberLayerFile> CopperLayers,
     string OutlineGerber,
     string Drill,
     int DrillHitCount,
-    GerberFormat Format);
+    GerberFormat Format,
+    IReadOnlyList<GerberLayerFile> MaskLayers,
+    IReadOnlyList<GerberLayerFile> SilkLayers);
 
 /// <summary>What <see cref="PcbGerberExport.Write"/> wrote to disk.</summary>
 /// <param name="Directory">The directory the files were written to.</param>
 /// <param name="Files">The full paths written, in order (copper Gerbers, outline, drill).</param>
 /// <param name="CopperLayerCount">How many copper-layer Gerbers were written.</param>
 /// <param name="DrillHitCount">How many holes the drill program carries.</param>
+/// <param name="MaskLayerCount">How many solder-mask Gerbers were written.</param>
+/// <param name="SilkLayerCount">How many silkscreen Gerbers were written.</param>
 public sealed record GerberExportResult(
     string Directory,
     IReadOnlyList<string> Files,
     int CopperLayerCount,
-    int DrillHitCount)
+    int DrillHitCount,
+    int MaskLayerCount = 0,
+    int SilkLayerCount = 0)
 {
     /// <summary>A human-readable summary.</summary>
     public override string ToString() =>
-        $"wrote {CopperLayerCount} copper Gerber(s) + outline + {DrillHitCount} drill hits "
-        + $"({Files.Count} files) to {Directory}";
+        $"wrote {CopperLayerCount} copper + {MaskLayerCount} mask + {SilkLayerCount} silk Gerber(s) "
+        + $"+ outline + {DrillHitCount} drill hits ({Files.Count} files) to {Directory}";
 }
 
 /// <summary>
 /// Gerber (RS-274X) + Excellon fabrication export — the fab output that makes a routed board
 /// manufacturable, the immediate follow-on to the autorouter. It reads a routed <see cref="PcbLayout"/>
-/// (or a raw <see cref="PcbCopperModel"/>) and produces one copper Gerber per layer, a board-outline
-/// Gerber, and an Excellon drill program.
+/// (or a raw <see cref="PcbCopperModel"/>) and produces the full fabrication set: one copper Gerber per
+/// layer, a solder-mask and a silkscreen Gerber per outer side, a board-outline Gerber, and an Excellon
+/// drill program.
 ///
 /// <para><b>The oracle is the twin-decoder round trip</b> (the repo's rule — the geometry must survive
 /// the round trip, not merely a structural validator pass): the copper written can be
@@ -57,10 +69,17 @@ public sealed record GerberExportResult(
 /// each layer to the region-area grade, and the <see cref="ExcellonReader">decoded drill hits</see>
 /// equal the board's holes exactly. See the ECAD fabrication tests.</para>
 ///
-/// <para><b>What it does not do (each filed):</b> solder-mask, silkscreen and paste/stencil layers
-/// (the board carries no mask/silk model yet), Gerber X2 attributes and the job file, and a Gerber
-/// IMPORT of a foreign board (this is EXPORT — the reader is the round-trip oracle scoped to what the
-/// writer emits). Plated and non-plated holes are not split (the copper model does not distinguish
+/// <para><b>The solder mask and silkscreen are ADDITIVE</b> — they are derived from the copper model
+/// (mask windows from the pads via <see cref="PcbMask"/>) and the placements (silk text / outlines via
+/// <see cref="PcbSilkscreen"/>) without touching the copper path, so the copper Gerbers, outline and
+/// drill are byte-identical whether or not the mask/silk are requested. Their settings ride on the
+/// layout as LAYOUT TRUTH (<see cref="PcbLayout.MaskSettings"/> / <see cref="PcbLayout.SilkscreenSettings"/>,
+/// write-only-when-stated).</para>
+///
+/// <para><b>What it does not do (each filed):</b> paste/stencil layers (the SMD pad set), fine mask
+/// tenting control beyond the tented/opened via policy, Gerber X2 attributes and the job file, and a
+/// Gerber IMPORT of a foreign board (this is EXPORT — the reader is the round-trip oracle scoped to what
+/// the writer emits). Plated and non-plated holes are not split (the copper model does not distinguish
 /// them at the drill), so all holes ride in one drill program.</para>
 /// </summary>
 public static class PcbGerberExport
@@ -90,7 +109,9 @@ public static class PcbGerberExport
                 name2, GerberWriter.CopperLayer(name2, features, vias, traces, LayerHoles(model, name2), format)));
         }
 
-        return Build(design, model, layers, format);
+        var mask = PcbMask.For(model, layout.MaskSettings);
+        var silk = PcbSilkscreen.For(layout, layout.SilkscreenSettings);
+        return Build(design, model, layers, format, MaskGerbers(mask, format), SilkGerbers(silk, format));
     }
 
     /// <summary>Generates the fabrication set (as text) for a raw copper model — every copper feature
@@ -113,16 +134,44 @@ public static class PcbGerberExport
                 name2, GerberWriter.CopperLayer(name2, features, vias, [], LayerHoles(model, name2), format)));
         }
 
-        return Build(design, model, layers, format);
+        // The raw-model path has no placements, so no silk (an empty, well-formed Gerber per side); the
+        // mask is well-defined over the model's pad features and derived with the default settings.
+        var mask = PcbMask.For(model);
+        return Build(design, model, layers, format, MaskGerbers(mask, format), EmptySilk(model, format));
     }
 
     private static FabricationOutput Build(
-        string design, PcbCopperModel model, IReadOnlyList<GerberLayerFile> layers, GerberFormat format)
+        string design, PcbCopperModel model, IReadOnlyList<GerberLayerFile> layers, GerberFormat format,
+        IReadOnlyList<GerberLayerFile> maskLayers, IReadOnlyList<GerberLayerFile> silkLayers)
     {
         var outline = GerberWriter.Outline(model.Board.OutlinePoints, format);
         var hits = model.Drills.Select(d => new DrillHit(d.Center, d.Diameter)).ToList();
         var drill = ExcellonWriter.Write(hits, format);
-        return new FabricationOutput(design, layers, outline, drill, hits.Count, format);
+        return new FabricationOutput(
+            design, layers, outline, drill, hits.Count, format, maskLayers, silkLayers);
+    }
+
+    /// <summary>One solder-mask Gerber per side (the pad windows imaged dark).</summary>
+    private static IReadOnlyList<GerberLayerFile> MaskGerbers(PcbMask mask, GerberFormat format) =>
+        [.. mask.Layers.Select(m => new GerberLayerFile(
+            m.Layer, GerberWriter.MaskLayer(m.Layer, m.Openings.Select(o => o.Region), format)))];
+
+    /// <summary>One silkscreen Gerber per side (reference / value / outline line-work).</summary>
+    private static IReadOnlyList<GerberLayerFile> SilkGerbers(PcbSilkscreen silk, GerberFormat format) =>
+        [.. silk.Layers.Select(s => new GerberLayerFile(
+            s.Layer, GerberWriter.Silkscreen(s.Layer, s.Strokes.Select(st => st.Points), s.LineWidth, format)))];
+
+    /// <summary>A well-formed empty silkscreen Gerber per side (the raw-model path, which has no
+    /// placements to draw).</summary>
+    private static IReadOnlyList<GerberLayerFile> EmptySilk(PcbCopperModel model, GerberFormat format)
+    {
+        double pen = PcbSilkscreenSettings.Default.LineWidth;
+        string top = model.Board.Stackup.Top.Name, bottom = model.Board.Stackup.Bottom.Name;
+        return
+        [
+            new GerberLayerFile(top, GerberWriter.Silkscreen(top, [], pen, format)),
+            new GerberLayerFile(bottom, GerberWriter.Silkscreen(bottom, [], pen, format)),
+        ];
     }
 
     /// <summary>Writes the fabrication set for a routed layout to files under <paramref name="directory"/>
@@ -148,6 +197,18 @@ public static class PcbGerberExport
             File.WriteAllText(path, layer.Gerber);
             files.Add(path);
         }
+        foreach (var layer in output.MaskLayers)
+        {
+            string path = Path.Combine(directory, $"{output.Name}-{Sanitize(layer.Layer)}_Mask.gbr");
+            File.WriteAllText(path, layer.Gerber);
+            files.Add(path);
+        }
+        foreach (var layer in output.SilkLayers)
+        {
+            string path = Path.Combine(directory, $"{output.Name}-{Sanitize(layer.Layer)}_Silkscreen.gbr");
+            File.WriteAllText(path, layer.Gerber);
+            files.Add(path);
+        }
         string outlinePath = Path.Combine(directory, $"{output.Name}-Edge_Cuts.gbr");
         File.WriteAllText(outlinePath, output.OutlineGerber);
         files.Add(outlinePath);
@@ -156,7 +217,9 @@ public static class PcbGerberExport
         File.WriteAllText(drillPath, output.Drill);
         files.Add(drillPath);
 
-        return new GerberExportResult(directory, files, output.CopperLayers.Count, output.DrillHitCount);
+        return new GerberExportResult(
+            directory, files, output.CopperLayers.Count, output.DrillHitCount,
+            output.MaskLayers.Count, output.SilkLayers.Count);
     }
 
     /// <summary>The TRUE AIR of a layer's final copper UNION — the pockets the Gerber must CLEAR
