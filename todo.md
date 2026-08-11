@@ -1530,7 +1530,12 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     through-hole component pad drills, the SMD-vs-THT distinction read the paste layer's way).
     Residuals: **(a) per-layer fabrication plots** — a copper/mask/silk plot per layer beside the
     drill map (a picture per Gerber), which wants the copper-model geometry the Gerber
-    exporter already builds rendered as sheet line work. **(d) fab-spec stack-up catalogues** — the `PcbFabricationSpec` states material / mask & silk colour as FREE strings; a per-fabricator CATALOGUE (the `StandardHoles` / `SheetMaterials` verify-against-datasheet pattern) would let a caller pick a house stack-up rather than typing them. (A `KiCadPcbReader` import now POPULATES the spec from the board-setup / stackup, best-effort and write-only-when-stated; and `DrcRuleSet.ForIpcClass(1|2|3)` + `DrcRuleSet.CheckSpec(spec)` now make the STATED class DRIVE the DRC and cross-check the spec's own `MinTraceWidthMm` / `MinClearanceMm` against it.)
+    exporter already builds rendered as sheet line work. (The `PcbFabricationSpec` catalogue —
+    a per-fabricator house-spec preset set, the `StandardHoles` / `SheetMaterials`
+    verify-against-datasheet pattern — LANDED as `StandardFabSpecs`; a `KiCadPcbReader` import
+    POPULATES the spec from the board-setup / stackup; and `DrcRuleSet.ForIpcClass(1|2|3)` +
+    `DrcRuleSet.CheckSpec(spec)` make the STATED class DRIVE the DRC and cross-check the spec's own
+    `MinTraceWidthMm` / `MinClearanceMm` against it.)
   - [ ] **Detail views** (a scaled-up circle of a region) and **broken views** (a long
     part with its middle removed). Both are clipping problems on top of the existing
     view, not new projections.
