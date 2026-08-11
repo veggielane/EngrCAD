@@ -264,6 +264,20 @@ datasheet, like `StandardHoles` / `SheetMaterials`); every length is in the mode
 a uniform scale). Multi-layer: clearance / shorts / width / acute angles are per layer,
 drill-to-copper is cross-layer.
 
+**IPC-6012 class presets + a spec cross-check.** `DrcRuleSet.ForIpcClass(1|2|3)` is the nominal rule
+set for an IPC-6012 performance class (Level A/B/C ↔ class 1/2/3). A DRC minimum is a FLOOR the design
+must clear, and a stricter class REQUIRES more copper, so **every minimum grows with the class and
+class 3 is the strictest** — the DRC direction for a minimum annular ring exactly (Level C leaves the
+most copper). Class 2 is field-identical to the Class-2-ish `Default`, so the preset spreads around
+it; ⚠ nominal figures, verify-against-datasheet. Being an ordinary `DrcRuleSet`, a preset **drives
+`PcbDrc` with no change to the check** (a gap that clears class 2 fails the stricter class 3).
+`DrcRuleSet.CheckSpec(spec)` cross-checks a `PcbFabricationSpec`'s own stated minimum trace width /
+clearance against the class it *claims* → an `IpcClassCheck`: a spec naming a strict class but stating
+a minimum LOOSER (finer) than that class's floor is **`NonConforming`**, each offender named with the
+stated value AND the class minimum; a spec whose stated minimums meet its class **`Conforming`**; a
+spec with no class, or a class but no minimum to compare, is **`NotCheckable`** with a reason (never
+invented into a verdict). Docs: `examples/ecad-drc.md`.
+
 **Traces arrive in stage 5.** Trace width and the acid-trap rule genuinely want conductors; the
 copper today is pads, so those rules run on whatever copper a layer carries (a deliberately-thin
 pad, a sharp corner) and fully engage once routing produces traces — a trace is a stroked

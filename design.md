@@ -7154,9 +7154,9 @@ the layout file with no writer change (persistence already carries the spec), ve
 per-field population, the finish-string mapping (ENIG/HASL/HAL-lead-free/OSP/immersion, ENEPIG →
 Other), the copper-weight conversion (0.035 → 1 oz, 0.070 → 2 oz), the write-only-when-stated
 partial-stackup case, the byte-identical no-stackup case, and determinism. Filed under the fab-drawing
-entry: a per-fabricator stack-up CATALOGUE and an IPC-class → `DrcRuleSet` preset that would let a
-caller pick a house stack-up rather than reading one, and cross-check the stated class against the
-spec's `MinTraceWidthMm`/`MinClearanceMm`.
+entry: a per-fabricator stack-up CATALOGUE that would let a caller pick a house stack-up rather than
+reading one. (The IPC-class → `DrcRuleSet` preset and the spec-vs-class cross-check filed here LANDED
+— see the fabrication-spec paragraph below.)
 
 ### KiCad `.kicad_sch` whole-schematic import (`KiCadSchReader`)
 
@@ -8012,6 +8012,28 @@ exactly as before, so a no-spec drawing is byte-identical (asserted: no-spec == 
 `ToSvg()`). Every stated value is validated at `WithFabrication` and refused **by name** — a
 non-finite/non-positive thickness / copper weight / minimum trace / minimum clearance, an IPC class
 outside {1, 2, 3}, or an `Other` finish with no name.
+
+**The stated IPC class now ACTS — an `DrcRuleSet.ForIpcClass(1|2|3)` preset and a spec-vs-class
+cross-check.** The load-bearing decision is the DIRECTION: a DRC minimum is a FLOOR the design must
+clear, and a stricter class requires MORE copper (a larger clearance, annular ring and edge keep-out),
+so **every minimum GROWS with the class and class 3 is the strictest** — the DRC flags progressively
+more, which is the IPC-6012 direction for a minimum annular ring exactly (Level C leaves the most
+copper), and is what makes "class 3 is strictest" mean "hardest to pass" for a floor-style rule. The
+naming is a producibility LEVEL A/B/C ↔ class 1/2/3 nominal convention; the values are ⚠ transcribed
+figures asserted in the datasheet form a human checks (the class minimums), monotone-increasing per
+rule with the acid-trap angle constant at 90°, and **class 2 is field-identical to the Class-2-ish
+`Default`** (asserted, so the preset spreads around a rule set that already shipped). Because a preset
+is an ordinary `DrcRuleSet` it **drives `PcbDrc` with NO change to the check** (verified: one board's
+0.18 mm gap clears class 2's 0.15 floor and fails the stricter class 3's 0.20). `DrcRuleSet.CheckSpec`
+reads the spec (the cleaner home per the task, since the class it claims resolves through
+`ForIpcClass`) and compares the spec's OWN stated `MinTraceWidthMm`/`MinClearanceMm` against that
+class's floor → an `IpcClassCheck`: a spec claiming a strict class but stating a minimum LOOSER (finer)
+than the class permits is `NonConforming` with each offender named (**the stated value AND the class
+minimum**, the `PcbLayoutCheck` house style), a spec whose stated minimums meet its class is
+`Conforming`, and a spec with no class — or a class but no minimum to compare against — is
+`NotCheckable` with a reason (never invented into a pass or a fail, the write-only-when-stated rule one
+level up). `Default` is field-identical to before (the preset is a new factory, the cross-check a new
+static method; every existing DRC path untouched). Docs: `examples/ecad-drc.md`.
 
 **v1 scope**, each filed as a follow-up: the drill table is the board's own holes + placed vias
 (component through-hole pad drills belong to the Excellon program the fab derives, folded in later);

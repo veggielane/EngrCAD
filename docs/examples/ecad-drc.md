@@ -96,6 +96,54 @@ var good = new PcbCopperModel(board, new[] {
 Console.WriteLine($"a hair further apart: {PcbDrc.Check(good, rules).Violations.Count} violations");
 ```
 
+## IPC-6012 class presets, and cross-checking a spec against its class
+
+`DrcRuleSet.ForIpcClass(1|2|3)` is a preset for an IPC-6012 performance class, following the IPC
+producibility levels (Level A ↔ class 1, Level B ↔ class 2, Level C ↔ class 3). A **DRC minimum is a
+floor the design must clear**, and a stricter class REQUIRES more copper — a larger clearance,
+annular ring and edge keep-out — so **every minimum grows with the class and class 3 is the
+strictest** (the DRC flags progressively more). That is the IPC-6012 direction for a minimum annular
+ring exactly (Level C leaves the most copper). Class 2 is field-identical to the Class-2-ish
+`Default`, so the preset spreads around it. ⚠ **These are nominal transcribed figures — verify
+against your fabricator's capability sheet** (flagged like `StandardHoles` / `SheetMaterials` /
+`Default`); the class→level mapping is a nominal convention.
+
+Because a preset is an ordinary `DrcRuleSet`, it **drives `PcbDrc` with no change to the check** — a
+gap that clears class 2 fails the stricter class 3. And `DrcRuleSet.CheckSpec(spec)` cross-checks a
+[`PcbFabricationSpec`](ecad-fab-drawing.md)'s own stated minimum trace width / clearance against the
+class it *claims*: a spec naming a strict class but stating a minimum LOOSER (finer) than that class's
+floor is inconsistent — it names the class yet permits features below its minimum — so the mismatch
+is **flagged, naming the stated value and the class minimum**. A spec whose stated minimums meet its
+class **conforms**; a spec that states no class, or a class but no minimum to compare, is
+**`NotCheckable`** with a reason (never invented into a pass or a fail).
+
+```csharp run:ecad-drc-ipc
+// The presets — higher class = stricter (larger required minimums). ⚠ nominal, verify-against-datasheet.
+var c1 = DrcRuleSet.ForIpcClass(1);
+var c2 = DrcRuleSet.ForIpcClass(2);
+var c3 = DrcRuleSet.ForIpcClass(3);
+Console.WriteLine($"min clearance  1/2/3 = {c1.MinCopperClearance} / {c2.MinCopperClearance} / {c3.MinCopperClearance} mm");
+Console.WriteLine($"min trace      1/2/3 = {c1.MinTraceWidth} / {c2.MinTraceWidth} / {c3.MinTraceWidth} mm");
+Console.WriteLine($"class 2 IS the Class-2-ish Default: {c2 == DrcRuleSet.Default}");
+
+// A preset drives PcbDrc: a 0.18 mm gap PASSES class 2 (floor 0.15) and FAILS class 3 (floor 0.20).
+var board = PcbBoard.Rectangle(50, 40, 1.6);
+CopperFeature Pad(string net, double x) =>
+    new("Top", net, net + ".1", CurvedRegion2d.Disc(new Vector2d(x, 0), 0.5));
+var model = new PcbCopperModel(board, new[] { Pad("A", 0), Pad("B", 1.18) });
+Console.WriteLine($"0.18 mm gap: class 2 clearance violations = {PcbDrc.Check(model, c2).OfRule(DrcRule.Clearance).Count()}, class 3 = {PcbDrc.Check(model, c3).OfRule(DrcRule.Clearance).Count()}");
+
+// Cross-check a spec's stated minimums against the class it claims.
+var spec = new PcbFabricationSpec { Ipc6012Class = 3, MinTraceWidthMm = 0.15, MinClearanceMm = 0.15 };
+var check = DrcRuleSet.CheckSpec(spec);
+Console.WriteLine($"spec claims class 3 with 0.15 mm mins: {check.Result}");
+foreach (var issue in check.Issues) Console.WriteLine($"  - {issue}");
+
+// No class stated => "not checkable", not a verdict invented from nothing.
+var noClass = DrcRuleSet.CheckSpec(new PcbFabricationSpec { MinTraceWidthMm = 0.15 });
+Console.WriteLine($"no class stated: {noClass.Result} ({noClass.Summary})");
+```
+
 ## The incremental seam for routing
 
 A stage-5 router costs a candidate route with `PcbDrc.Violates(model, candidate, rules)` — the
