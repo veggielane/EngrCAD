@@ -296,16 +296,113 @@ var chip   = board.Seat(Shape.Box(5, 5, 1), worldPoint);         // a raw electr
 
 The global-chart board seats by `(u, v)` instead (`board.Seat(component, new Vector2d(u, v))`).
 
+## Multi-shell — an inner moulded copper layer
+
+A real LDS part carries copper on the **outer** moulded wall *and* on an **inner** shell, stitched by
+through-shell vias. `MidStack` is that board — an outer `MidBoard` plus one or more inner shells, each
+the outer mesh with **every vertex offset inward by a dielectric thickness** along its angle-weighted
+vertex normal (the `MeshSdf` / boundary-layer pseudonormal convention — never a raw face normal, which
+would tear a shared vertex).
+
+**The inner shell keeps the same mesh topology, and that is the load-bearing decision.** A surface point
+on the outer shell (a face + barycentric weights) has a *corresponding* point on the inner shell (the
+same face + weights, on the offset mesh), so a through-shell `SurfaceVia` is exactly "tie the outer point
+to its corresponding inner point". Each shell is its **own `MidBoard`** with its **own exp-map
+machinery** — an inner shell's geodesic distances differ from the outer's, because offsetting a curved
+surface changes them — so the existing single-surface placement, routing and DRC run **per shell**
+unchanged: place a pad, trace or component by placing it on `stack.Shell(k)` (or `stack.Outer` /
+`stack.Inner`).
+
+```csharp render:ecad-mid-multishell
+HalfEdgeMesh Tube(double rr, double h, int around, int along) {
+    var pos = new List<Vector3d>();
+    for (int j = 0; j <= along; j++)
+        for (int i = 0; i < around; i++) {
+            double a = 2 * Math.PI * i / around;
+            pos.Add(new Vector3d(rr * Math.Cos(a), rr * Math.Sin(a), h * j / along));
+        }
+    var faces = new List<int[]>();
+    for (int j = 0; j < along; j++)
+        for (int i = 0; i < around; i++) {
+            int p = j * around + i, q = j * around + (i + 1) % around;
+            faces.Add(new[] { p, q, q + around });
+            faces.Add(new[] { p, q + around, p + around });
+        }
+    return HalfEdgeMesh.Build(pos, faces);
+}
+
+double r = 8, t = 0.8;
+// A moulded CYLINDER WALL plus an inner shell offset inward by the dielectric thickness t. On a
+// developable surface the inward normal offset is EXACT: the inner shell is a concentric cylinder r − t.
+var stack = MidStack.TwoShell(Tube(r, 14, 96, 60), t);
+double ir = r - t;
+Vector3d Out(double a, double z) => new(r * Math.Cos(a), r * Math.Sin(a), z);
+Vector3d In(double a, double z) => new(ir * Math.Cos(a), ir * Math.Sin(a), z);
+
+// OUTER shell: a SIG net up to the via foot, and a separate GND rail beside it.
+var sigA = stack.Outer.PlacePad("SIG", Out(0, 3), 0.7, "SIG.a");
+var viaWorld = Out(0, 10.5);
+var sigVia = stack.Outer.PlacePad("SIG", viaWorld, 0.7, "SIG.via");
+var outerSig = MidRouting.Connect(stack.Outer, sigA, sigVia, 0.5);
+var gndA = stack.Outer.PlacePad("GND", Out(0.55, 3), 0.7, "GND.a");
+var gndB = stack.Outer.PlacePad("GND", Out(0.55, 11), 0.7, "GND.b");
+var outerGnd = MidRouting.Connect(stack.Outer, gndA, gndB, 0.5);
+
+// A through-shell VIA stitches SIG to the inner shell at the corresponding point.
+var via = stack.AddVia("SIG", viaWorld, 0.6);
+
+// INNER shell: SIG continues from the via foot around to a sink pad.
+var inVia = stack.Inner.PlacePad("SIG", via.InnerPoint, 0.7, "SIG.via.in");
+var inSink = stack.Inner.PlacePad("SIG", In(1.5, 3), 0.7, "SIG.sink");
+var innerSig = MidRouting.Connect(stack.Inner, inVia, inSink, 0.5);
+
+// Verify: SIG connects across BOTH shells through the via, and the 3D DRC is clean. Self-checking.
+var report = stack.Check();
+if (report.Ratsnest.Count != 0 || !report.Ok)
+    throw new Exception("the multi-shell board did not verify: " + report);
+
+var scene = new Scene();
+scene.Add(new Part("outer wall", Shape.From(stack.Outer.Mesh), Palette.Steel) { DisplayMode = DisplayMode.Translucent });
+scene.Add(new Part("inner shell", Shape.From(stack.Inner.Mesh), new PartColor(0.42f, 0.48f, 0.54f)) { DisplayMode = DisplayMode.Translucent });
+scene.Add(new Part("SIG (outer)", outerSig.Conductor(0.2), Palette.Brass));
+scene.Add(new Part("GND (outer)", outerGnd.Conductor(0.2), Palette.Plum));
+scene.Add(new Part("SIG (inner)", innerSig.Conductor(0.2), Palette.Teal));
+scene.Add(new Part("via", via.Barrel(0.6), Palette.Coral));
+var camera = new CameraState(-Math.PI / 2 + 0.85, 0.42, 52, (0, 0, 7));
+```
+
+![A two-shell moulded cylinder — an outer wall and an inner shell, each carrying copper, stitched by a through-shell via](images/ecad-mid-multishell.png)
+
+**Connectivity and the DRC span the shells.** Each shell's copper is joined by the existing per-surface
+touch rule, and a via joins its own pads across shells (the plated barrel), so `stack.Connectivity()`
+answers the crux: a net whose copper lies on two shells is **one connected net iff a via of that net ties
+them** (the `PcbConnectivity` cross-layer rule, lifted to surfaces). Remove the via and the two shells'
+same-named copper are a cross-shell **ratsnest**. `stack.Check()` runs each shell's same-shell clearance /
+width DRC — a via's clearance to other-net copper on *both* shells it touches falls out of that, since a
+via pad **is** copper on its shell — plus the inter-shell **via-to-via** spacing rule. A single-shell
+stack (no vias) reduces to a plain `MidBoard`, so its DRC is **bit-identical** to
+`Mid3dDrc.Check(board)`.
+
+**The developable oracle is preserved and made exact.** On a cylinder the inward normal offset is an
+isometry, so the inner shell is a concentric cylinder of radius `r − t` **to round-off** — the
+angle-weighted vertex normal is exactly radial by symmetry, even at the free rim. An inward offset
+**self-intersects** only where the surface is *convex* and `t` exceeds the local curvature radius (a
+concave region offset inward merely diverges); a sphere offset inward past its radius turns inside out
+and is **refused by name** (the offset's signed volume flips sign), as is a developable inversion (an
+offset triangle folds through itself).
+
 ## Scope, v1
 
 `MidRouting.Route` **auto-routes** an intrinsic board and `MidRouting.Connect` **places** one trace
 between two given pads; both lay geodesics on the mesh and both are certified by the same 3D DRC. The
 auto-router runs on an **intrinsic** board (`OnMesh`); a global-chart board (`OnSurface`, kept for the
-exact developable DRC oracle) is refused by name with a pointer to `OnMesh`. Filed as later stages:
-**topological / shove** routing on the surface (v1 detours around obstacles but does not push them),
-**multi-shell** MID (traces on an inner moulded shell as well as the outer), **length matching**, and
-a conformal **solder mask / pour** on the surface (refused for the distortion reason, exactly as copper
-pours already refuse curved walls). LDS process specifics (laser activation paths) are out of scope.
+exact developable DRC oracle) is refused by name with a pointer to `OnMesh`. **Multi-shell** MID (copper
+on an inner moulded shell as well as the outer, stitched by through-shell vias) has landed as `MidStack`
+(see above). Filed as later stages: **topological / shove** routing on the surface (v1 detours around
+obstacles but does not push them), **cross-shell auto-routing** (choosing which shell a net rides and
+placing the vias — v1 routes per shell and places explicit vias), **length matching**, and a conformal
+**solder mask / pour** on the surface (refused for the distortion reason, exactly as copper pours already
+refuse curved walls). LDS process specifics (laser activation paths) are out of scope.
 
 ## Verification
 
@@ -327,3 +424,13 @@ would cross another's); a congested board that a greedy pass leaves unrouted is 
 clean; a dense knot's **partial result is always DRC-clean** with the failures named; on a developable
 cylinder the routed **connectivity matches the unrolled flat board's** (both clean, both fully routed —
 a search need not be bit-identical); and two runs are **deterministic** vertex for vertex.
+
+**Multi-shell** (`MidStack`) clears its own bar. The decisive oracle is the **developable** one: a
+cylinder's inner shell is a concentric cylinder of radius `r − t` to round-off (worst vertex error
+`< 1e-11`, the free rim included). Cross-shell connectivity is proved by the **via mutation** — a VOUT
+pad on the outer shell and one on the inner, tied by a via, are one connected net; remove the via and
+they split into a cross-shell ratsnest. The two-shell DRC finds a same-shell clearance violation on the
+**inner** shell, finds a via too close to other-net copper on **either** shell, finds a **via-to-via**
+spacing violation, and passes a well-spaced board clean; a **single-shell** stack's DRC is bit-identical
+to `Mid3dDrc.Check`; the self-intersection guard is **refused by name** on a sphere offset past its
+radius; the via barrel is a **closed solid**; and the build is **deterministic**.
