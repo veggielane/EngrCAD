@@ -185,6 +185,12 @@
       "reason": "does not compile against the browser's assemblies: The name 'LayerStackup' does not exist in the current context"
     },
     {
+      "id": "ecad-mid-conductors",
+      "page": "examples/ecad-mid.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'MidBoard' does not exist in the current context"
+    },
+    {
       "id": "ecad-multilayer",
       "page": "examples/ecad-pcb.md",
       "live": false,

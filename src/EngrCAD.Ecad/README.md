@@ -597,10 +597,39 @@ with the far-field ratio exactly `k_copper/k_bare`; a no-boundary board is refus
 transient warm-up (`SolveTransient` exists), thermal vias as discrete paths, CFD airflow, and
 detailed die/package models. Docs: `examples/ecad-thermal.md`.
 
+## MID / LDS — routing on a moulded surface
+
+The flagship: routing conductors and seating components on a **moulded, doubly-curved surface**
+(a plastic housing carrying its own circuit on its shaped wall) — the MID / LDS construction.
+**Everything happens in the surface's exponential-map (u, v) parameter space**: `MeshLocalParam`'s
+discrete exp map from a stated origin gives every point of the surface a flat `(u, v)` coordinate,
+and the routing and 3D DRC run there with the **same grow-and-intersect** the flat copper DRC uses,
+with the surface distortion the map carries **folded into the clearance** — never averaged away.
+
+| Type | What it is |
+| --- | --- |
+| `MidBoard` | A moulded routing surface (a mesh) parameterized by the exp map from a stated seed / reference / radius (the routing **patch**, a real design parameter). Holds pads (net-tagged `(u, v)` points), routed `SurfaceTrace`s, and seated components. `MaxDistortion` reports how developable the patch is; `PlacePad`/`PlacePin` (the one-declaration net from a `Schematic` pin); `Seat` poses a `HardwareComponent` on the surface tangent frame. |
+| `MidPad` | A copper land — a `(u, v)` point, a net, a land width, its lift onto the surface. |
+| `SurfaceTrace` / `SurfaceRun` | A net's conductor routed in `(u, v)` and lifted onto the surface. **Reports the distortion it carried** (`MinScale`/`MaxScale`/`Distortion`, exactly as `SurfaceCurve` does); a point past the map **breaks the run** (`UnmappedPoints`, counted, never inventing surface); `Conductor(thickness)` is a thin conductive `Shape` (a ribbon along the surface) that round-trips through STL/STEP. |
+| `MidRouting` | v1 **places** traces (`Connect`) and **verifies** them (`Verify` = the 3D DRC). `Route` refuses auto-routing by name (a geodesic maze search is filed). |
+| `Mid3dDrc` / `Mid3dDrcReport` / `MidDrcViolation` | The 3D DRC: clearance / short / trace-width in `(u, v)` with the distortion folded in. Three-valued — Clear / Violation / **Uncertain** (a conservative refusal in the band the parameterization cannot certify). |
+
+**The decisive oracle is the developable one**: on a cylinder the exp map is an isometry, so the 3D
+DRC verdicts and measured separations equal the **unrolled flat 2D DRC**'s — bit for bit (measured:
+cylinder exp-map distortion `~1.2e-3`, verdicts and `(u, v)` separations identical). Then on a
+**sphere cap** (distortion `~11%`, a tangential trace `MinScale ~0.92`) the distortion is **reported**
+and **folded**: a pair that passes flat but whose worst-case surface clearance drops below the rule is
+**refused** (an `Uncertain` finding), not passed false-precise. A trace's lifted endpoint lands
+**exactly** on its pad point; the conductor is a **closed solid**; the check is **deterministic**.
+
+**v1 scope** — a single conductive surface (no drills / edges / vias, which a moulded surface has
+none of); refused / filed **by name**: auto-routing on the surface (a geodesic maze search),
+multi-shell MID (traces on an inner moulded shell), a conformal solder mask / pour on the surface
+(the distortion reason copper pours already refuse curved walls). Docs: `examples/ecad-mid.md`.
+
 ## Not yet (later campaign stages)
 
-MID/LDS 3D
-routing, and the richer
+The richer
 interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one
 graph. On the LIBRARY side, **KiCad `.kicad_sym`/`.kicad_mod` and Eagle `.lbr` both import**; what
 stays filed is **IPC-7351 footprint GENERATION** from a designation (a generator, not a file

@@ -7669,15 +7669,71 @@ is an undriven conduction problem refused BY NAME (the `ThermalSolver` conventio
 board is isothermal at its held temperature exactly; a solve is **deterministic** to the bit. Docs:
 `examples/ecad-thermal.md`.
 
-### Not in stages 1–8
+### Stage 9 — MID / LDS 3D surface routing (`MidBoard`/`SurfaceTrace`/`MidRouting`/`Mid3dDrc`)
+
+The flagship novel capability: routing conductors and seating components on a MOULDED, doubly-curved
+surface (an LDS housing carrying its own circuit on its shaped wall) rather than on a flat board. The
+load-bearing decision is that **the whole thing happens in the surface's exponential-map (u, v)
+parameter space** — `MeshLocalParam`'s discrete exp map from a stated origin flattens the moulded
+surface into `(u, v)`, and the routing and the 3D DRC run there with the *same* grow-and-intersect the
+flat copper DRC uses, so nothing about the surface changes the arithmetic except that the map's own
+distortion is FOLDED into the clearance. A `MidBoard` owns the exp map and its inverse (a BVH over the
+mesh triangles in `(u, v)` plus barycentric interpolation — the same construction `SurfaceDecoration`
+lifts a decoration through, extended to also report the surface NORMAL the conductor lift needs, and
+computed ONCE so every pad, trace and probe reads one consistent map, which is why a trace authored to
+start at a pad's `(u, v)` lifts to exactly that pad's surface point). A `SurfaceTrace` is a `(u, v)`
+polyline lifted onto the surface that REPORTS the distortion it carried (`MinScale`/`MaxScale`, exactly
+as `SurfaceCurve` does), breaks its run where the map ends (`UnmappedPoints`, never inventing surface),
+and exports as a thin conductive `Shape` (a ribbon offset in the tangent plane and extruded along the
+surface normal) that round-trips through STL/STEP.
+
+**The exp map is exact on a plane, developable-clean on a cylinder and genuinely distorted on a cap,
+so the 3D DRC is THREE-VALUED where the flat one is two.** A required SURFACE clearance `C` becomes a
+PARAMETER clearance `C / scale`, and because the map's local scale varies over a pair the check reports
+Clear (the parameter separation is at least `C / minScale`, so the surface separation clears even
+worst-case), Violation (it is below `C / maxScale`, so it fails even best-case), or **Uncertain** — the
+band straddles the limit, so the answer depends on which scale is real, and it is REFUSED with the band
+stated rather than passed false-precise (the tamper-mesh near-tangency rule). This is the honest
+failure mode: a near-tolerance pair on a high-distortion patch cannot be certified, so it is not signed
+off.
+
+**The decisive oracle is the developable one.** On a cylinder the exp map is an isometry, so the
+distortion band collapses (min scale == max scale == 1) and the three outcomes reduce to the flat DRC's
+two: a cylindrical MID board's 3D DRC verdicts and measured parameter separations equal the UNROLLED
+flat 2D DRC's, bit for bit — measured with the reported separation bisected up to a BAND-INDEPENDENT
+cap (capping at the distortion-dependent threshold would make a developable board's clearance differ
+from its unrolling by the bisection's last bits, which is exactly what the oracle would then miss).
+Numbers: cylinder exp-map distortion `1.2e-3`, plane `6.7e-15`, verdicts and `(u, v)` separations
+identical, the cylinder folding the distortion only into the reported surface-clearance BAND
+(`[0.075, 0.0751]` where the flat reports `0.075`). Then on a sphere cap (distortion `~11%`, a
+tangential trace `MinScale ~0.92`) the fold has teeth: a pair spaced just above the flat limit but
+along the shrinking direction reads a worst-case surface clearance below the rule and is REFUSED, while
+the same `(u, v)` on the plane passes clean. The trace-width rule folds the same way (a 0.16 mm trace
+clears the 0.15 mm rule flat but is refused where the surface shrinks it).
+
+**Two smaller decisions.** The map RADIUS is required and explicit — it is the routing PATCH (which
+part of the moulding carries the circuit), and a footgun default that mapped a closed surface past its
+far side would wrap the exp map onto itself where it degenerates; it is a GRAPH distance that
+over-estimates the straight-line one, so a caller states it comfortably above the furthest feature's
+reach. And a trace's WIDTH is checked against the authored width folded through the scale band rather
+than re-measured off the region, because round joins never pinch a width and an opposing-wall measure
+under-reports on a round cap (a 0.25 mm stadium reads 0.147). **v1 is one conductive surface** — no
+drills, edges or vias (a moulded surface has none); auto-routing on the surface (a geodesic maze
+search, the flat grid router not lifting to a distorted metric), multi-shell MID (an inner moulded
+copper layer) and a conformal solder mask / pour (the distortion reason copper pours already refuse
+curved walls) are all filed by name. Docs: `examples/ecad-mid.md`.
+
+### Not in stages 1–9
 
 Thermal VIAS as discrete high-conductivity paths (v1's effective conductivity smears the copper, so
 it smears the vias too), a TRANSIENT board warm-up (the `SolveTransient` path exists, so it is a
 bounded follow-on with its own erfc-style oracle; the effective slab already carries a volume-weighted
 heat capacity), detailed die/package thermal models (v1 spreads a component's power uniformly over its
 footprint, not through a junction-to-case network), airflow/CFD cooling, snap-fit/screw-boss detailing,
-tolerance stack-up, and MID/LDS 3D routing are later stages over this one graph; each reads the
-netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. The richer interchange
+and tolerance stack-up are later stages over this one graph; each reads the
+netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. MID/LDS 3D surface routing
+has landed as stage 9 (see above); its own filed follow-ons are surface AUTO-routing (a geodesic maze
+search), multi-shell MID and a conformal surface mask/pour. The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. The drawn schematic SHEET has
 landed (see above) as a VIEW of the graph; a good auto-placer and an obstacle-avoiding wire
 router are the open follow-ons there, plus hierarchical sheets, buses, off-page connectors and
