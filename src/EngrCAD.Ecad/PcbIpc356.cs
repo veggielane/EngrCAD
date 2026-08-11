@@ -43,16 +43,30 @@ public enum Ipc356Feature
 /// <param name="Pin">The pad / pin number (<c>1</c>, <c>A5</c>), or the empty string for a via.</param>
 /// <param name="Feature">The access-point kind (through-hole pad / SMD pad / via).</param>
 /// <param name="Access">The IPC access code: <c>0</c> = all layers (a through feature), else the
-/// 1-based number of the top-most copper layer it is accessed from (top = 1, bottom = N).</param>
+/// 1-based number of the top-most copper layer it is accessed from (top = 1, bottom = N). A
+/// blind/buried via's single top-most-layer code cannot spell the full range it reaches, so it ALSO
+/// carries <see cref="FromLayer"/>/<see cref="ToLayer"/> (see <see cref="HasLayerSpan"/>).</param>
 /// <param name="Xum">The access-point midpoint X in micrometres, board-frame verbatim (no Y-flip).</param>
 /// <param name="Yum">The access-point midpoint Y in micrometres, board-frame verbatim.</param>
 /// <param name="DrillUm">The finished drill diameter in micrometres for a drilled feature, else 0.</param>
+/// <param name="FromLayer">The top-most copper layer a blind/buried via reaches (1-based, top = 1), or
+/// <c>0</c> when no explicit span is stated. A through feature (both outer faces) and a single-layer SMD
+/// pad leave this <c>0</c> — their reached set is implicit in <see cref="Access"/>, so no span token is
+/// written and their records stay byte-identical to the narrow format.</param>
+/// <param name="ToLayer">The bottom-most copper layer a blind/buried via reaches (1-based, top = 1), or
+/// <c>0</c> when no explicit span is stated (the twin of <see cref="FromLayer"/>).</param>
 public readonly record struct Ipc356AccessPoint(
     string Net, string RefDes, string Pin, Ipc356Feature Feature,
-    int Access, long Xum, long Yum, long DrillUm)
+    int Access, long Xum, long Yum, long DrillUm,
+    int FromLayer = 0, int ToLayer = 0)
 {
     /// <summary>Whether this access point is a via (no component reference).</summary>
     public bool IsVia => Feature == Ipc356Feature.Via;
+
+    /// <summary>Whether this access point states an EXPLICIT copper-layer span (a blind/buried via) — the
+    /// per-inner-layer encoding the single <see cref="Access"/> code cannot carry. When true,
+    /// <c>[FromLayer, ToLayer]</c> is the 1-based inclusive copper range the feature reaches.</summary>
+    public bool HasLayerSpan => FromLayer > 0 && ToLayer > 0;
 
     /// <summary>Whether this access point has a drilled hole (a through-hole pad or a via — every
     /// op <c>317</c> record).</summary>
@@ -107,9 +121,25 @@ public readonly record struct Ipc356Net(string Name, IReadOnlyList<Ipc356AccessP
 /// which SIDE it is probed from is the ACCESS code, not a coordinate flip.</item>
 /// <item><b>Access convention:</b> <c>A00</c> = all layers (a through-hole pad or a through via reaches
 /// both outer faces); otherwise the access is the 1-based number of the top-most copper layer the feature
-/// is accessed from — <c>A01</c> for a top pad, <c>A0N</c> for the bottom of an N-layer board, an inner
-/// layer's own number for a buried via. This is the general IPC layer convention, and it reduces to the
-/// task's <c>top = 1 / bottom = 2 / all = 0</c> on a 2-layer board.</item>
+/// is accessed from — <c>A01</c> for a top pad, <c>A0N</c> for the bottom of an N-layer board, the
+/// top-most reached layer for a buried via. This is the general IPC layer convention, and it reduces to
+/// the task's <c>top = 1 / bottom = 2 / all = 0</c> on a 2-layer board.</item>
+/// <item><b>A blind/buried via carries its full layer SPAN</b>, because the single 2-digit access code
+/// cannot: a feature reaching MORE than one copper layer but NOT both outer faces (a blind or buried via)
+/// ALSO writes an explicit <c>L&lt;from&gt;-&lt;to&gt;</c> geometry token — the 1-based inclusive copper
+/// range it touches (so a buried via between inner layers 2 and 3 is <c>A02 … L02-03</c>, not merely
+/// <c>A02</c>) — recovered by <see cref="Parse"/> into <see cref="Ipc356AccessPoint.FromLayer"/>/
+/// <see cref="Ipc356AccessPoint.ToLayer"/>. A through feature and an SMD pad write NO span token (their
+/// reached set is implicit in the access code), so their records are BYTE-IDENTICAL to the narrow format —
+/// the encoding only changes blind/buried-via records.</item>
+/// <item><b>An over-width identity rides a continuation record, never a truncation.</b> The fixed fields
+/// are 14 / 6 / 4 chars (net / refdes / pin); a longer identity is carried IN FULL by a preceding op
+/// <c>379</c> continuation record (letter-tagged <c>N</c>/<c>R</c>/<c>P</c> tokens for the fields that
+/// overflow), while the fixed field holds the identity's HEAD so the columns stay valid and a legacy
+/// reader still gets a usable — if truncated — name. <see cref="Parse"/> applies the continuation to the
+/// record that immediately follows it, recovering the full identity, so the net-reconstruction oracle
+/// groups by the full net name. A board whose identities all FIT the fixed fields writes no continuation
+/// record and is byte-identical to the narrow format — the mechanism only changes over-width records.</item>
 /// <item><b>What is emitted / included:</b> every component pad (op <c>327</c> for SMD, <c>317</c> for
 /// through-hole — drilled) and every net-carrying <see cref="Via"/> (op <c>317</c>, no component
 /// reference). An unconnected / no-connect pad is each its OWN single-point net (a unique
@@ -117,24 +147,27 @@ public readonly record struct Ipc356Net(string Name, IReadOnlyList<Ipc356AccessP
 /// reconstructed partition matches. Board mounting / legacy holes are EXCLUDED (they carry no net — a
 /// netlist lists NET access points). Conductor (trace, op <c>378</c>) records are NOT emitted: this is a
 /// bare-board netlist (access points), not a conductor topology (filed).</item>
-/// <item><b>An identity field is REFUSED, never sanitized, when the record cannot spell it</b> (the
-/// topological-naming rule — the net name IS the reconstruction key, so silently truncating or squashing
-/// whitespace would misresolve two nets into one). A net name over 14 chars / a refdes over 6 / a pin
-/// over 4, any whitespace in an identity, or a real net colliding with the synthetic <c>N/C-######</c>
-/// namespace, all refuse by name.</item>
+/// <item><b>An identity field is REFUSED, never sanitized, when neither the record NOR a continuation can
+/// spell it</b> (the topological-naming rule — the net name IS the reconstruction key, so squashing
+/// whitespace would misresolve two nets into one). Whitespace in any identity, or a real net colliding
+/// with the synthetic <c>N/C-######</c> namespace, refuses by name. An over-WIDTH identity does NOT refuse
+/// — it rides a continuation record (above).</item>
 /// </list>
 ///
 /// <para><b>Record format (fixed identity columns + a letter-prefixed geometry token stream):</b></para>
 /// <code>
 /// col 1-3    op code: 317 (drilled — through-hole pad / via) or 327 (SMD pad, no hole)
-/// col 5-18   net name              (14, left-justified, space-padded)
-/// col 20-25  reference designator  (6,  left-justified; blank for a via)
-/// col 27-30  pin number            (4,  left-justified; blank for a via)
-/// col 32+    A&lt;nn&gt; X&lt;±µm&gt; Y&lt;±µm&gt; [D&lt;µm&gt;]   (access, midpoint, drill on drilled records only)
+/// col 5-18   net name              (14, left-justified, space-padded; HEAD only when a 379 carries the full name)
+/// col 20-25  reference designator  (6,  left-justified; blank for a via; HEAD only when continued)
+/// col 27-30  pin number            (4,  left-justified; blank for a via; HEAD only when continued)
+/// col 32+    A&lt;nn&gt; X&lt;±µm&gt; Y&lt;±µm&gt; [D&lt;µm&gt;] [L&lt;from&gt;-&lt;to&gt;]   (access, midpoint, drill on drilled records, layer span on blind/buried vias)
+///
+/// 379 [N&lt;full net&gt;] [R&lt;full refdes&gt;] [P&lt;full pin&gt;]   (a continuation record, on the line BEFORE the record it applies to; only over-width fields)
 /// </code>
 /// <para>with a header of <c>C</c> comment and <c>P</c> parameter records (<c>P UNITS CUST 2</c>,
 /// <c>P VER IPC-D-356A</c>) and a trailing <c>999</c> end record. The reader is the round-trip oracle
-/// SCOPED to what the writer emits (an unknown record code or units is refused by name).</para>
+/// SCOPED to what the writer emits (an unknown record code or units is refused by name). The <c>379</c>
+/// continuation code is distinct from the (unimplemented) <c>378</c> conductor record.</para>
 /// </summary>
 public static class PcbIpc356
 {
@@ -142,6 +175,7 @@ public static class PcbIpc356
     private const int RefDesFieldWidth = 6;    // reference-designator field
     private const int PinFieldWidth = 4;       // pin-number field
     private const int GeometryStart = 31;      // 0-based index of column 32 (the token stream)
+    private const string ContinuationCode = "379";   // wide-identity continuation record (378 = conductor, unused)
 
     // ---- the one Compute both the writer and the oracle project --------------
 
@@ -210,9 +244,11 @@ public static class PcbIpc356
 
             string netName = net ?? Synthetic(++syntheticCounter);
             RequireRealNetName(net);   // a real net may not impersonate the synthetic namespace
+            var (padFrom, padTo) = LayerSpan(touched, layerCount);   // (0, 0) for a pad — a single or all-layers reach
             points.Add(new Ipc356AccessPoint(
                 netName, pad.Reference, pad.PadNumber, feature,
-                AccessCode(touched, layerCount), ToMicrons(pad.World.X), ToMicrons(pad.World.Y), drillUm));
+                AccessCode(touched, layerCount), ToMicrons(pad.World.X), ToMicrons(pad.World.Y), drillUm,
+                padFrom, padTo));
         }
 
         // (2) Vias — a net-carrying, drilled, componentless access point. Its net is non-null by
@@ -221,10 +257,11 @@ public static class PcbIpc356
         {
             RequireRealNetName(pv.Net);
             var touched = pv.Layers.Select(n => layerIndex.GetValueOrDefault(n, 0)).ToList();
+            var (viaFrom, viaTo) = LayerSpan(touched, layerCount);   // a blind/buried via carries its span; a through via does not
             points.Add(new Ipc356AccessPoint(
                 pv.Net, "", "", Ipc356Feature.Via,
                 AccessCode(touched, layerCount), ToMicrons(pv.Center.X), ToMicrons(pv.Center.Y),
-                ToMicrons(pv.DrillDiameter)));
+                ToMicrons(pv.DrillDiameter), viaFrom, viaTo));
         }
 
         points.Sort(Order);
@@ -269,7 +306,15 @@ public static class PcbIpc356
         sb.Append("P  IMAGE PRIMARY\n");
 
         foreach (var p in points)
+        {
+            // An over-width identity is carried IN FULL by a preceding 379 continuation record; the
+            // record's fixed field then holds its head. A record all of whose identities FIT writes no
+            // continuation, so it is byte-identical to the narrow format.
+            string continuation = Continuation(p);
+            if (continuation.Length > 0)
+                sb.Append(continuation).Append('\n');
             sb.Append(FormatRecord(p, coordWidth, drillWidth)).Append('\n');
+        }
 
         sb.Append("999\n");   // end record
         return sb.ToString();
@@ -320,7 +365,39 @@ public static class PcbIpc356
                     + "resolution, so it cannot be spelled as a positive drill.", nameof(p));
             sb.Append(" D").Append(p.DrillUm.ToString(CultureInfo.InvariantCulture).PadLeft(drillWidth, '0'));
         }
+
+        // A blind/buried via carries its full 1-based inclusive copper-layer span; the single access
+        // code cannot spell a range. A through feature and an SMD pad state no span (see LayerSpan), so
+        // no token is written and their records stay byte-identical to the narrow format.
+        if (p.HasLayerSpan)
+            sb.Append(" L")
+              .Append(p.FromLayer.ToString("D2", CultureInfo.InvariantCulture))
+              .Append('-')
+              .Append(p.ToLayer.ToString("D2", CultureInfo.InvariantCulture));
         return sb.ToString();
+    }
+
+    // The wide-identity continuation: a preceding op-379 record carrying, IN FULL, each identity (net /
+    // refdes / pin) that overflows its fixed field, as letter-tagged N/R/P tokens (the same style as the
+    // geometry stream). Returns "" when every identity fits — so a record all of whose fields fit writes
+    // no continuation record and stays byte-identical to the narrow format.
+    private static string Continuation(in Ipc356AccessPoint p)
+    {
+        var tokens = new StringBuilder();
+        AppendWide(tokens, 'N', p.Net, NetFieldWidth);
+        AppendWide(tokens, 'R', p.RefDes, RefDesFieldWidth);
+        AppendWide(tokens, 'P', p.Pin, PinFieldWidth);
+        return tokens.Length == 0 ? "" : ContinuationCode + " " + tokens;
+    }
+
+    private static void AppendWide(StringBuilder tokens, char tag, string? value, int width)
+    {
+        value ??= "";
+        if (value.Length <= width)
+            return;   // fits the fixed field — no continuation token needed
+        if (tokens.Length > 0)
+            tokens.Append(' ');
+        tokens.Append(tag).Append(value);   // whitespace is refused by Field on the same point
     }
 
     // ---- the twin decoder (the round-trip oracle) ----------------------------
@@ -338,6 +415,10 @@ public static class PcbIpc356
         var points = new List<Ipc356AccessPoint>();
         bool unitsSeen = false;
         int lineNo = 0;
+        // A pending wide-identity continuation (379) applies to the NEXT test record — accumulate then
+        // consume. A continuation followed by no record, or by another continuation, is malformed.
+        string? contNet = null, contRef = null, contPin = null;
+        bool pending = false;
 
         foreach (var raw in text.Split('\n'))
         {
@@ -369,9 +450,27 @@ public static class PcbIpc356
             if (c0 != '3')
                 throw new FormatException(
                     $"Unknown IPC-D-356A record on line {lineNo}: '{line.Trim()}'.");
-            points.Add(ParseRecord(line, lineNo));
+
+            if (line.Length >= 3 && line[..3] == ContinuationCode)
+            {
+                // A wide-identity continuation record — stash the full net/refdes/pin for the next record.
+                if (pending)
+                    throw new FormatException(
+                        $"IPC-D-356A continuation record (379) on line {lineNo} follows another continuation "
+                        + "with no test record between them.");
+                (contNet, contRef, contPin) = ParseContinuation(line, lineNo);
+                pending = true;
+                continue;
+            }
+
+            points.Add(ParseRecord(line, lineNo, contNet, contRef, contPin));
+            contNet = contRef = contPin = null;
+            pending = false;
         }
 
+        if (pending)
+            throw new FormatException(
+                "The IPC-D-356A file ends with a continuation record (379) that no test record follows.");
         if (!unitsSeen)
             throw new FormatException(
                 "The IPC-D-356A file declares no units — a 'P UNITS CUST 2' record is required so the "
@@ -379,7 +478,35 @@ public static class PcbIpc356
         return points;
     }
 
-    private static Ipc356AccessPoint ParseRecord(string line, int lineNo)
+    // Parses a 379 wide-identity continuation record — the full net / refdes / pin as letter-tagged
+    // N/R/P tokens (only the fields that overflowed their fixed columns). At least one token is required.
+    private static (string? Net, string? RefDes, string? Pin) ParseContinuation(string line, int lineNo)
+    {
+        string? net = null, refDes = null, pin = null;
+        var tokens = line[ContinuationCode.Length..]
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var tok in tokens)
+        {
+            string value = tok[1..];
+            switch (tok[0])
+            {
+                case 'N': net = value; break;
+                case 'R': refDes = value; break;
+                case 'P': pin = value; break;
+                default:
+                    throw new FormatException(
+                        $"IPC-D-356A continuation record (379) on line {lineNo} has an unknown field token "
+                        + $"'{tok}' (expected N/R/P).");
+            }
+        }
+        if (net is null && refDes is null && pin is null)
+            throw new FormatException(
+                $"IPC-D-356A continuation record (379) on line {lineNo} carries no field tokens.");
+        return (net, refDes, pin);
+    }
+
+    private static Ipc356AccessPoint ParseRecord(
+        string line, int lineNo, string? contNet, string? contRef, string? contPin)
     {
         if (line.Length < GeometryStart)
             throw new FormatException(
@@ -389,16 +516,19 @@ public static class PcbIpc356
             throw new FormatException(
                 $"Unknown IPC-D-356A operation code '{op}' on line {lineNo} (expected 317 or 327).");
 
-        string net = line.Substring(4, NetFieldWidth).TrimEnd();
-        string refDes = line.Substring(19, RefDesFieldWidth).TrimEnd();
-        string pin = line.Substring(26, PinFieldWidth).TrimEnd();
+        // A preceding 379 continuation carries the FULL identity for any field that overflowed its fixed
+        // column (whose head the column still holds); otherwise read the field verbatim.
+        string net = contNet ?? line.Substring(4, NetFieldWidth).TrimEnd();
+        string refDes = contRef ?? line.Substring(19, RefDesFieldWidth).TrimEnd();
+        string pin = contPin ?? line.Substring(26, PinFieldWidth).TrimEnd();
         if (net.Length == 0)
             throw new FormatException($"IPC-D-356A record on line {lineNo} names no net.");
 
-        // Geometry token stream from column 32: A<nn> X<±µm> Y<±µm> [D<µm>].
+        // Geometry token stream from column 32: A<nn> X<±µm> Y<±µm> [D<µm>] [L<from>-<to>].
         var tokens = line[GeometryStart..].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         int? access = null;
         long? x = null, y = null, drill = null;
+        int fromLayer = 0, toLayer = 0;
         foreach (var tok in tokens)
         {
             char k = tok[0];
@@ -409,6 +539,7 @@ public static class PcbIpc356
                 case 'X': x = ParseLong(rest, lineNo, "X"); break;
                 case 'Y': y = ParseLong(rest, lineNo, "Y"); break;
                 case 'D': drill = ParseLong(rest, lineNo, "drill"); break;
+                case 'L': (fromLayer, toLayer) = ParseSpan(rest, lineNo); break;
                 default:
                     throw new FormatException(
                         $"IPC-D-356A record on line {lineNo} has an unknown geometry token '{tok}'.");
@@ -435,7 +566,21 @@ public static class PcbIpc356
             : refDes.Length == 0 ? Ipc356Feature.Via : Ipc356Feature.ThroughHolePad;
 
         return new Ipc356AccessPoint(
-            net, refDes, pin, feature, access.Value, x.Value, y.Value, drill ?? 0);
+            net, refDes, pin, feature, access.Value, x.Value, y.Value, drill ?? 0, fromLayer, toLayer);
+    }
+
+    // Parses an L<from>-<to> layer-span token into its two 1-based copper-layer numbers.
+    private static (int From, int To) ParseSpan(string s, int lineNo)
+    {
+        int dash = s.IndexOf('-');
+        if (dash > 0 && dash < s.Length - 1
+            && int.TryParse(s[..dash], NumberStyles.Integer, CultureInfo.InvariantCulture, out int a)
+            && int.TryParse(s[(dash + 1)..], NumberStyles.Integer, CultureInfo.InvariantCulture, out int b)
+            && a > 0 && b > 0)
+            return (a, b);
+        throw new FormatException(
+            $"IPC-D-356A record on line {lineNo} has a malformed layer span 'L{s}' "
+            + "(expected L<from>-<to>, 1-based copper layers).");
     }
 
     // ---- grouping (for a net-by-net reconstruction) --------------------------
@@ -476,6 +621,25 @@ public static class PcbIpc356
         return top && bottom ? 0 : min + 1;
     }
 
+    /// <summary>The 1-based inclusive copper-layer span a feature reaches (top-most copper = 1), for the
+    /// explicit <c>L&lt;from&gt;-&lt;to&gt;</c> per-inner-layer token — returned ONLY for a blind/buried
+    /// via, a feature reaching MORE than one copper layer but NOT both outer faces, whose single
+    /// top-most-layer <see cref="AccessCode"/> alone cannot spell the range. A through feature (both
+    /// faces) and a single-layer SMD pad return <c>(0, 0)</c>: their reached set is implicit in the
+    /// access code, so no token is written and their records stay byte-identical to the narrow
+    /// format.</summary>
+    private static (int From, int To) LayerSpan(IReadOnlyList<int> touched, int layerCount)
+    {
+        int min = int.MaxValue, max = int.MinValue;
+        foreach (int i in touched)
+        {
+            if (i < min) min = i;
+            if (i > max) max = i;
+        }
+        bool through = min == 0 && max == layerCount - 1;
+        return max > min && !through ? (min + 1, max + 1) : (0, 0);
+    }
+
     // A stable total order: by net, then location (X, Y), then component / pin / feature / access / drill,
     // so ties are fully broken and two emissions are byte-identical.
     private static int Order(Ipc356AccessPoint a, Ipc356AccessPoint b)
@@ -494,7 +658,11 @@ public static class PcbIpc356
         if (c != 0) return c;
         c = a.Access.CompareTo(b.Access);
         if (c != 0) return c;
-        return a.DrillUm.CompareTo(b.DrillUm);
+        c = a.DrillUm.CompareTo(b.DrillUm);
+        if (c != 0) return c;
+        c = a.FromLayer.CompareTo(b.FromLayer);
+        if (c != 0) return c;
+        return a.ToLayer.CompareTo(b.ToLayer);
     }
 
     private static long ToMicrons(double mm) =>
@@ -503,23 +671,25 @@ public static class PcbIpc356
     private static string Coord(long um, int width) =>
         (um < 0 ? "-" : "+") + Math.Abs(um).ToString(CultureInfo.InvariantCulture).PadLeft(width, '0');
 
-    // A left-justified, space-padded fixed-width identity field. An identity that does not FIT — too
-    // long, or carrying whitespace that would break the fixed columns — is refused by name, never
-    // truncated or sanitized (the net name IS the reconstruction key; squashing two names into one is
-    // the exact silent-misresolve a netlist must not do).
+    // A left-justified, space-padded fixed-width identity field. Whitespace is refused by name (it cannot
+    // be spelled in a fixed column nor in a continuation token — the net name IS the reconstruction key,
+    // and squashing two names into one is the exact silent-misresolve a netlist must not do). An
+    // over-width value is NOT refused: its full text rides a preceding 379 continuation (see Continuation)
+    // and the fixed field holds its head.
     private static string Field(string value, int width, string what)
     {
         value ??= "";
-        if (value.Length > width)
-            throw new ArgumentException(
-                $"IPC-D-356A {what} '{value}' is {value.Length} characters; the field holds {width}. "
-                + "An identity is refused, never truncated (it is the reconstruction key).", nameof(value));
         foreach (char ch in value)
             if (char.IsWhiteSpace(ch))
                 throw new ArgumentException(
-                    $"IPC-D-356A {what} '{value}' contains whitespace, which a fixed-column record cannot "
-                    + "spell (an identity is refused, never sanitized).", nameof(value));
-        return value.PadRight(width);
+                    $"IPC-D-356A {what} '{value}' contains whitespace, which neither a fixed-column record "
+                    + "nor a continuation token can spell (an identity is refused, never sanitized).", nameof(value));
+        // A value over the fixed width is carried IN FULL by a preceding 379 continuation record (see
+        // Continuation); the fixed field then holds its HEAD, so the columns stay valid and a legacy
+        // reader still gets a usable — if truncated — identity. A value that fits is written verbatim, so
+        // a record all of whose identities fit is byte-identical to the narrow format.
+        string head = value.Length > width ? value[..width] : value;
+        return head.PadRight(width);
     }
 
     private const string SyntheticPrefix = "N/C-";

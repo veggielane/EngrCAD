@@ -2728,17 +2728,12 @@ from what was already understood rather than from scratch.
     mask/silk/paste on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
     MID/surface side's territory).
   - **IPC-D-356A netlist follow-ups (filed; the netlist itself has LANDED — `PcbIpc356`, see
-    CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`):** WIDER net-name / refdes /
-    pin fields (v1 uses the classic IPC field widths — net 14, refdes 6, pin 4 — and REFUSES an
-    identity over them by name rather than truncating, since the net name is the reconstruction key;
-    modern hierarchical net names exceed 14, so a widened field with a `P`-record declaration, or the
-    IPC-D-356A continuation form, is the follow-up). PER-INNER-LAYER access encoding (v1 emits the
-    top-most reached copper layer's number for a blind/buried via; adjacency-based bed-of-nails test
-    wants each accessible layer named, which needs the record's full access-code vocabulary).
-    CONDUCTOR (trace-midpoint, op `378`) records (v1 lists access points — pads and vias — not the
-    conductor topology; a `378` record traces a net's copper path for a more thorough net-compare).
-    An `.ipc` disk verb / MCP export tool (v1 has `PcbIpc356.WriteFile`; wiring it into the
-    fabrication-export CLI/MCP surface beside the Gerber set is plumbing).
+    CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`; wider net-name/refdes fields
+    via a `379` continuation record and per-inner-layer blind/buried-via access spans via an `L<from>-<to>`
+    token have since LANDED too):** CONDUCTOR (trace-midpoint, op `378`) records (v1 lists access points —
+    pads and vias — not the conductor topology; a `378` record traces a net's copper path for a more
+    thorough net-compare). An `.ipc` disk verb / MCP export tool (v1 has `PcbIpc356.WriteFile`; wiring it
+    into the fabrication-export CLI/MCP surface beside the Gerber set is plumbing).
   - **Pick-and-place follow-ups (filed; the centroid file itself has LANDED — `PcbPickAndPlace`,
     see CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`):** MULTI-VALUE / VARIANT P&P (a
     do-not-populate mask, or a configuration's per-variant values — needs an assembly-variant concept

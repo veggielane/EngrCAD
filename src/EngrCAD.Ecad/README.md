@@ -853,19 +853,26 @@ coordinates are board-frame **verbatim** (no Y-flip — a bottom access point ke
 top one; which side it is probed from is the ACCESS code); access is `A00` = all layers (a through-hole
 pad / through via), else the 1-based number of the top-most reached copper layer (top = 1, bottom = N),
 reducing to `top = 1 / bottom = 2 / all = 0` on a 2-layer board; op `327` = SMD pad (no hole), `317` =
-drilled (through-hole pad, or a via with a blank component reference). Included: every component pad and
+drilled (through-hole pad, or a via with a blank component reference). **A blind/buried via also carries
+its full layer SPAN** — a via reaching more than one copper layer but not both outer faces writes an
+explicit `L<from>-<to>` token (1-based inclusive copper range), so a buried In1→In2 via is `A02 … L02-03`,
+not merely `A02`; a through feature / SMD pad writes none (byte-identical to before). **An over-width
+identity rides a `379` continuation record** (letter-tagged `N`/`R`/`P` tokens carrying the full net /
+refdes / pin) with the fixed field holding the head — so an over-14-char net name is **carried, not
+refused** — the reader applies the continuation to the record it precedes; a board whose identities all
+fit is byte-identical. Included: every component pad and
 every net-carrying via — an unconnected / no-connect pad is its **own single-point net** (a unique
 `N/C-######` name, matching how the copper model treats a null-net feature); board mounting / legacy
 holes are excluded (no net). **The bar is the twin-decoder round trip plus a net reconstruction**:
 `PcbIpc356.Parse` reads the output back, and the partition of component pads it induces (which pads share
 a net) EQUALS the board's own — the copper model's partition — with a dropped or relabelled record making
 them differ (the mutation that proves the oracle bites). **Refused by name** (an identity is never
-sanitized — it is the reconstruction key): a net over 14 chars / refdes over 6 / pin over 4, whitespace
-in an identity, a real net colliding with the `N/C-######` namespace, a drill below the file's 1 µm
-resolution; the reader refuses an unknown record / units / a drilled record with no drill / an SMD record
-with one by name. **Not in v1** (each filed): wider net-name / refdes fields, per-inner-layer access
-encoding for buried vias, and conductor (trace-midpoint, op `378`) records. Docs:
-`examples/ecad-fabrication.md`.
+sanitized — it is the reconstruction key): whitespace in an identity (unspellable in a fixed column nor a
+token; an over-width identity is CARRIED by a continuation, not refused), a real net colliding with the
+`N/C-######` namespace, a drill below the file's 1 µm resolution; the reader refuses an unknown record / units / a
+drilled record with no drill / an SMD record with one / a malformed layer span / a dangling or unknown-token
+continuation by name. **Not in v1** (filed): conductor (trace-midpoint, op `378`) records — v1 lists
+access points (pads and vias), not the conductor topology. Docs: `examples/ecad-fabrication.md`.
 
 ## The fabrication drawing — the shared frame's third consumer
 

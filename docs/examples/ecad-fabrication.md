@@ -449,8 +449,25 @@ the netname-carrying revision (the original IPC-D-356 carried none).
   is probed from is the **access** code, not a coordinate flip.
 - **Access:** `A00` = all layers (a through-hole pad or a through via reaches both faces); otherwise the
   1-based number of the top-most copper layer it is accessed from — top pad `A01`, an N-layer board's
-  bottom `A0N`, an inner layer's own number for a buried via. This reduces to the classic
+  bottom `A0N`, the top-most reached layer for a buried via. This reduces to the classic
   `top = 1 / bottom = 2 / all = 0` on a 2-layer board.
+- **A blind/buried via carries its full layer SPAN**, because the single 2-digit access code cannot: a
+  feature reaching more than one copper layer but **not** both outer faces also writes an explicit
+  `L<from>-<to>` geometry token — the 1-based inclusive copper range it touches — so a buried via between
+  inner layers 2 and 3 is `A02 … L02-03`, not merely `A02`, and `Parse` recovers the range into
+  `Ipc356AccessPoint.FromLayer` / `ToLayer`. A through feature and an SMD pad write **no** span token
+  (their reached set is implicit in the access code), so those records are **byte-identical** to before —
+  the encoding only changes blind/buried-via records.
+- **An over-width identity rides a continuation record, never a truncation.** The fixed fields are 14 / 6
+  / 4 chars (net / refdes / pin); a longer identity is carried **in full** by a preceding op `379`
+  continuation record (letter-tagged `N` / `R` / `P` tokens for the fields that overflow), while the fixed
+  field holds the identity's **head** so the columns stay valid and a legacy reader still gets a usable —
+  if truncated — name. `Parse` applies the continuation to the record that immediately follows it,
+  recovering the full identity, so the net-reconstruction oracle groups by the full net name. A board
+  whose identities all fit is **byte-identical** — the mechanism only changes over-width records. (The
+  standard's single fixed field cannot spell a range or an over-width name, so both are the repo's own
+  additive tokens in the same letter-prefixed stream the format already uses; `379` is distinct from the
+  unimplemented `378` conductor record.)
 - **Included:** every component pad (op `327` for SMD, `317` for a drilled through-hole pad) and every
   net-carrying via (op `317`, no component reference). An unconnected / no-connect pad is each its **own
   single-point net** (a unique `N/C-######` name) — exactly how the copper model treats a null-net
@@ -518,6 +535,41 @@ if (!boardPartition.SetEquals(filePartition))
 Console.WriteLine($"net reconstruction: {filePartition.Count} net classes match the board's own");
 ```
 
+### Blind/buried via spans and long identities
+
+A blind or buried via reaches a *range* of copper layers that the single access code cannot name, so its
+record also carries an explicit `L<from>-<to>` span (1-based copper layers). And a net name / reference
+designator too long for its fixed field rides a preceding `379` continuation record rather than being
+refused — the reader recovers both, and a board that needs neither is byte-identical to the narrow format.
+
+```csharp run:ecad-ipc356-wide
+// A 4-layer board (Top / In1 / In2 / Bottom) with a buried via on a deliberately long net name.
+PartDefinition Res() => new("R_0805", "R",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("R0805", new[] {
+        Pad.Smd("1", new Vector2d(-1.0, 0), 1.2, 1.4),
+        Pad.Smd("2", new Vector2d(1.0, 0), 1.2, 1.4) }));
+
+var sch = new Schematic("ipc-wide");
+var r = sch.Add("R1", Res(), "0");
+sch.Connect("DIFFERENTIAL_PAIR_P", r.Pin("1"), r.Pin("2"));   // 19 chars > the 14-char field
+
+var stackup = PcbStackup.Layers(1.6, ("In1", 1.1), ("In2", 0.5));   // Top(1) In1(2) In2(3) Bottom(4)
+var layout = new PcbLayout(sch, PcbBoard.Rectangle(30, 20, 1.6, stackup));
+layout.Place("R1", 0, 0, 0, CopperSide.Top);
+layout.AddVia("DIFFERENTIAL_PAIR_P", 5, 5, "In1", "In2", drill: 0.3, pad: 0.6);   // buried inner→inner
+
+string ipc = PcbIpc356.Write(layout);
+Console.WriteLine(ipc);   // note the '379 N…' continuation line and the 'L02-03' span on the buried via
+
+// The twin decoder recovers the FULL net name and the FULL layer span.
+var via = PcbIpc356.Parse(ipc).Single(p => p.IsVia);
+Console.WriteLine($"via net='{via.Net}' access=A{via.Access:D2} span=[{via.FromLayer},{via.ToLayer}]");
+if (via.Net != "DIFFERENTIAL_PAIR_P" || via.FromLayer != 2 || via.ToLayer != 3)
+    throw new Exception("the wide net name or the buried-via layer span did not round-trip");
+Console.WriteLine("wide net name + per-inner-layer span round-trip: ok");
+```
+
 ## Coordinates and scale
 
 The coordinate format (`%FS`) is derived from the board's own coordinate magnitudes, so the
@@ -540,6 +592,7 @@ each filed: step / multi-level stencils, paste-volume optimisation, window-panin
 fine mask tenting control beyond the tented/opened via policy, curved conformal mask / silk / paste on a
 MID surface (refused for the distortion reason), a lowercase silk font (a value's lowercase advances as a
 blank), Gerber X2 attributes and the job file, and a Gerber IMPORT of a foreign board (this is export).
-The IPC-D-356A netlist itself files: wider net-name / refdes fields (a name over 14 chars is refused, not
-truncated), per-inner-layer access encoding for adjacency-based test rather than the top-most-layer code,
-and conductor (trace-midpoint, op `378`) records.
+The IPC-D-356A netlist now carries **blind/buried-via layer spans** (an explicit `L<from>-<to>` token
+beside the top-most-layer access code) and **wide net-name / refdes fields** (an over-width identity rides
+a `379` continuation record instead of being refused); it still files conductor (trace-midpoint, op `378`)
+records, since this is deliberately an access-point netlist, not a conductor topology.

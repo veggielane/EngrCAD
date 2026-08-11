@@ -353,26 +353,156 @@ public sealed class PcbIpc356Tests
         layout.Place("R1", 0, 0, 0, CopperSide.Top);
         layout.AddVia("SIG", 5, 5, "In1", "In2", drill: 0.3, pad: 0.6);   // buried inner→inner
 
-        var parsed = PcbIpc356.Parse(PcbIpc356.Write(layout));
-        var via = parsed.Single(p => p.IsVia);
+        string text = PcbIpc356.Write(layout);
+        var via = PcbIpc356.Parse(text).Single(p => p.IsVia);
         Assert.Equal(2, via.Access);   // top-most reached copper is In1 (layer number 2), not 0/all
+        // And the record carries the via's FULL layer span [2, 3] faithfully — the per-inner-layer
+        // encoding the single access code cannot spell (a buried In1→In2 via reaches BOTH layers).
+        Assert.True(via.HasLayerSpan);
+        Assert.Equal(2, via.FromLayer);
+        Assert.Equal(3, via.ToLayer);
+        Assert.Contains("L02-03", text);
+    }
+
+    [Fact]
+    public void ABlindViaCarriesItsFullLayerSpanAndRoundTrips()
+    {
+        // A 4-layer board: Top(0), In1(1), In2(2), Bottom(3).
+        var stackup = PcbStackup.Layers(1.6, ("In1", 1.1), ("In2", 0.5));
+        var board = PcbBoard.Rectangle(50, 40, 1.6, stackup);
+        var sch = new Schematic("ipc-blind");
+        var r = sch.Add("R1", Res2(1), "0");
+        sch.Connect("SIG", r.Pin("1"), r.Pin("2"));
+        var layout = new PcbLayout(sch, board);
+        layout.Place("R1", 0, 0, 0, CopperSide.Top);
+        layout.AddVia("SIG", 5, 5, "Top", "In2", drill: 0.3, pad: 0.6);   // blind: outer Top → inner In2
+
+        string text = PcbIpc356.Write(layout);
+        var via = PcbIpc356.Parse(text).Single(p => p.IsVia);
+        // The access names the top-most reached layer (Top = 1); the record ALSO carries the FULL
+        // span [1, 3] so the down-reach into In2 is not lost.
+        Assert.Equal(1, via.Access);
+        Assert.True(via.HasLayerSpan);
+        Assert.Equal(1, via.FromLayer);
+        Assert.Equal(3, via.ToLayer);
+        Assert.Contains("L01-03", text);
+
+        // Byte-identical fixed point through the twin decoder.
+        var pts = PcbIpc356.Compute(layout);
+        string t = PcbIpc356.Write(pts);
+        Assert.Equal(t, PcbIpc356.Write(PcbIpc356.Parse(t)));
+    }
+
+    // ---- 8c. additivity: the narrow (simple) case is byte-identical ---------
+
+    [Fact]
+    public void AThroughOnlyBoardWithShortNamesWritesNoContinuationOrLayerSpanToken()
+    {
+        // The additive contract: a board of only through vias / pads and short identities writes the
+        // NARROW format — no 379 continuation record and no L layer-span token — so it is byte-identical
+        // to the format before the wide-field / per-inner-layer encodings existed. (The whole existing
+        // suite exercising BuildLayout — determinism, round trips, token asserts — is the byte-identity
+        // proof; this states it directly.)
+        string text = PcbIpc356.Write(BuildLayout());
+        Assert.DoesNotContain(text.Split('\n'), l => l.StartsWith("379", StringComparison.Ordinal));
+        foreach (var line in text.Split('\n').Where(l => l.StartsWith("3", StringComparison.Ordinal)))
+            Assert.DoesNotContain(" L", line[3..]);   // no layer-span token in any record's geometry stream
+        // And every access point reports no explicit layer span.
+        Assert.All(PcbIpc356.Compute(BuildLayout()), p => Assert.False(p.HasLayerSpan));
+    }
+
+    // ---- 8d. wide identities ride a continuation record (full name recovered) --
+
+    [Fact]
+    public void ALongNetNameRoundTripsViaAContinuationRecord()
+    {
+        // A net name over the 14-char fixed field is CARRIED, not refused — it rides a preceding 379
+        // continuation record, and the reader recovers it IN FULL.
+        const string longNet = "POWER_RAIL_3V3_ANALOG";   // 21 chars > 14
+        var layout = MakeSingleNetLayout(longNet);
+
+        string text = PcbIpc356.Write(layout);
+        Assert.Contains("379 N" + longNet, text);    // the continuation carries the FULL name
+        Assert.Contains("POWER_RAIL_3V3 ", text);     // the fixed field holds the 14-char head (columns valid)
+
+        var parsed = PcbIpc356.Parse(text);
+        Assert.All(parsed.Where(p => !p.IsVia), p => Assert.Equal(longNet, p.Net));   // full name recovered
+        // The reconstruction oracle groups by the FULL net name and equals the board's own.
+        Assert.Equal(ModelPartition(layout), Partition(parsed));
+
+        // Byte-identical fixed point through the twin decoder.
+        var pts = PcbIpc356.Compute(layout);
+        string t = PcbIpc356.Write(pts);
+        Assert.Equal(t, PcbIpc356.Write(PcbIpc356.Parse(t)));
+    }
+
+    [Fact]
+    public void ALongReferenceDesignatorRoundTripsViaAContinuationRecord()
+    {
+        // A reference designator over the 6-char field rides the same continuation mechanism (R token).
+        const string longRef = "CONNECTOR_J1";   // 12 chars > 6
+        var sch = new Schematic("ipc-longref");
+        var r = sch.Add(longRef, Res2(1), "0");
+        sch.Connect("SIG", r.Pin("1"), r.Pin("2"));
+        var layout = new PcbLayout(sch, PcbBoard.Rectangle(20, 10, 1.6));
+        layout.Place(longRef, 0, 0, 0, CopperSide.Top);
+
+        string text = PcbIpc356.Write(layout);
+        Assert.Contains("379 R" + longRef, text);
+
+        var parsed = PcbIpc356.Parse(text);
+        Assert.All(parsed, p => Assert.Equal(longRef, p.RefDes));            // full refdes recovered
+        Assert.All(parsed, p => Assert.Equal(longRef + "." + p.Pin, p.PadName));
+
+        var pts = PcbIpc356.Compute(layout);
+        string t = PcbIpc356.Write(pts);
+        Assert.Equal(t, PcbIpc356.Write(PcbIpc356.Parse(t)));
+    }
+
+    [Fact]
+    public void ABoardWithBothABuriedViaAndALongNetReconstructsAndIsAFixedPoint()
+    {
+        // The two features TOGETHER: a buried via on a long-named net. The record gains both a preceding
+        // continuation (the full name) and a trailing L span, and both round-trip.
+        var stackup = PcbStackup.Layers(1.6, ("In1", 1.1), ("In2", 0.5));
+        var board = PcbBoard.Rectangle(50, 40, 1.6, stackup);
+        var sch = new Schematic("ipc-both");
+        const string longNet = "DIFFERENTIAL_PAIR_P";   // 19 chars > 14
+        var r = sch.Add("R1", Res2(1), "0");
+        sch.Connect(longNet, r.Pin("1"), r.Pin("2"));
+        var layout = new PcbLayout(sch, board);
+        layout.Place("R1", 0, 0, 0, CopperSide.Top);
+        layout.AddVia(longNet, 5, 5, "In1", "In2", drill: 0.3, pad: 0.6);   // buried, long-named
+
+        var pts = PcbIpc356.Compute(layout);
+        string text = PcbIpc356.Write(pts);
+        Assert.Contains("379 N" + longNet, text);   // the long name rides a continuation
+        Assert.Contains("L02-03", text);            // the buried via carries its span
+
+        var parsed = PcbIpc356.Parse(text);
+        var via = parsed.Single(p => p.IsVia);
+        Assert.Equal(longNet, via.Net);             // full net name recovered on the via
+        Assert.Equal((2, 3), (via.FromLayer, via.ToLayer));
+        Assert.Equal(ModelPartition(layout), Partition(parsed));   // oracle over the FULL net name
+        Assert.Equal(text, PcbIpc356.Write(parsed));               // byte-identical fixed point
+
+        // THE MUTATION still bites through both encodings: relabel a pad off the long net → differs.
+        var relabelled = parsed.Select(p => p.PadName == "R1.1" ? p with { Net = "OTHER" } : p).ToList();
+        Assert.NotEqual(ModelPartition(layout), Partition(relabelled));
     }
 
     // ---- 9. refusals by name (identities are refused, never sanitized) ------
 
     [Fact]
-    public void AnIdentityTooLongOrCarryingWhitespaceIsRefusedByName()
+    public void AnIdentityCarryingWhitespaceIsRefusedByName()
     {
-        // A net name over the 14-char field.
-        var over = MakeSingleNetLayout("THIS_NET_NAME_IS_WAY_TOO_LONG");
-        var ex1 = Assert.Throws<ArgumentException>(() => PcbIpc356.Write(over));
-        Assert.Contains("net name", ex1.Message);
-
-        // A net name carrying whitespace (a fixed-column record cannot spell it, and trimming would
-        // change the identity).
+        // A net name carrying whitespace cannot be spelled in a fixed column NOR in a continuation
+        // token (and trimming would change the identity), so it is refused — never sanitized. (An
+        // over-WIDTH name is no longer refused; it rides a continuation record — see the wide-field
+        // tests below.)
         var space = MakeSingleNetLayout("A B");
-        var ex2 = Assert.Throws<ArgumentException>(() => PcbIpc356.Write(space));
-        Assert.Contains("whitespace", ex2.Message);
+        var ex = Assert.Throws<ArgumentException>(() => PcbIpc356.Write(space));
+        Assert.Contains("whitespace", ex.Message);
     }
 
     [Fact]
@@ -422,6 +552,15 @@ public sealed class PcbIpc356Tests
             PcbIpc356.Parse(units + a317[..a317.LastIndexOf(" D", StringComparison.Ordinal)] + "\n999\n"));
         // An SMD (327) record carrying a spurious drill (D) token.
         Assert.Throws<FormatException>(() => PcbIpc356.Parse(units + a327 + " D0900\n999\n"));
+        // A malformed layer-span token (no <from>-<to>).
+        Assert.Throws<FormatException>(() => PcbIpc356.Parse(units + a317 + " L02\n999\n"));
+        // A dangling continuation record — no test record follows it.
+        Assert.Throws<FormatException>(() => PcbIpc356.Parse(units + "379 NLONG_NET_NAME_HERE\n999\n"));
+        // A continuation record carrying an unknown field token.
+        Assert.Throws<FormatException>(() => PcbIpc356.Parse(units + "379 ZWHAT\n" + a317 + "\n999\n"));
+        // Two continuation records with no test record between them.
+        Assert.Throws<FormatException>(() =>
+            PcbIpc356.Parse(units + "379 NA_LONG_NET_NAME\n379 NANOTHER_LONG_NAME\n" + a317 + "\n999\n"));
     }
 
     // ---- 10. empty board -----------------------------------------------------
