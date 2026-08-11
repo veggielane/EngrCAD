@@ -167,6 +167,21 @@ coordinates" means AND is internally consistent (pads, tracks, vias, zones and t
 frame) — all connectivity, the copper DRC and Gerber export need. A footprint rotation is a CCW
 rotation in that frame.
 
+**The fabrication spec is recovered too, best-effort and write-only-when-stated.** A `.kicad_pcb`'s
+`(setup (stackup ...))` block carries the fab-package fields the geometry cannot — so the reader
+populates a `PcbFabricationSpec` (`layout.Fabrication`) from it: the stackup's TOTAL (sum of every
+stated layer thickness) → finished board thickness, the first copper layer's thickness ÷ **0.035 mm**
+(1 oz = 35 µm = 0.035 mm, the industry rounding of 34.79 µm and KiCad's own 1 oz thickness — ⚠
+verify-against-datasheet) → copper weight in ounces, the first dielectric layer's `(material ...)` →
+base material, `(copper_finish ...)` → a named `PcbSurfaceFinish` (an unmapped string → `Other`
+carrying the verbatim name, noted), the outer mask/silk layers' `(color ...)` → the mask/silk
+colours, and any legacy default net class's `trace_width`/`clearance` → the minimum trace width /
+clearance. **Only a field the file actually states is set** — every numeric field gated
+finite-and-positive (a garbage value dropped, not crashed on) — so a board with **no stackup imports
+byte-identically** (`Fabrication` stays null, the saved layout has no `fabrication` key), and a
+stackup board's populated spec **round-trips** through the layout file as a `save → load → save`
+fixed point (persistence already carries the spec, so no writer change was needed).
+
 Verified higher than usual (an import that connects the wrong pads is a silent failure): the
 **net connectivity matches KiCad's intent** (each multi-pad net connected via its tracks/via/zone,
 the GND zone joining every GND pad — and removing the zone leaves GND an unrouted ratsnest, the
@@ -852,7 +867,9 @@ plate thickness in the finished-thickness note (the delivered stackup thickness 
 quotes to); with no spec the note is the modelled thickness exactly as before, so a no-spec drawing
 is byte-identical. Every stated value is validated at `WithFabrication` and a bad one is **refused by
 name** — a non-finite/non-positive thickness / copper weight / minimum trace / minimum clearance, an
-IPC class outside {1, 2, 3}, or an `Other` finish with no name.
+IPC class outside {1, 2, 3}, or an `Other` finish with no name. It is also **populated automatically
+from a `KiCadPcbReader` import** (the board-setup / stackup carries most of these fields) — see the
+whole-board interchange section above.
 
 **v1 scope** (each filed): the drill table is the board's own holes + placed vias (component
 through-hole pad drills belong to the Excellon program, folded in later); the drill glyphs are a

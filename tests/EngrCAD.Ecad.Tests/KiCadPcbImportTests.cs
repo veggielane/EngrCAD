@@ -259,7 +259,171 @@ public sealed class KiCadPcbImportTests
         Assert.Equal(PadShape.RoundedRectangle, footprint.Pads[0].Shape);
     }
 
+    // ==== the fabrication spec is recovered from the board setup / stackup ====
+    // A .kicad_pcb's (setup (stackup ...)) carries the fab-package fields the geometry cannot: the
+    // material, the copper weight, the finish, the mask/silk colours. The reader populates a
+    // PcbFabricationSpec from it BEST-EFFORT and WRITE-ONLY-WHEN-STATED — a board with no stackup
+    // imports byte-identically (Fabrication stays null).
+
+    [Fact]
+    public void StackupBoard_PopulatesTheFabricationSpec()
+    {
+        var fab = KiCadPcbReader.Read(KiCadPcbFixtures.StackupBoard).Layout.Fabrication;
+        Assert.NotNull(fab);
+
+        Assert.Equal("FR4", fab.BaseMaterial);
+        Assert.Equal(1.6, fab.FinishedThicknessMm!.Value, 6);   // sum of the stated layer thicknesses
+        Assert.Equal(1.0, fab.CopperWeightOz!.Value, 6);        // 0.035 mm / 0.035 = 1 oz
+        Assert.Equal(PcbSurfaceFinish.Enig, fab.SurfaceFinish);
+        Assert.Null(fab.SurfaceFinishOther);
+        Assert.Equal("Green", fab.SolderMaskColour);
+        Assert.Equal("White", fab.SilkscreenColour);
+        Assert.Equal(0.25, fab.MinTraceWidthMm!.Value, 6);
+        Assert.Equal(0.2, fab.MinClearanceMm!.Value, 6);
+
+        // Nothing the file does not state is invented.
+        Assert.Null(fab.Ipc6012Class);
+        Assert.Empty(fab.Notes);
+    }
+
+    [Fact]
+    public void PartialStackup_LeavesUnstatedFieldsNull()
+    {
+        var fab = KiCadPcbReader.Read(KiCadPcbFixtures.PartialStackupBoard).Layout.Fabrication;
+        Assert.NotNull(fab);
+
+        // Stated: copper weight, finished thickness (the copper + dielectric), the OSP finish.
+        Assert.Equal(1.0, fab.CopperWeightOz!.Value, 6);
+        Assert.Equal(1.58, fab.FinishedThicknessMm!.Value, 6);
+        Assert.Equal(PcbSurfaceFinish.Osp, fab.SurfaceFinish);
+
+        // Unstated: no dielectric material, no mask/silk colours, no net-class rules.
+        Assert.Null(fab.BaseMaterial);
+        Assert.Null(fab.SolderMaskColour);
+        Assert.Null(fab.SilkscreenColour);
+        Assert.Null(fab.MinTraceWidthMm);
+        Assert.Null(fab.MinClearanceMm);
+    }
+
+    [Fact]
+    public void NoStackup_LeavesFabricationNull_AndTheFileIsUnchanged()
+    {
+        // The plain Board fixture has an empty (setup) and no stackup / net class, so it states no
+        // fabrication requirements: Fabrication is null and the saved layout carries no "fabrication"
+        // key — byte-identical to a pre-spec import (the reader only ADDS the spec).
+        var pcb = KiCadPcbReader.Read(KiCadPcbFixtures.Board);
+        Assert.Null(pcb.Layout.Fabrication);
+        Assert.DoesNotContain("fabrication", pcb.Layout.Save());
+
+        // Every setup-less fixture stays spec-less.
+        Assert.Null(KiCadPcbReader.Read(KiCadPcbFixtures.BoardNoZone).Layout.Fabrication);
+        Assert.Null(KiCadPcbReader.Read(KiCadPcbFixtures.RotatedFootprintBoard).Layout.Fabrication);
+        Assert.Null(KiCadPcbReader.Read(KiCadPcbFixtures.ArcAndBottomBoard).Layout.Fabrication);
+    }
+
+    [Theory]
+    [InlineData("ENIG", PcbSurfaceFinish.Enig)]
+    [InlineData("HASL", PcbSurfaceFinish.Hasl)]
+    [InlineData("HAL", PcbSurfaceFinish.Hasl)]
+    [InlineData("HAL lead-free", PcbSurfaceFinish.HaslLeadFree)]
+    [InlineData("OSP", PcbSurfaceFinish.Osp)]
+    [InlineData("Immersion silver", PcbSurfaceFinish.ImmersionSilver)]
+    [InlineData("Immersion tin", PcbSurfaceFinish.ImmersionTin)]
+    public void SurfaceFinish_MapsKnownStrings(string finish, PcbSurfaceFinish expected)
+    {
+        var fab = KiCadPcbReader.Read(BoardWithFinish(finish)).Layout.Fabrication;
+        Assert.NotNull(fab);
+        Assert.Equal(expected, fab.SurfaceFinish);
+        Assert.Null(fab.SurfaceFinishOther);
+    }
+
+    [Fact]
+    public void SurfaceFinish_UnknownMapsToOther_CarryingTheString()
+    {
+        var pcb = KiCadPcbReader.Read(BoardWithFinish("ENEPIG"));
+        var fab = pcb.Layout.Fabrication;
+        Assert.NotNull(fab);
+        Assert.Equal(PcbSurfaceFinish.Other, fab.SurfaceFinish);
+        Assert.Equal("ENEPIG", fab.SurfaceFinishOther);
+        Assert.Equal("ENEPIG", fab.SurfaceFinishLabel);   // the drawing prints the verbatim name
+        Assert.Contains(pcb.Diagnostics, d => d.Contains("ENEPIG") && d.Contains("Other"));
+    }
+
+    [Theory]
+    [InlineData(0.035, 1.0)]    // 1 oz = 35 um = 0.035 mm (the industry rounding of 34.79 um, KiCad's
+    [InlineData(0.070, 2.0)]    // own 1 oz thickness) — verify-against-datasheet, so 0.035 mm = 1 oz
+    [InlineData(0.0175, 0.5)]   // exactly.
+    public void CopperWeight_DerivesFromTheCopperLayerThickness(double copperMm, double expectedOz)
+    {
+        var fab = KiCadPcbReader.Read(BoardWithCopper(copperMm)).Layout.Fabrication;
+        Assert.NotNull(fab);
+        Assert.Equal(expectedOz, fab.CopperWeightOz!.Value, 6);
+    }
+
+    [Fact]
+    public void StackupBoard_FabricationSpec_IsASaveLoadSaveFixedPoint()
+    {
+        var imported = KiCadPcbReader.Read(KiCadPcbFixtures.StackupBoard).Layout;
+        Assert.NotNull(imported.Fabrication);
+
+        // The populated spec rides the layout file (persistence landed with the spec), so a round trip
+        // is a byte-identical fixed point.
+        string once = imported.Save();
+        string twice = PcbLayout.Load(once).Save();
+        Assert.Equal(once, twice);
+
+        // The reloaded layout carries the same spec, field for field.
+        var reloaded = PcbLayout.Load(once).Fabrication!;
+        var original = imported.Fabrication!;
+        Assert.Equal(original.BaseMaterial, reloaded.BaseMaterial);
+        Assert.Equal(original.FinishedThicknessMm, reloaded.FinishedThicknessMm);
+        Assert.Equal(original.CopperWeightOz, reloaded.CopperWeightOz);
+        Assert.Equal(original.SurfaceFinish, reloaded.SurfaceFinish);
+        Assert.Equal(original.SolderMaskColour, reloaded.SolderMaskColour);
+        Assert.Equal(original.SilkscreenColour, reloaded.SilkscreenColour);
+        Assert.Equal(original.MinTraceWidthMm, reloaded.MinTraceWidthMm);
+        Assert.Equal(original.MinClearanceMm, reloaded.MinClearanceMm);
+    }
+
+    [Fact]
+    public void Read_IsDeterministic_ForTheFabricationSpec()
+    {
+        var a = KiCadPcbReader.Read(KiCadPcbFixtures.StackupBoard).Layout.Save();
+        var b = KiCadPcbReader.Read(KiCadPcbFixtures.StackupBoard).Layout.Save();
+        Assert.Equal(a, b);
+    }
+
     // ---- helpers ------------------------------------------------------------
+
+    // A minimal board carrying only a two-copper stackup and the given copper_finish — the fixture the
+    // finish-mapping theory drives.
+    private static string BoardWithFinish(string copperFinish) => $$"""
+(kicad_pcb (version 20221018) (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (stackup
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "core") (thickness 1.51) (material "FR4"))
+    (layer "B.Cu" (type "copper") (thickness 0.035))
+    (copper_finish "{{copperFinish}}")))
+  (gr_rect (start 0 0) (end 20 14) (layer "Edge.Cuts") (stroke (width 0.1) (type solid))))
+""";
+
+    // A minimal board whose copper layers carry the given thickness — the copper-weight theory's fixture.
+    private static string BoardWithCopper(double copperMm)
+    {
+        string mm = copperMm.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return $$"""
+(kicad_pcb (version 20221018) (generator pcbnew)
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (stackup
+    (layer "F.Cu" (type "copper") (thickness {{mm}}))
+    (layer "dielectric 1" (type "core") (thickness 1.51) (material "FR4"))
+    (layer "B.Cu" (type "copper") (thickness {{mm}}))))
+  (gr_rect (start 0 0) (end 20 14) (layer "Edge.Cuts") (stroke (width 0.1) (type solid))))
+""";
+    }
 
     private static void AssertPad(
         IReadOnlyList<PlacedPad> pads, string reference, string number,

@@ -233,4 +233,84 @@ internal static class KiCadPcbFixtures
   (arc (start 4 4) (mid 8 6) (end 12 4) (width 0.3) (layer "B.Cu") (net 1))
 )
 """;
+
+    // ---- a board carrying a FULL board-setup / stackup ----------------------
+    // A physical build-up a fab house reads: FR4 core + 1 oz (0.035 mm) copper on both faces + green
+    // mask + white silk + ENIG finish, plus a legacy default net class stating a 0.25 mm trace and a
+    // 0.2 mm clearance. The stated layer thicknesses sum to exactly 1.6 mm (the finished thickness);
+    // the geometry (one part on an outline) is incidental — the reader recovers the fabrication spec
+    // from the (setup (stackup ...)) block.
+
+    internal const string StackupBoard = """
+(kicad_pcb
+  (version 20221018)
+  (generator pcbnew)
+  (general (thickness 1.6))
+  (title_block (title "stackup-board"))
+  (layers
+    (0 "F.Cu" signal)
+    (31 "B.Cu" signal)
+    (44 "Edge.Cuts" user)
+  )
+  (setup
+    (stackup
+      (layer "F.SilkS" (type "Top Silk Screen") (color "White"))
+      (layer "F.Paste" (type "Top Solder Paste"))
+      (layer "F.Mask" (type "Top Solder Mask") (color "Green") (thickness 0.01))
+      (layer "F.Cu" (type "copper") (thickness 0.035))
+      (layer "dielectric 1" (type "core") (thickness 1.51) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02))
+      (layer "B.Cu" (type "copper") (thickness 0.035))
+      (layer "B.Mask" (type "Bottom Solder Mask") (color "Green") (thickness 0.01))
+      (layer "B.SilkS" (type "Bottom Silk Screen") (color "White"))
+      (copper_finish "ENIG")
+      (dielectric_constraints no)
+    )
+    (pad_to_mask_clearance 0)
+  )
+  (net_class "Default" "This is the default net class."
+    (clearance 0.2)
+    (trace_width 0.25)
+    (via_dia 0.8)
+    (via_drill 0.4)
+  )
+  (net 0 "")
+  (net 1 "N")
+
+  (footprint "R" (layer "F.Cu")
+    (at 5 5 0)
+    (property "Reference" "R1" (at 0 -1.5 0) (layer "F.SilkS"))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "N"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "N"))
+  )
+
+  (gr_rect (start 0 0) (end 20 14) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)))
+)
+""";
+
+    // ---- a stackup stating only SOME fields (write-only-when-stated) ---------
+    // Copper thickness + an OSP finish, a dielectric with a thickness but NO material name, no mask /
+    // silk colours and no net class — so material, colours and the min trace / clearance stay unstated.
+
+    internal const string PartialStackupBoard = """
+(kicad_pcb
+  (version 20221018)
+  (generator pcbnew)
+  (general (thickness 1.6))
+  (layers
+    (0 "F.Cu" signal)
+    (31 "B.Cu" signal)
+    (44 "Edge.Cuts" user)
+  )
+  (setup
+    (stackup
+      (layer "F.Cu" (type "copper") (thickness 0.035))
+      (layer "dielectric 1" (type "core") (thickness 1.51))
+      (layer "B.Cu" (type "copper") (thickness 0.035))
+      (copper_finish "OSP")
+    )
+  )
+
+  (gr_rect (start 0 0) (end 20 14) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)))
+)
+""";
 }
