@@ -552,12 +552,35 @@ cutouts are checked against their bounding box in v1 (exact round-hole corner fi
 `FitReport` is deterministic (same enclosure + board → the same report) and always reports
 `Headroom` (positive clears, negative collides). Docs: `examples/ecad-enclosure.md`.
 
-**Thermal coupling** — per-component power dissipated into the thermal solver, verified against a
-uniformly-dissipating board's analytic temperature rise — is the next stage over this one geometry.
+## Thermal coupling (`PcbThermal`)
+
+Where does the heat go? `PcbThermal.Solve(layout, spec)` turns a powered board into a heat-conduction
+problem on the **landed [FEA thermal solver](../EngrCAD.Fea/README.md)** — not a lumped estimate —
+so the answers are verifiable against closed forms. Each component's dissipation (watts) becomes a
+volumetric source over its footprint; the copper spreads it; a held cold edge or a convecting face
+carries it away; the result is a temperature field the `FieldDisplay` colour map picks up and a
+hot-spot temperature per component.
+
+v1 is the standard **board-level model**: the copper is SMEARED into an effective conductivity over
+a homogeneous slab — high in-plane (the copper layers are parallel paths, `k_in = f·k_Cu + (1−f)·k_FR4`),
+low through-thickness (they are in series, the harmonic mean) — with `f` the copper volume fraction
+(the one honest knob, `PcbThermalSpec.CopperFraction`, or `.FromCoverage(board, coverage)`). A bare
+board collapses to the isotropic dielectric conductivity. Power is stated in watts and a film
+coefficient in W/(m²·K), converted once to the model unit; boundary conditions (`FixedTemperature`,
+`Convection`) name a `BoardSurface` or a raw `Facets` selector.
+
+**Verified against analytic conduction** (an ECAD thermal answer fails plausibly): a uniformly-
+dissipating board matches the parabola `T = T0 + (q/2k)(L²−x²)` to 3e-12 relative (quadratic-exact);
+a single hot component's far-field matches the series-resistance line `T0 + Q(L−x)/(kA)` to 3.6e-5
+with the energy balance exact; real FR4 vs 2.6 % copper drops the peak rise 1129 K → 32.6 K (34.7×)
+with the far-field ratio exactly `k_copper/k_bare`; a no-boundary board is refused by name (the
+`ThermalSolver` convention); zero power is isothermal; a solve is deterministic to the bit. Filed:
+transient warm-up (`SolveTransient` exists), thermal vias as discrete paths, CFD airflow, and
+detailed die/package models. Docs: `examples/ecad-thermal.md`.
 
 ## Not yet (later campaign stages)
 
-Thermal coupling, MID/LDS 3D
+MID/LDS 3D
 routing, and the richer
 interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one
 graph. On the LIBRARY side, **KiCad `.kicad_sym`/`.kicad_mod` and Eagle `.lbr` both import**; what

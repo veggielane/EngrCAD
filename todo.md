@@ -2586,8 +2586,14 @@ from what was already understood rather than from scratch.
     routing costs a candidate route with. Verified from both sides of every limit against the
     closed-form gap, scale-invariant, deterministic; the placed stage-2 fixture is DRC-clean
     with an unrouted ratsnest. See CLAUDE.md's ECAD status paragraph and design.md §6d for the
-    findings. The OPEN stages below (MID/LDS, ECAD thermal coupling, interchange) are next
-    (enclosure fit landed — stage 7).
+    findings. The OPEN stages below (MID/LDS, interchange) are next (enclosure fit landed —
+    stage 7; thermal coupling landed — stage 8: `PcbThermal.Solve` couples per-component power
+    into the landed FEA thermal solver over an effective copper-smeared slab conductivity,
+    verified against the analytic conduction parabola (3.16e-12 relative), the series-resistance
+    rise (3.6e-5, energy balance exact), the copper-spreading ratio (34.7×, exactly `k_copper/k_bare`),
+    the no-BC refusal, isothermal zero-power and bit determinism — filed there: thermal vias as
+    discrete paths, a transient warm-up, detailed die/package models and CFD airflow. See CLAUDE.md
+    and design.md §6d stage 8).
   - **✅ STAGE 4b — multilayer stackups + embedded/enclosed components — LANDED**
     (`LayerStackup`/`StackLayer`/`Embedding`/`EmbeddedCavity`; the `PcbPlacement` extended with
     `Layer`/`Embedding`/`CavityClearance` + the new `Embed` method; `DrcRule.CavityClearance`;

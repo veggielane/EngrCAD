@@ -197,6 +197,12 @@
       "reason": "does not compile against the browser's assemblies: The type or namespace name 'PartDefinition' could not be found (are you missing a using directive or an assembly reference?)"
     },
     {
+      "id": "ecad-thermal-board",
+      "page": "examples/ecad-thermal.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'PartDefinition' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
       "id": "extrude",
       "page": "examples/extrude-revolve-sweep.md",
       "live": true

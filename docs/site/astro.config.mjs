@@ -235,6 +235,7 @@ document.addEventListener('click', function (event) {
             { label: 'Autorouting', slug: 'examples/ecad-routing' },
             { label: 'Gerber & Excellon fabrication export', slug: 'examples/ecad-fabrication' },
             { label: 'Enclosure fit', slug: 'examples/ecad-enclosure' },
+            { label: 'Board thermal coupling', slug: 'examples/ecad-thermal' },
           ],
         },
         { label: 'Writing examples', slug: 'writing-examples' },
