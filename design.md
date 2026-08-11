@@ -7580,11 +7580,42 @@ Gerber round-trips, the full set writes/re-reads (`-Top_Paste.gbr`/`-Bottom_Past
 board writes a valid EMPTY paste, and determinism.
 
 **Not in v1** (each filed): step / multi-level stencils, paste-volume optimisation, window-paning of
-large apertures, the assembly pick-and-place file (a different output), fine mask tenting control beyond
+large apertures, fine mask tenting control beyond
 the tented/opened via policy, curved conformal mask/silk/paste on a MID surface (refused for the
 tamper-mesh distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber
-X2 attributes and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
-`examples/ecad-fabrication.md`.
+X2 attributes and the job file, an IPC-D-356 netlist test-point export, and a Gerber IMPORT of a foreign
+board (this is export). Docs: `examples/ecad-fabrication.md`.
+
+### Assembly pick-and-place (the centroid file) (`PcbPickAndPlace`)
+
+The copper Gerber/Excellon set builds the bare board; the **pick-and-place (centroid) file** is the
+assembly-side output a P&P machine reads to *populate* it — one row per placed component (reference
+designator, X, Y, rotation, side, value/package). `PcbPickAndPlace.Compute` projects the layout's
+`PcbPlacement`s into `PickAndPlaceRow`s, and **one `Compute` feeds both writers** (the drawing-sheet
+rule — a CSV centroid and a KiCad-style `.pos` cannot disagree about a pose): `ToCsv` writes the
+ubiquitous `Designator,X,Y,Rotation,Side,Value`, `ToPos` a KiCad-style aligned
+`Ref Val Package PosX PosY Rot Side`, and `Write` drops both to disk.
+
+**The pose is the placement, not the 3D body.** A machine places by the footprint origin, which is the
+layout's `PcbPlacement` pose independent of any 3D-model offset, so a row is a pure projection of the
+placement (exact by construction). Board-frame X/Y are reported **verbatim** (the same coordinate honesty
+the KiCad import states — no flip), units are mm and degrees CCW-positive.
+
+**The one real decision is the bottom-side rotation, and it is a mirror.** A bottom part is physically
+reflected (the layout realises it as the `FlipZ` part transform); a P&P machine populating the bottom
+flips the board about its X axis, which negates the board-frame angle — so a bottom row's rotation is
+`(360 − rot) mod 360` (normalised to `[0, 360)`) while a top row is the placement angle verbatim. It is a
+**sign swap, never a `cos`**, so a quarter turn is exact (90 → 270, 270 → 90). The flip-about-X choice
+(negate) is stated rather than a vendor default; flip-about-Y (`180 − rot`) is the other convention, filed
+as a per-fab option. Rows are in placement (declaration) order, so the output is a deterministic function
+of the layout (two emissions byte-identical).
+
+**The oracle is the twin-decoder round trip** (the repo's fab-file rule): `ParseCsv` reads back what
+`ToCsv` wrote and recovers the designator, X, Y, rotation, side and value exactly — coordinates written
+round-trippable, fields RFC-4180 quoted only when they carry a comma / quote / newline, so a value like
+`10k, 5%` survives — and it refuses a wrong header / field count / number / side / unterminated quote by
+name (the reader scoped to what the writer emits). `Package` is the component's footprint name, or its
+definition type name when it carries no footprint. Docs: `examples/ecad-fabrication.md`.
 
 ### Copper pours — ground / power planes (`CopperPour`, `CopperPourBuilder`)
 

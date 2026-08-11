@@ -2707,8 +2707,7 @@ from what was already understood rather than from scratch.
     aperture thickness the flat model does not carry), PASTE-VOLUME optimisation (aperture area/shape
     reduction rules per pad size — a stencil-house recipe, not one fixed expansion), WINDOW-PANING /
     aperture segmentation of large apertures (a big thermal pad's paste is broken into a grid so it
-    does not slump), and the assembly PICK-AND-PLACE file (a different output — centroid/rotation per
-    part, not artwork). FINE MASK TENTING control beyond the tented/opened via policy (per-via
+    does not slump). FINE MASK TENTING control beyond the tented/opened via policy (per-via
     tenting, a mask dam width); and a LOWERCASE silk font (v1's `SilkFont` covers uppercase + digits +
     punctuation, so a value's lowercase advances as a blank). GERBER X2 attributes (`%TF`/`%TA`/`%TO`)
     and the JOB FILE (`.gbrjob`) carry per-object net/component metadata a modern fab reads. A
@@ -2717,6 +2716,18 @@ from what was already understood rather than from scratch.
     matching and differential pairs are later routing stages over the same grid. A CONFORMAL
     mask/silk/paste on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
     MID/surface side's territory).
+  - **Pick-and-place follow-ups (filed; the centroid file itself has LANDED — `PcbPickAndPlace`,
+    see CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`):** an **IPC-D-356(A)
+    netlist** export (the fab's electrical test-point / bare-board-test file — a different output from
+    the centroid, and the natural next assembly-side artifact, its net/pad access data already in the
+    `PcbConnectivity`/`PcbCopperModel` the copper stages carry). MULTI-VALUE / VARIANT P&P (a
+    do-not-populate mask, or a configuration's per-variant values — needs an assembly-variant concept
+    the layout does not yet carry, and would ride `Configurations` when it reaches ECAD). SEPARATE
+    top/bottom centroid FILES (some machines want one file per side; v1 carries a `Side` column, which
+    every modern feeder reads). EMBEDDED-part handling (v1 emits an embedded placement by its 2D pose
+    like any other; a buried die is not surface-placed, so a real assembly line would filter it — a
+    scope decision, not a defect). A configurable bottom-flip axis (v1 is flip-about-X = negate the
+    angle; flip-about-Y = `180 − rot` is the other convention, a per-fab option).
   - **Copper-pour follow-ups (filed, the pour itself has LANDED — see CLAUDE.md's ECAD status,
     design.md §6d, `examples/ecad-pcb.md`):** POUR PRIORITY / ordering when several pours overlap
     (v1 fills each pour against the base copper, not other pours, so two overlapping same-layer
