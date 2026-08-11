@@ -173,9 +173,11 @@ internal static class KiCadSchFixtures
     internal static readonly string NoConnectSheet = Sheet("noconnect", NoConnectBody);
 
     // ---- out-of-scope constructs (refused by name) -------------------------
-    internal static readonly string BusSheet = Sheet("bus", """
-      (wire (pts (xy 10 10) (xy 20 10)))
+    // A bus GROUP label ({…} named group / alias) is out of scope. (A plain bus wire and bus-vector
+    // labels are SUPPORTED — see KiCadSchBusFixtures.)
+    internal static readonly string BusGroupSheet = Sheet("busgroup", """
       (bus (pts (xy 10 20) (xy 20 20)))
+      (label "{USB DP DM}" (at 12 20 0) (effects (font (size 1.27 1.27))))
       """);
 
     internal static readonly string HierarchicalSheet = Sheet("hier", """

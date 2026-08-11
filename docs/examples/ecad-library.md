@@ -234,12 +234,74 @@ if (!sch.Check().Ok) throw new Exception(sch.Check().ToString());
 
 `KiCadSchReader.Read` covers a **single sheet**: the embedded `lib_symbols` (mapped to
 `PartDefinition`s), placed `(symbol …)` instances, power symbols (their `Value` is the net name),
-`wire`, `junction`, local `label`, `global_label`, and `no_connect`. **Refused by name**: **buses**
-(`bus` / `bus_entry` / bus-vector labels like `D[7..0]`), and — in the single-sheet `Read` only —
-**hierarchical sheets** (`sheet` subsheets, `hierarchical_label`), so a flat import cannot silently
-drop a whole subsheet. A netless wire, an instance referencing an unknown symbol, or a dangling pin is
-**reported** as a diagnostic, not thrown; a non-`(kicad_sch …)` root — a board or a symbol library
+`wire`, `junction`, local `label`, `global_label`, `no_connect`, and **buses** (see below). **Refused
+by name**: bus **GROUP** labels (`{…}` named groups / aliases) and a malformed bus range (`DATA[]`, a
+non-integer bound); and — in the single-sheet `Read` only — **hierarchical sheets** (`sheet`
+subsheets, `hierarchical_label`), so a flat import cannot silently drop a whole subsheet. A netless
+wire, an instance referencing an unknown symbol, a dangling pin, or a dangling / non-member bus entry
+is **reported** as a diagnostic, not thrown; a non-`(kicad_sch …)` root — a board or a symbol library
 handed here — or a malformed S-expression is refused by name.
+
+### Buses
+
+A **bus** is a labelled bundle of signal nets: `DATA[0..7]` is the eight nets DATA0..DATA7 (KiCad's
+bus-vector notation). A `(bus …)` wire carries the bundle, a `(bus_entry …)` rips a member off it onto
+a signal wire, and — this is KiCad's rule — that ripped wire is **labelled with the member's own name**
+(`DATA3`), so the member's net is reconstructed like any other labelled wire. The honest finding is
+that **a ripped tap's net is its own local label**, and same-named labels are already one net by
+local-label equivalence, so on a flat sheet the bus's *connecting* role is subsumed. Buses are
+therefore **sugar**: the reader expands a `NAME[m..n]` label into its members (so a bus-vector label is
+NOT mistaken for a signal net — `DATA[0..7]` is never a net) and validates that each tap is a declared
+member, reporting a stray tap by name. A reversed range `DATA[7..0]` is legal (the same eight
+members); a bus **group** `{…}` and buses **across sheets** (hierarchical bus pins, where the
+connecting role would become load-bearing) stay out of scope, refused by name.
+
+```csharp run:ecad-schematic-buses
+// A DATA[0..1] bus. The DATA[0..1] label declares the members DATA0, DATA1; each bus_entry rips a
+// member off the bus onto a signal wire that carries the member's OWN label. DATA0 is ripped TWICE
+// (at R0 and R1) — the same member label at both taps, so the bus links them into one net — while
+// DATA1 taps R2. The bus-vector label DATA[0..1] is NOT itself a net.
+var schText = """
+(kicad_sch (version 20230121) (generator eeschema) (paper "A4") (title_block (title "bus"))
+  (lib_symbols
+    (symbol "Device:R" (property "Reference" "R" (at 0 0 0)) (property "Value" "R" (at 0 0 0))
+      (symbol "R_1_1"
+        (pin passive line (at 0 3.81 270) (length 1.27) (name "~") (number "1"))
+        (pin passive line (at 0 -3.81 90) (length 1.27) (name "~") (number "2")))))
+
+  (bus (pts (xy 94 40) (xy 166 40)))
+  (label "DATA[0..1]" (at 96 40 0))
+
+  (symbol (lib_id "Device:R") (at 100 60 0) (property "Reference" "R0" (at 103 60 0)) (property "Value" "R" (at 103 62 0)))
+  (wire (pts (xy 100 56.19) (xy 100 42.54))) (bus_entry (at 100 42.54) (size 0 -2.54))
+  (label "DATA0" (at 100 49 0)) (no_connect (at 100 63.81))
+
+  (symbol (lib_id "Device:R") (at 130 60 0) (property "Reference" "R2" (at 133 60 0)) (property "Value" "R" (at 133 62 0)))
+  (wire (pts (xy 130 56.19) (xy 130 42.54))) (bus_entry (at 130 42.54) (size 0 -2.54))
+  (label "DATA1" (at 130 49 0)) (no_connect (at 130 63.81))
+
+  (symbol (lib_id "Device:R") (at 160 60 0) (property "Reference" "R1" (at 163 60 0)) (property "Value" "R" (at 163 62 0)))
+  (wire (pts (xy 160 56.19) (xy 160 42.54))) (bus_entry (at 160 42.54) (size 0 -2.54))
+  (label "DATA0" (at 160 49 0)) (no_connect (at 160 63.81))
+
+  (sheet_instances (path "/" (page "1"))))
+""";
+
+var sch = KiCadSchReader.Read(schText).Schematic;
+
+// The bus-vector label declares members but is NOT itself a net.
+if (sch.Nets.Any(n => n.Name == "DATA[0..1]")) throw new Exception("a bus label is not a net");
+
+// DATA0 links R0 and R1 across the bus (the same member label at both taps); DATA1 taps R2.
+var netlist = sch.ToNetlist();
+var data0 = netlist.NetOf(sch.Find("R0")!.Pin("1"));
+Console.WriteLine($"DATA0 links: {string.Join(", ", data0!.Pins.Select(p => p.ToString()))}");
+Console.WriteLine($"R2.1 is on net: {netlist.NetOf(sch.Find("R2")!.Pin("1"))!.Name}");
+if (!ReferenceEquals(data0, netlist.NetOf(sch.Find("R1")!.Pin("1"))))
+    throw new Exception("R0.1 and R1.1 should share DATA0 across the bus");
+if (data0.Name != "DATA0") throw new Exception("member net name");
+if (!sch.Check().Ok) throw new Exception(sch.Check().ToString());
+```
 
 ## Hierarchical / multi-sheet import
 

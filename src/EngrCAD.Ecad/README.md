@@ -501,12 +501,30 @@ markers (their `Value` is the net name), not components. This is exactly the rul
 **Coverage** of `Read` is a single sheet: embedded `lib_symbols` → `PartDefinition`s (interned per
 `lib_id`, so two `Device:R` instances share one definition), placed `(symbol …)` instances (Reference
 → refdes, Value → value), power symbols, `wire`, `junction`, local `label`, `global_label`,
-`no_connect`. **Refused BY NAME**: buses (`bus`/`bus_entry`/bus-vector labels like `D[7..0]`), and —
-in the single-sheet `Read` only — hierarchical sheets (`sheet` subsheets, `hierarchical_label`), so a
-flat import cannot silently drop a whole subsheet; a `(sheet_instances …)`, present in every flat
-sheet, is NOT a subsheet and passes. A netless wire, an instance referencing an unknown symbol, or a
-dangling pin is REPORTED (a diagnostic), never thrown; a non-`(kicad_sch …)` root or a malformed
-S-expression is refused by name.
+`no_connect`, and **buses** (see below). **Refused BY NAME**: bus GROUP labels (`{…}` named groups /
+aliases) and a malformed bus range; and — in the single-sheet `Read` only — hierarchical sheets
+(`sheet` subsheets, `hierarchical_label`), so a flat import cannot silently drop a whole subsheet; a
+`(sheet_instances …)`, present in every flat sheet, is NOT a subsheet and passes. A netless wire, an
+instance referencing an unknown symbol, a dangling pin, or a dangling / non-member bus entry is
+REPORTED (a diagnostic), never thrown; a non-`(kicad_sch …)` root or a malformed S-expression is
+refused by name.
+
+**Buses are sugar that EXPANDS to member nets.** A bus is a labelled bundle of signals: a bus-VECTOR
+label `DATA[m..n]` on a `(bus …)` wire declares the members `DATA`+m..`DATA`+n (so `DATA[0..7]` is
+DATA0..DATA7; a reversed `DATA[7..0]` is the same eight), and a `(bus_entry …)` rips a member off the
+bus onto a signal wire. **The honest finding is that a ripped tap's net is its OWN local label** — KiCad
+requires the ripped wire labelled with a member, and same-named labels are already one net by local-label
+equivalence — so on a single flat sheet the bus's CONNECTING role is entirely subsumed by that
+equivalence, and the bus model's job reduces to (a) declaring the member NAMESPACE (so a bus-vector
+label is not mistaken for a signal net — `DATA[0..7]` is never a net) and (b) VALIDATING each tap
+against it (a stray tap, a dangling entry, or a bad range is reported / refused by name). The
+connecting role becomes load-bearing only ACROSS sheets (hierarchical bus pins), so buses stay refused
+in the hierarchical entry points; a bus GROUP (`{…}`) needs its own member-set resolution and is out of
+scope. Verified higher than usual (a mis-expanded bus is a silent failure): the member PARTITION is
+reconstructed exactly with `Check()` passing, and the MUTATION that proves it bites is a RELABELLED tap
+— moving a tap's label moves its pin to a different member (a positional / membership-blind importer
+would pass the partition test and fail this) — plus reversed-range parsing, the plain-net
+non-contamination, and the bad-range / non-member / dangling-entry reports.
 
 ### Hierarchical / multi-sheet import
 
@@ -544,9 +562,9 @@ proves the reader reads geometry (move a wire endpoint off a pin → the net spl
 reported); the junction rule from both sides (a crossing needs a junction to join); label
 equivalence (same label = one net, different = two); no_connect (an isolated marked pin is on no
 signal net); the symbol == netlist pin identity (`PinIdentity`); determinism (two reads save
-byte-identically); and the refusals. Filed follow-ups: hierarchical / multi-sheet import, buses, and
-multi-unit symbols (a duplicate reference is currently imported as a separate component with a
-note). Docs: `examples/ecad-library.md`.
+byte-identically); and the refusals. Filed follow-ups: bus GROUPS (`{…}` aliases) and buses across
+sheets (hierarchical bus pins), and multi-unit symbols (a duplicate reference is currently imported
+as a separate component with a note). Docs: `examples/ecad-library.md`.
 
 ## Drawing the schematic sheet
 

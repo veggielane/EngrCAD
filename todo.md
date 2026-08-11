@@ -2846,11 +2846,20 @@ from what was already understood rather than from scratch.
     multi-sheet import has ALSO landed** (`KiCadSchReader.ReadProject(rootPath)` /
     `ReadProjectFrom(rootFile, sheetsByFile)` — the flat union-find generalised with an instance
     dimension, cross-sheet stitching by sheet-pin ↔ hierarchical-label name match, global/power
-    spanning and local scoping, hierarchical refdes, recursion refused / missing subsheet reported),
-    with these `.kicad_sch` RESIDUALS still filed: **buses** (`bus`/`bus_entry`/bus-vector labels —
-    refused by name across both entry points), and **multi-unit symbols** (a duplicate reference is
-    imported as a separate component with a note — proper support merges the units' pins). Whole
-    Eagle `.brd`/`.sch` import and IPC-7351 footprint GENERATION remain.
+    spanning and local scoping, hierarchical refdes, recursion refused / missing subsheet reported).
+    **Single-sheet BUS import has ALSO landed** (`bus` wires, `bus_entry` rips and bus-VECTOR labels
+    `DATA[m..n]` → members DATA{m}..DATA{n}; the honest finding is that a ripped tap's net is its OWN
+    local label and same-named labels are already one net by local-label equivalence, so on a flat
+    sheet the bus's connecting role is subsumed and the bus model's job reduces to declaring the
+    member namespace — so a bus-vector label is not mistaken for a signal net — and validating the
+    taps; verified by the member partition + a relabel mutation, reversed-range parsing, and dangling
+    / non-member / bad-range reports), with these `.kicad_sch` RESIDUALS still filed: **bus GROUPS**
+    (`{…}` named groups / aliases — refused by name; a group needs its own member-set resolution),
+    **buses ACROSS sheets** (hierarchical bus PINS carrying a bundle over a sheet boundary — the
+    connecting role becomes load-bearing there; buses stay refused in the hierarchical entry points),
+    and **multi-unit symbols** (a duplicate reference is imported as a separate component with a note
+    — proper support merges the units' pins). Whole Eagle `.brd`/`.sch` import and IPC-7351 footprint
+    GENERATION remain.
     **3D-model residuals, filed by name** (each RECORDED as a reference but not
     loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
     needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import

@@ -168,10 +168,13 @@ public sealed class KiCadSchImportTests
     }
 
     [Fact]
-    public void Buses_AreRefusedByName()
+    public void BusGroups_AreRefusedByName()
     {
-        var ex = Assert.Throws<FormatException>(() => KiCadSchReader.Read(KiCadSchFixtures.BusSheet));
-        Assert.Contains("bus", ex.Message);
+        // Bus VECTORS (NAME[m..n]) are supported (see KiCadSchBusImportTests); a bus GROUP ({…}
+        // named group / alias) stays out of scope and is refused by name.
+        var ex = Assert.Throws<FormatException>(
+            () => KiCadSchReader.Read(KiCadSchFixtures.BusGroupSheet));
+        Assert.Contains("bus GROUP", ex.Message);
     }
 
     [Fact]
