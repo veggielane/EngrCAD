@@ -516,6 +516,58 @@ public static class Mid3dDrc
         return PairOutcome.Clear;
     }
 
+    // ---- the auto-router's incremental commit gate (the source of truth) -----
+
+    /// <summary>
+    /// Whether a candidate surface conductor (all one net) CLEARS every existing OTHER-net feature and
+    /// its own trace-width rule — the exact 3D DRC check the surface auto-router commits against, so the
+    /// grid graph can never ship a clearance-violating trace. It asks the DRC's OWN broad phase and
+    /// grow-and-intersect (<see cref="RoutePairClear"/>) rather than restating them, and a pair the
+    /// surface leaves UN-CERTIFIABLE (<see cref="MidDrcVerdict.Uncertain"/>) is treated as not passable
+    /// — the same conservative rule <see cref="Mid3dDrcReport.Ok"/> applies — so a committed trace is
+    /// certified, not merely plausible. Adding a candidate that clears here can only introduce clean
+    /// pairs, so the whole-board <see cref="Check(MidBoard, DrcRuleSet?)"/> stays clean.
+    /// </summary>
+    internal static bool RouteCandidateClears(
+        MidBoard board, MidSurfaceFeature candidate, IReadOnlyList<MidSurfaceFeature> existing, DrcRuleSet rules)
+    {
+        // The candidate's own surface trace width (the same fold CheckSurfaceTraceWidths applies): a
+        // width below the rule at ANY local scale (violation OR straddle) is not passable.
+        if (rules.MinTraceWidth > 0)
+        {
+            var (wmin, _) = board.LocalScaleBandAround(
+                candidate.Centre, candidate.Width, candidate.Bounds.Size.Length);
+            if (candidate.Width * wmin < rules.MinTraceWidth)
+                return false;
+        }
+
+        double c = rules.MinCopperClearance;
+        foreach (var e in existing)
+        {
+            if (SameNet(candidate.Net, e.Net))
+                continue;   // same-net copper is the intended connection, never a violation
+            if (RoutePairClear(board, candidate, e, c) != PairOutcome.Clear)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>The pair classification the router's gate reads — the SAME certified broad phase and
+    /// local-chart grow-and-intersect the report's <see cref="ClassifySurfacePair"/> uses, so a pair the
+    /// gate certifies Clear cannot come back a Violation or Uncertain in <see cref="Check"/>. A pair too
+    /// curved to measure in a chart is Uncertain (not passable), exactly as the report treats it.</summary>
+    private static PairOutcome RoutePairClear(MidBoard board, MidSurfaceFeature a, MidSurfaceFeature b, double c)
+    {
+        double chordCentres = SurfaceGeometry.PolylineDistance(a.Polyline, b.Polyline);
+        double chordEdge = chordCentres - a.Width / 2 - b.Width / 2;
+        if (c > 0 && chordEdge >= c)
+            return PairOutcome.Clear;   // the certified 3D broad phase proves the surface clearance
+        var location = board.Surface.Locate((a.Centre.Position + b.Centre.Position) * 0.5);
+        if (!TryMeasurePair(board, a, b, location, chordCentres, c, out var ra, out var rb, out double minScale, out double maxScale))
+            return PairOutcome.Uncertain;   // too curved to certify — not passable
+        return ClearanceOutcome(ra, rb, minScale, maxScale, c, out _);
+    }
+
     private static bool IntersectAfterGrow(IReadOnlyList<CurvedRegion2d> a, IReadOnlyList<CurvedRegion2d> b, double gap) =>
         CurvedRegion2dBoolean.Intersection(Grow(a, gap / 2), Grow(b, gap / 2)).Count > 0;
 

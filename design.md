@@ -7768,8 +7768,48 @@ through STL/STEP. A component seats at a world position (`board.Seat(component, 
 `(u, v)`; a raw `Shape` body (an MCU, an LED, a connector modelled as a small solid) seats the same way
 for the showcase. **The showcase** is a moulded wearable dome — a wide low ellipsoid carrying an MCU,
 two LEDs, a connector and passives seated on the shaped surface, wired by geodesic conductors — that
-SELF-VERIFIES (its render throws if the nets do not connect or the DRC is not clean) and lands as
-`examples/ecad-mid.md`'s `ecad-mid-wearable` render.
+SELF-VERIFIES (its render throws if the nets do not route, connect or pass the DRC) and lands as
+`examples/ecad-mid.md`'s `ecad-mid-wearable` render, which now **auto-routes** rather than
+place-and-verifies.
+
+**The surface AUTO-router landed (`SurfaceRouter`/`SurfaceRouteOptions`/`SurfaceRouteResult`,
+`MidRouting.Route`) — the geodesic analogue of the flat `PcbRouter`, and the doctrine is the flat
+router's verbatim.** Each unrouted net (its pads not yet all joined per the ratsnest) is decomposed into
+2-pin connections over an MST and routed as a geodesic maze search over the mesh VERTEX GRAPH (edge
+weight the geodesic edge length, an A\* whose 3D-straight-line heuristic is admissible because a chord
+never exceeds a geodesic), straightened, and committed. **The load-bearing rule is that the vertex graph
+only ACCELERATES; the exact 3D DRC is the source of truth** — a candidate geodesic is committed only
+after `Mid3dDrc.RouteCandidateClears` (the incremental twin of `Check`, sharing the same certified
+broad phase and grow-and-intersect) certifies it adds no violation, with an `Uncertain` pair treated as
+not passable (the same conservative rule `Ok` applies), so a graph-resolution error can never ship a
+clearance-violating trace, a boxed net is reported UNROUTABLE by name, and the partial board is always
+clean. **Because the DRC decides every commit, the obstacle model may safely OVER-BLOCK**: a vertex is
+hard-blocked for a net when laying its copper there comes within `clearance + width/2 + otherHalf +
+margin` of an other-net PAD, measured as the 3D CHORD (a lower bound on the geodesic, so blocking is
+the safe direction), or when it is on the mesh boundary; a committed other-net TRACE is SOFT (a per-net
+bitmask, crossable at a high cost in a rip-up route and then ripped up). **The margin is exactly HALF a
+longest edge, and that is what makes the raw edge-graph path DRC-clean BY CONSTRUCTION** — a point on a
+mesh edge between two free (unblocked) vertices is within half an edge of the nearer one, so its chord
+to other copper is ≥ clearance, which is precisely the certified broad phase's Clear condition; the
+straightened path moves OFF the edges so that guarantee lapses there, which is why straightening is
+VALIDATED with the exact DRC and falls back to the raw path when it drifts across an obstacle.
+**Rip-up-and-reroute is the flat router's negotiated congestion verbatim** (a net with no clean geodesic
+routes across the traces blocking it, rips those up, re-routes cleanly without them, and re-queues them,
+bounded so a truly boxed net terminates) — reproduced exactly so a ripped victim is either re-routed
+against the ripper or left unrouted, never restored as stale geometry that no later commit certified.
+**Over-blocking costs COMPLETENESS, not correctness** — it can refuse a route that a finer search would
+find (a named refusal), never accept a violating one; and a narrow gap that the over-block seals is one
+a clean trace genuinely cannot fit anyway, so the refusal is usually real rather than merely
+conservative. The router runs on an INTRINSIC board (`OnMesh`); a global-chart board (`OnSurface`,
+kept for the developable DRC oracle) is refused by name with a pointer to `OnMesh`, because an
+intrinsic surface trace is not what the global `(u, v)` DRC reads. **The cylinder-vs-flat cross-check
+is the developable oracle applied to ROUTING, and it is a CONNECTIVITY invariant rather than a
+bit-identity**: a cylinder MID board and its unrolled flat sheet route the SAME net list, both
+fully-routed, both DRC-clean, both connected — a search need not be bit-identical (the two meshes
+differ), so the invariant is what the two produce (connectivity + cleanliness), not the exact
+geodesics. Filed by name: **topological / shove** routing on the surface (v1 detours around obstacles
+but does not push them), and **length matching** — beside the multi-shell and conformal-mask/pour
+follow-ons.
 
 **One trap worth keeping**: the exp map measures the geodesic ACCURATELY along the separation direction
 (the chart's radial coordinate IS geodesic distance from the seed), so the intrinsic clearance rarely
@@ -7783,10 +7823,9 @@ not trust a flat approximation — the honest boundary rather than a knife-edge 
 **Two smaller decisions carry over.** A trace's WIDTH is checked against the authored width folded
 through the local scale band rather than re-measured off the region (round joins never pinch a width and
 an opposing-wall measure under-reports on a round cap). **v1 is one conductive surface** — no drills,
-edges or vias (a moulded surface has none); auto-routing on the surface (a geodesic maze search, the
-flat grid router not lifting to a distorted metric), multi-shell MID (an inner moulded copper layer) and
-a conformal solder mask / pour (the distortion reason copper pours already refuse curved walls) are all
-filed by name. Docs: `examples/ecad-mid.md`.
+edges or vias (a moulded surface has none); topological / shove routing on the surface, multi-shell MID
+(an inner moulded copper layer), length matching and a conformal solder mask / pour (the distortion
+reason copper pours already refuse curved walls) are all filed by name. Docs: `examples/ecad-mid.md`.
 
 ### Not in stages 1–9
 
@@ -7797,8 +7836,9 @@ heat capacity), detailed die/package thermal models (v1 spreads a component's po
 footprint, not through a junction-to-case network), airflow/CFD cooling, snap-fit/screw-boss detailing,
 and tolerance stack-up are later stages over this one graph; each reads the
 netlist↔copper identity stage 2 establishes and the DRC stage 4 provides. MID/LDS 3D surface routing
-has landed as stage 9 (see above); its own filed follow-ons are surface AUTO-routing (a geodesic maze
-search), multi-shell MID and a conformal surface mask/pour. The richer interchange
+has landed as stage 9 (see above), and its surface AUTO-router with it; its own filed follow-ons are
+topological / shove routing on the surface, multi-shell MID, length matching and a conformal surface
+mask/pour. The richer interchange
 (KiCad `.kicad_pcb`, STEP AP214 board assemblies) follows IDF. The drawn schematic SHEET has
 landed (see above) as a VIEW of the graph; a good auto-placer and an obstacle-avoiding wire
 router are the open follow-ons there, plus hierarchical sheets, buses, off-page connectors and

@@ -19,9 +19,10 @@ surface that a single global exp map would wrap onto itself is routed with no ch
 ## The showcase: a moulded wearable
 
 A wide, low ellipsoidal **wearable dome** — a moulded pebble — carrying its own circuit: an MCU, two
-LEDs, a connector and passives **seated on the shaped surface**, wired by conductors **routed as
-geodesics along the dome**. The whole layout is verified on the surface — every net connects its pads
-and the 3D DRC is clean — before it is rendered.
+LEDs, a connector and passives **seated on the shaped surface**, wired by conductors the board
+**routes itself** as geodesics along the dome. Pads are placed and `MidRouting.Route` lays a DRC-clean
+geodesic per net; the whole layout is verified on the surface — every net connects its pads and the 3D
+DRC is clean — before it is rendered.
 
 ```csharp render:ecad-mid-wearable
 // The moulded shell: a wide, low ellipsoidal dome (a wearable puck), genuinely doubly-curved so no
@@ -62,8 +63,8 @@ scene.Add(P("r1",    board.Seat(Passive(),   Above(-2.6, 4.8)).Body,   brown));
 scene.Add(P("r2",    board.Seat(Passive(),   Above(0, 5.2)).Body,      brown));
 scene.Add(P("r3",    board.Seat(Passive(),   Above(2.6, 4.8)).Body,    brown));
 
-// Pads and single-trace nets, radiating from the central MCU so the routed geodesics do not cross:
-// connector power/ground to the MCU's south pads, and each LED to a side pad.
+// Pads for four nets, radiating from the central MCU: connector power/ground to the MCU's south pads,
+// and each LED to a side pad.
 var nets = new[] {
     ("5V",  Above(-1.7, -9.0), Above(-1.7, -3.2)),
     ("GND", Above( 1.7, -9.0), Above( 1.7, -3.2)),
@@ -71,11 +72,18 @@ var nets = new[] {
     ("D2",  Above( 3.2,  0.9), Above( 8.8,  2.5)),
 };
 foreach (var (net, a, b) in nets) {
-    var pa = board.PlacePad(net, a, 0.6, $"{net}.a");
-    var pb = board.PlacePad(net, b, 0.6, $"{net}.b");
-    var trace = MidRouting.Connect(board, pa, pb, 0.35);          // a GEODESIC path on the dome
-    scene.Add(P($"copper-{net}", trace.Conductor(0.06), Palette.Brass));
+    board.PlacePad(net, a, 0.6, $"{net}.a");
+    board.PlacePad(net, b, 0.6, $"{net}.b");
 }
+
+// AUTO-ROUTE: the board routes itself — a DRC-aware geodesic per net over the mesh vertex graph, each
+// committed only after the exact 3D DRC certifies it clean. A net it cannot route is reported by name.
+var routed = MidRouting.Route(board, null, new SurfaceRouteOptions { TraceWidth = 0.35 });
+Console.WriteLine($"auto-routed {routed.RoutedNets.Count} nets: {routed}");
+if (!routed.FullyRouted)
+    throw new Exception("the wearable did not fully route: " + routed);
+foreach (var trace in routed.Traces)
+    scene.Add(P($"copper-{trace.Net}", trace.Conductor(0.06), Palette.Brass));
 
 // Verify on the surface: every routed net connects its pads, the 3D DRC is clean. Self-checking, so
 // this example cannot rot.
@@ -87,7 +95,42 @@ if (!report.Ok || report.Ratsnest.Count != 0)
 var camera = new CameraState(-Math.PI / 2 + 0.5, 0.66, 50, (0, 23, 3.4));
 ```
 
-![A moulded wearable dome — an MCU, two LEDs, a connector and passives seated on the shaped surface, wired by copper conductors routed as geodesics along the dome](images/ecad-mid-wearable.png)
+![A moulded wearable dome — an MCU, two LEDs, a connector and passives seated on the shaped surface, wired by copper conductors the board auto-routed as geodesics along the dome](images/ecad-mid-wearable.png)
+
+## The surface auto-router
+
+`MidRouting.Route` is the **geodesic analogue of the flat autorouter** ([`PcbRouter`](ecad-routing.md)):
+it turns the ratsnest of an intrinsic board into DRC-clean copper. Each unrouted net is decomposed into
+2-pin connections over an MST and routed as a **DRC-aware geodesic maze search over the mesh vertex
+graph** (edge weight the geodesic edge length, an A\* whose 3D-straight-line heuristic is admissible
+because a chord never exceeds a geodesic), then straightened.
+
+```csharp
+var board = MidBoard.OnMesh(shell);              // an INTRINSIC board (OnMesh, any geometry)
+// ... place the pads carrying each net ...
+var result = MidRouting.Route(board, rules, new SurfaceRouteOptions { TraceWidth = 0.35 });
+// result.RoutedNets / result.UnroutedNets / result.Traces / result.RipUps
+```
+
+The verification bar is the flat router's, lifted onto the surface — an autorouter that connects while
+violating clearance is the classic silent failure, so the router is built so that cannot happen:
+
+- **The mesh vertex graph is an accelerator; the exact 3D DRC is the source of truth.** A candidate
+  geodesic is committed only after `Mid3dDrc.RouteCandidateClears` certifies it adds *no* violation
+  (and an `Uncertain` pair — one the surface cannot certify — is treated as not passable), so a
+  graph-resolution error can never ship a clearance-violating trace, and the partial result of a board
+  it cannot fully route is still clean.
+- **A net that cannot be routed cleanly is reported UNROUTABLE by name** — never a silent violation.
+- **Rip-up-and-reroute for congestion**, exactly the flat router's negotiated-congestion doctrine: a
+  net with no clean geodesic routes *across* the committed traces that block it (soft obstacles, a
+  per-net bitmask; pads and the mesh boundary are hard), rips those up, re-routes cleanly without them,
+  and re-queues them — bounded, so a truly boxed-in net terminates and is named.
+
+Because the exact DRC decides every commit, the search's obstacle model can safely **over-block**: a
+vertex is blocked when laying the net's copper there comes within the clearance of an other-net feature,
+measured as the 3D **chord** (a lower bound on the geodesic), plus half a longest edge so the raw
+edge-graph path is DRC-clean by construction. Over-blocking only costs a detour or a named refusal,
+never correctness.
 
 ## The certified geodesic DRC
 
@@ -255,13 +298,14 @@ The global-chart board seats by `(u, v)` instead (`board.Seat(component, new Vec
 
 ## Scope, v1
 
-`MidRouting` **places** traces (as geodesics on the mesh) and **verifies** them; it does **not
-auto-route**. Auto-routing on a surface is a *geodesic maze search* (the flat grid autorouter does not
-lift, since the metric is the surface's own distorted geometry) — filed as a later stage, and
-`MidRouting.Route` refuses it by name. Also filed: **multi-shell** MID (traces on an inner moulded
-shell as well as the outer), and a conformal **solder mask / pour** on the surface (refused for the
-distortion reason, exactly as copper pours already refuse curved walls). LDS process specifics (laser
-activation paths) are out of scope.
+`MidRouting.Route` **auto-routes** an intrinsic board and `MidRouting.Connect` **places** one trace
+between two given pads; both lay geodesics on the mesh and both are certified by the same 3D DRC. The
+auto-router runs on an **intrinsic** board (`OnMesh`); a global-chart board (`OnSurface`, kept for the
+exact developable DRC oracle) is refused by name with a pointer to `OnMesh`. Filed as later stages:
+**topological / shove** routing on the surface (v1 detours around obstacles but does not push them),
+**multi-shell** MID (traces on an inner moulded shell as well as the outer), **length matching**, and
+a conformal **solder mask / pour** on the surface (refused for the distortion reason, exactly as copper
+pours already refuse curved walls). LDS process specifics (laser activation paths) are out of scope.
 
 ## Verification
 
@@ -274,4 +318,12 @@ certified **Clear**, a near pair a **Violation**, and a near-limit pair on a hig
 cylinder's 3D DRC verdicts and measured separations equal the unrolled sheet's, **bit for bit**. A
 geodesic trace's endpoints land **exactly** on their pads; the exported conductor is a **closed solid**
 that round-trips through STL; the whole check is **deterministic**; and the **showcase itself
-self-verifies** (its render throws if the nets do not connect or the DRC is not clean).
+self-verifies** (its render throws if the nets do not route, connect or pass the DRC).
+
+**The auto-router** clears the same bar: a 2-pin net on a cylinder and on a sphere cap routes clean and
+connected; several nets **route around** each other (a net's copper detours where its straight geodesic
+would cross another's); a congested board that a greedy pass leaves unrouted is **completed by rip-up**
+(both clean); a pin walled in by other-net copper is **unroutable by name** with the rest routed and
+clean; a dense knot's **partial result is always DRC-clean** with the failures named; on a developable
+cylinder the routed **connectivity matches the unrolled flat board's** (both clean, both fully routed —
+a search need not be bit-identical); and two runs are **deterministic** vertex for vertex.
