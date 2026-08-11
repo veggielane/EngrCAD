@@ -260,6 +260,74 @@ if (sym > 1e-4 * apAll)
     throw new Exception("the solder paste did not survive the round trip");
 ```
 
+## Pick and place (the assembly centroid file)
+
+The copper set (Gerber + Excellon) builds the bare board; the **pick-and-place (centroid) file** is
+what a P&P machine reads to *populate* it — one row per placed component: reference designator, X, Y,
+rotation, side, and the value / package identifiers a feeder is matched by. `PcbPickAndPlace.Compute`
+projects the layout's placements into rows, and one `Compute` feeds **both** writers (the
+drawing-sheet rule), so a CSV centroid and a KiCad-style `.pos` cannot disagree about a pose:
+
+- `PcbPickAndPlace.ToCsv(layout)` — the ubiquitous CSV: `Designator,X,Y,Rotation,Side,Value`.
+- `PcbPickAndPlace.ToPos(layout)` — a KiCad-style aligned `.pos`: `Ref Val Package PosX PosY Rot Side`.
+- `PcbPickAndPlace.Write(layout, dir)` writes both (`<name>-pos.csv`, `<name>.pos`) and reports the paths.
+
+**The pose is the placement, not the 3D body.** A machine places by the footprint origin, which is the
+layout's `PcbPlacement` pose — independent of any 3D-model offset — so a row is exactly the placement.
+Units are **millimetres** and **degrees (CCW positive)**, and the board-frame X/Y are reported
+**verbatim** (no flip — the repo's coordinate honesty). The one real decision is the **bottom-side
+rotation**: a bottom part is physically mirrored (the board is flipped about its X axis to populate it),
+which **negates** the board-frame angle, so a bottom row's rotation is `(360 − rotation) mod 360` — a
+sign swap, never a `cos`, so a quarter turn is exact. A top row carries the placement rotation verbatim.
+
+The rows are in placement (declaration) order, so the output is a deterministic function of the layout
+(two emissions are byte-identical). And the CSV survives the **twin-decoder round trip** —
+`PcbPickAndPlace.ParseCsv` reads back what `ToCsv` wrote and recovers the designator, X, Y, rotation, side
+and value exactly — the repo's rule that a fab file must survive the round trip, not merely a structural
+check.
+
+```csharp run:ecad-pickplace
+// A resistor (SMD) and an LED (no footprint — its Package falls back to the definition name).
+PartDefinition Res(string package) => new("R_" + package, "R",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint(package, new[] {
+        Pad.Smd("1", new Vector2d(-0.5, 0), 0.6, 0.6),
+        Pad.Smd("2", new Vector2d(0.5, 0), 0.6, 0.6) }));
+
+var sch = new Schematic("blinky");
+sch.Add("R1", Res("0805"), "330");
+sch.Add("R2", Res("0603"), "10k, 5%");   // a comma in the value — the CSV quotes it
+sch.Add("D1", new PartDefinition("LED", "D",
+    new[] { new Pin("A", PinType.Passive), new Pin("K", PinType.Passive) }), "red");
+
+var board = PcbBoard.Rectangle(40, 30, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("R1", 3.5, -2.25, 90);                       // top
+layout.Place("R2", -7.0, 4.0, 90, CopperSide.Bottom);    // bottom → rotation mirrors to 270
+layout.Place("D1", 12.25, 6.5, 270);                     // top
+
+var rows = PcbPickAndPlace.Compute(layout);
+Console.WriteLine(PcbPickAndPlace.ToCsv(layout));
+
+// The pose is the placement (a top row's rotation is verbatim), and the bottom row is mirrored.
+var r1 = rows.Single(r => r.Designator == "R1");
+var r2 = rows.Single(r => r.Designator == "R2");
+Console.WriteLine($"R1 top rotation {r1.Rotation} (verbatim); R2 bottom rotation {r2.Rotation} (mirror of 90)");
+if (r1.Rotation != 90 || r2.Rotation != 270)
+    throw new Exception("the top/bottom rotation convention is wrong");
+
+// The twin-decoder round trip: parse the CSV back and recover every pose exactly (the comma survives).
+var back = PcbPickAndPlace.ParseCsv(PcbPickAndPlace.ToCsv(layout));
+for (int i = 0; i < rows.Count; i++)
+    if (back[i].Designator != rows[i].Designator || back[i].X != rows[i].X || back[i].Y != rows[i].Y
+        || back[i].Rotation != rows[i].Rotation || back[i].Side != rows[i].Side || back[i].Value != rows[i].Value)
+        throw new Exception($"the pick-and-place CSV did not round-trip row {i}");
+Console.WriteLine("centroid round trip: every pose recovered exactly");
+```
+
+The aligned `.pos` (`PcbPickAndPlace.ToPos(layout)`) carries the same rows with a `Package` column —
+each part's footprint name, or (like `D1`) its definition type name when it has no footprint yet.
+
 ## Coordinates and scale
 
 The coordinate format (`%FS`) is derived from the board's own coordinate magnitudes, so the
@@ -276,9 +344,9 @@ solder-paste layers above, and the board outline. An unrepresentable copper boun
 which RS-274X region contours cannot carry — is refused **by name** rather than silently flattened, and
 the reader (the round-trip oracle, scoped to what the writer emits) refuses a truncated file, a missing
 format spec or an aperture macro by name; a mask/silk/paste on a non-outer layer, or a pad window /
-aperture off the board, are refused by name too. Not in v1, each filed: step / multi-level stencils,
-paste-volume optimisation, window-paning of large apertures, the assembly pick-and-place file (a
-different output), fine mask tenting control beyond the tented/opened via policy, curved conformal
-mask / silk / paste on a MID surface (refused for the distortion reason), a lowercase silk font (a
-value's lowercase advances as a blank), Gerber X2 attributes and the job file, and a Gerber IMPORT of a
-foreign board (this is export).
+aperture off the board, are refused by name too. The assembly **pick-and-place (centroid) file** is
+its own output, above. Not in v1, each filed: step / multi-level stencils, paste-volume optimisation,
+window-paning of large apertures, fine mask tenting control beyond the tented/opened via policy, curved
+conformal mask / silk / paste on a MID surface (refused for the distortion reason), a lowercase silk
+font (a value's lowercase advances as a blank), Gerber X2 attributes and the job file, an IPC-D-356
+netlist test-point export, and a Gerber IMPORT of a foreign board (this is export).
