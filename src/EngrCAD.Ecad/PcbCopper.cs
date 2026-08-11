@@ -57,7 +57,8 @@ public sealed class PcbCopperModel
         IEnumerable<DrilledHole>? drills = null,
         IEnumerable<EmbeddedCavity>? cavities = null,
         IEnumerable<PlacedVia>? vias = null,
-        IEnumerable<string>? traceSources = null)
+        IEnumerable<string>? traceSources = null,
+        IEnumerable<string>? pourSources = null)
     {
         ArgumentNullException.ThrowIfNull(board);
         ArgumentNullException.ThrowIfNull(copper);
@@ -69,6 +70,9 @@ public sealed class PcbCopperModel
         TraceSources = traceSources is null
             ? new HashSet<string>(StringComparer.Ordinal)
             : new HashSet<string>(traceSources, StringComparer.Ordinal);
+        PourSources = pourSources is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(pourSources, StringComparer.Ordinal);
     }
 
     /// <summary>The board (its outline is the copper-to-edge datum).</summary>
@@ -96,6 +100,15 @@ public sealed class PcbCopperModel
     /// pad sources: a trace ties copper together but is not itself a pin to be joined, so a routed
     /// net's connectivity is decided by whether its component PADS end up in one component.</summary>
     public IReadOnlyCollection<string> TraceSources { get; }
+
+    /// <summary>The <see cref="CopperFeature.Source"/>s that are POUR components (a ground / power
+    /// plane). Like traces and via pads these are CONNECTORS, not terminals — a pour ties copper
+    /// together (so a GND pour joins every GND pad it touches) but is not itself a pin to be joined,
+    /// so a floating pour piece never makes a net read unconnected. Each connected pour COMPONENT gets
+    /// its own source, so two disjoint pieces stay disjoint in the connectivity graph (they are joined
+    /// only by geometric touch, which they do not have) — a pour never force-connects pads its copper
+    /// does not actually bridge.</summary>
+    public IReadOnlyCollection<string> PourSources { get; }
 
     /// <summary>The distinct copper-layer names, in stackup order.</summary>
     public IReadOnlyList<string> Layers => Board.Stackup.Coppers.Select(c => c.Name).ToList();
@@ -196,9 +209,39 @@ public sealed class PcbCopperModel
                 copper.Add(new CopperFeature(trace.Layer, trace.Net, source, region));
         }
 
+        // Pours: a ground / power plane flooded over a layer. Each is filled against the BASE copper
+        // (pads / vias / traces — not other pours; v1 does no inter-pour priority), and every kept
+        // connected component becomes a copper feature of the pour's net, with a UNIQUE source so two
+        // disjoint pieces stay disjoint in connectivity. The pour sources are CONNECTORS (like traces),
+        // so a GND pour joins every GND pad it touches without being counted as a pin.
+        var pourSources = new List<string>();
+        if (layout.Pours.Count > 0)
+        {
+            var baseModel = new PcbCopperModel(
+                layout.Board, copper, drills, layout.Cavities(), placedVias, traceSources);
+            for (int i = 0; i < layout.Pours.Count; i++)
+            {
+                var pour = layout.Pours[i];
+                var filled = CopperPourBuilder.Fill(baseModel, pour);
+                for (int j = 0; j < filled.Regions.Count; j++)
+                {
+                    string source = PourSource(i, j);
+                    pourSources.Add(source);
+                    copper.Add(new CopperFeature(pour.Layer, pour.Net, source, filled.Regions[j]));
+                }
+            }
+        }
+
         return new PcbCopperModel(
-            layout.Board, copper, drills, layout.Cavities(), placedVias, traceSources);
+            layout.Board, copper, drills, layout.Cavities(), placedVias, traceSources, pourSources);
     }
+
+    /// <summary>The report id a pour COMPONENT's copper feature is tagged with
+    /// (<c>"pour1.0"</c>, <c>"pour1.1"</c>, … — the pour number and the component number, both
+    /// one/zero-based in declaration order) — unique per connected component so the connectivity
+    /// engine never force-joins two disjoint pieces.</summary>
+    internal static string PourSource(int pourIndex, int componentIndex) =>
+        $"pour{pourIndex + 1}.{componentIndex}";
 }
 
 /// <summary>Turns a footprint <see cref="Pad"/> into a board-local copper <see cref="CurvedRegion2d"/>

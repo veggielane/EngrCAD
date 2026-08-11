@@ -416,6 +416,45 @@ routes. **v1 scope**: through-vias (all copper layers); NOT topological/shove ro
 matching, differential pairs, copper pours, teardrops, or cavity walls as obstacles. Docs:
 `examples/ecad-routing.md`.
 
+## Copper pours — ground / power planes
+
+A `CopperPour` floods a copper layer on one net (a ground plane, a power plane). It is **layout
+truth** — declared on the layout (`layout.AddPour(...)`), it round-trips in the file — and it derives
+into copper features `PcbCopperModel.FromLayout` adds, so the DRC and the connectivity engine read a
+pour exactly like any other copper. A GND pour **joins every GND pad it touches**, so the GND
+ratsnest empties.
+
+| Type | What it is |
+| --- | --- |
+| `CopperPour` | The declaration: net + layer + optional outline, fill (solid / hatched), clearances, thermal-relief and hatch settings, and a dead-copper policy. Refuses a nonexistent net/layer or an off-board outline by name. |
+| `CopperPourBuilder.Fill(baseModel, pour)` → `PouredPour` | Fills a pour against the board's base copper (pads/vias/traces) and returns the kept connected region(s) plus diagnostics (dead-copper count/area, relieved pads, spokes). |
+| `ThermalRelief` / `HatchStyle` | The relief spoke pattern and the crosshatch pattern; `ThermalRelief.None` floods a through-hole pad. |
+
+**The fill region is exact and the tamper-mesh construction** — the board area (or a stated outline)
+inset from the edge, **minus** every other-net copper feature and drill grown by the clearance,
+**minus** a thermal-relief annulus around each same-net through-hole pad. Built with
+`CurvedRegion2dOffset` / `CurvedRegion2dBoolean`, no tolerance, so the pour clears every other net *by
+construction* and a poured board passes `PcbDrc.Check` (the empty grown-intersection is the proof,
+the same rule the DRC uses).
+
+**Thermal relief** keeps a same-net through-hole pad solderable: an annular air gap around the pad,
+bridged by thin radial spokes (four on the diagonals by default). The pad stays *connected* through
+the spokes and *relieved* by the gap — a relief that disconnects the pad and a pad that floods are
+the two classic bugs, so a test asserts BOTH. SMD pads and vias are direct-connected (flooded).
+Spokes meet the plane at ~90° corners, so a poured board with reliefs wants an acid-trap threshold at
+or below 90°.
+
+**Dead copper** — a piece of the pour the net cannot reach (walled off by other-net copper) — is
+removed by default and always reported (`PouredPour.DeadCopperArea`); `DeadCopperPolicy.Keep` keeps
+it. Each kept connected component becomes a copper feature with its own source, so two disjoint pieces
+stay disjoint in connectivity — a pour never force-joins pads its copper does not actually bridge.
+`PourFill.Hatched` intersects the fill with a crosshatch grid (region ∩ a line pattern) for a lighter
+plane. A pour exports to Gerber as a `G36`/`G37` region fill and round-trips (an other-net pad in a
+pour's clearance hole is a copper island the clear pass re-darkens, so it survives the round trip).
+**v1 does no inter-pour priority** (each pour is filled against the base copper, not other pours),
+custom relief geometry beyond the spoke default is filed, and conformal placement on a curved wall is
+not offered. Docs: `examples/ecad-pcb.md` (Copper pours).
+
 ## Fabrication export — Gerber (RS-274X) + Excellon
 
 The fab output that makes a routed board manufacturable. `PcbGerberExport.Write(layout, dir)` writes

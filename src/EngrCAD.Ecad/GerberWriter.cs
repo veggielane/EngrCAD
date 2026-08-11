@@ -340,13 +340,13 @@ public static class GerberWriter
         IEnumerable<CopperFeature> features,
         IEnumerable<PlacedVia> vias,
         IEnumerable<(IReadOnlyList<Vector2d> Points, double Width)> traces,
-        IEnumerable<IReadOnlyList<CurvedEdge2d>> clearHoles,
+        IEnumerable<CurvedRegion2d> clearAir,
         GerberFormat format)
     {
         ArgumentNullException.ThrowIfNull(features);
         ArgumentNullException.ThrowIfNull(vias);
         ArgumentNullException.ThrowIfNull(traces);
-        ArgumentNullException.ThrowIfNull(clearHoles);
+        ArgumentNullException.ThrowIfNull(clearAir);
 
         var builder = new GerberBuilder(format, $"EngrCAD copper layer '{layerName}'");
 
@@ -359,21 +359,29 @@ public static class GerberWriter
         foreach (var (points, width) in traces)
             builder.Draw(width, points);
 
-        // Clear the exposed holes of the final union — a drill covered by a pad or a trace has no hole
-        // here and stays solid.
-        foreach (var hole in clearHoles)
-            EmitHoleClear(builder, hole);
+        // Clear the TRUE AIR of the final union — the air pockets (via drills, pour anti-pads). An
+        // air pocket may be a RING: a pour's clearance hole with an other-net pad ISLAND sitting in it,
+        // where the pad is copper and only the ring around it is air. Clearing the ring's outer loop
+        // erases the pad (drawn above), so its inner loops are re-DARKENED, restoring the island. A via
+        // drill has no island, so this reduces to the plain circle clear.
+        foreach (var air in clearAir)
+            EmitAirClear(builder, air);
 
         return builder.Finish();
     }
 
-    private static void EmitHoleClear(GerberBuilder builder, IReadOnlyList<CurvedEdge2d> hole)
+    private static void EmitAirClear(GerberBuilder builder, CurvedRegion2d air)
     {
-        // A circular hole (a via drill) clears as a circle flash; anything else as a region fill.
-        if (hole.Count == 1 && hole[0].IsFullCircle)
-            builder.Flash(GerberAperture.Circle(2 * hole[0].Radius), hole[0].Center, dark: false);
-        else
-            builder.Contour(hole, dark: false);
+        // A simple circular pocket (a via drill / mounting hole) clears as one circle flash.
+        if (air.Holes.Count == 0 && air.Outer.Count == 1 && air.Outer[0].IsFullCircle)
+        {
+            builder.Flash(GerberAperture.Circle(2 * air.Outer[0].Radius), air.Outer[0].Center, dark: false);
+            return;
+        }
+        // Otherwise clear the outer contour, then re-dark any copper islands sitting inside it.
+        builder.Contour(air.Outer, dark: false);
+        foreach (var island in air.Holes)
+            builder.Contour(island, dark: true);
     }
 
     /// <summary>The board-outline (edge-cuts) Gerber: the closed outline polygon traced with a thin

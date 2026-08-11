@@ -159,17 +159,28 @@ public static class PcbGerberExport
         return new GerberExportResult(directory, files, output.CopperLayers.Count, output.DrillHitCount);
     }
 
-    /// <summary>The holes of a layer's final copper UNION — the exposed via drills / pour holes the
-    /// Gerber must CLEAR (a drill covered by a pad or trace has no hole here, so it is not cleared and
-    /// stays solid, exactly as the copper model's union does).</summary>
-    private static IReadOnlyList<IReadOnlyList<CurvedEdge2d>> LayerHoles(PcbCopperModel model, string layer)
+    /// <summary>The TRUE AIR of a layer's final copper UNION — the pockets the Gerber must CLEAR
+    /// (exposed via drills, mounting holes, pour anti-pads). A drill covered by a pad or trace has no
+    /// hole in the union, so it is not cleared and stays solid. A pour's clearance hole that contains
+    /// an OTHER-net pad is only air AROUND that pad — a RING — so the copper (the pad island) is
+    /// subtracted from each hole, and the ring is returned carrying the pad as its own hole (the writer
+    /// clears the ring and re-darkens the island). For a board with no pours (nothing nests) this is
+    /// exactly the union's holes, so a non-poured board's Gerber is byte-identical.</summary>
+    private static IReadOnlyList<CurvedRegion2d> LayerHoles(PcbCopperModel model, string layer)
     {
-        var union = CurvedRegion2dBoolean.UnionAll(
-            [.. model.Copper.Where(f => f.Layer == layer).Select(f => f.Region)]);
-        var holes = new List<IReadOnlyList<CurvedEdge2d>>();
+        var copper = model.Copper.Where(f => f.Layer == layer).Select(f => f.Region).ToList();
+        if (copper.Count == 0)
+            return [];
+        var union = CurvedRegion2dBoolean.UnionAll([.. copper]);
+        var holeRegions = new List<CurvedRegion2d>();
         foreach (var region in union)
-            holes.AddRange(region.Holes);
-        return holes;
+            foreach (var hole in region.Holes)
+                holeRegions.Add(new CurvedRegion2d([.. hole]));
+        if (holeRegions.Count == 0)
+            return [];
+        // Copper islands inside a hole (an other-net pad in a pour's anti-pad) are copper, not air —
+        // subtract the copper, leaving the true air (a plain disc for a drill, a ring for an anti-pad).
+        return CurvedRegion2dBoolean.Difference(holeRegions, union);
     }
 
     // ---- the shared coordinate format ----

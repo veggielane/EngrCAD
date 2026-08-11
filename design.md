@@ -7428,7 +7428,14 @@ matching the model set for set. This is the correct, always-faithful way to repr
 Gerber's order-dependent dark/clear polarity — the naive "clear every via drill" opens a hole the
 model fills at a via-in-pad, which the crossing-board fixture (whose SIG via lands under a pad, and
 whose other via is covered by the trace ending on it) demonstrates: it has ZERO exposed drills, so a
-correct exporter emits no clear on it at all.
+correct exporter emits no clear on it at all. **A copper POUR sharpened this rule**: a pour's
+clearance hole around an OTHER-net pad contains that pad as a copper ISLAND, so the true air is a
+RING, not the whole hole. Clearing the whole hole (the naive "the union region's holes") erases the
+pad the writer drew (measured: a poured board's Gerber came back one anti-pad's worth of copper short
+per other-net pad). So the air the writer clears is the union's holes MINUS the copper — the ring —
+and the writer clears the ring's OUTER contour and re-DARKENS its inner loops (the island), restoring
+the pad; a via drill (no island) is the same computation with the island empty, so a non-poured
+board's Gerber is byte-identical.
 
 **The coordinate format is derived from the board's own magnitudes** (`GerberFormat.For`), so the
 resolution stays a fixed fraction of the model at any scale — the epsilon-ladder property, in a file
@@ -7446,6 +7453,65 @@ round-trip oracle scoped to what the writer emits — a truncated file, a missin
 an aperture macro. **Not in v1** (each filed): solder-mask / silkscreen / paste layers (the board
 carries no mask/silk model yet), Gerber X2 attributes and the job file, and a Gerber IMPORT of a
 foreign board (this is export). Docs: `examples/ecad-fabrication.md`.
+
+### Copper pours — ground / power planes (`CopperPour`, `CopperPourBuilder`)
+
+A copper pour floods a layer on one net. It is **layout truth** (`layout.AddPour`), it round-trips in
+the file, and `PcbCopperModel.FromLayout` DERIVES it into copper features the DRC and the connectivity
+engine read like any other copper — so a GND pour **joins every GND pad it touches** and the GND
+ratsnest empties. Nothing new was needed downstream; the pour is just copper.
+
+**The fill is the tamper-mesh construction and clears every other net by construction.** The region =
+(the board area, or a stated outline) inset from the edge by the pour's `EdgeClearance`, **minus** the
+union of every OTHER-net copper feature on the layer grown by `Clearance`, **minus** every OTHER-net
+(or netless) drill grown by `DrillClearance` (cross-layer), all through `Region2dOffset` /
+`CurvedRegion2dOffset` / `CurvedRegion2dBoolean` with no tolerance. Growing the OBSTACLE by the
+clearance keeps the pour at least that far from it — the same offset the DRC's clearance rule grows
+with — so a poured board passes `PcbDrc.Check` and the grown-region intersection with any other net is
+EMPTY (the proof, asserted directly). **The clearances live on the pour, not on a rule set**, which is
+the load-bearing simplification: the fill is a pure function of the pour and the base copper (nothing
+threads a `DrcRuleSet` through `FromLayout`), and the defaults exceed the `DrcRuleSet.Default`
+minimums so a default pour passes the default DRC with margin.
+
+**Thermal relief is where the design earns its keep.** A same-net THROUGH-HOLE pad must stay
+solderable, so instead of flooding over it (which sinks its heat into the plane) the pour carves an
+annular gap `disc(padR + Gap)` around it and unions back thin radial SPOKES (four on the diagonals by
+default) that overlap the pad copper (inner) and the flood (outer). The two classic bugs are a relief
+that DISCONNECTS the pad and a pad that FLOODS, so a test asserts BOTH directions: the pad is
+CONNECTED to the plane through the spokes (a pour component overlaps the pad → they touch → one
+component in `PcbConnectivity`) AND a point in the annular gap BETWEEN the spokes carries NO copper.
+The spoke overlap is a robust AREA overlap by design (a tangent touch is measure-zero and would NOT
+connect — the same exact-region-touch rule the connectivity engine uses). SMD pads and vias are
+direct-connected (flooded); `ThermalRelief.None` floods a through-hole pad too. One honest cost is
+STATED: a spoke meets the plane's clearance circle at a ~90° corner, so the acid-trap (acute-angle)
+rule's default strict-`<`-90° threshold is borderline on thermal reliefs (a realistic board sets it
+well under 90° anyway), where a same-net-SMD pour is smooth and passes the default.
+
+**Islands are DEAD copper.** After the fill, each connected component (each returned `CurvedRegion2d`)
+that touches NO same-net feature is a piece the net cannot reach — removed by default (kept only under
+`DeadCopperPolicy.Keep`) and always REPORTED (`PouredPour.DeadCopperArea`). **Each kept component gets
+its OWN source** (`pour{i}.{j}`), so two disjoint pieces stay disjoint in the connectivity graph
+(they join only by geometric touch, which they do not have) — a pour never force-connects pads its
+copper does not actually bridge, which a single shared source (the plated-barrel union) would. The
+pour sources are CONNECTORS (like traces and via pads), not terminals, so a floating pour piece never
+makes a net read unconnected. `PourFill.Hatched` intersects the fill with a crosshatch grid (the
+region ∩ a line pattern, `CurvedRegion2dOffset.Stroke`d strips) for a lighter, more flexible plane;
+the spokes are unioned AFTER the hatch so a hatched pour's pad connections stay solid.
+
+**A pour exports to Gerber** as a `G36`/`G37` region fill (it flows to `PcbGerberExport` as an
+ordinary copper feature, region-filled because it is neither a recognised flash nor a via/trace) and
+round-trips by area — see the Gerber imaging note above for the anti-pad-island fix a pour forced.
+**Verified higher than usual because ECAD fails plausibly** (`PcbPourTests`): the GND-pour headline
+(every GND pin connected, ratsnest empty); the poured board DRC-clean with the empty grown-
+intersection asserted directly; the THT relief connected-AND-gap; the island removed and reported
+(and kept under the opt-in); the pour area a closed form of board/clearance/hole; determinism (a pure
+function → bit-identical area); the Gerber round-trip by area and symmetric difference; a
+save→load→save byte fixed point (pour-free byte-identical); the refusals by name; and scale
+invariance (area ∝ s²). **v1 does no inter-pour PRIORITY** (each pour is filled against the base
+copper, not other pours — two overlapping same-layer different-net pours would need an ordering);
+custom relief geometry beyond the spoke default is filed; and conformal placement on a doubly-curved
+wall is not offered (the distortion would land in the pitch, the tamper-mesh lesson). Docs:
+`examples/ecad-pcb.md` (Copper pours).
 
 ### Not in stages 1–6
 

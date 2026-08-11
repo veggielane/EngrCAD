@@ -95,6 +95,6 @@ is byte-identical to the input's. Routed traces are **layout truth** and round-t
 An honest v1: a grid/maze A* with rip-up-reroute, **through-vias** (spanning all copper layers) for
 layer changes, and 2-pin MST decomposition of multi-pin nets. Deterministic — a fixed net order and
 grid give bit-identical routes. Not in v1 (each filed): topological / shove / push routing, length
-matching and differential pairs, copper pours with thermal reliefs, teardrops, and cavity walls as
-routing obstacles. **[Gerber / Excellon fabrication export](ecad-fabrication.md)** of the routed
-board — the fab output — has landed.
+matching and differential pairs, teardrops, and cavity walls as routing obstacles.
+**[Copper pours / ground planes with thermal reliefs](ecad-pcb.md)** and **[Gerber / Excellon
+fabrication export](ecad-fabrication.md)** of the routed board — the fab output — have landed.

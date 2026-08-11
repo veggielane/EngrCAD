@@ -443,6 +443,76 @@ layer). The offsets are pure geometry, so this — like `AutoExplode` — is off
 evaluating the animation is then matrices only, the instance count and order independent of the
 factor.
 
+## Copper pours (ground planes)
+
+A **copper pour** floods a layer with copper on one net — a ground plane, a power plane, a poured
+fill. It is [layout truth](ecad-pcb.md) (a plane is part of the design), so a `CopperPour` derives
+into copper features the [DRC](ecad-drc.md) and the [connectivity engine](ecad-pcb.md) read exactly
+like any other copper: a `GND` pour **joins every GND pad it touches**, so the GND ratsnest empties.
+
+The fill region is exact and the tamper-mesh construction — the board area (or a stated outline),
+inset from the edge, **minus** every other-net copper and drill grown by the clearance, **minus** a
+thermal-relief annulus around each same-net through-hole pad (bridged by spokes). So the pour clears
+every other net *by construction* and a poured board passes the DRC:
+
+```csharp run:ecad-pour
+// A through-hole part (GND on pin 1) and an SMD part (GND on pin 1), spread across the board.
+PartDefinition Header() => new("HDR", "J",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("HDR_fp", new[] {
+        Pad.ThroughHole("1", new Vector2d(0, 0), pad: 1.8, drill: 1.0),
+        Pad.ThroughHole("2", new Vector2d(4, 0), pad: 1.8, drill: 1.0) }));
+PartDefinition Res() => new("R", "R",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("R_fp", new[] {
+        Pad.Smd("1", new Vector2d(-0.8, 0), 1.0, 1.0), Pad.Smd("2", new Vector2d(0.8, 0), 1.0, 1.0) }));
+
+var sch = new Schematic("pour-demo");
+var j = sch.Add("J1", Header()); var r = sch.Add("R1", Res());
+sch.Connect("GND", j.Pin("1"), r.Pin("1"));     // a THT GND pin and an SMD GND pin, far apart
+sch.Connect("SIG", j.Pin("2"), r.Pin("2"));
+
+var board = new PcbBoard(new[] {
+    new Vector2d(-15, -10), new Vector2d(15, -10), new Vector2d(15, 10), new Vector2d(-15, 10) }, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("J1", 0, 0);          // J1.1 (GND, THT) at the origin — gets a thermal relief
+layout.Place("R1", -10, 0);        // a second GND pad
+
+Console.WriteLine($"before pour: GND connected = {layout.Connectivity().Of("GND").IsConnected}");
+
+layout.AddPour(new CopperPour("GND", "Top"));   // default: four-spoke thermal relief on THT pads
+
+var gnd = layout.Connectivity().Of("GND");
+var rules = DrcRuleSet.Default with { MinAcuteAngleDegrees = 45 };   // a realistic acid-trap threshold
+var report = PcbDrc.Check(layout, rules);
+var model = PcbCopperModel.FromLayout(layout);
+
+// The relief: a point in the annular gap between the spokes carries NO copper, yet the THT pad is
+// still connected to the plane through the spokes.
+bool gapIsAir = !model.Copper.Any(f => f.Layer == "Top" && f.Region.Contains(new Vector2d(1.1, 0)));
+
+Console.WriteLine($"after pour:  GND connected = {gnd.IsConnected}, ratsnest = [{string.Join(", ", report.Ratsnest)}]");
+Console.WriteLine($"THT relief gap is air: {gapIsAir}; DRC violations: {report.Violations.Count}");
+
+if (!gnd.IsConnected || report.Ratsnest.Contains("GND") || !report.Ok || !gapIsAir)
+    throw new Exception("a GND pour must connect every GND pin (incl. through spokes) and stay DRC-clean");
+```
+
+**Thermal relief** keeps a same-net through-hole pad solderable: instead of flooding over it (which
+would sink all its heat into the plane), the pour leaves an annular air gap around the pad bridged by
+thin radial spokes (four on the diagonals, by default). The pad stays *connected* through the spokes
+and *relieved* by the gap — asserted both ways above. SMD pads and vias are direct-connected
+(flooded); `ThermalRelief.None` floods a through-hole pad too. Spokes meet the plane at ~90° corners,
+so a poured board with thermal reliefs wants an acid-trap threshold at or below 90° (a realistic
+board sets it well under 90° regardless).
+
+A `PourFill.Hatched` variant intersects the fill with a crosshatch grid — the region ∩ a line
+pattern — for a lighter, more flexible plane. **Dead copper** — a piece of the pour the net cannot
+reach, walled off by other-net copper — is removed by default (kept only when
+`DeadCopper = DeadCopperPolicy.Keep`) and always reported (`PouredPour.DeadCopperArea`). A pour
+exports to [Gerber](ecad-fabrication.md) as a `G36`/`G37` region fill and round-trips, and rides in
+the layout file (write-only-when-stated, so a pour-free layout is byte-identical).
+
 ## Interchange: IDF import
 
 `IdfReader` imports an IDF 3.0/4.0 board (`.emn`) file — board outline, thickness, drilled holes,

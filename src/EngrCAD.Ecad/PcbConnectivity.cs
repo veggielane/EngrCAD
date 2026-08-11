@@ -101,14 +101,18 @@ public static class PcbConnectivity
         return Compute(net, features, connectorSources);
     }
 
-    /// <summary>The feature sources that are CONNECTORS rather than terminals — via pads and traces.
-    /// A connector ties copper together but is not itself a pin to be joined, so it never counts as
-    /// an island of its own (a floating via or a stray trace never makes a net read unconnected).</summary>
+    /// <summary>The feature sources that are CONNECTORS rather than terminals — via pads, traces and
+    /// pour components. A connector ties copper together but is not itself a pin to be joined, so it
+    /// never counts as an island of its own (a floating via, a stray trace or a pour piece never makes
+    /// a net read unconnected — but a pour that JOINS a net's pads does connect it, since two features
+    /// still join by touch whether or not either is a terminal).</summary>
     private static HashSet<string> ConnectorSources(PcbCopperModel model)
     {
         var connectors = new HashSet<string>(model.Vias.Select(v => v.Source), StringComparer.Ordinal);
         foreach (var trace in model.TraceSources)
             connectors.Add(trace);
+        foreach (var pour in model.PourSources)
+            connectors.Add(pour);
         return connectors;
     }
 
