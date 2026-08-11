@@ -7163,8 +7163,35 @@ isometry is the **library-Y-up → sheet-Y-down flip plus the instance rotation*
 the transform — a wrong sign lands the pins off the wires and the partition breaks, which is what
 the mutation test measures. And **power symbols are net-name markers, not components** (their `Value`
 is the net name at their pin anchor), so the schematic's components stay the real parts. Filed:
-buses, and multi-unit symbols (a duplicate reference is imported as a separate component with a
-note). Docs: `examples/ecad-library.md`.
+multi-unit symbols (a duplicate reference is imported as a separate component with a note). Docs:
+`examples/ecad-library.md`.
+
+**Single-sheet BUS import.** A bus is a labelled bundle of signal nets — a bus-VECTOR label
+`DATA[m..n]` on a `(bus …)` wire declares the members `DATA`+m..`DATA`+n (`DATA[0..7]` is
+DATA0..DATA7; a reversed `DATA[7..0]` is the same eight, honoured in the drawn direction) — and a
+`(bus_entry …)` rips a member off the bus onto a signal wire. **The load-bearing finding is that a
+ripped tap's net is its OWN local label, so the bus's connecting role is subsumed on a flat sheet.**
+KiCad requires the ripped wire labelled with a member (`DATA3`), and same-named labels are already
+one net by local-label equivalence — so the signal union-find is UNCHANGED (a member `DATAi` is
+reconstructed like any other labelled wire, and two same-named taps ride one net), and the bus model
+does two things only: (a) it DECLARES the member namespace by expanding the `NAME[m..n]` label, which
+is what stops a bus-vector label being mistaken for a signal net (`DATA[0..7]` is never a net), and
+(b) it VALIDATES each tap against the members of the bus it rips off — a bundle being a connected
+component of bus wires, tracked by a separate union-find so a bus point is never a signal net, and a
+tap's member checked by reading the ripped wire's net label back off the signal graph. The connecting
+role becomes load-bearing only ACROSS sheets (hierarchical bus pins carrying a bundle over a sheet
+boundary), so **buses stay refused in the hierarchical entry points**; a bus GROUP (`{…}` named group
+/ alias) needs its own member-set resolution and is refused by name, as is a malformed range
+(`DATA[]`, a non-integer bound — stricter than KiCad, which would treat those as ordinary labels, but
+the refuse-by-name ethos), while a dangling bus entry (its bus side or wire side touching nothing) or
+a non-member tap is REPORTED not thrown. **The oracle is the member partition asserted exactly plus a
+RELABEL mutation** — moving a tap's label moves its pin to a different member (a positional /
+membership-blind importer would pass the partition test and fail this), with reversed-range parsing
+(forward and reversed expand to the same eight members, so all eight taps validate clean),
+plain-net non-contamination (a bus beside a plain net leaves it exactly what it was, structural since
+the signal union-find never sees a bus point), and the bad-range / non-member / dangling reports each
+pinned. Filed: bus groups / aliases, buses across sheets, and drawing buses on the schematic sheet.
+Docs: `examples/ecad-library.md`.
 
 **Hierarchical / multi-sheet import** (`KiCadSchReader.ReadProject(rootPath)` /
 `ReadProjectFrom(rootFile, sheetsByFile)`) flattens a real KiCad hierarchy — a root `.kicad_sch` plus

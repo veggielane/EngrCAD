@@ -189,4 +189,16 @@ internal static class KiCadSchHierFixtures
                 (property "Sheetfile" "gone.kicad_sch" (at 40 61 0)))
               """),
         });
+
+    // A hierarchical project whose sheet carries a BUS. Single-sheet Read supports buses, but buses
+    // ACROSS sheets (hierarchical bus pins) stay out of scope, so the hierarchical entry points
+    // refuse a bus by name.
+    internal static readonly (string Root, IReadOnlyDictionary<string, string> Map) RootWithBus =
+        ("root.kicad_sch", new Dictionary<string, string>
+        {
+            ["root.kicad_sch"] = Sheet("busroot", """
+              (bus (pts (xy 90 40) (xy 160 40)))
+              (label "DATA[0..3]" (at 95 40 0) (effects (font (size 1.27 1.27))))
+              """),
+        });
 }

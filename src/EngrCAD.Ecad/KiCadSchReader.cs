@@ -1,3 +1,4 @@
+using System.Globalization;
 using EngrCAD.Core;
 
 namespace EngrCAD.Ecad;
@@ -60,7 +61,20 @@ public sealed record KiCadSchematic(
 /// <para><b>Covered:</b> a single sheet's embedded <c>lib_symbols</c> (mapped to
 /// <see cref="PartDefinition"/>s), placed <c>(symbol …)</c> instances (Reference → refdes, Value →
 /// value, <c>lib_id</c> → definition), power symbols (their <c>Value</c> is the net name),
-/// <c>wire</c>, <c>junction</c>, local <c>label</c>, <c>global_label</c>, and <c>no_connect</c>.</para>
+/// <c>wire</c>, <c>junction</c>, local <c>label</c>, <c>global_label</c>, <c>no_connect</c>, and
+/// <b>buses</b> — bus wires (<c>bus</c>), bus entries (<c>bus_entry</c>) and bus-VECTOR labels
+/// (<c>DATA[0..7]</c>).</para>
+///
+/// <para><b>Buses are SUGAR that EXPANDS to member nets; the net of a ripped signal is its own
+/// local label.</b> KiCad requires a wire ripped off a bus (via a bus entry) to be LABELLED with a
+/// bus member (e.g. <c>DATA3</c>) — that label names the net, and same-named labels are already one
+/// net by local-label equivalence, so on a single flat sheet the bus's CONNECTING role is entirely
+/// subsumed by that equivalence. The bus model's job here is therefore (a) to declare the member
+/// NAMESPACE by expanding a <c>NAME[m..n]</c> label into members <c>NAME</c>+i (so a bus-vector
+/// label is NOT mistaken for a signal net), and (b) to validate that a ripped tap's label is a
+/// declared member. The bus's connecting role becomes load-bearing only ACROSS sheets (hierarchical
+/// bus pins), which stays out of scope. Buses are supported only in the single-sheet
+/// <see cref="Read"/>; the hierarchical entry points still refuse them by name.</para>
 ///
 /// <para><b>Hierarchical / multi-sheet designs</b> (a root that references sub-sheet FILES) are
 /// handled by <see cref="ReadProject(string)"/> / <see cref="ReadProjectFrom"/>, which flatten the
@@ -69,10 +83,11 @@ public sealed record KiCadSchematic(
 /// sheet; local labels stay local). The single-sheet <see cref="Read"/> deliberately REFUSES a
 /// hierarchical design by name so a flat import cannot silently drop a whole subsheet.</para>
 ///
-/// <para><b>Refused BY NAME</b>: buses (<c>bus</c>, <c>bus_entry</c>, and bus-vector labels like
-/// <c>D[7..0]</c>) — still out of scope in both entry points; and, in <see cref="Read"/> only,
-/// hierarchical sheets (<c>sheet</c> subsheets, <c>hierarchical_label</c>). A netless wire, an
-/// instance referencing an unknown symbol, or a dangling pin is REPORTED (a diagnostic), not thrown
+/// <para><b>Refused BY NAME</b>: bus GROUP labels (<c>{…}</c> named groups / aliases) and a
+/// malformed bus range (<c>DATA[]</c>, a non-integer bound); buses in the HIERARCHICAL entry points
+/// (out of scope there); and, in <see cref="Read"/> only, hierarchical sheets (<c>sheet</c>
+/// subsheets, <c>hierarchical_label</c>). A netless wire, an instance referencing an unknown symbol,
+/// a dangling pin, or a dangling / non-member bus entry is REPORTED (a diagnostic), not thrown
 /// (the readers-never-throw culture); a hierarchical project's missing/unreadable sub-sheet file is
 /// reported too, and a RECURSIVE sheet reference is refused by name. A non-<c>(kicad_sch …)</c> root
 /// — including a <c>.kicad_pcb</c> board or a <c>.kicad_sym</c> handed here — or a malformed
@@ -90,8 +105,8 @@ public static class KiCadSchReader
     /// <summary>Reads a <c>.kicad_sch</c> file's text into a <see cref="KiCadSchematic"/>.</summary>
     /// <param name="text">The <c>.kicad_sch</c> file text.</param>
     /// <exception cref="FormatException">The file is not a KiCad schematic, its S-expression is
-    /// malformed, or it uses a construct out of v1 scope (buses / hierarchical sheets) — refused
-    /// by name.</exception>
+    /// malformed, or it uses a construct out of v1 scope (a bus GROUP label, a malformed bus range,
+    /// or a hierarchical sheet) — refused by name.</exception>
     public static KiCadSchematic Read(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
@@ -191,21 +206,31 @@ public static class KiCadSchReader
             if (TryAt(junction, out var at))
                 junctions.Add(at);
 
+        // Labels split two ways: a bus-VECTOR label declares a member namespace (it is NOT a signal
+        // net), an ordinary label is a signal net point (the existing rule).
+        var busLabels = new List<BusLabel>();
         foreach (var label in root.Lists("label"))
-            if (TryLabel(label, out var at, out var name))
-                labelPoints.Add(new LabelPoint(at, name, LabelPriority.Local));
-
+            ReadLabelOrBus(label, LabelPriority.Local, labelPoints, busLabels);
         foreach (var label in root.Lists("global_label"))
-            if (TryLabel(label, out var at, out var name))
-                labelPoints.Add(new LabelPoint(at, name, LabelPriority.Global));
+            ReadLabelOrBus(label, LabelPriority.Global, labelPoints, busLabels);
 
         var noConnects = new List<Vector2d>();
         foreach (var nc in root.Lists("no_connect"))
             if (TryAt(nc, out var at))
                 noConnects.Add(at);
 
+        // ---- bus geometry: bus wires (the bundle) + bus entries (the diagonal rips) ----------
+        var busSegments = new List<(Vector2d A, Vector2d B)>();
+        foreach (var bus in root.Lists("bus"))
+            ReadBusSegments(bus, busSegments);
+        var busEntries = new List<(Vector2d A, Vector2d B)>();
+        foreach (var entry in root.Lists("bus_entry"))
+            if (TryBusEntry(entry, out var ea, out var eb))
+                busEntries.Add((ea, eb));
+
         // ---- reconstruct the nets (union-find over connection points) ---------
-        BuildNets(schematic, pinPoints, labelPoints, wires, junctions, noConnects, Note);
+        BuildNets(schematic, pinPoints, labelPoints, wires, junctions, noConnects,
+            busSegments, busEntries, busLabels, Note);
 
         return new KiCadSchematic(schematic, sheetName, diagnostics);
     }
@@ -287,6 +312,9 @@ public static class KiCadSchReader
         List<(Vector2d A, Vector2d B)> wires,
         List<Vector2d> junctions,
         List<Vector2d> noConnects,
+        List<(Vector2d A, Vector2d B)> busSegments,
+        List<(Vector2d A, Vector2d B)> busEntries,
+        List<BusLabel> busLabels,
         Action<string> note)
     {
         var graph = new Graph();
@@ -339,6 +367,11 @@ public static class KiCadSchReader
             int root = graph.Find(graph.Intern(lp.At));
             (namesByRoot.TryGetValue(root, out var list) ? list : namesByRoot[root] = []).Add(lp);
         }
+
+        // Buses: the signal union-find above already reconstructed every ripped member net from its
+        // own local label (a member DATAi = its label DATAi, same-named labels one net). The bus
+        // model only VALIDATES the taps and reports dangling / non-member bus entries.
+        ValidateBuses(graph, namesByRoot, wires, busSegments, busEntries, busLabels, note);
 
         var noConnectKeys = noConnects.Select(Graph.Key).ToHashSet();
 
@@ -445,28 +478,231 @@ public static class KiCadSchReader
             throw new FormatException(
                 "This KiCad schematic uses a 'hierarchical_label', part of hierarchical sheets, "
                 + "which are out of v1 scope (single-sheet import only).");
-        if (root.List("bus") is not null || root.List("bus_entry") is not null)
-            throw new FormatException(
-                "This KiCad schematic uses buses ('bus' / 'bus_entry'), which are out of v1 scope. "
-                + "Route the signals as individual wires, or file bus import as a follow-up.");
+
+        // Bus VECTORS (NAME[m..n]) are supported and expanded (see ExpandBusVector); a bus GROUP
+        // ({…} named group / alias) is out of scope, and a malformed bus range is refused BY NAME —
+        // both before any work is done, so a bad file fails the same way a bad geometry file does.
         foreach (var label in root.Lists("label").Concat(root.Lists("global_label")))
-            if (LooksLikeBus(label.Arg(0)))
+        {
+            string? name = label.Arg(0);
+            if (IsBusGroup(name))
                 throw new FormatException(
-                    $"This KiCad schematic uses a bus label ('{label.Arg(0)}'), which is out of v1 "
-                    + "scope. Name the signals individually, or file bus import as a follow-up.");
+                    $"This KiCad schematic uses a bus GROUP label ('{name}') — a named bus group / "
+                    + "alias — which is out of scope. Bus VECTORS (NAME[m..n]) are supported; spell a "
+                    + "group's members individually, or file bus groups as a follow-up.");
+            if (IsBusVector(name))
+                ExpandBusVector(name!);   // refuses a malformed range by name before the read proper
+        }
     }
 
-    /// <summary>Whether a label name is a bus vector (<c>D[7..0]</c>) or bus group (<c>{…}</c>).</summary>
-    private static bool LooksLikeBus(string? name)
+    // ======================================================================
+    // Buses — sugar that expands to member nets. The signal union-find is
+    // UNCHANGED: a ripped tap's net is its own local label (KiCad requires the
+    // tap labelled with a member, and same-named labels are already one net by
+    // local-label equivalence, so the bus's connecting role is subsumed on a
+    // single flat sheet). The bus model DECLARES the member namespace (so a
+    // bus-vector label is not mistaken for a signal net) and VALIDATES the taps.
+    // ======================================================================
+
+    /// <summary>An expanded bus-vector label: where it sits, its raw text, and the member net names
+    /// it declares (<c>DATA[0..7]</c> → DATA0..DATA7).</summary>
+    private readonly record struct BusLabel(Vector2d At, string Raw, IReadOnlyList<string> Members);
+
+    /// <summary>Whether a label names a bus — a bus GROUP or a bus VECTOR. The hierarchical path uses
+    /// this to refuse buses by name (buses across sheets stay out of scope).</summary>
+    private static bool LooksLikeBus(string? name) => IsBusGroup(name) || IsBusVector(name);
+
+    /// <summary>Whether a label is a bus GROUP — the <c>{…}</c> named-group / alias form. Out of
+    /// scope (a group needs its own member-set resolution), so it is refused by name where it
+    /// appears.</summary>
+    private static bool IsBusGroup(string? name) =>
+        name is not null && (name.Contains('{') || name.Contains('}'));
+
+    /// <summary>Whether a label is a bus VECTOR — a <c>NAME[m..n]</c> suffix (a non-empty base name,
+    /// then a bracketed range at the very end). Whether the range is well-formed is decided by
+    /// <see cref="ExpandBusVector"/>, which refuses a malformed one by name.</summary>
+    private static bool IsBusVector(string? name)
     {
-        if (name is null)
+        if (name is null || name.Length == 0 || name[^1] != ']')
             return false;
-        if (name.Contains('{') || name.Contains('}'))
-            return true;
         int lb = name.IndexOf('[');
-        int rb = name.IndexOf(']');
-        return lb >= 0 && rb > lb && name.AsSpan(lb, rb - lb).Contains("..", StringComparison.Ordinal);
+        return lb >= 1;   // a non-empty base name before the '['
     }
+
+    /// <summary>Expands a bus-vector label <c>NAME[m..n]</c> into its member net names — the KiCad
+    /// vector notation, member i named <c>NAME</c> + i (so <c>DATA[0..7]</c> is DATA0..DATA7). The
+    /// range is inclusive and honoured in the DRAWN direction, so a reversed <c>DATA[7..0]</c> is
+    /// legal and expands to the same eight members. A malformed range — empty, no <c>..</c>, or a
+    /// non-integer bound — is refused BY NAME.</summary>
+    private static IReadOnlyList<string> ExpandBusVector(string name)
+    {
+        int lb = name.IndexOf('[');
+        string baseName = name[..lb];
+        string inner = name[(lb + 1)..^1];   // between the '[' and the final ']'
+        var parts = inner.Split("..", StringSplitOptions.None);
+        if (parts.Length != 2
+            || !int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int start)
+            || !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int end))
+            throw new FormatException(
+                $"The bus label '{name}' has a malformed vector range: a bus vector is NAME[m..n] "
+                + "with integer bounds (for example 'DATA[0..7]'; reversed 'DATA[7..0]' is allowed).");
+        var members = new List<string>();
+        int step = start <= end ? 1 : -1;
+        for (int i = start; ; i += step)
+        {
+            members.Add(baseName + i.ToString(CultureInfo.InvariantCulture));
+            if (i == end)
+                break;
+        }
+        return members;
+    }
+
+    /// <summary>Reads a <c>(label …)</c> / <c>(global_label …)</c>: a bus-VECTOR label is expanded
+    /// into a <see cref="BusLabel"/> (it declares members, it is NOT a signal net), everything else
+    /// is an ordinary signal-label point.</summary>
+    private static void ReadLabelOrBus(
+        SList label, LabelPriority priority, List<LabelPoint> labelPoints, List<BusLabel> busLabels)
+    {
+        if (!TryLabel(label, out var at, out var name))
+            return;
+        if (IsBusVector(name))   // a bus GROUP was already refused in RefuseOutOfScope
+            busLabels.Add(new BusLabel(at, name, ExpandBusVector(name)));
+        else
+            labelPoints.Add(new LabelPoint(at, name, priority));
+    }
+
+    /// <summary>Reads a bus wire <c>(bus (pts (xy …) …))</c> into its consecutive segments (a bus
+    /// polyline can have more than two points).</summary>
+    private static void ReadBusSegments(SList bus, List<(Vector2d A, Vector2d B)> segments)
+    {
+        var pts = bus.List("pts");
+        if (pts is null)
+            return;
+        var xy = pts.Lists("xy")
+            .Select(x => x.Numbers())
+            .Where(n => n.Count >= 2)
+            .Select(n => new Vector2d(n[0], n[1]))
+            .ToList();
+        for (int i = 0; i + 1 < xy.Count; i++)
+            segments.Add((xy[i], xy[i + 1]));
+    }
+
+    /// <summary>Reads a bus entry <c>(bus_entry (at x y) (size dx dy))</c> — the diagonal stub that
+    /// connects a point on the bus to a signal-wire endpoint. It joins <c>(x, y)</c> to
+    /// <c>(x + dx, y + dy)</c>; which end is the bus side and which the wire side is worked out from
+    /// the geometry (whichever end lies on a bus segment is the bus side).</summary>
+    private static bool TryBusEntry(SList entry, out Vector2d a, out Vector2d b)
+    {
+        b = default;
+        if (!TryAt(entry, out a))
+            return false;
+        var size = entry.ChildNumbers("size");
+        b = size.Count >= 2 ? new Vector2d(a.X + size[0], a.Y + size[1]) : a;
+        return true;
+    }
+
+    /// <summary>Validates the buses against the reconstructed signal nets and reports what is wrong,
+    /// never throwing (the readers-never-throw-on-dirty culture). The signal nets are already built
+    /// — this only checks that each ripped tap's own local label is a declared member of the bus it
+    /// taps, and that no bus entry is dangling.</summary>
+    private static void ValidateBuses(
+        Graph graph,
+        Dictionary<int, List<LabelPoint>> namesByRoot,
+        List<(Vector2d A, Vector2d B)> wires,
+        List<(Vector2d A, Vector2d B)> busSegments,
+        List<(Vector2d A, Vector2d B)> busEntries,
+        List<BusLabel> busLabels,
+        Action<string> note)
+    {
+        if (busSegments.Count == 0 && busEntries.Count == 0 && busLabels.Count == 0)
+            return;   // nothing bus-shaped on the sheet — the flat path is untouched
+
+        // A bus bundle: a connected component of bus wires (its own union-find, separate from the
+        // signal graph so a bus point is never mistaken for a signal net).
+        var busGraph = new Graph();
+        foreach (var (a, b) in busSegments)
+            busGraph.Union(busGraph.Intern(a), busGraph.Intern(b));
+
+        // The bundle a point sits on (a bus-vector label, or a bus entry's bus-side), or -1.
+        int BundleAt(Vector2d p)
+        {
+            foreach (var (a, b) in busSegments)
+                if (OnSegment(p, a, b))
+                    return busGraph.Find(busGraph.Intern(a));
+            return -1;
+        }
+
+        // The members declared for each bundle (union of the bus-vector labels sitting on it).
+        var membersByBundle = new Dictionary<int, HashSet<string>>();
+        foreach (var bl in busLabels)
+        {
+            int bundle = BundleAt(bl.At);
+            if (bundle < 0)
+            {
+                note($"Bus label '{bl.Raw}' at {Fmt(bl.At)} does not sit on a bus wire; its members "
+                    + "declare no bus.");
+                continue;
+            }
+            var set = membersByBundle.TryGetValue(bundle, out var s)
+                ? s : membersByBundle[bundle] = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var m in bl.Members)
+                set.Add(m);
+        }
+
+        // Each bus entry rips a signal off the bus: its wire-side label must be a member of the bus.
+        foreach (var (a, b) in busEntries)
+        {
+            int bundle = BundleAt(a);
+            Vector2d wireEnd = b;
+            if (bundle < 0)
+            {
+                bundle = BundleAt(b);
+                wireEnd = a;
+            }
+            if (bundle < 0)
+            {
+                note($"A bus entry at {Fmt(a)} is not connected to a bus; the signal ripped there "
+                    + "joins no bus member.");
+                continue;
+            }
+
+            var wire = FindWire(wires, wireEnd);
+            if (wire is null)
+            {
+                note($"A bus entry at {Fmt(wireEnd)} is not connected to a wire; nothing is ripped "
+                    + "off the bus there.");
+                continue;
+            }
+
+            int root = graph.Find(graph.Intern(wire.Value.A));
+            var netLabels = namesByRoot.GetValueOrDefault(root)?
+                .Select(l => l.Name).Distinct(StringComparer.Ordinal).ToList() ?? [];
+            if (netLabels.Count == 0)
+            {
+                note($"A wire ripped off a bus at {Fmt(wireEnd)} carries no member label; KiCad "
+                    + "wants the ripped wire labelled with a bus member (e.g. 'DATA3').");
+                continue;
+            }
+            var members = membersByBundle.GetValueOrDefault(bundle);
+            if (members is { Count: > 0 } && !netLabels.Any(members.Contains))
+                note($"A wire ripped off a bus carries the label(s) {string.Join(", ", netLabels.OrderBy(x => x, StringComparer.Ordinal))}, "
+                    + $"which is not a member of the bus (members: {string.Join(", ", members.OrderBy(x => x, StringComparer.Ordinal))}).");
+        }
+    }
+
+    /// <summary>The signal wire a point lies on (endpoint or interior), or null.</summary>
+    private static (Vector2d A, Vector2d B)? FindWire(List<(Vector2d A, Vector2d B)> wires, Vector2d p)
+    {
+        foreach (var w in wires)
+            if (OnSegment(p, w.A, w.B))
+                return w;
+        return null;
+    }
+
+    /// <summary>A point formatted for a diagnostic.</summary>
+    private static string Fmt(Vector2d p) =>
+        $"({p.X.ToString("0.###", CultureInfo.InvariantCulture)}, "
+        + $"{p.Y.ToString("0.###", CultureInfo.InvariantCulture)})";
 
     // ======================================================================
     // Hierarchical engine — instance tree, per-sheet collection, cross-sheet

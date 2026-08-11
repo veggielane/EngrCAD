@@ -118,6 +118,16 @@ public sealed class KiCadSchHierImportTests
     }
 
     [Fact]
+    public void ABusInAHierarchicalProject_IsRefusedByName()
+    {
+        // The single-sheet Read supports buses, but buses ACROSS sheets (hierarchical bus pins) are
+        // out of scope, so the hierarchical entry points refuse a bus by name.
+        var ex = Assert.Throws<FormatException>(() => KiCadSchReader.ReadProjectFrom(
+            KiCadSchHierFixtures.RootWithBus.Root, KiCadSchHierFixtures.RootWithBus.Map));
+        Assert.Contains("bus", ex.Message);
+    }
+
+    [Fact]
     public void AMissingSubSheetFile_IsReported_NotThrown()
     {
         var read = KiCadSchReader.ReadProjectFrom(
