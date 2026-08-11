@@ -2712,9 +2712,11 @@ from what was already understood rather than from scratch.
     and the JOB FILE (`.gbrjob`) carry per-object net/component metadata a modern fab reads. A
     Gerber IMPORT of a foreign board is a different project (this is EXPORT; the reader is the
     round-trip oracle scoped to what the writer emits). Topological / shove / push routing and
-    differential pairs are later routing stages over the same grid (LENGTH MATCHING has LANDED —
-    `LengthMatch.Tune`/`MatchGroup`, serpentine tuning gated on the exact DRC; see CLAUDE.md's ECAD
-    status, design.md §6d, `examples/ecad-routing.md`). A CONFORMAL
+    differential-pair COUPLED routing are later routing stages over the same grid (LENGTH MATCHING and
+    differential-pair ANALYSIS + skew matching have LANDED — `LengthMatch.Tune`/`MatchGroup` serpentine
+    tuning gated on the exact DRC, and `DiffPair`/`DiffPairs.Check`/`MatchSkew` measuring a pair's
+    coupling + skew and equalising its halves; see CLAUDE.md's ECAD status, design.md §6d,
+    `examples/ecad-routing.md`). A CONFORMAL
     mask/silk/paste on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
     MID/surface side's territory).
   - **IPC-D-356A netlist follow-ups (filed; the netlist itself has LANDED — `PcbIpc356`, see

@@ -138,12 +138,56 @@ the length is an `Unchanged` no-op, and a trace boxed in on both sides is report
 how much it *could* add. Filed follow-ups: spreading the comb over several segments, teeth to only the
 open side, ripping up a neighbour to make room, and **differential-pair coupled tuning**.
 
+## Differential pairs
+
+A **differential pair** is two nets routed together for controlled impedance and common-mode
+rejection, judged by two measured properties: **coupling** (do the two traces run parallel at a
+target gap?) and **skew** (do their two halves match in length?). `DiffPairs.Check` measures both,
+and `DiffPairs.MatchSkew` equalises the lengths by reusing the DRC-gated serpentine tuner.
+
+```csharp run:ecad-diffpair
+PartDefinition Tp(string n) => new(n, "TP", new[] { new Pin("1", PinType.Passive) },
+    new Footprint(n + "_fp", new[] { Pad.Smd("1", new Vector2d(0, 0), 0.6, 0.6) }));
+
+var sch = new Schematic("t");
+var p1 = sch.Add("P1", Tp("P1")); var p2 = sch.Add("P2", Tp("P2"));
+var n1 = sch.Add("N1", Tp("N1")); var n2 = sch.Add("N2", Tp("N2"));
+sch.Connect("D_P", p1.Pin("1"), p2.Pin("1"));
+sch.Connect("D_N", n1.Pin("1"), n2.Pin("1"));
+var board = new PcbBoard(new[] {
+    new Vector2d(0, 0), new Vector2d(24, 0), new Vector2d(24, 24), new Vector2d(0, 24) }, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("P1", 4, 10); layout.Place("P2", 20, 10);
+layout.Place("N1", 4, 10.3); layout.Place("N2", 20, 10.3);
+
+// Two parallel traces 0.3 mm apart — the hand-routed pair.
+string layer = layout.Board.Stackup.Coppers[0].Name;
+layout.AddTrace("D_P", layer, 0.2, new[] { new Vector2d(4, 10.0), new Vector2d(20, 10.0) });
+layout.AddTrace("D_N", layer, 0.2, new[] { new Vector2d(4, 10.3), new Vector2d(20, 10.3) });
+
+var report = DiffPairs.Check(layout, new DiffPair("D_P", "D_N", TargetGapMm: 0.3));
+Console.WriteLine(report.Message);
+Console.WriteLine($"well coupled: {report.WellCoupled}, within skew: {report.WithinSkew}, ok: {report.Ok}");
+
+if (!report.Ok)
+    throw new Exception("a parallel, length-matched pair must read well-coupled and within skew");
+```
+
+`Check` reports the two lengths, the skew, the median gap, and the coupled fraction (1.0 for a
+perfectly parallel pair), each net's trace resolved by name. A pair whose nets are not routed (or
+routed to several traces) is reported *not checkable* rather than throwing. `MatchSkew` lengthens the
+shorter half to the longer, DRC-clean, and hands back the tuned traces for `ReplaceTrace`. **v1 is
+analysis + skew tuning, not coupled routing** — filed: coupled routing (routing the two together
+while holding the gap), per-segment skew tuning that preserves coupling, and impedance from the
+stackup.
+
 ## v1 scope
 
 An honest v1: a grid/maze A* with rip-up-reroute, **through-vias** (spanning all copper layers) for
 layer changes, and 2-pin MST decomposition of multi-pin nets. Deterministic — a fixed net order and
-grid give bit-identical routes. **[Length matching](#length-matching-serpentine-tuning)** has landed.
-Not in v1 (each filed): topological / shove / push routing, differential pairs (coupled routing),
-teardrops, and cavity walls as routing obstacles.
+grid give bit-identical routes. **[Length matching](#length-matching-serpentine-tuning)** and
+**[differential-pair analysis](#differential-pairs)** have landed. Not in v1 (each filed):
+topological / shove / push routing, differential-pair coupled routing, teardrops, and cavity walls as
+routing obstacles.
 **[Copper pours / ground planes with thermal reliefs](ecad-pcb.md)** and **[Gerber / Excellon
 fabrication export](ecad-fabrication.md)** of the routed board — the fab output — have landed.

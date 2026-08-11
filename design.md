@@ -7679,6 +7679,21 @@ one longest segment, teeth to alternating sides; filed — spreading over severa
 only the OPEN side, ripping up a neighbour to make room, and differential-pair coupled tuning
 (matching within a pair while holding the gap). Docs: `examples/ecad-routing.md`.
 
+**Differential pairs — analysis + skew matching, NOT coupled routing** (`DiffPair`, `DiffPairs`). A
+`DiffPair` carries the two properties a diff pair IS judged by — a target coupling gap and a skew
+tolerance — and `DiffPairs.Check` MEASURES both over a routed layout: it resolves each net to its
+single trace (reporting *not checkable* by name when a net is unrouted or split, never throwing), and
+reports the two lengths, the skew `|P − N|`, the median nearest-neighbour gap, and the **coupled
+fraction** — the arc-length share of the + trace whose nearest point on the − trace lies within the
+gap tolerance of the target gap (1.0 for a perfectly parallel pair, driven low the moment the pair is
+judged against the WRONG gap, which is what makes the measurement a real test rather than a
+tautology). Coupling is a point-to-polyline distance sampled by arc length, so it needs no boolean.
+`DiffPairs.MatchSkew` equalises the halves by handing the two traces to `LengthMatch.MatchGroup`, so
+the skew serpentine is DRC-gated for free and cannot collide with its partner. The deliberate v1
+boundary is that this ANALYSES and skew-tunes a pair that is already routed — COUPLED routing (routing
+the two together while holding the gap) is the hard research stage and is filed, as are per-segment
+skew tuning that preserves coupling and impedance from the stackup. Docs: `examples/ecad-routing.md`.
+
 ### Drawing the schematic sheet (`SchematicSheet`, `SchematicDrawing`)
 
 The human-readable VIEW of a schematic — placed symbols, orthogonal wires, junction dots, net

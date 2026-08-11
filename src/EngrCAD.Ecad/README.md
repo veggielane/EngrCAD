@@ -713,6 +713,16 @@ target shorter than the current length is `Refused`, an already-matched one is `
 boxed-in trace is `Untunable` with how much it could add. Filed: multi-segment combs, one-sided teeth,
 rip-up-to-make-room, and differential-pair coupled tuning.
 
+**Differential pairs (analysis + skew match).** A `DiffPair` (two nets, a target gap, a skew
+tolerance) is judged by the two properties a diff pair IS — coupling and skew. `DiffPairs.Check`
+resolves each net's trace by name and measures the two lengths, their skew, the median nearest-neighbour
+gap, and the **coupled fraction** (how much of the + trace runs within the gap tolerance of the target
+gap — 1.0 for a perfectly parallel pair), reporting *not checkable* rather than throwing when a net is
+unrouted. `DiffPairs.MatchSkew` equalises the two halves by tuning the shorter to the longer through
+`LengthMatch` (so the serpentine is DRC-gated). v1 is analysis + skew tuning; filed: COUPLED routing
+(the two together, holding the gap), per-segment skew tuning that preserves coupling, and impedance
+from the stackup.
+
 ## Copper pours — ground / power planes
 
 A `CopperPour` floods a copper layer on one net (a ground plane, a power plane). It is **layout
