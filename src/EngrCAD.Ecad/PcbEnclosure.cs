@@ -287,9 +287,6 @@ public sealed class Enclosure
         new Vector3d(InteriorWidth / 2 + WallThickness, InteriorDepth / 2 + WallThickness,
             LidZ + LidThickness)));
 
-    /// <summary>The world transform from interior coordinates (<see cref="Frame"/>'s matrix).</summary>
-    internal Matrix4d ToWorldMatrix => Frame.ToMatrix();
-
     /// <summary>The tool that punches <paramref name="cutout"/> through its wall (interior
     /// coordinates). Spans the wall thickness with a small overshoot on both faces so a boolean
     /// never sees a coplanar face (the Drill overshoot doctrine).</summary>
