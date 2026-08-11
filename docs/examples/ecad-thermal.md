@@ -168,7 +168,7 @@ than against a picture (the FEA house style):
 
 Filed as later stages, each with its own oracle:
 
-- **Transient** board warm-up — the [`SolveTransient`](fea-thermal.md#transient) path exists, so it
+- **Transient** board warm-up — the [`SolveTransient`](fea-thermal.md#transient-conduction) path exists, so it
   is a bounded follow-on with its own erfc-style oracle; the effective slab already carries a
   volume-weighted heat capacity.
 - **Thermal vias** as discrete high-conductivity paths — v1's effective conductivity smears the
