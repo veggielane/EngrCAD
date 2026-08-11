@@ -165,3 +165,45 @@ A stated **finished thickness** is authoritative: it is the delivered stackup th
 finish) a fabricator quotes to, so it *replaces* the modelled plate thickness in the finished-
 thickness note rather than printing a second one. With no spec, that note is the modelled thickness
 exactly as before — the drawing is byte-identical to one built before the spec existed.
+
+## A house standard from the catalogue
+
+Typing the same fields for every board gets old, so `StandardFabSpecs` is a small catalogue of
+common house specs — `TwoLayerFr4Hasl`, `TwoLayerFr4Enig`, `FourLayerFr4Enig`, `FlexPolyimideEnig`
+— each an ordinary `PcbFabricationSpec` you pass to `WithFabrication`. It is the same
+verify-against-datasheet pattern as `StandardHoles` / `SheetMaterials`: ⚠ **nominal transcribed
+figures — check them against your fabricator's capability sheet**. Because a catalogue entry *is*
+an ordinary spec, it persists and drives the fab drawing through exactly the machinery above — there
+is no second application path. The spec carries no layer count (that lives on the board's stackup),
+so the two 2-layer entries differ only by finish (HASL vs ENIG) and the 4-layer one is a
+higher-reliability class-3 build; tweak any preset with a record `with` expression.
+
+```csharp run:ecad-fab-catalogue
+var board = new PcbBoard(
+    [
+        new Vector2d(-30, -20), new Vector2d(30, -20),
+        new Vector2d(30, 20), new Vector2d(-30, 20),
+    ],
+    thickness: 1.6);
+
+// Pick a house standard — then override just what differs (a black mask here).
+var spec = StandardFabSpecs.TwoLayerFr4Enig with { SolderMaskColour = "Black" };
+var layout = new PcbLayout(new Schematic("sensor"), board).WithFabrication(spec);
+
+// It reaches the fab drawing through the same PcbFabricationSheet seam — no new drawing code.
+var notes = new PcbFabricationSheet(layout).Compute().Notes;
+if (!notes.Contains("SURFACE FINISH: ENIG."))
+    throw new Exception("the catalogue spec's finish should print on the fab drawing");
+if (!notes.Contains("SOLDER MASK COLOUR: BLACK."))
+    throw new Exception("the override should carry through");
+
+// And it persists like any other spec — a save -> load -> save fixed point.
+if (PcbLayout.Load(layout.Save()).Save() != layout.Save())
+    throw new Exception("a catalogue spec should round-trip like any other");
+
+// Every catalogue entry's stated minimums conform to the IPC class it claims.
+foreach (var (name, s) in StandardFabSpecs.All)
+    if (!DrcRuleSet.CheckSpec(s).Conforms)
+        throw new Exception($"{name} contradicts its own IPC class");
+Console.WriteLine($"catalogue: {StandardFabSpecs.All.Count} house specs, all class-conforming");
+```

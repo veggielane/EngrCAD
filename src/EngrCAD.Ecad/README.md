@@ -928,6 +928,19 @@ IPC class outside {1, 2, 3}, or an `Other` finish with no name. It is also **pop
 from a `KiCadPcbReader` import** (the board-setup / stackup carries most of these fields) — see the
 whole-board interchange section above.
 
+**A caller can pick a house standard from a catalogue** rather than typing the fields:
+`StandardFabSpecs` (`StandardFabSpecs.cs`) is a small set of named presets — `TwoLayerFr4Hasl`,
+`TwoLayerFr4Enig`, `FourLayerFr4Enig`, `FlexPolyimideEnig` — each an ORDINARY `PcbFabricationSpec`,
+so it persists and drives the fab drawing through the machinery above with no second application
+path. ⚠ **Nominal transcribed figures, verify-against-datasheet** (the `StandardHoles` /
+`SheetMaterials` / `DrcRuleSet.ForIpcClass` pattern): the near-universal defaults a typical
+prototype fabricator ships (FR-4 1.6 mm, 1 oz / 35 µm outer copper, green mask / white legend,
+6 mil = 0.15 mm minimum trace and space = the IPC-6012 class-2 floor). **The spec carries no layer
+count** (the board's stackup does), so the two 2-layer entries differ only by finish (HASL vs ENIG)
+and the 4-layer one is a higher-reliability class-3 build; each states all nine core fields (so none
+is half-filled) and each is `DrcRuleSet.CheckSpec`-**Conforming** to the class it claims. Vary a
+preset with a record `with` expression.
+
 **v1 scope** (filed): no per-layer copper/mask/silk plots yet (a picture per Gerber, wanting the
 copper-model geometry rendered as sheet line work). Docs: `examples/ecad-fab-drawing.md`.
 

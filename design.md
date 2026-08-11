@@ -8044,6 +8044,25 @@ minimum**, the `PcbLayoutCheck` house style), a spec whose stated minimums meet 
 level up). `Default` is field-identical to before (the preset is a new factory, the cross-check a new
 static method; every existing DRC path untouched). Docs: `examples/ecad-drc.md`.
 
+**A named house-spec CATALOGUE closes the last fab-spec residual** (`StandardFabSpecs`): a caller picks
+a common preset — `TwoLayerFr4Hasl` / `TwoLayerFr4Enig` / `FourLayerFr4Enig` / `FlexPolyimideEnig` —
+instead of typing the fields, the `StandardHoles` / `SheetMaterials` / `ForIpcClass`
+verify-against-datasheet pattern. **The load-bearing decision is that a catalogue entry is an ORDINARY
+`PcbFabricationSpec`**, not a new type or a new application path: it is a value a caller passes to
+`WithFabrication`, so it persists (a `save → load → save` byte fixed point) and drives the fab drawing
+through exactly the machinery above (verified through those seams, no new drawing/persistence code). ⚠
+The figures are transcribed nominal defaults asserted in the datasheet form a human checks (the values
+themselves — a re-typed formula agrees with its own mistake). **The spec carries no LAYER COUNT — the
+board's stackup does** — so the "2-layer"/"4-layer" names describe the intended board while the SPEC's
+honest differentiators are FINISH (the two 2-layer entries differ only there, HASL vs ENIG, the single
+most common real distinction) and CLASS (the 4-layer entry is a higher-reliability class-3 build with
+wider required minimums). Every entry states all nine core fields (so a new one cannot be added
+half-filled — asserted by enumerating the catalogue) and every entry's stated minimums MEET the class
+it claims (`DrcRuleSet.CheckSpec` reports each `Conforming` — a house standard must not contradict its
+own class), and the coverage is a CLAIM: a reflection test asserts `All` lists exactly the published
+properties, so a new entry that is not in `All` fails. Vary a preset with a record `with` expression.
+Docs: `examples/ecad-fab-drawing.md`.
+
 **The drill map now carries a canonical symbol set + legend, and the drill table includes through-hole
 component pad drills** (board holes + placed vias + THT pads, grouped by (diameter, plated); an SMD pad
 has no drill and contributes no row — the paste layer's SMD-vs-THT distinction reused). Symbols are a
