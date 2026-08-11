@@ -1530,14 +1530,9 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     closed-form partition proves), while a complete drill map would also table the footprint
     through-hole pad drills (those live in the Excellon program the fab derives from the
     copper — including them here means resolving `PcbLayout.PlacedPads()` drills and folding
-    them into the same `(diameter, plated)` partition); **(c) fab-note templates** — the
-    notes are write-only-when-stated over what the board carries (thickness, copper-layer
-    count, copper foil thickness, mask/silk/paste presence), but the board states no
-    material / surface finish / mask colour, so those wait on a `PcbBoard`-level fabrication
-    spec (material, finish, class, colours) to state them rather than have the drawing invent
-    them; **(d) per-layer fabrication plots** — a copper/mask/silk plot per layer beside the
+    them into the same `(diameter, plated)` partition); **(c) per-layer fabrication plots** — a copper/mask/silk plot per layer beside the
     drill map (a picture per Gerber), which wants the copper-model geometry the Gerber
-    exporter already builds rendered as sheet line work.
+    exporter already builds rendered as sheet line work. **(d) fab-spec catalogues + an IPC-class DRC preset** — the `PcbFabricationSpec` states material / mask & silk colour as FREE strings and the class / minimum trace & clearance as loose numbers; a per-fabricator CATALOGUE (the `StandardHoles` / `SheetMaterials` verify-against-datasheet pattern) would let a caller pick a house stack-up rather than typing them, and an IPC-6012-class — `DrcRuleSet` preset (class 1/2/3 to a minimum trace / clearance / annular) would let the STATED class DRIVE the DRC and cross-check the spec's own `MinTraceWidthMm` / `MinClearanceMm` against it; and the spec is not yet populated from a `KiCadPcbReader` import (KiCad's board-setup / stackup carries most of these).
   - [ ] **Detail views** (a scaled-up circle of a region) and **broken views** (a long
     part with its middle removed). Both are clipping problems on top of the existing
     view, not new projections.

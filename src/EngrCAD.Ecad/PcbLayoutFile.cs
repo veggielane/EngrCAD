@@ -139,7 +139,46 @@ internal static class PcbLayoutWriter
         if (layout.PasteSettings is { } paste)
             root["paste"] = SavePaste(paste);
 
+        // The fabrication requirements are LAYOUT TRUTH like the mask/silk/paste settings — written
+        // only when a spec is set, and within, each field write-only-when-stated, so a layout that
+        // states no spec saves byte-identically to a pre-spec one and a stated spec is a fixed point.
+        if (layout.Fabrication is { } fab)
+            root["fabrication"] = SaveFabrication(fab);
+
         return root;
+    }
+
+    private static JsonObject SaveFabrication(PcbFabricationSpec fab)
+    {
+        var record = new JsonObject();
+        if (fab.BaseMaterial is { } material)
+            record["material"] = material;
+        if (fab.FinishedThicknessMm is { } thickness)
+            record["finishedThickness"] = thickness;
+        if (fab.CopperWeightOz is { } copperOz)
+            record["copperWeightOz"] = copperOz;
+        if (fab.SurfaceFinish is { } finish)
+            record["surfaceFinish"] = finish.ToString();
+        if (fab.SurfaceFinishOther is { } finishOther)
+            record["surfaceFinishOther"] = finishOther;
+        if (fab.SolderMaskColour is { } maskColour)
+            record["maskColour"] = maskColour;
+        if (fab.SilkscreenColour is { } silkColour)
+            record["silkColour"] = silkColour;
+        if (fab.Ipc6012Class is { } ipcClass)
+            record["ipcClass"] = ipcClass;
+        if (fab.MinTraceWidthMm is { } minTrace)
+            record["minTraceWidth"] = minTrace;
+        if (fab.MinClearanceMm is { } minClearance)
+            record["minClearance"] = minClearance;
+        if (fab.Notes.Count > 0)
+        {
+            var notes = new JsonArray();
+            foreach (var note in fab.Notes)
+                notes.Add(note);
+            record["notes"] = notes;
+        }
+        return record;
     }
 
     private static JsonObject SavePaste(PcbPasteSettings paste)
@@ -390,8 +429,34 @@ internal static class PcbLayoutReader
             layout.SetLoadedSilkscreenSettings(ReadSilk(silkObj));
         if (root.TryGetPropertyValue("paste", out var pasteNode) && pasteNode is JsonObject pasteObj)
             layout.SetLoadedPasteSettings(ReadPaste(pasteObj));
+        if (root.TryGetPropertyValue("fabrication", out var fabNode) && fabNode is JsonObject fabObj)
+            layout.SetLoadedFabrication(ReadFabrication(fabObj));
 
         return layout;
+    }
+
+    private static PcbFabricationSpec ReadFabrication(JsonObject r)
+    {
+        IReadOnlyList<string>? notes = null;
+        if (r.TryGetPropertyValue("notes", out var notesNode) && notesNode is JsonArray notesArray)
+            notes = [.. notesArray.Select(n => n!.GetValue<string>())];
+
+        return new PcbFabricationSpec
+        {
+            BaseMaterial = r["material"]?.GetValue<string>(),
+            FinishedThicknessMm = r["finishedThickness"]?.GetValue<double>(),
+            CopperWeightOz = r["copperWeightOz"]?.GetValue<double>(),
+            SurfaceFinish = r.TryGetPropertyValue("surfaceFinish", out var finishNode)
+                ? EcadJson.Enum<PcbSurfaceFinish>(finishNode?.GetValue<string>(), "a surface finish")
+                : null,
+            SurfaceFinishOther = r["surfaceFinishOther"]?.GetValue<string>(),
+            SolderMaskColour = r["maskColour"]?.GetValue<string>(),
+            SilkscreenColour = r["silkColour"]?.GetValue<string>(),
+            Ipc6012Class = r["ipcClass"]?.GetValue<int>(),
+            MinTraceWidthMm = r["minTraceWidth"]?.GetValue<double>(),
+            MinClearanceMm = r["minClearance"]?.GetValue<double>(),
+            Notes = notes ?? [],
+        };
     }
 
     private static PcbPasteSettings ReadPaste(JsonObject r)

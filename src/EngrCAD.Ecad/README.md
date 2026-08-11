@@ -835,8 +835,24 @@ invent one. The **stackup table** lists the physical `LayerStackup.Layers` (copp
 copper-only board carries no physical stackup, so its table is empty and a note states the copper
 count instead. The **notes** are write-only-when-stated — finished thickness, copper-layer count,
 copper foil thickness (only when a stackup gives one), the drill summary, and any mask/silk/paste the
-layout declares; a value the board does not carry (material, surface finish, mask colour) is
-**omitted, not invented**.
+layout declares; a value nothing carries is **omitted, not invented**.
+
+**The fab-package fields the geometry cannot carry come from a `PcbFabricationSpec`** — the board's
+FABRICATION REQUIREMENTS: base material, finished thickness, copper weight, surface finish
+(`PcbSurfaceFinish` + an `Other` name), solder-mask and silkscreen colours, IPC-6012 class, minimum
+trace width and clearance, and free-form notes. **Every field is optional** (`null` / an empty notes
+list = "not stated"), so `PcbFabricationSpec.Default` is valid and states nothing. It rides in the
+layout as **LAYOUT TRUTH** the same way the mask/silk/paste settings do (`layout.WithFabrication(...)`
+→ `layout.Fabrication`), so the fabrication drawing reads it **write-only-when-stated** — a stated
+field prints its note (e.g. `MATERIAL: FR-4.`, `SURFACE FINISH: ENIG.`, `COPPER WEIGHT: 1 oz (35
+um).`, `FABRICATE TO IPC-6012 CLASS 2.`), an unstated one is absent — and it **persists**
+write-only-when-stated (a layout that states none saves byte-identically to a pre-spec one, a stated
+spec is a `save → load → save` fixed point). A **stated finished thickness OVERRIDES** the modelled
+plate thickness in the finished-thickness note (the delivered stackup thickness is what a fabricator
+quotes to); with no spec the note is the modelled thickness exactly as before, so a no-spec drawing
+is byte-identical. Every stated value is validated at `WithFabrication` and a bad one is **refused by
+name** — a non-finite/non-positive thickness / copper weight / minimum trace / minimum clearance, an
+IPC class outside {1, 2, 3}, or an `Other` finish with no name.
 
 **v1 scope** (each filed): the drill table is the board's own holes + placed vias (component
 through-hole pad drills belong to the Excellon program, folded in later); the drill glyphs are a
