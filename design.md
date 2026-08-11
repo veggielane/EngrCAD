@@ -7694,6 +7694,29 @@ boundary is that this ANALYSES and skew-tunes a pair that is already routed — 
 the two together while holding the gap) is the hard research stage and is filed, as are per-segment
 skew tuning that preserves coupling and impedance from the stackup. Docs: `examples/ecad-routing.md`.
 
+**Shove (push-and-route) insertion** (`ShoveRouter`). Where a direct trace is blocked, a DETOUR
+router routes the new trace around; a SHOVE router pushes the blocker aside and keeps the new trace
+straight — which is the whole point, since the direct path is the short one. `ShoveRouter.Insert`
+places a new trace and JOGS any parallel blocker out of its corridor: the stretch of the blocker
+alongside the new trace's longest run is offset perpendicular to the target clearance with a ramp in
+and out, while the blocker's ENDPOINTS stay put — so its pads and its connectivity never move, and the
+new trace itself does not move at all. The commit rule is the router's own exact-DRC-is-truth: the
+WHOLE candidate (the new trace plus every shoved blocker) is checked with `PcbDrc.Check` and committed
+only if clean, so a shove can never ship a clearance violation — a shove that would push a blocker into
+a THIRD trace fails that check and is `Refused` rather than propagated (v1 does NOT cascade). Two
+numerical points earned by the geometry: the jog is a rectangular offset with 90° ramps (a round-joined
+90° corner passes the acute rule, the length-match lesson), and the blocker is pushed a HALF TRACE
+WIDTH past the bare clearance because the round-join BULGE at the new trace's corners — where its
+lead-ins converge on the run — reaches toward the blocker, so pushing exactly onto the clearance limit
+measured 0.283 against a 0.3 minimum (MEASURED, then fixed by the margin rather than guessed). v1
+shoves a single straight parallel blocker per obstacle that extends past the run far enough to ramp
+(anything else — a bent blocker, a non-parallel one, one too short — is refused BY NAME); filed:
+cascading shoves, bent blockers, and full push-and-route inside the maze search. Verified: a board
+where the direct trace is DRC-blocked is made clean by shoving the blocker aside (with the mutation —
+without the shove the same trace violates), the blocker's endpoints are unmoved and both nets stay
+connected, the no-cascade guard refuses a shove that would collide with a third trace, and the bent /
+no-shove-needed / determinism cases. Docs: `examples/ecad-routing.md`.
+
 ### Drawing the schematic sheet (`SchematicSheet`, `SchematicDrawing`)
 
 The human-readable VIEW of a schematic — placed symbols, orthogonal wires, junction dots, net

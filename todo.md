@@ -2711,12 +2711,13 @@ from what was already understood rather than from scratch.
     punctuation, so a value's lowercase advances as a blank). GERBER X2 attributes (`%TF`/`%TA`/`%TO`)
     and the JOB FILE (`.gbrjob`) carry per-object net/component metadata a modern fab reads. A
     Gerber IMPORT of a foreign board is a different project (this is EXPORT; the reader is the
-    round-trip oracle scoped to what the writer emits). Topological / shove / push routing and
-    differential-pair COUPLED routing are later routing stages over the same grid (LENGTH MATCHING and
-    differential-pair ANALYSIS + skew matching have LANDED — `LengthMatch.Tune`/`MatchGroup` serpentine
-    tuning gated on the exact DRC, and `DiffPair`/`DiffPairs.Check`/`MatchSkew` measuring a pair's
-    coupling + skew and equalising its halves; see CLAUDE.md's ECAD status, design.md §6d,
-    `examples/ecad-routing.md`). A CONFORMAL
+    round-trip oracle scoped to what the writer emits). Full topological push-and-route INSIDE the maze
+    search and differential-pair COUPLED routing are the remaining routing stages (LENGTH MATCHING,
+    differential-pair ANALYSIS + skew matching, and SHOVE insertion have LANDED — `LengthMatch.Tune`/
+    `MatchGroup` serpentine tuning gated on the exact DRC, `DiffPair`/`DiffPairs.Check`/`MatchSkew`
+    measuring a pair's coupling + skew and equalising its halves, and `ShoveRouter.Insert` placing a
+    direct trace by jogging a parallel blocker aside, DRC-gated and non-cascading; see CLAUDE.md's ECAD
+    status, design.md §6d, `examples/ecad-routing.md`). A CONFORMAL
     mask/silk/paste on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
     MID/surface side's territory).
   - **IPC-D-356A netlist follow-ups (filed; the netlist itself has LANDED — `PcbIpc356`, see

@@ -181,13 +181,64 @@ analysis + skew tuning, not coupled routing** — filed: coupled routing (routin
 while holding the gap), per-segment skew tuning that preserves coupling, and impedance from the
 stackup.
 
+## Shove (push-and-route)
+
+Where a direct trace is blocked by an existing one, a detour router goes *around*; a **shove** router
+pushes the blocker *aside*. `ShoveRouter.Insert` places a new trace on its direct path and jogs any
+parallel blocker out of the way — offset perpendicular to the target clearance, ramped in and out,
+with its **endpoints (pads) held fixed** so its connectivity never moves. The commit rule is the
+router's: the whole result (the new trace and every shoved blocker) is DRC-clean, or the insertion is
+refused by name — a shove never ships a violation.
+
+```csharp run:ecad-shove
+PartDefinition Tp(string n) => new(n, "TP", new[] { new Pin("1", PinType.Passive) },
+    new Footprint(n + "_fp", new[] { Pad.Smd("1", new Vector2d(0, 0), 0.6, 0.6) }));
+
+var sch = new Schematic("t");
+var o1 = sch.Add("O1", Tp("O1")); var o2 = sch.Add("O2", Tp("O2"));
+var m1 = sch.Add("M1", Tp("M1")); var m2 = sch.Add("M2", Tp("M2"));
+sch.Connect("OLD", o1.Pin("1"), o2.Pin("1"));
+sch.Connect("NEW", m1.Pin("1"), m2.Pin("1"));
+var board = new PcbBoard(new[] {
+    new Vector2d(0, 0), new Vector2d(28, 0), new Vector2d(28, 20), new Vector2d(0, 20) }, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("O1", 2, 10); layout.Place("O2", 26, 10);   // the blocker's pads span the board
+layout.Place("M1", 4, 13); layout.Place("M2", 24, 13);   // the new net's pads, clear of the blocker
+
+var rules = new DrcRuleSet(
+    MinCopperClearance: 0.3, MinTraceWidth: 0.2, MinAnnularRing: 0.2,
+    MinDrillToCopper: 0.3, MinCopperToEdge: 0.3, MinAcuteAngleDegrees: 80);
+string layer = layout.Board.Stackup.Coppers[0].Name;
+layout.AddTrace("OLD", layer, 0.4, new[] { new Vector2d(2, 10), new Vector2d(26, 10) });
+
+// A direct route whose middle runs 0.4 mm from OLD — too close to just drop in.
+var newTrace = new PcbTrace("NEW", layer, 0.4, new[] {
+    new Vector2d(4, 13), new Vector2d(8, 10.4), new Vector2d(20, 10.4), new Vector2d(24, 13) });
+
+var result = ShoveRouter.Insert(layout, newTrace, rules);
+Console.WriteLine(result.Message);
+
+// apply the shove and the new trace, then check the whole board.
+foreach (var kv in result.ShovedTraces) layout.ReplaceTrace(kv.Key, kv.Value);
+layout.AddTrace(result.NewTrace);
+Console.WriteLine($"DRC clean after shove: {PcbDrc.Check(layout, rules).Ok}");
+
+if (result.Outcome != ShoveOutcome.Inserted || !PcbDrc.Check(layout, rules).Ok)
+    throw new Exception("the shove must place the trace AND leave the board DRC-clean");
+```
+
+`NoShoveNeeded` when nothing is in the way; `Refused` (nothing changed) when a blocker is one v1 can't
+shove (bent, not parallel, not extending past the run to ramp) or when shoving would collide with a
+third trace — v1 does **not** cascade. Filed: cascading shoves, bent blockers, and push-and-route
+inside the maze search.
+
 ## v1 scope
 
 An honest v1: a grid/maze A* with rip-up-reroute, **through-vias** (spanning all copper layers) for
 layer changes, and 2-pin MST decomposition of multi-pin nets. Deterministic — a fixed net order and
-grid give bit-identical routes. **[Length matching](#length-matching-serpentine-tuning)** and
-**[differential-pair analysis](#differential-pairs)** have landed. Not in v1 (each filed):
-topological / shove / push routing, differential-pair coupled routing, teardrops, and cavity walls as
-routing obstacles.
+grid give bit-identical routes. **[Length matching](#length-matching-serpentine-tuning)**,
+**[differential-pair analysis](#differential-pairs)** and **[shove insertion](#shove-push-and-route)**
+have landed. Not in v1 (each filed): topological push-and-route inside the maze, differential-pair
+coupled routing, teardrops, and cavity walls as routing obstacles.
 **[Copper pours / ground planes with thermal reliefs](ecad-pcb.md)** and **[Gerber / Excellon
 fabrication export](ecad-fabrication.md)** of the routed board — the fab output — have landed.

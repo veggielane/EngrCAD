@@ -723,6 +723,17 @@ unrouted. `DiffPairs.MatchSkew` equalises the two halves by tuning the shorter t
 (the two together, holding the gap), per-segment skew tuning that preserves coupling, and impedance
 from the stackup.
 
+**Shove (push-and-route).** `ShoveRouter.Insert(layout, newTrace, rules)` places a new trace on its
+DIRECT path even where an existing trace is in the way — by PUSHING the blocker aside, not detouring
+the new trace around it. A parallel blocker too close to the new trace's main run is JOGGED (offset
+perpendicular to the target clearance, ramped in and out) with its ENDPOINTS held fixed, so its pads
+and connectivity never move; the new trace does not move at all (that is what makes it a shove). The
+commit rule is the router's: the whole result (the new trace + every shoved blocker) is DRC-clean, or
+the insertion is `Refused` by name — a shove never ships a violation, and it does NOT cascade (a shove
+that would push a blocker into a third trace is refused). `NoShoveNeeded` when nothing blocked it. v1
+shoves a single straight parallel blocker per obstacle; filed: cascading shoves, bent blockers, and
+push-and-route inside the maze search.
+
 ## Copper pours — ground / power planes
 
 A `CopperPour` floods a copper layer on one net (a ground plane, a power plane). It is **layout
