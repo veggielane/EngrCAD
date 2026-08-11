@@ -583,8 +583,8 @@ truncated file / missing format spec / aperture macro by name (the `StepReader`/
 large apertures, fine mask tenting control beyond
 the tented/opened via policy, curved conformal mask / silk / paste on a MID surface (refused for the
 distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber X2 attributes
-and the job file, an IPC-D-356 netlist test-point export, and a Gerber IMPORT of a foreign board (this
-is export). Docs: `examples/ecad-fabrication.md`.
+and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
+`examples/ecad-fabrication.md`.
 
 **The assembly pick-and-place (centroid) file** (`PcbPickAndPlace`) is the assembly twin of the copper
 Gerber/Excellon set — the file a P&amp;P machine reads to *populate* the board: one row per placed
@@ -603,6 +603,33 @@ order, so the output is deterministic (two emissions byte-identical). **The twin
 exactly (RFC-4180 quoting survives a comma or quote in a value), refusing a wrong header / field count /
 number / side by name. `Package` is the component's footprint name, or its definition type name when it
 carries no footprint. Docs: `examples/ecad-fabrication.md`.
+
+**The IPC-D-356A netlist** (`PcbIpc356`) is the board-house **electrical-test / net-compare** deliverable:
+per NET, every conductive **access point** — every component pad and every net-carrying via — with its
+net name, refdes + pin, board-frame midpoint (X, Y), layer/access code, drill (for drilled features) and
+feature kind. A fab net-compares it against the copper Gerbers; a test house programs a flying-probe /
+bed-of-nails tester from it. IPC-D-356**A** is the netname-carrying revision. `PcbIpc356.Write(layout)`
+returns the text; `WriteFile` writes `<name>.ipc`. The net of every pad is resolved through
+`PcbCopperModel.FromLayout` (the same tagging the DRC/connectivity read — the one-declaration identity).
+Conventions, each **stated**: units are metric **micrometres** (`P UNITS CUST 2`, coordinates
+`X<sign><µm>`/`Y…`), so the round trip is exact and a wrong scale is a 1000× coordinate-magnitude tell;
+coordinates are board-frame **verbatim** (no Y-flip — a bottom access point keeps the same (x, y) as a
+top one; which side it is probed from is the ACCESS code); access is `A00` = all layers (a through-hole
+pad / through via), else the 1-based number of the top-most reached copper layer (top = 1, bottom = N),
+reducing to `top = 1 / bottom = 2 / all = 0` on a 2-layer board; op `327` = SMD pad (no hole), `317` =
+drilled (through-hole pad, or a via with a blank component reference). Included: every component pad and
+every net-carrying via — an unconnected / no-connect pad is its **own single-point net** (a unique
+`N/C-######` name, matching how the copper model treats a null-net feature); board mounting / legacy
+holes are excluded (no net). **The bar is the twin-decoder round trip plus a net reconstruction**:
+`PcbIpc356.Parse` reads the output back, and the partition of component pads it induces (which pads share
+a net) EQUALS the board's own — the copper model's partition — with a dropped or relabelled record making
+them differ (the mutation that proves the oracle bites). **Refused by name** (an identity is never
+sanitized — it is the reconstruction key): a net over 14 chars / refdes over 6 / pin over 4, whitespace
+in an identity, a real net colliding with the `N/C-######` namespace, a drill below the file's 1 µm
+resolution; the reader refuses an unknown record / units / a drilled record with no drill / an SMD record
+with one by name. **Not in v1** (each filed): wider net-name / refdes fields, per-inner-layer access
+encoding for buried vias, and conductor (trace-midpoint, op `378`) records. Docs:
+`examples/ecad-fabrication.md`.
 
 ## Enclosure fit — the MCAD/ECAD boundary
 
