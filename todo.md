@@ -2586,7 +2586,8 @@ from what was already understood rather than from scratch.
     routing costs a candidate route with. Verified from both sides of every limit against the
     closed-form gap, scale-invariant, deterministic; the placed stage-2 fixture is DRC-clean
     with an unrouted ratsnest. See CLAUDE.md's ECAD status paragraph and design.md §6d for the
-    findings. The OPEN stages below (MID/LDS, enclosure fit, interchange) are next.
+    findings. The OPEN stages below (MID/LDS, ECAD thermal coupling, interchange) are next
+    (enclosure fit landed — stage 7).
   - **✅ STAGE 4b — multilayer stackups + embedded/enclosed components — LANDED**
     (`LayerStackup`/`StackLayer`/`Embedding`/`EmbeddedCavity`; the `PcbPlacement` extended with
     `Layer`/`Embedding`/`CavityClearance` + the new `Embed` method; `DrcRule.CavityClearance`;
@@ -2702,17 +2703,20 @@ from what was already understood rather than from scratch.
     rule. Verified against a developable surface (a cylinder, where the exp map is EXACT and
     the 3D DRC must agree with the unrolled 2D DRC bit for bit) before any doubly-curved
     part.
-  - **The MCAD/ECAD boundary is still where mechanical engineers lose time, and it comes
-    almost free once the board exists**: does the board fit the enclosure, do the connectors
-    line up with their panel cutouts, do the tall parts clear the lid, where does the heat
-    go? Enclosure fit is `Bvh.QueryOverlap` + `MeshIntersection.Crosses` + the mechanism
-    sweep's clash reporting, already landed and already knowing a SEATED part (a board on
-    standoffs) is not a clash. Keep-outs are volumes, so the implicit engine and the boolean
-    apply directly. Thermal coupling is the genuinely novel MCAD answer: per-component power
-    dissipation as a volumetric `Generation` load into the landed thermal solver, conducting
-    through board and standoffs into an enclosure with convective faces — verifiable against
-    a uniformly-dissipating board conducting to a fixed-temperature edge before any real
-    design. Drawings and BOM already exist.
+  - **ECAD thermal coupling — the genuinely novel MCAD answer, the next stage over the
+    enclosure fit that just landed.** Enclosure fit is DONE (`Enclosure`/`EnclosureFit`/
+    `PanelCutout`/`FitReport` in `PcbEnclosure.cs`; docs `examples/ecad-enclosure.md`, design.md §6d
+    stage 7, README, CLAUDE.md ECAD status): board-fits (closed-form outline vs cavity walls),
+    component-clash (the landed `MeshIntersection.Crosses`, transversal so a seated part is not a
+    clash), connector↔panel-cutout alignment, closed-form lid clearance/headroom, and keep-out
+    volumes (surface crossing OR winding containment). What stays open here is the HEAT: per-component
+    power dissipation as a volumetric `Generation` load into the landed thermal solver, conducting
+    through board and standoffs into an enclosure with convective faces. It is a SEPARATE stage
+    because it wants its own analytic oracle rather than a geometric one — verify against a
+    uniformly-dissipating board conducting to a fixed-temperature edge (a closed-form temperature
+    rise) before any real design; drawings and BOM already exist. Filed beside it: airflow/CFD
+    cooling, snap-fit/screw-boss detailing, tolerance stack-up, and an exact round-cutout corner-fit
+    check (v1 checks a round cutout against its bounding box).
   - **Interchange, in value order** (import first, since without it there is nothing to fit):
     **IDF 4.0** (board outline, placements, keep-outs; plain text, spoken by nearly every
     ECAD tool, and it carries exactly the geometry subset) → **KiCad `.kicad_pcb`** (open,

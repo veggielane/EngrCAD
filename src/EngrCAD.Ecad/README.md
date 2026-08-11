@@ -444,9 +444,47 @@ truncated file / missing format spec / aperture macro by name (the `StepReader`/
 X2 attributes and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
 `examples/ecad-fabrication.md`.
 
+## Enclosure fit — the MCAD/ECAD boundary
+
+Does a placed board fit the box? `Enclosure` is a housing built from the ordinary `Shape` API (a
+shelled box with the panel cutouts drilled — no new solid type): a rectangular interior **cavity**,
+a **wall**/**floor** thickness, a board **seating height** (the standoffs), a **lid** at a stated
+height (the headroom ceiling), named **panel cutouts** and interior **keep-out** volumes.
+`EnclosureFit.Check(enclosure, layout)` (or `enclosure.Fit(layout)`) returns a `FitReport` that
+**names, locates and measures** every problem.
+
+**It reuses the landed clash machinery** — an instance-bounds broad phase then the transversal
+`MeshIntersection.Crosses` narrow phase — so a part resting flush on the lid or seated on its
+standoffs is NOT a clash (they touch; they do not interpenetrate). Where the geometry is a plane or
+a rectangle the number is closed-form: the board outline against the cavity walls, a part's top
+against the lid.
+
+| `FitIssue` | What it catches |
+| --- | --- |
+| `BoardTooLarge` | The board outline reaches past a side wall — the wall (`+X`, `−Y`, …) and overhang named. |
+| `ComponentClashesWall` | A component body interpenetrates a wall/floor. |
+| `ComponentClashesLid` | A part reaches past the lid underside — named with its exact clearance deficit. |
+| `ConnectorNoCutout` | A component declared panel-mount (`AddPanelConnector`) has no cutout serving it. |
+| `ConnectorMisaligned` | A panel connector's cross-section does not fit through / is not centred in its cutout — the offset reported. |
+| `ConnectorNotProtruding` | A panel connector's body does not reach the wall its cutout is in — the reach deficit reported. |
+| `KeepOutCollision` | A component body intersects an interior keep-out volume (surface crossing OR full containment). |
+
+`Enclosure.SeatFrame()` is where the board mounts — pass it as the layout's `boardFrame` so the
+board seats in the cavity and the fit reads one geometry, not two hand-kept poses. A panel connector
+is declared with `AddPanelConnector(reference)` and served by a `PanelCutout` whose `For` names it;
+panel connectors are excluded from the wall-clash test (passing through a wall is what they are
+for). `Enclosure.SmallestFor(layout, clearance, standoff, headroom, wall)` sizes and places the
+smallest box the layout fits in place (a starting point, not an enclosure generator). Round panel
+cutouts are checked against their bounding box in v1 (exact round-hole corner fit is filed).
+`FitReport` is deterministic (same enclosure + board → the same report) and always reports
+`Headroom` (positive clears, negative collides). Docs: `examples/ecad-enclosure.md`.
+
+**Thermal coupling** — per-component power dissipated into the thermal solver, verified against a
+uniformly-dissipating board's analytic temperature rise — is the next stage over this one geometry.
+
 ## Not yet (later campaign stages)
 
-Panel cutouts, thermal coupling, MID/LDS 3D
+Thermal coupling, MID/LDS 3D
 routing, and the richer
 interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one
 graph. On the LIBRARY side, **Eagle `.lbr`** (an XML second reader), **IPC-7351 footprint
