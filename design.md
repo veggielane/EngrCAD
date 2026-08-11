@@ -6901,8 +6901,55 @@ and SOIC-8 parse with the pin count/names/numbers round-tripping, the symbol pin
 pads sharing the numbers, a deliberately mismatched footprint REPORTED by number, pad geometry
 matched EXACTLY to the file, the symbol's primitives and pin anchors matched, malformed input
 refused by name, the persistence fixed point, and determinism. What stays filed: IPC-7351 footprint
-GENERATION from a designation (a generator, not an import), EDIF, and the KiCad 3D model reference
-(`.wrl`/`.step` — its path noted, not loaded).
+GENERATION from a designation (a generator, not an import) and EDIF.
+
+### Component interchange — the 3D model, the third view (`ComponentModel3D`, `ModelPlacement`)
+
+The trinity's third view is the **3D model**, and the change that makes it a first-class peer of
+the symbol and footprint — rather than the bare `Func<Shape>` the legacy `Body` was — is
+`ComponentModel3D`: a body SOURCE unified with a `ModelPlacement` relative to the footprint origin,
+the KiCad `(model …)` shape. `PartDefinition` gains `Model` as an OPTIONAL last constructor
+parameter (so every positional construction is byte-for-byte unchanged), and the legacy `Body` stays
+as the spelling of a **code model with the identity placement** — the two seat bit-identically, and
+the seating resolves `Model ?? (Body as identity-placed model)`.
+
+**Two source kinds, and the split is the design.** A **file** reference — `.stl`/`.obj`/`.off` via
+`Shape.From`, `.step` via `StepReader` — travels through the schematic/board file as DATA (the path
+plus the placement) and loads on demand; a **code** model (a `Func<Shape>`) stays OPAQUE and is
+re-attached from a `PartLibrary` by definition name, exactly as `Body` is. Constructing a model
+never touches the filesystem, so a data-only load that only references a path is honest and complete
+for persistence and connectivity — loading is an explicit act (`TryLoad(out error)` soft,
+`Load()` hard), and a missing/unreadable file, a `.wrl` (VRML — KiCad's default 3D format, which has
+no reader) or an `.igs`/`.iges` (a face soup needing `ShapeHealing`, filed) is RECORDED but refused
+BY NAME, never a data-load crash (the "readers never throw on dirty geometry" culture). An
+unloadable model leaves the assembly without a 3D occurrence — the pads are still placed — exactly
+as a body-less component does.
+
+**The placement seats into the pose, and a quarter turn is exact.** `PcbLayout.ToAssembly` bakes the
+`ModelPlacement` (translate · rotate · scale) into the body BEFORE the side reflection and the
+placement pose, so it is applied in the footprint's own frame and a bottom-side component's model is
+reflected along with its footprint — verified as a closed form: on the bottom, a model offset
+(dx, dy, dz) moves the seated body by (dx, dy, −dz), the placement applied before the reflection.
+An IDENTITY placement applies **no transform at all** (which is what keeps the legacy body path
+bit-identical — the seated body mesh is bit-for-bit the raw body's), and the struct default IS the
+identity: a zero scale component reads as unit, since no scale collapses geometry so a stored zero
+can only mean "unspecified". A rotation that is a multiple of 90° is built from sign swaps
+((x, y) → (−y, x)), never a `cos` — so a 90° rotate about Z TRANSPOSES the footprint-plane bounds
+to the last bit (the packing/glTF exact-quarter-turn rule), the offset shifts the seated bounds by
+exactly that offset, and a scale scales them by exactly the factor.
+
+**Persistence and KiCad follow the seams.** A file-referenced model round-trips as
+`{ path, offset?, rotate?, scale? }` (write-only-when-stated) — a `save → load → save` byte-identical
+fixed point through the schematic AND the embedded board file — while a code model (opaque) and a
+model-less definition write no `"model"` key, so a pre-model file is byte-identical. The stored
+offset/rotate/scale ride VERBATIM (the `AxisRef` never-re-derive rule). On the KiCad side, the
+footprint reader (`KiCadFootprintReader`, and the whole-board `KiCadPcbReader`) turns the filed
+`(model …)` reference into a `FromFile` model carrying the path plus KiCad's placement — offset in
+mm (a legacy inch `at` is converted with a note), rotate in degrees, scale unitless — so a
+`ComponentLibrary.Load` part arrives with its 3D model REFERENCE, not force-loaded (an empty library
+directory is normal). What stays filed on the model side: a VRML (`.wrl`) reader, IGES (`.igs`)
+3D-model loading, and Eagle 3D package models (Eagle's `<packages3d>` reference a model by URN —
+materially more than the classic `.lbr` carries).
 
 **The Eagle `.lbr` reader is the SECOND interchange, and its structure — not effort — is the
 finding** (`EagleLibraryReader`, `EagleLibrary`; the KiCad reader's twin). An Eagle library is one

@@ -2,9 +2,10 @@
 title: "Loading a component (symbol + footprint)"
 ---
 
-A `PartDefinition` in EngrCAD carries three views of one part: its **pins** (the netlist
-terminals), its **footprint** (the copper pads the board places), and — new here — its 2D
-**schematic symbol** (the drawn shape a schematic sheet wires to). Stage 1 could declare pins
+A `PartDefinition` in EngrCAD is built from the **three views** of one part: its 2D
+**schematic symbol** (the drawn shape a schematic sheet wires to), its **footprint** (the copper
+pads the board places), and its **3D model** (the body an assembly seats) — all sharing one
+pin-NUMBER identity, plus the pins that are the netlist terminals. Stage 1 could declare pins
 and a footprint by hand; a real library is *imported*, so EngrCAD reads a component from the
 **KiCad** interchange (`.kicad_sym` + `.kicad_mod`) or an **Eagle** library (`.lbr`) so it
 arrives with all three at once.
@@ -169,6 +170,62 @@ kind outside the set, a multi-gate deviceset (a gate array), and a symbol pin wi
 (an unmapped pin) are each **ignored with a diagnostic or refused by name**; whole `.brd`/`.sch`
 board/schematic import is out of scope, refused at the root.
 
+## The 3D model — the third view
+
+The third view is the **3D model**, a first-class `ComponentModel3D` peer of the symbol and
+footprint (not a bare `Func<Shape>`). It unifies a body **source** with a `ModelPlacement`
+relative to the footprint origin — the KiCad `(model …)` shape. The source is either a **file**
+reference (`.stl`/`.obj`/`.off`/`.step`, which travels through the schematic/board file as DATA
+and loads on demand) or **code** (a `Func<Shape>`, opaque, re-attached from a `PartLibrary` — the
+legacy `Body` is exactly a code model with the identity placement). The board seats the model
+into the pose, applying the placement in the footprint's own frame before the side reflection —
+so a quarter turn transposes the footprint-plane bounds **exactly** (a sign swap, not a `cos`):
+
+```csharp render:ecad-library-trinity
+// A resistor built from its THREE views — symbol, footprint, 3D model. Here a code model,
+// rotated 90° about Z (an EXACT quarter turn) so its 3.2 × 1.4 body seats as 1.4 × 3.2.
+var sym = new Symbol("R_0805",
+    new[] {
+        new SymbolPin("1", "", new Vector2d(-2.54, 0), SymbolPinDirection.Right, 1.27, PinType.Passive),
+        new SymbolPin("2", "", new Vector2d(2.54, 0), SymbolPinDirection.Left, 1.27, PinType.Passive),
+    },
+    new SymbolGraphic[] { new SymbolRectangle(new Vector2d(-1.0, -0.5), new Vector2d(1.0, 0.5)) });
+
+var model = ComponentModel3D.FromShape(
+    () => Shape.Box(3.2, 1.4, 0.6).Translate(0, 0, 0.3),
+    new ModelPlacement(new Vector3d(0, 0, 0), new Vector3d(0, 0, 90)));
+
+var resistor = new PartDefinition("R_0805", "R",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("R0805", new[] {
+        Pad.Smd("1", new Vector2d(-1.6, 0), 1.2, 1.4),
+        Pad.Smd("2", new Vector2d(1.6, 0), 1.2, 1.4),
+    }),
+    symbol: sym, model: model);
+
+var sch = new Schematic("trinity");
+sch.Add("R1", resistor, "330");
+
+var board = new PcbBoard(
+    new[] { new Vector2d(-10, -8), new Vector2d(10, -8), new Vector2d(10, 8), new Vector2d(-10, 8) },
+    thickness: 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("R1", 0, 0, 0, CopperSide.Top);
+
+var scene = new Scene();
+scene.AddTab("Board").Add(layout.ToAssembly());
+```
+
+![A small two-layer board with one SMD resistor whose 3D model, rotated a quarter turn about its footprint, seats across the board's short axis.](images/ecad-library-trinity.png)
+
+A **file-referenced** model is the other source — `ComponentModel3D.FromFile("models/R_0805.step",
+placement)` — and it travels as data (`{ path, offset?, rotate?, scale? }`, write-only-when-stated),
+a **byte-identical fixed point** through the schematic and board files. Loading is an explicit act
+(`model.TryLoad(out var error)` soft, `model.Load()` hard): a missing or unreadable file, a `.wrl`
+(VRML — KiCad's default 3D format, which has no reader) or an `.igs`/`.iges` is RECORDED but refused
+**by name**, never a data-load crash — so a data-only model that only references a path is honest
+and complete for persistence and connectivity.
+
 ## When the symbol and footprint disagree
 
 A `PinIdentity.Check` names every mismatch. If a footprint were missing pad `"8"` and carried a
@@ -189,9 +246,14 @@ The reader maps the **common subset** and NAMES anything else rather than mis-re
   (`circle`/`rect`/`roundrect`/`oval`) with their `at`/`size`/`drill`. A pad rotation (not
   carried by a footprint pad), a `trapezoid`/`custom` shape, or an oval drill is approximated
   **with a note**.
+- **3D model** (`.kicad_mod`'s `(model …)`): the footprint's `(model "path" (offset (xyz …))
+  (rotate (xyz …)) (scale (xyz …)))` becomes the definition's `Model` — a `FromFile` reference
+  carrying the path plus the placement (offset in mm, rotate in degrees, scale unitless). The file
+  is NOT force-loaded (an empty library directory is normal); the reference is recorded and loaded
+  on demand.
 
 Malformed input — a file that is not a KiCad symbol library or footprint, an unbalanced
 parenthesis, an unterminated string; or an Eagle file that is not a library, or whose XML is
 malformed — is refused **by name** (the `StepReader`/`IgesReader` rule). IPC-7351 footprint
-*generation*, EDIF, whole `.brd`/`.sch` board/schematic import, and the KiCad 3D model reference
-(`.wrl`/`.step`) are later work; the path to a 3D model is noted, not loaded.
+*generation*, EDIF and whole `.brd`/`.sch` board/schematic import are later work; a VRML (`.wrl`)
+reader and IGES (`.igs`) 3D-model loading stay filed (both refused by name, the reference recorded).

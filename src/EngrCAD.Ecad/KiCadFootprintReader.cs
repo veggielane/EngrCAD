@@ -3,12 +3,18 @@ using EngrCAD.Core;
 namespace EngrCAD.Ecad;
 
 /// <summary>
-/// A KiCad footprint read from a <c>.kicad_mod</c> file: the <see cref="Footprint"/> (pads) and
-/// the diagnostics naming anything the reader could not carry.
+/// A KiCad footprint read from a <c>.kicad_mod</c> file: the <see cref="Footprint"/> (pads), the 3D
+/// <see cref="Model"/> reference the footprint carries (KiCad's <c>(model …)</c>, if any) and the
+/// diagnostics naming anything the reader could not carry.
 /// </summary>
 /// <param name="Footprint">The pad layout, mapped onto <see cref="Ecad.Footprint"/>/<see cref="Pad"/>.</param>
+/// <param name="Model">The 3D model REFERENCE (a <see cref="ComponentModel3D.FromFile"/> carrying the
+/// path plus KiCad's offset/rotate/scale placement), or null when the footprint has no
+/// <c>(model …)</c>. The path is RECORDED, not loaded — KiCad's default models are <c>.wrl</c>, which
+/// has no reader, so the reference travels while the geometry is loaded only on demand.</param>
 /// <param name="Diagnostics">What the reader ignored or approximated.</param>
-public sealed record KiCadFootprint(Footprint Footprint, IReadOnlyList<string> Diagnostics);
+public sealed record KiCadFootprint(
+    Footprint Footprint, ComponentModel3D? Model, IReadOnlyList<string> Diagnostics);
 
 /// <summary>
 /// Reads a KiCad footprint (<c>.kicad_mod</c>) into a <see cref="KiCadFootprint"/>. It maps the
@@ -53,7 +59,56 @@ public static class KiCadFootprintReader
             if (TryPad(padList, name, diagnostics, out var pad))
                 pads.Add(pad);
 
-        return new KiCadFootprint(new Footprint(name, pads), diagnostics);
+        var model = ReadModelReference(root, name, diagnostics.Add);
+        return new KiCadFootprint(new Footprint(name, pads), model, diagnostics);
+    }
+
+    /// <summary>Reads the footprint's <c>(model "path" (offset (xyz …)) (rotate (xyz …)) (scale
+    /// (xyz …)))</c> into a <see cref="ComponentModel3D.FromFile"/> reference. KiCad's conventions:
+    /// <c>offset</c> is in millimetres (KiCad 6+; a legacy <c>at</c> is in inches and converted),
+    /// <c>rotate</c> in degrees, <c>scale</c> unitless. The path is recorded VERBATIM (an env-var
+    /// path like <c>${KICAD6_3DMODEL_DIR}/…</c> is not resolved), so the reference travels while the
+    /// geometry is loaded only on demand.</summary>
+    internal static ComponentModel3D? ReadModelReference(SList footprint, string footprintName, Action<string> note)
+    {
+        var modelList = footprint.List("model");
+        if (modelList is null)
+            return null;
+        string? path = modelList.Arg(0);
+        if (string.IsNullOrEmpty(path))
+        {
+            note($"Footprint '{footprintName}': a (model …) has no path and was ignored.");
+            return null;
+        }
+
+        // KiCad 6+ states the offset in mm as (offset (xyz …)); legacy KiCad used (at (xyz …)) in inches.
+        var offset = Vector3d.Zero;
+        if (Xyz(modelList.List("offset")) is { } off)
+        {
+            offset = off;
+        }
+        else if (Xyz(modelList.List("at")) is { } legacy)
+        {
+            offset = legacy * 25.4;   // inches -> mm
+            note(
+                $"Footprint '{footprintName}': legacy model 'at' offset assumed in inches and converted to mm.");
+        }
+        var rotate = Xyz(modelList.List("rotate")) ?? Vector3d.Zero;
+        var scale = Xyz(modelList.List("scale")) ?? new Vector3d(1, 1, 1);
+
+        var model = ComponentModel3D.FromFile(path, new ModelPlacement(offset, rotate, scale));
+        if (!model.CanLoad)
+            note(
+                $"Footprint '{footprintName}': 3D model '{path}' is recorded but its format cannot be "
+                + "loaded (only .stl/.obj/.off/.step load; .wrl/.igs are reference-only).");
+        return model;
+    }
+
+    // (offset (xyz x y z)) -> (x, y, z), or null when the holder or its xyz is absent.
+    private static Vector3d? Xyz(SList? holder)
+    {
+        var n = holder?.List("xyz")?.Numbers();
+        return n is { Count: >= 3 } ? new Vector3d(n[0], n[1], n[2]) : null;
     }
 
     /// <summary>Reads a <c>.kicad_mod</c> file from disk.</summary>
