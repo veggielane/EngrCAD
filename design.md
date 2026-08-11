@@ -7007,6 +7007,54 @@ keep-out names and the fixed header date do not, because IDF has no field for th
 stated: straight-segment outlines/keep-outs (a nonzero arc angle is flattened to a chord, reported),
 outline cutout loops dropped, the `.emp` library accepted but not modelled.
 
+### KiCad `.kicad_pcb` whole-board import (`KiCadPcbReader`)
+
+`KiCadPcbReader.Read(text)`/`ReadFile(path)` → a `KiCadPcb` (the reconstructed `PcbLayout` +
+diagnostics) is the **board twin of the KiCad component reader**, and it is a pure reading path over
+the SAME hand-rolled `SExpr` parser, the SAME covered-subset / refuse-by-name discipline, and — the
+finding — **no additive change to any board type at all**. Everything builds through the existing
+public constructors (`PcbBoard`/`PcbStackup`, `Schematic.Add`/`Connect`/`Stub`,
+`PcbLayout.Place`/`AddTrace`/`AddVia`/`AddPour`), because the one thing an IDF board lacks — a
+schematic to hold placements against — a KiCad board **already carries in the pads' own net tags**.
+
+**The load-bearing decision is that the pads' `(net n name)` tags ARE the reconstructed schematic**,
+not a hint toward one. Each `(footprint)` becomes a data-only `PartDefinition` (one `Pin` per distinct
+pad number), and the reader groups pads by net — a multi-pad net becomes a `Signal` net (`Connect`), a
+single-pad net a `Stub` — so the synthesized schematic's connectivity IS what KiCad intended. That is
+what makes the headline oracle a real check rather than a hope: `PcbConnectivity` then answers whether
+the imported COPPER (tracks, vias, zones) actually joins the pads those tags say belong together, and
+`PcbDrc.Check` answers whether the geometry is manufacturable. An import that connected the wrong pads
+would show up as a net the copper does not join — the silent failure this stage exists to make loud.
+
+**The coordinate convention is verbatim-no-flip, and that is what "exact from the file's mm
+coordinates" requires.** KiCad stores Y downward; a Y-flip would make `pad.Y == −file.Y`, which is not
+"exact from the file's coordinates", so the reader imports coordinates verbatim into the board frame
+(noted in `Diagnostics`). The choice costs nothing because it is INTERNALLY CONSISTENT — pads, tracks,
+vias, zones and the Edge.Cuts outline share one frame — and handedness is invisible to connectivity,
+the clearance DRC and a Gerber (which is just artwork); a footprint rotation is taken as a CCW rotation
+in that frame, matching `PcbLayout.PlacementPose`. Covered: `(general)` thickness, the copper
+`(layers)` stackup (any `.Cu`-suffixed layer, F.Cu first at z = thickness), the `Edge.Cuts` outline
+(`gr_line` chained by endpoint, `gr_rect`/`gr_poly`, `gr_arc` flattened to a sampled polyline), the
+`(net)` table, `(segment)`/`(arc)` tracks, `(via)`s (type derived from the layer span), and `(zone)`s
+as `CopperPour`s whose FILL EngrCAD re-derives (KiCad's stored `filled_polygon`/hatch geometry is not
+read — the "hatch/fill best-effort with a note" boundary). Ignored / refused BY NAME: keepout / rule
+areas, teardrops, dimension graphics, 3D-model references, a netless track/via/zone, and a
+non-`(kicad_pcb ...)` root — including a `.kicad_sym` or `.kicad_mod` handed here (the head-tag check).
+The reader NEVER throws on dirty per-element geometry (a bad via is caught and noted, the
+`StepReader`/`IgesReader` culture); only a malformed S-expression or a wrong root refuses.
+
+Verified higher than usual (interchange fails plausibly): the net connectivity matches KiCad's intent
+(each multi-pad net connected via its tracks/via/zone, the GND zone joining every GND pad — and the
+MUTATION that proves it, removing the zone leaving GND an unrouted ratsnest of two islands); the board
+is DRC-clean with a known-violation fixture (a copper short between two nets) FOUND; pad centres exact
+from the file's mm coordinates including a 90°-rotated footprint; the imported copper round-trips to
+Gerber and re-reads (the twin-decoder oracle, by area and symmetric difference); determinism (two
+reads give byte-identical Gerber); the refusals by name; and the **component reader stays bit-identical
+by construction** (a new file, nothing shared moved), pinned by re-asserting a component-load fixture's
+exact geometry. Filed: EXPORT of our board to `.kicad_pcb` (a different, larger job), the KiCad
+`.kicad_sch` schematic, custom pad primitives and differential-pair / length-tuning metadata. Docs:
+`examples/ecad-pcb.md`.
+
 ### Stage 3 — placement constraints (`ConstrainedLayout`, `PcbConstraintSolver`)
 
 Stage 3 places components by CONSTRAINT rather than by typed coordinates: a rough drawn layout is

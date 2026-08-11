@@ -139,6 +139,45 @@ IDF carries no connectivity, so `ToLayout()` synthesizes a data-only schematic (
 placement). `IdfWriter.Write` closes the loop — `read → write → read → write` is a byte fixed
 point for the geometry IDF carries.
 
+### KiCad `.kicad_pcb` whole-board interchange
+
+`KiCadPcbReader.Read(text)` / `ReadFile(path)` imports a whole KiCad board (`.kicad_pcb`) into a
+`KiCadPcb` (the reconstructed `PcbLayout` + diagnostics) — the **board twin of the KiCad component
+reader**, reusing the same hand-rolled `SExpr` parser and the same covered-subset / refuse-by-name
+discipline. It reconstructs the `(general)` thickness, the copper `(layers)` stackup (every `.Cu`
+layer, F.Cu first, mapped to a `PcbStackup`), the board outline from the `Edge.Cuts` graphics
+(`gr_line` chained, `gr_rect`/`gr_poly`, `gr_arc` flattened), each `(footprint)` as a placed
+data-only `PartDefinition` with its pads, the `(net)` table, copper `(segment)`/`(arc)` tracks,
+`(via)`s, and copper `(zone)`s as pours.
+
+**Like IDF, a bare board carries no schematic, so the reader synthesizes one from the pads' own net
+tags** — a footprint becomes a `PartDefinition`, and each pad's `(net n name)` reconstructs the nets
+the design intended. That is what makes "the connectivity matches what KiCad intended" a *checkable*
+claim rather than a hope: the pads' net tags ARE the schematic, and `PcbConnectivity` then confirms
+the imported copper (tracks, vias, zones) actually joins the pads KiCad tagged. **No additive change
+to the board types was needed** — everything builds through the existing public constructors
+(`PcbBoard`/`PcbStackup`, `Schematic.Add`/`Connect`/`Stub`, `PcbLayout.Place`/`AddTrace`/`AddVia`/
+`AddPour`), because the pads' net assignment already carries the connectivity the board file lacks a
+schematic for.
+
+**Coordinate convention.** KiCad stores Y downward; the reader imports coordinates VERBATIM into the
+board frame (no Y-flip, noted in `Diagnostics`), which is what "pad centres exact from the file's mm
+coordinates" means AND is internally consistent (pads, tracks, vias, zones and the outline share one
+frame) — all connectivity, the copper DRC and Gerber export need. A footprint rotation is a CCW
+rotation in that frame.
+
+Verified higher than usual (an import that connects the wrong pads is a silent failure): the
+**net connectivity matches KiCad's intent** (each multi-pad net connected via its tracks/via/zone,
+the GND zone joining every GND pad — and removing the zone leaves GND an unrouted ratsnest, the
+mutation that proves the zone connects them); the board is **DRC-clean** with a known-violation
+fixture (a copper short between two nets) FOUND; **pad centres are exact** from the file's mm
+coordinates (including a 90°-rotated footprint); the imported copper **round-trips to Gerber** and
+re-reads (the twin-decoder oracle); determinism; refusals by name; and the **component reader stays
+bit-identical** (a new reading path, nothing shared moved). Ignored/refused by name: keepout / rule
+areas, teardrops, dimension graphics, 3D-model references, a netless track/via/zone, an arc track
+(flattened, noted). Filed: the KiCad `.kicad_sch` schematic and EXPORT of our board to `.kicad_pcb`
+(a different, larger job). Docs: `examples/ecad-pcb.md`.
+
 ## Stage 3 — placement constraints
 
 Stage 3 places components by **constraint** rather than by typed coordinates. The variables are
@@ -651,12 +690,13 @@ multi-shell MID (traces on an inner moulded shell), a conformal solder mask / po
 ## Not yet (later campaign stages)
 
 The richer
-interchange (KiCad `.kicad_pcb`, STEP AP214 board assemblies) — each a later stage over this one
-graph. On the LIBRARY side, **KiCad `.kicad_sym`/`.kicad_mod` and Eagle `.lbr` both import**; what
-stays filed is **IPC-7351 footprint GENERATION** from a designation (a generator, not a file
-import), EDIF, whole Eagle `.brd`/`.sch` board/schematic import (a different, larger job), Eagle 3D
-package models, the newer Eagle/Fusion XML variants beyond the classic `.lbr`, and the KiCad 3D
-model reference (`.wrl`/`.step`). Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
+interchange grows: **KiCad `.kicad_pcb` whole-board IMPORT has landed** (see Stage 2 above); what
+stays filed is EXPORT of our board to `.kicad_pcb` (a different, larger job), the KiCad `.kicad_sch`
+schematic, and STEP AP214 board assemblies. On the LIBRARY side, **KiCad `.kicad_sym`/`.kicad_mod`
+and Eagle `.lbr` both import**; what stays filed is **IPC-7351 footprint GENERATION** from a
+designation (a generator, not a file import), EDIF, whole Eagle `.brd`/`.sch` board/schematic import
+(a different, larger job), Eagle 3D package models, the newer Eagle/Fusion XML variants beyond the
+classic `.lbr`, and the KiCad 3D model reference (`.wrl`/`.step`). Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
 drilling the plate is a later refinement). The drawn schematic **sheet** (`SchematicSheet` →
 SVG/DXF/PDF) has landed as a VIEW of the graph (see above); what stays open there is a real
 **auto-placer** (a good layout, not the grid placeholder) and an **obstacle-avoiding** wire

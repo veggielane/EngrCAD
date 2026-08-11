@@ -524,6 +524,91 @@ no footprints. `IdfWriter` closes the loop, so `read → write → read → writ
 fixed point for the geometry IDF carries. Section structure is validated up front and a malformed
 file is refused by name.
 
+## Interchange: KiCad `.kicad_pcb` (whole board)
+
+`KiCadPcbReader.Read(text)` / `ReadFile(path)` imports a whole KiCad **board** — the twin of the
+[component reader](ecad-library.md), reusing the same hand-rolled S-expression parser and the same
+covered-subset / refuse-by-name discipline. It reconstructs a `PcbLayout`: the `(general)`
+thickness, the copper `(layers)` stackup (every `.Cu` layer, F.Cu first), the board outline from the
+`Edge.Cuts` graphics, each `(footprint)` as a placed data-only part with its pads, the `(net)`
+table, copper `(segment)`/`(arc)` tracks, `(via)`s, and copper `(zone)`s as pours.
+
+**Like [IDF](#interchange-idf-import), a bare board carries no schematic, so the reader synthesizes
+one from the pads' own net tags** — a footprint becomes a `PartDefinition`, and each pad's
+`(net n name)` reconstructs the nets the design intended. That is what makes "the connectivity
+matches what KiCad intended" a *checkable* claim: [`PcbConnectivity`](ecad-pcb.md) confirms the
+imported copper (tracks, vias, zones) actually joins the pads KiCad tagged, and the board passes the
+[copper DRC](ecad-drc.md) — a real board is DRC-clean, so a clean import proves the geometry landed
+right. Pad centres are carried **exactly** from the file's millimetre coordinates (KiCad's Y-down
+frame is imported verbatim into the board frame — internally consistent, which is all connectivity,
+the DRC and [Gerber export](ecad-fabrication.md) need). Anything outside the common subset — keepout
+zones, teardrops, 3D-model references — is ignored with a named diagnostic, and a `.kicad_sym` or
+`.kicad_mod` handed here is refused by name.
+
+```csharp run:ecad-kicad-pcb
+// A minimal .kicad_pcb: a 20 x 14 board, two SMD parts, a VCC track, a GND stitching via and a
+// GND zone that joins the two GND pads. Nets are reconstructed from the pads' own (net ...) tags.
+var text = """
+(kicad_pcb (version 20221018) (generator pcbnew)
+  (general (thickness 1.6))
+  (title_block (title "demo"))
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (net 0 "") (net 1 "GND") (net 2 "VCC")
+  (footprint "R_0805" (layer "F.Cu") (at 5 7 0)
+    (property "Reference" "R1" (at 0 -1.5 0) (layer "F.SilkS"))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 2 "VCC"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "GND")))
+  (footprint "R_0805" (layer "F.Cu") (at 15 7 0)
+    (property "Reference" "R2" (at 0 -1.5 0) (layer "F.SilkS"))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 2 "VCC"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (net 1 "GND")))
+  (gr_line (start 0 0) (end 20 0) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)))
+  (gr_line (start 20 0) (end 20 14) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)))
+  (gr_line (start 20 14) (end 0 14) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)))
+  (gr_line (start 0 14) (end 0 0) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)))
+  (segment (start 4 7) (end 4 11) (width 0.4) (layer "F.Cu") (net 2))
+  (segment (start 4 11) (end 14 11) (width 0.4) (layer "F.Cu") (net 2))
+  (segment (start 14 11) (end 14 7) (width 0.4) (layer "F.Cu") (net 2))
+  (via (at 10 2) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
+  (zone (net 1) (net_name "GND") (layer "F.Cu")
+    (polygon (pts (xy 0 0) (xy 20 0) (xy 20 14) (xy 0 14)))))
+""";
+
+var pcb = KiCadPcbReader.Read(text);
+Console.WriteLine($"{pcb.BoardName}: {pcb.FootprintCount} footprints, {pcb.TrackCount} tracks, "
+    + $"{pcb.ViaCount} via(s), {pcb.ZoneCount} zone(s), {pcb.NetCount} nets");
+
+// Pad centres are exact from the file (R1 at (5,7), pad "1" local (-1,0) -> world (4,7)).
+var r1p1 = pcb.Layout.PlacedPads().Single(p => p.Reference == "R1" && p.PadNumber == "1");
+Console.WriteLine($"R1.1 at ({r1p1.World.X}, {r1p1.World.Y})");
+
+// The headline: every net connects, as KiCad intended. VCC is joined by the track; GND by the zone.
+var conn = pcb.Layout.Connectivity();
+foreach (var net in new[] { "VCC", "GND" })
+    Console.WriteLine($"net {net}: connected = {conn.Of(net).IsConnected}");
+
+// A real board is DRC-clean (the pour + relief wants an acid-trap threshold below ~78 deg).
+var rules = DrcRuleSet.Default with { MinAcuteAngleDegrees = 45 };
+var drc = PcbDrc.Check(pcb.Layout, rules);
+Console.WriteLine($"DRC: {(drc.Ok ? "clean" : $"{drc.Violations.Count} violations")}");
+
+// The imported copper exports to Gerber and re-reads (the twin-decoder round trip).
+var gerber = PcbGerberExport.Generate(pcb.Layout, "demo");
+var topArea = GerberReader.Read(gerber.CopperLayers.Single(l => l.Layer == "F.Cu").Gerber)
+    .Copper.Sum(r => r.Area);
+Console.WriteLine($"Gerber F.Cu copper area re-read: {topArea > 0}");
+
+if (!conn.Of("VCC").IsConnected || !conn.Of("GND").IsConnected || !drc.Ok || !(topArea > 0))
+    throw new Exception("a KiCad-imported board must connect its nets, pass the DRC and export Gerber");
+```
+
+The nets connect (VCC through the track, GND through the zone), the board is DRC-clean, and the
+copper round-trips to Gerber — an existing KiCad design ingested, verified and made manufacturable
+through one graph. **Not in v1** (filed by name): rule areas / keepout zones, differential-pair and
+length-tuning metadata, teardrops, custom pad primitives, the 3D-model references, and the KiCad
+`.kicad_sch` schematic (the component reader and this board reader cover the pieces; a whole
+schematic import is separate). Export of *our* board to `.kicad_pcb` is a different, larger job.
+
 ## What is next
 
 Positioning constraints, copper DRC (a region-offset clearance query over the placed pads),
