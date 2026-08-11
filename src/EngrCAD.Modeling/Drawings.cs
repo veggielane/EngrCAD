@@ -35,11 +35,50 @@ public static class SheetLayers
 /// <param name="Height">Sheet height, mm.</param>
 public sealed record SheetFormat(string Name, double Width, double Height)
 {
+    // The one paper-size table every frame reads. ISO 216 A series, ISO 216 B series and the
+    // ANSI/ASME Y14.1 A-E sizes, all stated LANDSCAPE (width > height); .Portrait turns one
+    // over. The B and ANSI sizes are additive — nothing uses them by default — so they cannot
+    // move any existing output.
+
     public static SheetFormat A4 { get; } = new("A4", 297, 210);
     public static SheetFormat A3 { get; } = new("A3", 420, 297);
     public static SheetFormat A2 { get; } = new("A2", 594, 420);
     public static SheetFormat A1 { get; } = new("A1", 841, 594);
     public static SheetFormat A0 { get; } = new("A0", 1189, 841);
+
+    /// <summary>ISO 216 B series (rounded to millimetres, landscape).</summary>
+    public static SheetFormat B0 { get; } = new("B0", 1414, 1000);
+    /// <inheritdoc cref="B0"/>
+    public static SheetFormat B1 { get; } = new("B1", 1000, 707);
+    /// <inheritdoc cref="B0"/>
+    public static SheetFormat B2 { get; } = new("B2", 707, 500);
+    /// <inheritdoc cref="B0"/>
+    public static SheetFormat B3 { get; } = new("B3", 500, 353);
+    /// <inheritdoc cref="B0"/>
+    public static SheetFormat B4 { get; } = new("B4", 353, 250);
+    /// <inheritdoc cref="B0"/>
+    public static SheetFormat B5 { get; } = new("B5", 250, 176);
+
+    // ANSI/ASME Y14.1 sizes are defined in inches; the millimetre figures are exact
+    // (25.4 mm/in): A = 11 x 8.5, B = 17 x 11, C = 22 x 17, D = 34 x 22, E = 44 x 34.
+    /// <summary>ANSI/ASME Y14.1 A (11 x 8.5 in), landscape.</summary>
+    public static SheetFormat AnsiA { get; } = new("ANSI A", 279.4, 215.9);
+    /// <summary>ANSI/ASME Y14.1 B (17 x 11 in), landscape.</summary>
+    public static SheetFormat AnsiB { get; } = new("ANSI B", 431.8, 279.4);
+    /// <summary>ANSI/ASME Y14.1 C (22 x 17 in), landscape.</summary>
+    public static SheetFormat AnsiC { get; } = new("ANSI C", 558.8, 431.8);
+    /// <summary>ANSI/ASME Y14.1 D (34 x 22 in), landscape.</summary>
+    public static SheetFormat AnsiD { get; } = new("ANSI D", 863.6, 558.8);
+    /// <summary>ANSI/ASME Y14.1 E (44 x 34 in), landscape.</summary>
+    public static SheetFormat AnsiE { get; } = new("ANSI E", 1117.6, 863.6);
+
+    /// <summary>Every named size, A series then B series then ANSI — the table a picker reads.</summary>
+    public static IReadOnlyList<SheetFormat> All { get; } =
+    [
+        A4, A3, A2, A1, A0,
+        B0, B1, B2, B3, B4, B5,
+        AnsiA, AnsiB, AnsiC, AnsiD, AnsiE,
+    ];
 
     /// <summary>The same sheet turned on its side.</summary>
     public SheetFormat Portrait => Width >= Height ? new(Name, Height, Width) : this;
@@ -148,6 +187,16 @@ public sealed record TitleBlock
     public string Finish { get; init; } = "";
     public string Revision { get; init; } = "";
     public string Company { get; init; } = "";
+
+    /// <summary>The project this drawing belongs to. Carried so the type is complete; the
+    /// engineering and schematic title-block layouts do not render it (an ISO 7200 layout,
+    /// filed, would). The SCALE is deliberately NOT a field: it is derived from the sheet's own
+    /// layout so it cannot contradict the views it labels.</summary>
+    public string Project { get; init; } = "";
+
+    /// <summary>Sheet number within a set, e.g. "1 / 3". Carried for completeness; not rendered
+    /// by the current layouts (see <see cref="Project"/>).</summary>
+    public string Sheet { get; init; } = "";
 
     /// <summary>Block width, sheet mm (clamped to the drawing area).</summary>
     public double Width { get; init; } = 180;
@@ -527,7 +576,32 @@ public sealed class DrawingSheet
 
     public TitleBlock Title { get; set; } = new();
 
+    /// <summary>Opt-in sheet-standard furniture (ISO 5457 zone grid and centring marks);
+    /// default <see cref="FrameStandards.None"/> leaves the sheet's output byte-identical.</summary>
+    public FrameStandards Standards { get; set; } = FrameStandards.None;
+
     public IReadOnlyList<DrawingView> Views => _views;
+
+    /// <summary>
+    /// The shared <see cref="DrawingFrame"/> this sheet draws its border and title block from —
+    /// the SAME frame value the ECAD schematic sheet uses, so the two cannot disagree about what
+    /// a frame looks like. The scale and projection angle are read from the layout, not the
+    /// caller, so they cannot contradict the views.
+    /// </summary>
+    public DrawingFrame Frame()
+    {
+        string scale = _views.Count > 0
+            ? DrawingScales.Format(_views[0].Scale)
+            : DrawingScales.Format(1);
+        return new DrawingFrame
+        {
+            Format = Format,
+            Margin = Margin,
+            Title = Title,
+            Layout = new EngineeringTitleBlock(scale, Projection),
+            Standards = Standards,
+        };
+    }
 
     public DrawingSheet Add(DrawingView view)
     {
@@ -692,15 +766,12 @@ public sealed class DrawingSheet
         var runs = new List<HiddenLineRun>();
         var hatch = new List<(Vector2d A, Vector2d B)>();
 
-        var border = Border;
-        AddRectangle(lines, border, SheetLayers.Border);
-
-        double blockWidth = Math.Min(Title.Width, border.Size.X);
-        var block = new Aabb(
-            new Vector3d(border.Max.X - blockWidth, border.Min.Y, 0),
-            new Vector3d(border.Max.X, border.Min.Y + Title.Height, 0));
-        AddRectangle(lines, block, SheetLayers.TitleBlock);
-        AddTitleBlock(lines, texts, block);
+        // The border and title block come from the shared frame, so a drawing and a schematic
+        // of one project draw the same furniture. The frame's lines/texts are merged AHEAD of
+        // the views (border and title-block layers before the dimensions), as before.
+        var frame = Frame().Compute();
+        lines.AddRange(frame.Lines);
+        texts.AddRange(frame.Texts);
 
         foreach (var view in _views)
         {
@@ -712,76 +783,6 @@ public sealed class DrawingSheet
                 lines.Add((a, b, SheetLayers.Dimensions));
         }
         return new SheetContent(runs, hatch, lines, texts, Format);
-    }
-
-    private void AddTitleBlock(
-        List<(Vector2d A, Vector2d B, string Layer)> lines, List<SheetText> texts, in Aabb block)
-    {
-        double pad = SheetLettering.TitleBlockPadding;
-        double x = block.Min.X + pad;
-        double right = block.Max.X - pad;
-        double top = block.Max.Y;
-        double h = block.Size.Y;
-
-        // Two horizontal rules split the block into a title band and two data rows.
-        double rule1 = block.Min.Y + h * 2 / 3;
-        double rule2 = block.Min.Y + h / 3;
-        lines.Add((new Vector2d(block.Min.X, rule1), new Vector2d(block.Max.X, rule1), SheetLayers.TitleBlock));
-        lines.Add((new Vector2d(block.Min.X, rule2), new Vector2d(block.Max.X, rule2), SheetLayers.TitleBlock));
-
-        texts.Add(new SheetText(
-            new Vector2d(x, rule1 + (top - rule1 - SheetLettering.TitleHeight) / 2),
-            Title.Title, SheetLettering.TitleHeight));
-        if (Title.Company.Length > 0)
-        {
-            texts.Add(new SheetText(
-                new Vector2d(right, rule1 + (top - rule1 - SheetLettering.TextHeight) / 2),
-                Title.Company, SheetLettering.TextHeight, SheetTextAnchor.Right));
-        }
-
-        double row1 = rule2 + (rule1 - rule2 - SheetLettering.TextHeight) / 2;
-        double row2 = block.Min.Y + (rule2 - block.Min.Y - SheetLettering.TextHeight) / 2;
-        double column = (right - x) / 3;
-
-        AddField(x, row1, "DWG", Title.DrawingNumber);
-        AddField(x + column, row1, "MATERIAL", Title.Material);
-        AddField(x + 2 * column, row1, "FINISH", Title.Finish);
-        AddField(x, row2, "DRAWN", Title.Author);
-        AddField(x + column, row2, "DATE", Title.Date);
-        AddField(x + 2 * column, row2, "REV", Title.Revision);
-
-        // The scale and projection angle are the sheet's own facts, never the caller's
-        // to mistype: they are read from the layout that produced the views.
-        string scale = _views.Count > 0
-            ? DrawingScales.Format(_views[0].Scale)
-            : DrawingScales.Format(1);
-        texts.Add(new SheetText(
-            new Vector2d(right, row2), $"SCALE {scale}", SheetLettering.TextHeight, SheetTextAnchor.Right));
-        texts.Add(new SheetText(
-            new Vector2d(right, row1),
-            Projection == ProjectionAngle.Third ? "THIRD ANGLE" : "FIRST ANGLE",
-            SheetLettering.TextHeight, SheetTextAnchor.Right));
-
-        void AddField(double fx, double fy, string label, string value)
-        {
-            texts.Add(new SheetText(
-                new Vector2d(fx, fy + SheetLettering.TextHeight * 1.1), label, SheetLettering.SmallTextHeight));
-            if (value.Length > 0)
-                texts.Add(new SheetText(new Vector2d(fx, fy), value, SheetLettering.TextHeight));
-        }
-    }
-
-    private static void AddRectangle(
-        List<(Vector2d A, Vector2d B, string Layer)> lines, in Aabb box, string layer)
-    {
-        var bl = new Vector2d(box.Min.X, box.Min.Y);
-        var br = new Vector2d(box.Max.X, box.Min.Y);
-        var tr = new Vector2d(box.Max.X, box.Max.Y);
-        var tl = new Vector2d(box.Min.X, box.Max.Y);
-        lines.Add((bl, br, layer));
-        lines.Add((br, tr, layer));
-        lines.Add((tr, tl, layer));
-        lines.Add((tl, bl, layer));
     }
 }
 

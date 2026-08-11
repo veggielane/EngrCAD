@@ -546,7 +546,16 @@ name) or a net past the fanout threshold (default 4).
 The verification is the house style — every net's connected pins are JOINED (by a wire path or
 a shared label) and no two pins on different nets are joined — reconstructed from the drawn
 primitives so the drawing cannot omit a connection the netlist has nor invent one it does not.
-Docs: `examples/ecad-schematic-sheet.md`.
+
+**The border and title block come from the shared `DrawingFrame`** (Modeling) — the SAME value
+type the mechanical [drawing sheet](../EngrCAD.Modeling/README.md) draws, so a schematic and a
+mechanical drawing of one project share one look and cannot DRIFT. The frame is one pure
+function of its parameters, and a schematic passes its own two-band `SchematicTitleBlock` and
+the ECAD schematic layers; that is the only thing that differs (the mechanical sheet passes the
+three-band engineering layout). `SchematicSheet.Frame()` exposes it. The frame's opt-in
+`FrameStandards` (the ISO 5457 zone grid and centring marks) reach a schematic via the
+`standards:` constructor argument, off by default so an existing schematic sheet is
+byte-identical. Docs: `examples/ecad-schematic-sheet.md`.
 
 ## Stage 5 — the autorouter
 

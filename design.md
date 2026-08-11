@@ -6754,6 +6754,38 @@ A drawing is a *document*, not a picture, and the whole design follows from that
   arc has no exact form and an overload would silently flatten), layers (PDF needs
   optional-content groups for those; filed), and a CLI route (sheets are produced by
   code and docs fences, not by `--export`, for SVG and DXF alike).
+- **One frame, shared by the mechanical AND the schematic sheet, extracted ADDITIVELY.**
+  The paper, the border and the title block used to be carried twice — once by the
+  mechanical `DrawingSheet` and once, deliberately re-implemented, by the ECAD
+  `SchematicSheet` — so a drawing and a schematic of one project could look inconsistent
+  and could drift. They are now ONE value type, `DrawingFrame` (`DrawingFrame.cs`), a
+  pure function of its parameters: `Compute()` returns the border and title-block
+  geometry, and two sheets given the same paper, the same `TitleBlock` fields and the same
+  frame options produce byte-identical furniture because they call one function. That is
+  the oracle the filing asked for — *the two sheets provably cannot disagree because it is
+  one function* — and it is checked directly (the same frame options handed to a
+  mechanical sheet and a schematic sheet give identical geometry). **The extraction is
+  ADDITIVE, and byte-identity is the other oracle**: the two title blocks differ *today*
+  (the mechanical `EngineeringTitleBlock` is a three-band layout on `SheetLayers`; the
+  schematic `SchematicTitleBlock` a two-band one on the ECAD schematic layers), so the
+  frame carries BOTH parameterisations — a `TitleBlockLayout` strategy plus the border and
+  title-block layer names — and each sheet passes the ones that reproduce its OWN look,
+  which was verified by hashing every mechanical and schematic SVG/DXF/PDF before and after
+  and finding them identical. **The strategy (two subclasses) was chosen over a
+  declarative grid** precisely because the byte-identity bar is unforgiving: transcribing
+  each incumbent's own arithmetic verbatim is the safe way to reproduce it to the last bit,
+  where a single declarative model powerful enough to spell both would be a large surface
+  for a floating-point drift. **The schematic keeps its own BODY, deliberately** — the
+  frame is the paper's furniture, and a schematic's line work is caller-placed while a
+  mechanical sheet's is projected views, so unifying the bodies is not what "share the
+  frame" means. Two smaller things landed with it, both additive: `SheetFormat` gained the
+  ISO 216 B series and the ANSI/ASME Y14.1 A–E sizes (`SheetFormat.All` is the one table
+  the frame reads), and `FrameStandards` is the opt-in ISO 5457 border — a zone grid
+  (column numbers, row letters, I and O omitted) and centring marks drawn in the margin
+  band so they never touch the drawing area, **OFF by default** (`FrameStandards.None`) so
+  nothing existing moves. The ISO 7200 field layout is filed (a full new layout wants its
+  datasheet); the zone COUNTS here come from a nominal field size rather than ISO 5457's
+  exact per-size table.
 
 ## 6d. ECAD — schematics and the connectivity data model (`EngrCAD.Ecad`)
 

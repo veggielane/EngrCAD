@@ -215,6 +215,52 @@ bit for bit.)
 `sheet.ToSvg()`, `sheet.ToDxf()` and `sheet.ToPdf()` hand back the document if you
 would rather post-process it.
 
+## The shared frame
+
+The paper, the border and the title block are a `DrawingFrame` — **one value type both this
+mechanical sheet and the ECAD [schematic sheet](ecad-schematic-sheet.md) draw from**, so a
+drawing and a schematic of one project share one look and cannot drift. It is one *pure
+function* of its parameters (`sheet.Frame().Compute()`), which is the whole point: two sheets
+given the same paper, the same title-block fields and the same frame options produce
+byte-identical furniture because they call one function. The two blocks differ *today* — the
+mechanical block is a three-band engineering layout, the schematic block a two-band one — so
+the frame carries both parameterisations and each sheet picks its own; the extraction unified
+the code and the value type, not the default appearance.
+
+`SheetFormat` is the one paper-size table the frame reads: the ISO 216 **A** and **B** series
+and the ANSI/ASME Y14.1 **A–E** sizes (`SheetFormat.All`), all landscape, `.Portrait` to turn
+one over.
+
+### Opt-in sheet standards (ISO 5457)
+
+`FrameStandards` adds standard furniture, **off by default** so an existing sheet is
+byte-identical. `FrameStandards.Iso5457` draws the ISO 5457 border: a **zone grid** (column
+numbers across, row letters down each side, with I and O omitted) and **centring marks** at
+the middle of each side — all in the margin band, so they never reach the drawing area.
+
+```csharp svg:drawing-frame-iso5457
+var scene = new Scene();
+scene.Add(new Part("plate", Shape.Box(80, 50, 10)
+    .Drill(HoleSpec.Simple(8), [new Vector2d(0, 0)], depth: 12,
+        SketchPlane.At((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY))));
+
+var sheet = DrawingSheet.StandardLayout(scene, SheetFormat.A3);
+sheet.Title = sheet.Title with
+{
+    Title = "SPACER PLATE", DrawingNumber = "EC-2001", Company = "ENGRCAD",
+};
+
+// Opt in to the ISO 5457 border: a zone grid and centring marks, drawn in the margin band.
+sheet.Standards = FrameStandards.Iso5457;
+
+var svg = sheet.ToSvg();
+```
+
+![An A3 sheet with the ISO 5457 zone grid and centring marks](images/drawing-frame-iso5457.svg)
+
+The ISO 7200 title-block field layout is a filed follow-up; the zone COUNTS here come from a
+nominal field size (`FrameStandards.NominalZone`) rather than ISO 5457's exact per-size table.
+
 ## What the projection is honest about
 
 The line work is **exact wherever the kernel has it**: for a B-Rep-backed part the

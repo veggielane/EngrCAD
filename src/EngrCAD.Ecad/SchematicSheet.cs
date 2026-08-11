@@ -181,7 +181,8 @@ public sealed class SchematicSheet
         SchematicPlacement? placement = null,
         SheetFormat? format = null,
         TitleBlock? title = null,
-        SchematicSheetOptions? options = null)
+        SchematicSheetOptions? options = null,
+        FrameStandards? standards = null)
     {
         ArgumentNullException.ThrowIfNull(schematic);
         Schematic = schematic;
@@ -189,6 +190,7 @@ public sealed class SchematicSheet
         _options = options ?? SchematicSheetOptions.Default;
         _placement = placement ?? SchematicPlacement.Grid(schematic, Format);
         Title = title ?? new TitleBlock { Title = schematic.Name };
+        Standards = standards ?? FrameStandards.None;
         Validate();
     }
 
@@ -200,6 +202,27 @@ public sealed class SchematicSheet
 
     /// <summary>The title block (its title defaults to the schematic's name).</summary>
     public TitleBlock Title { get; }
+
+    /// <summary>Opt-in sheet-standard furniture (ISO 5457 zone grid and centring marks);
+    /// default <see cref="FrameStandards.None"/> leaves the sheet's output byte-identical.</summary>
+    public FrameStandards Standards { get; }
+
+    /// <summary>
+    /// The shared <see cref="DrawingFrame"/> this sheet draws its border and title block from —
+    /// the SAME frame value the mechanical <see cref="DrawingSheet"/> uses, so the two cannot
+    /// disagree about what a frame looks like. A schematic configures the two-band schematic
+    /// title block on the ECAD schematic layers; that is the only thing that differs.
+    /// </summary>
+    public DrawingFrame Frame() => new()
+    {
+        Format = Format,
+        Margin = DefaultMargin,
+        Title = Title,
+        BorderLayer = SchematicLayers.Border,
+        TitleBlockLayer = SchematicLayers.TitleBlock,
+        Layout = new SchematicTitleBlock(_options.TextHeight),
+        Standards = Standards,
+    };
 
     /// <summary>Refuses, by name, everything that would make the sheet undrawable.</summary>
     private void Validate()
@@ -268,7 +291,13 @@ public sealed class SchematicSheet
 
         internal SchematicDrawing Build()
         {
-            DrawBorderAndTitleBlock();
+            // The border and title block come from the shared DrawingFrame, so a schematic and
+            // a mechanical drawing of one project draw the same furniture. Merged AHEAD of the
+            // symbols and wires, as the frame's own line work always was.
+            var frame = _sheet.Frame().Compute();
+            _segments.AddRange(frame.Lines);
+            _texts.AddRange(frame.Texts);
+
             foreach (var component in _sheet.Schematic.Components)
                 DrawSymbol(component);
             // Nets after symbols so wires overlay bodies where they must.
@@ -561,67 +590,5 @@ public sealed class SchematicSheet
             _segments.Add((anchor + new Vector2d(-r, r), anchor + new Vector2d(r, -r), SchematicLayers.NoConnects));
         }
 
-        // ---- border and title block -----------------------------------------
-
-        private void DrawBorderAndTitleBlock()
-        {
-            double m = DefaultMargin;
-            double w = _sheet.Format.Width;
-            double h = _sheet.Format.Height;
-            AddRectangle(new Vector2d(m, m), new Vector2d(w - m, h - m), SchematicLayers.Border);
-
-            // A schematic title block is simpler than a mechanical one: no scale and no
-            // projection angle (a schematic is not a scaled projection). Bottom-right corner.
-            double blockW = Math.Min(_sheet.Title.Width, w - 2 * m);
-            double blockH = _sheet.Title.Height;
-            var blockMin = new Vector2d(w - m - blockW, m);
-            var blockMax = new Vector2d(w - m, m + blockH);
-            AddRectangle(blockMin, blockMax, SchematicLayers.TitleBlock);
-
-            double rule = blockMin.Y + blockH * 0.55;
-            _segments.Add((new Vector2d(blockMin.X, rule), new Vector2d(blockMax.X, rule), SchematicLayers.TitleBlock));
-
-            double pad = 2.5;
-            double titleHeight = _options.TextHeight * 1.4;
-            _texts.Add(new SheetText(
-                new Vector2d(blockMin.X + pad, rule + (blockMax.Y - rule - titleHeight) / 2),
-                _sheet.Title.Title, titleHeight, SheetTextAnchor.Left, SchematicLayers.TitleBlock));
-            if (_sheet.Title.Company.Length > 0)
-                _texts.Add(new SheetText(
-                    new Vector2d(blockMax.X - pad, rule + (blockMax.Y - rule - _options.TextHeight) / 2),
-                    _sheet.Title.Company, _options.TextHeight, SheetTextAnchor.Right, SchematicLayers.TitleBlock));
-
-            // Bottom row: DWG / DRAWN / DATE / REV, evenly across the block.
-            double row = blockMin.Y + (rule - blockMin.Y - _options.TextHeight) / 2;
-            double x = blockMin.X + pad;
-            double column = (blockMax.X - pad - x) / 4;
-            Field(x, row, "DWG", _sheet.Title.DrawingNumber);
-            Field(x + column, row, "DRAWN", _sheet.Title.Author);
-            Field(x + 2 * column, row, "DATE", _sheet.Title.Date);
-            Field(x + 3 * column, row, "REV", _sheet.Title.Revision);
-
-            void Field(double fx, double fy, string label, string value)
-            {
-                _texts.Add(new SheetText(
-                    new Vector2d(fx, fy + _options.TextHeight * 1.15), label, _options.TextHeight * 0.72,
-                    SheetTextAnchor.Left, SchematicLayers.TitleBlock));
-                if (value.Length > 0)
-                    _texts.Add(new SheetText(
-                        new Vector2d(fx, fy), value, _options.TextHeight, SheetTextAnchor.Left,
-                        SchematicLayers.TitleBlock));
-            }
-        }
-
-        private void AddRectangle(in Vector2d min, in Vector2d max, string layer)
-        {
-            var bl = min;
-            var br = new Vector2d(max.X, min.Y);
-            var tr = max;
-            var tl = new Vector2d(min.X, max.Y);
-            _segments.Add((bl, br, layer));
-            _segments.Add((br, tr, layer));
-            _segments.Add((tr, tl, layer));
-            _segments.Add((tl, bl, layer));
-        }
     }
 }
