@@ -57,14 +57,15 @@ public static class MidShowcase
             ("D2",  Above( 3.2,  0.9), Above( 8.8,  2.5)),
         };
 
-        var conductors = new List<Shape>();
         foreach (var (net, a, b) in nets)
         {
-            var pa = board.PlacePad(net, a, land, $"{net}.a");
-            var pb = board.PlacePad(net, b, land, $"{net}.b");
-            var trace = MidRouting.Connect(board, pa, pb, width);
-            conductors.Add(trace.Conductor(copper));
+            board.PlacePad(net, a, land, $"{net}.a");
+            board.PlacePad(net, b, land, $"{net}.b");
         }
+
+        // AUTO-ROUTE: the board routes itself — a DRC-clean geodesic per net over the mesh vertex graph.
+        var routed = MidRouting.Route(board, null, new SurfaceRouteOptions { TraceWidth = width });
+        var conductors = routed.Traces.Select(t => t.Conductor(copper)).ToList();
 
         report = MidRouting.Verify(board);
         netCount = nets.Length;

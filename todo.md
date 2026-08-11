@@ -2749,10 +2749,24 @@ from what was already understood rather than from scratch.
     Findings baked into CLAUDE.md/design.md: the exp map measures the geodesic ACCURATELY along the
     separation (radial coord = geodesic), so the intrinsic DRC is CONFIDENT at board scales and refuses
     only where the clearance is comparable to the curvature radius — the naive "curvature shrinks the
-    clearance" is INVERTED (geodesic ≥ chord always). **Filed follow-ons**: surface AUTO-routing (a
-    geodesic maze search — the flat grid router does not lift to the distorted metric), MULTI-SHELL MID
-    (traces on an inner moulded copper layer as well as the outer), and a conformal surface SOLDER MASK
-    / POUR (refused for the distortion reason copper pours already refuse curved walls).
+    clearance" is INVERTED (geodesic ≥ chord always). **The surface AUTO-router LANDED**
+    (`SurfaceRouter`/`SurfaceRouteOptions`/`SurfaceRouteResult`, `MidRouting.Route` — the geodesic
+    analogue of the flat `PcbRouter`): each unrouted net decomposed over an MST and routed as a DRC-aware
+    A* maze search over the mesh VERTEX GRAPH (admissible 3D-straight-line heuristic), straightened, and
+    committed only after the exact 3D DRC (`Mid3dDrc.RouteCandidateClears`) certifies it clean — the
+    vertex graph accelerates, the exact DRC is the source of truth, a boxed net is UNROUTABLE by name and
+    the partial board is always clean. The obstacle model over-blocks safely (the 3D chord is a lower
+    bound on the geodesic; a HALF-longest-edge margin makes the raw edge path clean by construction), and
+    rip-up-and-reroute is the flat router's negotiated congestion verbatim. Runs on an INTRINSIC board
+    (`OnMesh`); a global-chart board is refused with a pointer to `OnMesh`. Verified to the flat router's
+    bar: a 2-pin net on a cylinder and a sphere cap routes clean+connected, several nets route AROUND each
+    other, a congested board is completed by RIP-UP, a walled-in pin is unroutable by name, a dense knot's
+    partial is always clean, the cylinder's routed CONNECTIVITY matches the unrolled flat board's (both
+    clean, not bit-identical), and two runs are deterministic vertex for vertex; the wearable showcase now
+    AUTO-routes (its PNG re-rendered). **Filed follow-ons**: TOPOLOGICAL / SHOVE routing on the surface
+    (v1 detours around obstacles but does not push them), LENGTH MATCHING, MULTI-SHELL MID (traces on an
+    inner moulded copper layer as well as the outer), and a conformal surface SOLDER MASK / POUR (refused
+    for the distortion reason copper pours already refuse curved walls).
   - **ECAD thermal coupling — the genuinely novel MCAD answer, the next stage over the
     enclosure fit that just landed.** Enclosure fit is DONE (`Enclosure`/`EnclosureFit`/
     `PanelCutout`/`FitReport` in `PcbEnclosure.cs`; docs `examples/ecad-enclosure.md`, design.md §6d

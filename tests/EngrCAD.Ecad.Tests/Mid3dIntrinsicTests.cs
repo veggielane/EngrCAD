@@ -446,7 +446,10 @@ public class Mid3dIntrinsicTests
         var pad = board.PlacePad("N", TorusPoint(12, 4, 0, 0), 0.3, "P");
         Assert.False(pad.HasParameter);
         Assert.Throws<InvalidOperationException>(() => pad.Parameter);
-        // Auto-routing is refused by name.
-        Assert.Throws<NotSupportedException>(() => MidRouting.Route(board));
+        // Auto-routing an intrinsic board with nothing to route (one lone pad) leaves it unchanged.
+        var routed = MidRouting.Route(board);
+        Assert.Empty(routed.RoutedNets);
+        Assert.Empty(routed.UnroutedNets);
+        Assert.Equal(0, routed.TracesAdded);
     }
 }

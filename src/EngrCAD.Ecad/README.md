@@ -666,7 +666,8 @@ no chart at all.
 | `MidBoard` | A moulded routing surface. `OnMesh(mesh)` is **INTRINSIC** (no chart, any geometry); `OnSurface(mesh, seed, ref, radius)` is the **global-chart** mode for a developable patch (exact numbers, the bit-for-bit oracle). Holds pads, routed `SurfaceTrace`s, seated components. `MaxDistortion` reports per-region (intrinsic) or per-chart (global); `PlacePad`/`PlacePin` at a world position or a `(u, v)`; `Seat` poses a `HardwareComponent` OR a raw `Shape` body on the surface tangent frame. |
 | `MidPad` | A copper land — a surface point, a net, a land width (and a `(u, v)` on a global-chart board). |
 | `SurfaceTrace` / `SurfaceRun` | A net's conductor — a centre-line lifted onto the surface. **Reports the distortion it carried** (`MinScale`/`MaxScale`/`Distortion`); `Conductor(thickness)` is a thin conductive `Shape` (a ribbon along the surface) that round-trips through STL/STEP. |
-| `MidRouting` | v1 **places** traces and **verifies** them. `Connect` lays a trace between two pads as a **geodesic on the mesh** (`DijkstraGraphDistance` edge path, then a straightest-geodesic curve-shortening smoothing) so it follows the shell. `Route` refuses auto-routing by name (a geodesic maze search is filed). |
+| `MidRouting` | **Places** traces (`Connect`, a **geodesic on the mesh** — `DijkstraGraphDistance` edge path then a straightest-geodesic curve-shortening smoothing) AND **auto-routes** a whole intrinsic board (`Route`). `Verify` runs the 3D DRC. |
+| `SurfaceRouter` / `SurfaceRouteOptions` / `SurfaceRouteResult` | The surface AUTO-ROUTER — the geodesic analogue of the flat `PcbRouter`: a DRC-aware maze search over the mesh vertex graph (A\*, admissible 3D-straight-line heuristic), MST decomposition of each net from the ratsnest, straightening, and rip-up-and-reroute. Every candidate is committed only after the exact 3D DRC (`Mid3dDrc.RouteCandidateClears`) certifies it clean; a net boxed in is reported UNROUTABLE by name; the partial result is always clean. Runs on an INTRINSIC board (`OnMesh`); a global-chart board is refused with a pointer to `OnMesh`. |
 | `Mid3dDrc` / `Mid3dDrcReport` / `MidDrcViolation` | The 3D DRC. On an intrinsic board the clearance is a **geodesic surface distance** (a certified 3D-chord broad phase, then a per-pair local chart); on a global-chart board it runs in the one exp map's `(u, v)`. Three-valued — Clear / Violation / **Uncertain** (a conservative refusal where the distortion cannot certify the verdict). |
 
 **The certified geodesic DRC**: a 3D chord is never longer than a surface geodesic, so a chord
@@ -680,12 +681,21 @@ bit — and the intrinsic route reaches the same answer to the discretisation gr
 matches its great-circle closed form `R·θ`; a geodesic trace's endpoints land **exactly** on their
 pads; the conductor is a **closed solid**; the check is **deterministic**. The showcase is a moulded
 wearable dome (an MCU, two LEDs, a connector, passives seated on the shaped surface, wired by geodesic
-conductors) that **self-verifies**.
+conductors the board **auto-routes**) that **self-verifies**.
 
-**v1 scope** — a single conductive surface (no drills / edges / vias, which a moulded surface has
-none of); refused / filed **by name**: auto-routing on the surface (a geodesic maze search),
-multi-shell MID (traces on an inner moulded shell), a conformal solder mask / pour on the surface
-(the distortion reason copper pours already refuse curved walls). Docs: `examples/ecad-mid.md`.
+**The surface auto-router** clears the flat router's bar, lifted onto the surface — the exact 3D DRC
+is the source of truth, the vertex graph only accelerates: a 2-pin net on a cylinder and on a sphere
+cap routes clean and connected; several nets **route around** each other; a congested board a greedy
+pass leaves unrouted is **completed by rip-up** (both clean); a walled-in pin is **unroutable by name**
+with the rest routed and clean; a dense knot's **partial result is always DRC-clean** with the failures
+named; on a developable cylinder the routed **connectivity matches the unrolled flat board's**; and two
+runs are **deterministic** vertex for vertex.
+
+**v1 scope** — a single conductive surface (no drills / edges / vias, which a moulded surface has none
+of); refused / filed **by name**: **topological / shove** routing on the surface (v1 detours but does
+not push obstacles), **multi-shell** MID (traces on an inner moulded shell), **length matching**, and a
+conformal solder mask / pour on the surface (the distortion reason copper pours already refuse curved
+walls). Docs: `examples/ecad-mid.md`.
 
 ## Not yet (later campaign stages)
 

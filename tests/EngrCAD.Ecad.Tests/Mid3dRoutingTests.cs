@@ -401,8 +401,9 @@ public class Mid3dRoutingTests
         var noSchematic = MidBoard.OnSurface(plane, seed, Vector3d.UnitX, radius: 5.0);
         Assert.Throws<InvalidOperationException>(() =>
             noSchematic.PlacePin(default, new Vector2d(0, 0), 0.3));
-        // Auto-routing is refused by name.
-        Assert.Throws<NotSupportedException>(() => MidRouting.Route(board));
+        // Auto-routing runs on an INTRINSIC board — a global-chart board is refused BY NAME.
+        var ex2 = Assert.Throws<ArgumentException>(() => MidRouting.Route(board));
+        Assert.Contains("OnMesh", ex2.Message);
     }
 
     // ---- the one-declaration rule (a real schematic) -------------------------

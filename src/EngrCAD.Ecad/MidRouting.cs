@@ -6,15 +6,19 @@ namespace EngrCAD.Ecad;
 /// <summary>
 /// Routing and verification of nets on a <see cref="MidBoard"/>'s moulded surface.
 ///
-/// <para><b>v1 PLACES traces and VERIFIES them; it does NOT auto-route.</b> On an intrinsic board a trace
-/// between two pads is laid as a GEODESIC path ON the mesh (<see cref="Connect(MidBoard, MidPad, MidPad,
-/// double)"/> uses <see cref="DijkstraGraphDistance"/>'s edge-graph geodesic), so the lift and the length
-/// are correct on any surface — a straight (u, v) line would cut through a curved shell. Auto-routing on
-/// a surface is a research problem: the flat autorouter (<c>PcbRouter</c>) is a grid/maze A* over a
-/// plane, and the surface analogue is a GEODESIC maze search whose metric is the surface's distorted
-/// geometry — a genuinely harder problem, and one whose result would still have to be certified by the
-/// same 3D DRC. So <see cref="Route"/> refuses by name; a caller places traces and <see cref="Verify"/>
-/// runs the DRC, which is where the surface's honesty lives.</para>
+/// <para>Two ways to lay copper. <see cref="Connect(MidBoard, MidPad, MidPad, double)"/> places ONE
+/// trace between two given pads as a GEODESIC on the mesh (the place-and-verify path), and
+/// <see cref="Route"/> AUTO-ROUTES a whole intrinsic board — the geodesic analogue of the flat
+/// autorouter (<c>PcbRouter</c>): a DRC-aware maze search over the mesh vertex graph, MST decomposition
+/// of each net from the ratsnest, and rip-up-and-reroute for congestion. Either way a trace between two
+/// pads is a geodesic path ON the mesh (correct length and lift on any surface — a straight (u, v) line
+/// would cut through a curved shell), and either way <see cref="Verify"/> runs the same 3D DRC.</para>
+///
+/// <para><b>The exact 3D DRC (<see cref="Mid3dDrc"/>) is the source of truth; the vertex graph only
+/// accelerates.</b> The auto-router commits a candidate geodesic only after the exact DRC certifies it
+/// adds NO violation (<see cref="Mid3dDrc.RouteCandidateClears"/>), so a graph-resolution error can
+/// never produce a violating route — a net that cannot be routed cleanly is reported UNROUTABLE by name
+/// (never a silent clearance violation), and a partial result is still DRC-clean.</para>
 /// </summary>
 public static class MidRouting
 {
@@ -155,15 +159,118 @@ public static class MidRouting
         Mid3dDrc.Check(board, rules);
 
     /// <summary>
-    /// Auto-routing on the surface — refused by name in v1.
+    /// AUTO-ROUTES an INTRINSIC (<see cref="MidBoard.OnMesh"/>) moulded board — the geodesic analogue of
+    /// the flat autorouter. Each unrouted net (its pads not yet all joined) is decomposed into 2-pin
+    /// connections over an MST and routed as a DRC-aware geodesic on the mesh vertex graph, straightened,
+    /// and committed only if the exact 3D DRC certifies it clean; a net boxed in by other-net copper is
+    /// reported UNROUTABLE by name. The board is MUTATED in place with the routed traces (so
+    /// <see cref="Verify"/> then reports the routed nets connected and clean); a net already connected has
+    /// nothing to route and the board is left unchanged.
     /// </summary>
-    /// <exception cref="NotSupportedException">Always. See the class remarks: a geodesic maze search is a
-    /// later stage; place traces (as geodesics) manually and <see cref="Verify"/> them.</exception>
-    public static Mid3dDrcReport Route(MidBoard board, DrcRuleSet? rules = null) =>
-        throw new NotSupportedException(
-            "Auto-routing on a moulded surface is not offered in v1. Routing on a doubly-curved surface is "
-            + "a GEODESIC maze search — the flat grid autorouter (PcbRouter) does not lift, since the "
-            + "surface metric is the surface's own distorted geometry — and it is filed as a later stage. "
-            + "Place surface traces (MidRouting.Connect lays them as geodesics on the mesh) and verify them "
-            + "with MidRouting.Verify, which folds the distortion into the DRC.");
+    /// <param name="board">The intrinsic board to route (its pads carry the nets). Mutated with the
+    /// routed traces.</param>
+    /// <param name="rules">The design rules to route to and certify against (null = the defaults). The
+    /// "nets" to route are the board's own unrouted nets (its ratsnest), exactly the flat router.</param>
+    /// <param name="options">The router options (null = the defaults).</param>
+    /// <exception cref="ArgumentException">The board is a GLOBAL-chart board
+    /// (<see cref="MidBoard.OnSurface"/>): auto-routing runs on an intrinsic board, so build it with
+    /// <see cref="MidBoard.OnMesh"/>.</exception>
+    public static SurfaceRouteResult Route(
+        MidBoard board, DrcRuleSet? rules = null, SurfaceRouteOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(board);
+        if (!board.IsIntrinsic)
+            throw new ArgumentException(
+                "Auto-routing runs on an INTRINSIC MID board — build the routing surface with "
+                + "MidBoard.OnMesh(mesh), where a geodesic maze search over the mesh vertex graph works on "
+                + "any geometry. A global-chart board (MidBoard.OnSurface) parameterizes a developable "
+                + "patch by one exp map, kept for the exact developable DRC oracle; route the same mesh "
+                + "with OnMesh instead.", nameof(board));
+        return new SurfaceRouter(board, rules ?? DrcRuleSet.Default, options ?? new SurfaceRouteOptions()).Run();
+    }
+
+    /// <summary>
+    /// Straightens a raw surface polyline toward the geodesic, endpoints PINNED — the auto-router's
+    /// trace-quality pass, the same curve-shortening <see cref="Geodesic"/> uses (densify then relax to
+    /// the midpoint of neighbours, snapped back onto the surface). Unconstrained, so a straightened path
+    /// may drift across an obstacle; the router validates it with the exact DRC and falls back to the raw
+    /// (edge-graph, obstacle-avoiding) path when it does.
+    /// </summary>
+    internal static List<SurfacePoint> Straighten(MidSurface surface, IReadOnlyList<SurfacePoint> raw, in SurfacePoint end)
+    {
+        var path = Dedup(raw, end);
+        if (path.Count < 3)
+            return path;
+        Densify(surface, path);
+        Smooth(surface, path, iterations: 16);
+        return Dedup(path, end);
+    }
+}
+
+/// <summary>
+/// Options for <see cref="MidRouting.Route"/>. Every field has a rule-derived default (a zero means
+/// "derive it"), so <c>new SurfaceRouteOptions()</c> is a sensible auto-route. The vertex graph is an
+/// ACCELERATOR — the exact 3D DRC decides every commit — so these only steer the search, never
+/// correctness.
+/// </summary>
+public sealed record SurfaceRouteOptions
+{
+    /// <summary>The trace width laid (mm); 0 = <see cref="DrcRuleSet.MinTraceWidth"/>.</summary>
+    public double TraceWidth { get; init; }
+
+    /// <summary>The copper-to-copper surface clearance the router keeps (mm); 0 =
+    /// <see cref="DrcRuleSet.MinCopperClearance"/>. The exact DRC is certified against the SAME rule set,
+    /// so this only steers the search.</summary>
+    public double Clearance { get; init; }
+
+    /// <summary>The maximum number of times any one net may trigger a rip-up (default 8). When a net has
+    /// no clean geodesic, the router routes it ACROSS the committed traces that block it, rips those up,
+    /// re-routes it cleanly without them, and re-queues them — negotiated congestion. This bounds the
+    /// rip-ups so a truly boxed-in net terminates and is reported UNROUTABLE by name. 0 disables rip-up
+    /// (a pure greedy pass).</summary>
+    public int MaxRipUpIterations { get; init; } = 8;
+
+    /// <summary>An explicit net routing order (net names); nets not listed follow in ordinal order.
+    /// null = ordinal order. A fixed order + a fixed mesh gives deterministic routes.</summary>
+    public IReadOnlyList<string>? NetOrder { get; init; }
+
+    /// <summary>Whether to straighten each committed geodesic toward the true geodesic (default true).
+    /// A straightened trace that fails the exact DRC falls back to the raw obstacle-avoiding edge
+    /// path.</summary>
+    public bool Straighten { get; init; } = true;
+}
+
+/// <summary>
+/// The result of <see cref="MidRouting.Route"/>: which nets routed and which did NOT, and the counts.
+/// The board is guaranteed 3D-DRC-clean against the rule set it was routed with (the router commits a
+/// geodesic only after the exact DRC certifies it adds no violation), so a PARTIAL result — one that
+/// could not route every net — is still clean, with the unroutable nets NAMED rather than faked.
+/// </summary>
+/// <param name="Board">The routed board (mutated in place with the committed traces).</param>
+/// <param name="RoutedNets">The nets that were routed (had ≥ 2 pads to join and got connected), in
+/// routing order.</param>
+/// <param name="UnroutedNets">The nets that could NOT be routed, in ordinal order — reported, not
+/// faked.</param>
+/// <param name="Traces">The committed surface traces (one or more per routed net).</param>
+/// <param name="TracesAdded">The number of trace segments added.</param>
+/// <param name="RipUps">How many times a net was routed across another and the blocking net ripped up
+/// and re-routed (0 = every net found a clean geodesic the first time).</param>
+public sealed record SurfaceRouteResult(
+    MidBoard Board,
+    IReadOnlyList<string> RoutedNets,
+    IReadOnlyList<string> UnroutedNets,
+    IReadOnlyList<SurfaceTrace> Traces,
+    int TracesAdded,
+    int RipUps)
+{
+    /// <summary>True when every net that needed routing was routed.</summary>
+    public bool FullyRouted => UnroutedNets.Count == 0;
+
+    /// <summary>A human-readable summary.</summary>
+    public override string ToString() =>
+        FullyRouted
+            ? $"routed {RoutedNets.Count} nets ({TracesAdded} traces)"
+              + (RipUps > 0 ? $" after {RipUps} rip-up(s)" : "")
+            : $"routed {RoutedNets.Count} nets ({TracesAdded} traces); "
+              + $"UNROUTED: {string.Join(", ", UnroutedNets)}";
 }
