@@ -2674,17 +2674,29 @@ from what was already understood rather than from scratch.
     count overflowed the field and decoded a 1e-3-scale board 10^5 too large — a format bug the
     area oracle caught as a 10-orders-of-magnitude miss). A Bézier copper boundary is refused by
     name; the reader refuses a truncated file / missing spec / aperture macro by name.
-  - **Fabrication follow-ups (filed; SOLDER MASK + SILKSCREEN have LANDED — see CLAUDE.md's ECAD
-    status, design.md §6d stage 6, `examples/ecad-fabrication.md`):** the PASTE / STENCIL layer
-    (the SMD pad set) is the one remaining derived layer the same `GerberWriter` emits once its
-    model exists; FINE MASK TENTING control beyond the tented/opened via policy (per-via tenting, a
-    mask dam width); and a LOWERCASE silk font (v1's `SilkFont` covers uppercase + digits +
+  - **Fabrication follow-ups (filed; SOLDER MASK + SILKSCREEN + SOLDER PASTE have LANDED — see
+    CLAUDE.md's ECAD status, design.md §6d stage 6, `examples/ecad-fabrication.md`):** the full fab
+    set is now copper + mask + silk + PASTE + outline + Excellon. The PASTE / STENCIL layer
+    (`PcbPaste`/`PcbPasteSettings`/`PasteAperture`, `GerberWriter.PasteLayer`,
+    `FabricationOutput.PasteLayers`) is the mask's SIBLING through the SAME `GerberWriter` and
+    twin-decoder oracle, with two deliberate differences that ARE the design: it covers **SMD pads
+    ONLY** (a through-hole pad — one carrying a drill — and a via get NO aperture, the SMD-only rule
+    whose classic bug is pasting a THT pad; no via policy is consulted, unlike the mask), and its
+    default expansion is slightly **NEGATIVE** (`-0.05 mm`, the aperture a hair smaller than the pad
+    to control paste volume, so it ALLOWS the negative offset the mask refuses). What is STILL filed:
+    STEP / MULTI-LEVEL stencils (thicker paste on some pads via a stepped stencil — needs per-pad
+    aperture thickness the flat model does not carry), PASTE-VOLUME optimisation (aperture area/shape
+    reduction rules per pad size — a stencil-house recipe, not one fixed expansion), WINDOW-PANING /
+    aperture segmentation of large apertures (a big thermal pad's paste is broken into a grid so it
+    does not slump), and the assembly PICK-AND-PLACE file (a different output — centroid/rotation per
+    part, not artwork). FINE MASK TENTING control beyond the tented/opened via policy (per-via
+    tenting, a mask dam width); and a LOWERCASE silk font (v1's `SilkFont` covers uppercase + digits +
     punctuation, so a value's lowercase advances as a blank). GERBER X2 attributes (`%TF`/`%TA`/`%TO`)
     and the JOB FILE (`.gbrjob`) carry per-object net/component metadata a modern fab reads. A
     Gerber IMPORT of a foreign board is a different project (this is EXPORT; the reader is the
     round-trip oracle scoped to what the writer emits). Topological / shove / push routing, length
     matching and differential pairs are later routing stages over the same grid. A CONFORMAL
-    mask/silk on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
+    mask/silk/paste on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
     MID/surface side's territory).
   - **Copper-pour follow-ups (filed, the pour itself has LANDED — see CLAUDE.md's ECAD status,
     design.md §6d, `examples/ecad-pcb.md`):** POUR PRIORITY / ordering when several pours overlap

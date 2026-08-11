@@ -423,6 +423,25 @@ public static class GerberWriter
     }
 
     /// <summary>
+    /// The Gerber for one solder-paste (stencil) layer. It images the stencil APERTURES (the openings
+    /// through which paste is deposited onto the SMD pads) as DARK — the same positive-openings
+    /// convention the solder mask uses — so the stencil is cut where the Gerber is dark, and a decoded
+    /// paste Gerber recovers the apertures. Each aperture flashes (a disc / rect / obround) or
+    /// region-fills (a rounded or rotated one), so the decoder rebuilds the exact same aperture. A side
+    /// with no apertures still yields a well-formed empty Gerber.
+    /// </summary>
+    public static string PasteLayer(
+        string layerName, IEnumerable<CurvedRegion2d> apertures, GerberFormat format)
+    {
+        ArgumentNullException.ThrowIfNull(apertures);
+        var builder = new GerberBuilder(
+            format, $"EngrCAD solder paste '{layerName}' (apertures imaged dark)");
+        foreach (var aperture in apertures)
+            EmitSolid(builder, aperture);
+        return builder.Finish();
+    }
+
+    /// <summary>
     /// The Gerber for one silkscreen layer — the reference / value / outline line-work drawn with a
     /// round aperture of the pen <paramref name="lineWidth"/> (a `D01` draw, exactly as a trace draws),
     /// so the round-trip decoder strokes each run back to the same footprint. A side with no strokes

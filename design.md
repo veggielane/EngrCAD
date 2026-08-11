@@ -7504,10 +7504,38 @@ fixed point, a layout that states none byte-identical to a pre-fabrication one).
 mask/silk on a non-outer layer, a mask window entirely off the board (a pad placed off it), and a
 negative mask expansion (a mask-defined pad).
 
-**Not in v1** (each filed): paste/stencil layers (the SMD pad set), fine mask tenting control beyond
-the tented/opened via policy, curved conformal mask/silk on a MID surface (refused for the tamper-mesh
-distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber X2
-attributes and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
+**Solder paste (the stencil) completes the fab set** (`PcbPaste`/`PcbPasteSettings`/`PasteAperture`;
+`GerberWriter.PasteLayer`; `FabricationOutput.PasteLayers`, `GerberExportResult.PasteLayerCount`), so a
+routed board can be fully manufactured AND reflow-assembled. It is the mask's SIBLING — the same
+`GerberWriter`, the same twin-decoder oracle, the same offset-of-a-pad machinery — with two deliberate
+differences that ARE the design. **(1) It covers SMD pads ONLY** (the SMD-only rule, whose classic bug
+is pasting a through-hole pad): a through-hole/plated pad is wave- or hand-soldered and a via would wick
+solder down its barrel, so both get NO aperture. Which pads are SMD is read from the copper model exactly
+as the mask reads what a pad IS — a COMPONENT pad (not a trace, pour or via) that carries **no drill**
+(its source is not among `PcbCopperModel.Drills`), so a through-hole pad, which the mask *does* window,
+is excluded here by its drill and a via by its source, with no via policy consulted at all (unlike the
+mask, paste never opens a via). **(2) The default expansion is slightly NEGATIVE** — `-0.05 mm`, a stencil
+aperture is a hair *smaller* than the pad to control the paste VOLUME (a paste brick as wide as the pad
+bridges and slumps) — so paste ALLOWS the negative expansion the mask refuses (a shrink is the point,
+`CurvedRegion2dOffset.Offset`'s deflate path), a round pad's aperture is a disc of radius `r + e < r`
+(area `π(r+e)²` to ~1e-12), a rectangular pad's a smaller rounded rectangle, and a negative expansion
+large enough to consume a pad simply leaves no aperture. The Gerber images the APERTURES dark (the mask's
+positive-openings convention — the stencil is cut where the Gerber is dark), so it strokes back through
+the same reader. Paste is ADDITIVE (the copper/mask/silk Gerbers are byte-identical with or without it,
+asserted), LAYOUT TRUTH (`PcbLayout.PasteSettings`, write-only-when-stated, a save→load→save fixed point,
+a no-paste layout byte-identical to before), and refused BY NAME on a non-outer layer or with an aperture
+entirely off the board — but NOT for a negative expansion, the one refusal the mask keeps and paste drops.
+Verified the fab house way: an aperture equals the SMD pad grown by the expansion (area `π(r+e)²` to 1e-12,
+region grade via symmetric difference; a negative expansion measurably shrinks it and zero is the pad
+exactly), the through-hole and via pads carry NO aperture (the SMD-only assertion with teeth), the paste
+Gerber round-trips, the full set writes/re-reads (`-Top_Paste.gbr`/`-Bottom_Paste.gbr`), an all-through-hole
+board writes a valid EMPTY paste, and determinism.
+
+**Not in v1** (each filed): step / multi-level stencils, paste-volume optimisation, window-paning of
+large apertures, the assembly pick-and-place file (a different output), fine mask tenting control beyond
+the tented/opened via policy, curved conformal mask/silk/paste on a MID surface (refused for the
+tamper-mesh distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber
+X2 attributes and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
 `examples/ecad-fabrication.md`.
 
 ### Copper pours — ground / power planes (`CopperPour`, `CopperPourBuilder`)

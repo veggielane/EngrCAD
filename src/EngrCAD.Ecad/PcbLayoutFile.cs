@@ -136,8 +136,19 @@ internal static class PcbLayoutWriter
             root["mask"] = SaveMask(mask);
         if (layout.SilkscreenSettings is { } silk)
             root["silk"] = SaveSilk(silk);
+        if (layout.PasteSettings is { } paste)
+            root["paste"] = SavePaste(paste);
 
         return root;
+    }
+
+    private static JsonObject SavePaste(PcbPasteSettings paste)
+    {
+        var def = PcbPasteSettings.Default;
+        var record = new JsonObject();
+        if (paste.Expansion != def.Expansion)
+            record["expansion"] = paste.Expansion;
+        return record;
     }
 
     private static JsonObject SaveMask(PcbMaskSettings mask)
@@ -377,8 +388,16 @@ internal static class PcbLayoutReader
             layout.SetLoadedMaskSettings(ReadMask(maskObj));
         if (root.TryGetPropertyValue("silk", out var silkNode) && silkNode is JsonObject silkObj)
             layout.SetLoadedSilkscreenSettings(ReadSilk(silkObj));
+        if (root.TryGetPropertyValue("paste", out var pasteNode) && pasteNode is JsonObject pasteObj)
+            layout.SetLoadedPasteSettings(ReadPaste(pasteObj));
 
         return layout;
+    }
+
+    private static PcbPasteSettings ReadPaste(JsonObject r)
+    {
+        var def = PcbPasteSettings.Default;
+        return def with { Expansion = r["expansion"]?.GetValue<double>() ?? def.Expansion };
     }
 
     private static PcbMaskSettings ReadMask(JsonObject r)

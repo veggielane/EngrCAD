@@ -491,21 +491,23 @@ not offered. Docs: `examples/ecad-pcb.md` (Copper pours).
 
 ## Fabrication export — Gerber (RS-274X) + Excellon
 
-The fab output that makes a routed board manufacturable. `PcbGerberExport.Write(layout, dir)` writes
-the full set — one **Gerber** per copper layer, a **solder-mask** and a **silkscreen** Gerber per outer
-side, a board-outline Gerber, and an **Excellon** NC-drill program (and reports what it wrote);
-`PcbGerberExport.Generate(layout)` returns the same as text.
+The fab output that makes a routed board manufacturable AND reflow-assemblable.
+`PcbGerberExport.Write(layout, dir)` writes the full set — one **Gerber** per copper layer, a
+**solder-mask**, a **silkscreen** and a **solder-paste (stencil)** Gerber per outer side, a board-outline
+Gerber, and an **Excellon** NC-drill program (and reports what it wrote); `PcbGerberExport.Generate(layout)`
+returns the same as text.
 
 | Type | What it is |
 | --- | --- |
-| `GerberWriter` / `GerberBuilder` | RS-274X (extended Gerber): the format spec, an aperture table (circle/rectangle/obround/regular-polygon `%ADD`s), pads as flashes (`D03`), traces as round-aperture draws (`D01`/`D02`), region fills (`G36`/`G37`) and dark/clear polarity. `MaskLayer` images mask windows dark; `Silkscreen` draws the line-work. |
-| `GerberReader` / `GerberImage` | The TWIN DECODER — parses exactly what the writer emits and reconstructs the copper/mask/silk as `CurvedRegion2d`s per layer. The round-trip oracle. |
+| `GerberWriter` / `GerberBuilder` | RS-274X (extended Gerber): the format spec, an aperture table (circle/rectangle/obround/regular-polygon `%ADD`s), pads as flashes (`D03`), traces as round-aperture draws (`D01`/`D02`), region fills (`G36`/`G37`) and dark/clear polarity. `MaskLayer` images mask windows dark, `PasteLayer` images stencil apertures dark; `Silkscreen` draws the line-work. |
+| `GerberReader` / `GerberImage` | The TWIN DECODER — parses exactly what the writer emits and reconstructs the copper/mask/silk/paste as `CurvedRegion2d`s per layer. The round-trip oracle. |
 | `ExcellonWriter` / `ExcellonReader` / `DrillHit` | The NC-drill program (a tool per distinct diameter + the hits) and its twin decoder. Metric, decimal coordinates. |
 | `PcbMask` / `PcbMaskSettings` / `MaskOpening` | The solder mask, derived from the copper model: a window (the pad grown by the `Expansion`) over every solderable pad on each outer layer; vias tented or opened. The whole board is mask except these windows. |
 | `PcbSilkscreen` / `PcbSilkscreenSettings` / `SilkStroke` / `SilkFont` | The silkscreen, derived from the placements: a reference designator (and optionally value) as stroke-font TEXT and a body/courtyard OUTLINE per surface component, plus board-level marks. `OverExposedCopper` reports silk on a solderable pad by name. |
+| `PcbPaste` / `PcbPasteSettings` / `PasteAperture` | The solder-paste (stencil) layer, derived from the copper model: an aperture (the pad grown by the `Expansion`, default slightly negative) over every **SMD** pad on each outer layer — a through-hole pad and a via get none (the SMD-only rule). |
 | `PcbGerberExport` / `FabricationOutput` / `GerberExportResult` | Composes the whole fab set for a `PcbLayout` (or a raw `PcbCopperModel` for pours), sharing one coordinate format. |
 
-### Solder mask and silkscreen
+### Solder mask, silkscreen and solder paste
 
 The mask covers the whole board **except** a window over each solderable pad, each window the pad grown
 by a stated **expansion** (`PcbMask.For`) — so a mask window is EXACT (a round pad's is a disc of radius
@@ -516,9 +518,16 @@ dark. Vias are **tented** (no window) or **opened** by policy. The silkscreen is
 no text primitive) — a refdes/value in a single-stroke vector `SilkFont`, and a courtyard outline, drawn
 with a round aperture exactly as a trace draws, so it strokes back through the reader. `PcbSilkscreen.
 OverExposedCopper(mask)` is the assembly check: silk on a solderable land is a real defect, reported by
-name rather than thrown. The mask/silk **settings are layout truth** (`PcbLayout.MaskSettings` /
-`SilkscreenSettings`, write-only-when-stated), and the layers are **additive** — the copper Gerbers,
-outline and drill are byte-identical whether or not the mask/silk are requested.
+name rather than thrown. The **solder paste** (the stencil) is the reflow-assembly layer: an aperture
+over every **SMD** pad — and only SMD pads, because a through-hole pad is wave/hand-soldered and a via
+would wick solder down the barrel (the SMD-only rule, the classic bug this layer must not have; a pad is
+SMD when it carries no drill) — each aperture the pad grown by a `PcbPasteSettings.Expansion` whose
+default is slightly NEGATIVE (the aperture is a hair smaller than the pad, to control the paste volume).
+So a round pad's aperture is a disc of radius `r + e` (area `π(r+e)²`, `e` negative → smaller) and it
+images the apertures as dark (the mask's positive-openings convention), round-tripping through the same
+twin decoder. The mask/silk/paste **settings are layout truth** (`PcbLayout.MaskSettings` /
+`SilkscreenSettings` / `PasteSettings`, write-only-when-stated), and the layers are **additive** — the
+copper Gerbers, outline and drill are byte-identical whether or not they are requested.
 
 **The oracle is the twin-decoder round trip** (the repo's rule — the geometry must survive the round
 trip, not merely a structural validator pass): the copper written is parsed *back* and the recovered
@@ -531,10 +540,12 @@ lays all the solid copper down, then clears exactly the holes of the final union
 format is derived from the board's own magnitudes, so it is scale-invariant. An unrepresentable
 boundary (a Bézier edge in a copper region) is refused **by name**, and the reader refuses a
 truncated file / missing format spec / aperture macro by name (the `StepReader`/`IgesReader` ethos).
-**Not in v1** (each filed): paste/stencil layers (the SMD pad set), fine mask tenting control beyond
-the tented/opened via policy, curved conformal mask/silk on a MID surface (refused for the distortion
-reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber X2 attributes and the
-job file, and a Gerber IMPORT of a foreign board (this is export). Docs: `examples/ecad-fabrication.md`.
+**Not in v1** (each filed): step / multi-level stencils, paste-volume optimisation, window-paning of
+large apertures, the assembly pick-and-place file (a different output), fine mask tenting control beyond
+the tented/opened via policy, curved conformal mask / silk / paste on a MID surface (refused for the
+distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber X2 attributes
+and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
+`examples/ecad-fabrication.md`.
 
 ## Enclosure fit — the MCAD/ECAD boundary
 

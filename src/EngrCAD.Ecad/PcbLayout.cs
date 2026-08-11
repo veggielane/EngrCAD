@@ -412,6 +412,10 @@ public sealed partial class PcbLayout
     /// for the defaults. LAYOUT TRUTH — see <see cref="MaskSettings"/>.</summary>
     public PcbSilkscreenSettings? SilkscreenSettings { get; private set; }
 
+    /// <summary>The solder-paste (stencil) settings (the SMD-pad aperture expansion), or null for the
+    /// defaults. LAYOUT TRUTH — see <see cref="MaskSettings"/>.</summary>
+    public PcbPasteSettings? PasteSettings { get; private set; }
+
     /// <summary>Sets the solder-mask settings (see <see cref="MaskSettings"/>); returns this layout.</summary>
     public PcbLayout WithMask(PcbMaskSettings settings)
     {
@@ -431,6 +435,16 @@ public sealed partial class PcbLayout
         return this;
     }
 
+    /// <summary>Sets the solder-paste settings (see <see cref="PasteSettings"/>); returns this
+    /// layout.</summary>
+    public PcbLayout WithPaste(PcbPasteSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        settings.Validate();
+        PasteSettings = settings;
+        return this;
+    }
+
     // Loader entry points — validated the same way, so a saved-then-loaded setting is refused for the
     // same reasons a freshly-set one is.
     internal void SetLoadedMaskSettings(PcbMaskSettings settings)
@@ -443,5 +457,11 @@ public sealed partial class PcbLayout
     {
         settings.Validate();
         SilkscreenSettings = settings;
+    }
+
+    internal void SetLoadedPasteSettings(PcbPasteSettings settings)
+    {
+        settings.Validate();
+        PasteSettings = settings;
     }
 }
