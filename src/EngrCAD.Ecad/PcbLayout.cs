@@ -451,6 +451,15 @@ public sealed partial class PcbLayout
     /// defaults. LAYOUT TRUTH — see <see cref="MaskSettings"/>.</summary>
     public PcbPasteSettings? PasteSettings { get; private set; }
 
+    /// <summary>The board's FABRICATION REQUIREMENTS (base material, finished thickness, copper weight,
+    /// surface finish, mask/silk colours, IPC-6012 class, minimum trace/clearance, free-form notes), or
+    /// null for none. It is the same KIND of thing as <see cref="MaskSettings"/> — a fabrication
+    /// parameter of the board — so it lives here as LAYOUT TRUTH: the fabrication drawing reads it
+    /// write-only-when-stated, and it rides in the layout file (write-only-when-stated), so a layout
+    /// that states none saves byte-identically to a pre-spec one and a stated spec is a save→load→save
+    /// fixed point.</summary>
+    public PcbFabricationSpec? Fabrication { get; private set; }
+
     /// <summary>Sets the solder-mask settings (see <see cref="MaskSettings"/>); returns this layout.</summary>
     public PcbLayout WithMask(PcbMaskSettings settings)
     {
@@ -480,6 +489,17 @@ public sealed partial class PcbLayout
         return this;
     }
 
+    /// <summary>Sets the fabrication requirements (see <see cref="Fabrication"/>); returns this
+    /// layout. Every stated field is validated (finite/positive where a value is stated, a valid IPC
+    /// class, a named 'Other' finish) and a bad one is refused by name.</summary>
+    public PcbLayout WithFabrication(PcbFabricationSpec spec)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        spec.Validate();
+        Fabrication = spec;
+        return this;
+    }
+
     // Loader entry points — validated the same way, so a saved-then-loaded setting is refused for the
     // same reasons a freshly-set one is.
     internal void SetLoadedMaskSettings(PcbMaskSettings settings)
@@ -498,5 +518,11 @@ public sealed partial class PcbLayout
     {
         settings.Validate();
         PasteSettings = settings;
+    }
+
+    internal void SetLoadedFabrication(PcbFabricationSpec spec)
+    {
+        spec.Validate();
+        Fabrication = spec;
     }
 }

@@ -72,3 +72,66 @@ var svg = drawing.ToSvg();   // also drawing.ToDxf(), drawing.ToPdf()
 The drill table's counts and diameters are the board's own — the drawing is a *view* of the
 layout's drilled features, so it cannot omit a hole nor invent one. The same `Compute()` feeds
 the SVG, DXF and PDF writers, so the three cannot disagree about the drawing.
+
+## Fabrication requirements: the notes the geometry cannot carry
+
+The geometry states a thickness and a copper-layer count, but a board house also needs the base
+material, the copper weight, the surface finish, the mask and legend colours, the IPC-6012 class,
+and the minimum trace and clearance — none of which the geometry carries. A
+`PcbFabricationSpec` states them, and the fabrication
+drawing prints them **write-only-when-stated**: every field is optional, a stated field prints its
+note, and an unstated one is simply absent — the drawing never invents a value. The spec rides in
+the layout as **layout truth** (`layout.WithFabrication(...)`, `layout.Fabrication`), the same kind
+of thing the solder-mask / silkscreen / paste settings are, so it persists in the layout file
+write-only-when-stated (a layout that states none saves byte-identically to a pre-spec one).
+
+```csharp svg:ecad-fab-spec
+// A 2-layer board (60 x 40 x 1.6) — the geometry says nothing about material or finish.
+var board = new PcbBoard(
+    [
+        new Vector2d(-30, -20), new Vector2d(30, -20),
+        new Vector2d(30, 20), new Vector2d(-30, 20),
+    ],
+    thickness: 1.6,
+    holes:
+    [
+        new BoardHole(new Vector2d(-26, -16), 3.2, BoardHoleKind.Mounting),
+        new BoardHole(new Vector2d(26, 16), 3.2, BoardHoleKind.Mounting),
+    ]);
+
+// The fabrication REQUIREMENTS the geometry cannot carry. Every field is optional — this spec
+// states a material, finish, copper weight, colours, class and minimum trace/clearance, and
+// leaves everything else (e.g. an impedance tolerance) to the fabricator's default.
+var layout = new PcbLayout(new Schematic("sensor"), board)
+    .WithFabrication(new PcbFabricationSpec
+    {
+        BaseMaterial = "FR-4",
+        FinishedThicknessMm = 1.6,
+        CopperWeightOz = 1,
+        SurfaceFinish = PcbSurfaceFinish.Enig,
+        SolderMaskColour = "Blue",
+        SilkscreenColour = "White",
+        Ipc6012Class = 2,
+        MinTraceWidthMm = 0.15,
+        MinClearanceMm = 0.15,
+        Notes = ["50 OHM CONTROLLED IMPEDANCE ON ROUTED NETS."],
+    });
+
+var title = new TitleBlock
+{
+    Title = "SENSOR PCB", DrawingNumber = "PCB-108", Author = "EngrCAD", Company = "ACME",
+};
+var drawing = new PcbFabricationSheet(layout, SheetFormat.A3, title).Compute();
+
+// The notes block now carries the stated requirements, e.g. "MATERIAL: FR-4.",
+// "SURFACE FINISH: ENIG.", "COPPER WEIGHT: 1 oz (35 um).", "FABRICATE TO IPC-6012 CLASS 2." —
+// each printed only because the spec states it.
+var svg = drawing.ToSvg();
+```
+
+![The sensor PCB's fabrication drawing, with its fabrication-requirements notes.](images/ecad-fab-spec.svg)
+
+A stated **finished thickness** is authoritative: it is the delivered stackup thickness (copper and
+finish) a fabricator quotes to, so it *replaces* the modelled plate thickness in the finished-
+thickness note rather than printing a second one. With no spec, that note is the modelled thickness
+exactly as before — the drawing is byte-identical to one built before the spec existed.

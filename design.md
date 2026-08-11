@@ -7891,14 +7891,34 @@ as an identity rather than eyeballed. The **stackup table** lists the physical `
 (copper + dielectric); a copper-only board carries no physical stackup, so its table is empty and a
 note states the copper count instead. The **notes** are write-only-when-stated: finished thickness,
 copper-layer count, copper foil thickness (only when a stackup gives one), the drill summary, and any
-mask/silk/paste the layout declares — a value the board does not carry (material, surface finish, mask
-colour) is **omitted, not invented**, since `PcbBoard` states none of them.
+mask/silk/paste the layout declares — a value nothing carries is **omitted, not invented**.
+
+**The fab-package fields the geometry cannot carry come from a `PcbFabricationSpec`** — the board's
+FABRICATION REQUIREMENTS: base material, finished thickness, copper weight, surface finish
+(`PcbSurfaceFinish` + an `Other` name), solder-mask and silkscreen colours, IPC-6012 class, minimum
+trace width and clearance, and free-form notes. **Every field is optional** and `null` (or an empty
+notes list) is "not stated", so `PcbFabricationSpec.Default` is valid and states nothing — the same
+write-only-when-stated convention the drawing's own notes and the layout file already use. It rides in
+the layout as **layout truth** the same way the mask/silk/paste settings do (`layout.WithFabrication`
+→ `layout.Fabrication`), which is the deciding call: a fab spec is a fabrication PARAMETER of the
+board, the same KIND of thing those settings are, so it lives beside them rather than on `PcbBoard`
+(the geometry). The drawing reads it write-only-when-stated (a stated field prints its note, e.g.
+`MATERIAL: FR-4.` / `SURFACE FINISH: ENIG.` / `COPPER WEIGHT: 1 oz (35 µm).` / `FABRICATE TO IPC-6012
+CLASS 2.`; an unstated one is absent), and it persists on the mask/silk/paste seam verbatim — written
+only when non-null, each field write-only-when-stated inside — so a layout stating no spec saves
+byte-identically to a pre-spec file and a stated spec is a `save → load → save` byte fixed point.
+**A stated finished thickness OVERRIDES** the modelled plate thickness in the ONE finished-thickness
+note (the delivered stackup thickness including copper and finish is what a fabricator quotes to, and
+duplicating it as a second note would confuse); with no spec that note is the modelled thickness
+exactly as before, so a no-spec drawing is byte-identical (asserted: no-spec == empty-spec notes AND
+`ToSvg()`). Every stated value is validated at `WithFabrication` and refused **by name** — a
+non-finite/non-positive thickness / copper weight / minimum trace / minimum clearance, an IPC class
+outside {1, 2, 3}, or an `Other` finish with no name.
 
 **v1 scope**, each filed as a follow-up: the drill table is the board's own holes + placed vias
 (component through-hole pad drills belong to the Excellon program the fab derives, folded in later);
 the drill glyphs cycle a hand-rolled palette (a canonical IPC symbol set with a legend is filed); no
-per-layer copper/mask/silk plots yet; a `PcbBoard`-level fabrication spec (material/finish/class/
-colour) is what a full notes block wants. Docs: `examples/ecad-fab-drawing.md`.
+per-layer copper/mask/silk plots yet. Docs: `examples/ecad-fab-drawing.md`.
 
 ### Copper pours — ground / power planes (`CopperPour`, `CopperPourBuilder`)
 

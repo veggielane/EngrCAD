@@ -1,0 +1,79 @@
+<svg viewBox="0 -297 420 297" width="420mm" height="297mm" xmlns="http://www.w3.org/2000/svg">
+  <g transform="scale(1,-1)">
+    <g id="border" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 10 L410 10" />
+      <path d="M410 10 L410 287" />
+      <path d="M410 287 L10 287" />
+      <path d="M10 287 L10 10" />
+    </g>
+    <g id="titleblock" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M230 10 L410 10" />
+      <path d="M410 10 L410 50" />
+      <path d="M410 50 L230 50" />
+      <path d="M230 50 L230 10" />
+      <path d="M230 36.66666666666667 L410 36.66666666666667" />
+      <path d="M230 23.333333333333336 L410 23.333333333333336" />
+    </g>
+    <g id="outline" class="visible" fill="none" stroke="#111111" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M65.99999999999999 128.5 L186 128.5" />
+      <path d="M186 128.5 L186 208.5" />
+      <path d="M186 208.5 L65.99999999999999 208.5" />
+      <path d="M65.99999999999999 208.5 L65.99999999999999 128.5" />
+    </g>
+    <g id="drills" class="visible" fill="none" stroke="#111111" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M72.59999999999998 136.5 L75.39999999999999 136.5" />
+      <path d="M73.99999999999999 135.1 L73.99999999999999 137.9" />
+      <path d="M176.6 200.5 L179.4 200.5" />
+      <path d="M178 199.1 L178 201.9" />
+    </g>
+    <g id="tables" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M251.99999999999997 276.5 L410 276.5" />
+      <path d="M254.49999999999997 273 L257.5 273" />
+      <path d="M255.99999999999997 271.5 L255.99999999999997 274.5" />
+      <path d="M251.99999999999997 270.5 L410 270.5" />
+      <path d="M410 270.5 L410 281.5" />
+      <path d="M410 281.5 L251.99999999999997 281.5" />
+      <path d="M251.99999999999997 281.5 L251.99999999999997 270.5" />
+    </g>
+  </g>
+  <g id="titleblock" fill="#111111" stroke="none" font-family="Helvetica, Arial, sans-serif">
+    <text x="233" y="-40.833333333333336" font-size="7.142857142857143" text-anchor="start">SENSOR PCB</text>
+    <text x="407" y="-41.583333333333336" font-size="5" text-anchor="end">ACME</text>
+    <text x="233" y="-32.1" font-size="3.5714285714285716" text-anchor="start">DWG</text>
+    <text x="233" y="-28.250000000000004" font-size="5" text-anchor="start">PCB-108</text>
+    <text x="291" y="-32.1" font-size="3.5714285714285716" text-anchor="start">MATERIAL</text>
+    <text x="349" y="-32.1" font-size="3.5714285714285716" text-anchor="start">FINISH</text>
+    <text x="233" y="-18.76666666666667" font-size="3.5714285714285716" text-anchor="start">DRAWN</text>
+    <text x="233" y="-14.916666666666668" font-size="5" text-anchor="start">EngrCAD</text>
+    <text x="291" y="-18.76666666666667" font-size="3.5714285714285716" text-anchor="start">DATE</text>
+    <text x="349" y="-18.76666666666667" font-size="3.5714285714285716" text-anchor="start">REV</text>
+    <text x="407" y="-14.916666666666668" font-size="5" text-anchor="end">SCALE 2:1</text>
+    <text x="407" y="-28.250000000000004" font-size="5" text-anchor="end">THIRD ANGLE</text>
+  </g>
+  <g id="tables" fill="#111111" stroke="none" font-family="Helvetica, Arial, sans-serif">
+    <text x="251.99999999999997" y="-283.5" font-size="5" text-anchor="start">DRILL TABLE</text>
+    <text x="261" y="-278" font-size="3.5714285714285716" text-anchor="start">DIA (mm)</text>
+    <text x="278" y="-278" font-size="3.5714285714285716" text-anchor="start">PLATED</text>
+    <text x="298" y="-278" font-size="3.5714285714285716" text-anchor="end">QTY</text>
+    <text x="261" y="-273" font-size="3.5714285714285716" text-anchor="start">3.2</text>
+    <text x="278" y="-273" font-size="3.5714285714285716" text-anchor="start">NPTH</text>
+    <text x="298" y="-273" font-size="3.5714285714285716" text-anchor="end">2</text>
+    <text x="251.99999999999997" y="-259" font-size="5" text-anchor="start">LAYER STACKUP</text>
+    <text x="251.99999999999997" y="-253.5" font-size="3.5714285714285716" text-anchor="start">2-LAYER (COPPER ONLY;</text>
+    <text x="251.99999999999997" y="-248.5" font-size="3.5714285714285716" text-anchor="start">NO STACKUP STATED)</text>
+    <text x="251.99999999999997" y="-234.5" font-size="5" text-anchor="start">NOTES</text>
+    <text x="251.99999999999997" y="-229" font-size="3.5714285714285716" text-anchor="start">1. ALL DIMENSIONS IN MILLIMETRES.</text>
+    <text x="251.99999999999997" y="-224.5" font-size="3.5714285714285716" text-anchor="start">2. FINISHED BOARD THICKNESS 1.6 mm.</text>
+    <text x="251.99999999999997" y="-220" font-size="3.5714285714285716" text-anchor="start">3. 2 COPPER LAYERS.</text>
+    <text x="251.99999999999997" y="-215.5" font-size="3.5714285714285716" text-anchor="start">4. 2 DRILLED HOLES, 1 SIZE(S); SMALLEST DIA 3.2 mm.</text>
+    <text x="251.99999999999997" y="-211" font-size="3.5714285714285716" text-anchor="start">5. MATERIAL: FR-4.</text>
+    <text x="251.99999999999997" y="-206.5" font-size="3.5714285714285716" text-anchor="start">6. COPPER WEIGHT: 1 oz (35 µm).</text>
+    <text x="251.99999999999997" y="-202" font-size="3.5714285714285716" text-anchor="start">7. SURFACE FINISH: ENIG.</text>
+    <text x="251.99999999999997" y="-197.5" font-size="3.5714285714285716" text-anchor="start">8. SOLDER MASK COLOUR: BLUE.</text>
+    <text x="251.99999999999997" y="-193" font-size="3.5714285714285716" text-anchor="start">9. SILKSCREEN COLOUR: WHITE.</text>
+    <text x="251.99999999999997" y="-188.5" font-size="3.5714285714285716" text-anchor="start">10. FABRICATE TO IPC-6012 CLASS 2.</text>
+    <text x="251.99999999999997" y="-184" font-size="3.5714285714285716" text-anchor="start">11. MINIMUM TRACE WIDTH 0.15 mm.</text>
+    <text x="251.99999999999997" y="-179.5" font-size="3.5714285714285716" text-anchor="start">12. MINIMUM CLEARANCE 0.15 mm.</text>
+    <text x="251.99999999999997" y="-175" font-size="3.5714285714285716" text-anchor="start">13. 50 OHM CONTROLLED IMPEDANCE ON ROUTED NETS.</text>
+  </g>
+</svg>

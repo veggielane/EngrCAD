@@ -537,19 +537,25 @@ public sealed class PcbFabricationSheet
         return rows;
     }
 
-    /// <summary>The fabrication notes, WRITE-ONLY-WHEN-STATED: a value the board does not carry
-    /// (material, surface finish, mask/silk colour) is omitted rather than invented. What the
-    /// board DOES state — its finished thickness, its copper-layer count, its copper foil
-    /// thickness (only when a physical stackup gives one), the drill summary, and any
-    /// mask/silk/paste settings the layout declares — is reported.</summary>
+    /// <summary>The fabrication notes, WRITE-ONLY-WHEN-STATED: a value nothing carries is omitted
+    /// rather than invented. What the board DOES state geometrically — its finished thickness, its
+    /// copper-layer count, its copper foil thickness (only when a physical stackup gives one), the
+    /// drill summary, and any mask/silk/paste settings the layout declares — is always reported;
+    /// and the layout's <see cref="PcbLayout.Fabrication"/> spec fills in the fab-package fields the
+    /// geometry cannot carry (material, copper weight, surface finish, mask/silk colours, IPC-6012
+    /// class, minimum trace/clearance, free-form notes), each printed only when the spec states it.
+    /// A stated finished thickness OVERRIDES the modelled plate thickness in the thickness note,
+    /// since the delivered finished thickness (copper + finish) is what a fabricator quotes to; when
+    /// no spec states one, the note is the modelled thickness exactly as before (byte-identical).</summary>
     internal static List<string> CollectNotes(
         PcbLayout layout, PcbBoard board, IReadOnlyList<DrillTableRow> table,
         IReadOnlyList<DrillMark> marks, IReadOnlyList<StackupRow> stackup)
     {
+        var fab = layout.Fabrication;
         var notes = new List<string>
         {
             "ALL DIMENSIONS IN MILLIMETRES.",
-            $"FINISHED BOARD THICKNESS {Num(board.Thickness)} mm.",
+            $"FINISHED BOARD THICKNESS {Num(fab?.FinishedThicknessMm ?? board.Thickness)} mm.",
             $"{board.Stackup.Coppers.Count} COPPER LAYERS.",
         };
 
@@ -575,6 +581,34 @@ public sealed class PcbFabricationSheet
             notes.Add("SILKSCREEN PER FABRICATION DATA.");
         if (layout.PasteSettings is not null)
             notes.Add("SOLDER PASTE STENCIL PER FABRICATION DATA.");
+
+        // The fabrication-requirements block — each field of the spec printed only when stated (an
+        // unstated field is omitted, never invented), so with no spec nothing is added and the notes
+        // above are byte-identical to before. (Finished thickness is folded into the note above.)
+        if (fab is not null)
+        {
+            if (fab.BaseMaterial is { } material)
+                notes.Add($"MATERIAL: {material.ToUpperInvariant()}.");
+            if (fab.CopperWeightOz is { } copperOz)
+                // 1 oz/ft2 is ~34.79 um; 35 um/oz is the shop-standard rounding a fabricator reads.
+                // The micro sign (U+00B5) rides as an escape so the source stays pure ASCII (the
+                // Callouts.cs / PdfDrawing convention); it IS in WinAnsi, so ToPdf carries it.
+                notes.Add($"COPPER WEIGHT: {Num(copperOz)} oz ({Num(copperOz * 35)} \u00B5m).");
+            if (fab.SurfaceFinishLabel is { } finish)
+                notes.Add($"SURFACE FINISH: {finish}.");
+            if (fab.SolderMaskColour is { } maskColour)
+                notes.Add($"SOLDER MASK COLOUR: {maskColour.ToUpperInvariant()}.");
+            if (fab.SilkscreenColour is { } silkColour)
+                notes.Add($"SILKSCREEN COLOUR: {silkColour.ToUpperInvariant()}.");
+            if (fab.Ipc6012Class is { } ipcClass)
+                notes.Add($"FABRICATE TO IPC-6012 CLASS {ipcClass}.");
+            if (fab.MinTraceWidthMm is { } minTrace)
+                notes.Add($"MINIMUM TRACE WIDTH {Num(minTrace)} mm.");
+            if (fab.MinClearanceMm is { } minClearance)
+                notes.Add($"MINIMUM CLEARANCE {Num(minClearance)} mm.");
+            foreach (var note in fab.Notes)
+                notes.Add(note);
+        }
 
         return notes;
     }
