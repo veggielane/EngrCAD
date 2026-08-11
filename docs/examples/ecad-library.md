@@ -6,7 +6,8 @@ A `PartDefinition` in EngrCAD carries three views of one part: its **pins** (the
 terminals), its **footprint** (the copper pads the board places), and — new here — its 2D
 **schematic symbol** (the drawn shape a schematic sheet wires to). Stage 1 could declare pins
 and a footprint by hand; a real library is *imported*, so EngrCAD reads a component from the
-**KiCad** interchange (`.kicad_sym` + `.kicad_mod`) so it arrives with all three at once.
+**KiCad** interchange (`.kicad_sym` + `.kicad_mod`) or an **Eagle** library (`.lbr`) so it
+arrives with all three at once.
 
 ## The one identity: one part, one set of pin NUMBERS
 
@@ -84,6 +85,90 @@ The symbol is the representation a drawn schematic **sheet** consumes — each `
 the point where a wire lands (`Anchor`), the direction it points into the body, and its length,
 so routing a wire to a placed symbol is exact.
 
+## Loading from Eagle (`.lbr`)
+
+An Eagle library is a single **XML** file (`.lbr`), read with `EagleLibraryReader` — the second
+interchange, producing the same `LoadedPart`. Its structure is different: an Eagle symbol's pins
+are named in the symbol's own vocabulary, a package's pads are numbered, and a **deviceset**'s
+`<connect gate pin pad>` map binds them — so *the `<connect>` map is what unifies the three by pad
+number* (symbol pin `"VCC"` → pad `"8"`, so the loaded pin is numbered `"8"` and named `"VCC"`).
+Read the library, then load one device by its full name (deviceset + device):
+
+```csharp run:ecad-eagle-library
+// A minimal Eagle .lbr library — a resistor deviceset binding a symbol to an 0805 package
+// through its <connect> map. Eagle stores coordinates in millimetres.
+var lbr = """
+<?xml version="1.0" encoding="utf-8"?>
+<eagle version="7.7.0">
+  <drawing>
+    <library>
+      <packages>
+        <package name="R0805">
+          <smd name="1" x="-0.9125" y="0" dx="1.025" dy="1.4" layer="1" roundness="25"/>
+          <smd name="2" x="0.9125" y="0" dx="1.025" dy="1.4" layer="1" roundness="25"/>
+        </package>
+      </packages>
+      <symbols>
+        <symbol name="R">
+          <rectangle x1="-1.016" y1="-2.54" x2="1.016" y2="2.54" layer="94"/>
+          <pin name="1" x="0" y="3.81" length="short" direction="pas" rot="R270"/>
+          <pin name="2" x="0" y="-3.81" length="short" direction="pas" rot="R90"/>
+        </symbol>
+      </symbols>
+      <devicesets>
+        <deviceset name="R-EU_" prefix="R">
+          <gates><gate name="G$1" symbol="R" x="0" y="0"/></gates>
+          <devices>
+            <device name="R0805" package="R0805">
+              <connects>
+                <connect gate="G$1" pin="1" pad="1"/>
+                <connect gate="G$1" pin="2" pad="2"/>
+              </connects>
+            </device>
+          </devices>
+        </deviceset>
+      </devicesets>
+    </library>
+  </drawing>
+</eagle>
+""";
+
+// Read the library, then load one device by its full name (deviceset + device).
+var lib = EagleLibraryReader.Read(lbr);
+Console.WriteLine("devices: " + string.Join(", ", lib.Devices.Select(d => d.Name)));
+
+var part = lib.Load("R-EU_R0805");
+var def = part.Definition;
+Console.WriteLine($"{def.Name}: {def.Pins.Count} pins, {def.Footprint!.Pads.Count} pads, "
+    + $"{def.Symbol!.Pins.Count} symbol pins");
+
+// The <connect> map unifies the three: symbol pin "1" == pad "1" == netlist pin "1".
+if (!part.Identity.Ok) throw new Exception(part.Identity.ToString());
+if (def.ReferencePrefix != "R") throw new Exception("expected reference prefix R");
+
+// Pad coordinates are STATED in the file (millimetres), so they are carried exactly.
+if (def.Footprint.Pads[0].Center.X != -0.9125) throw new Exception("pad geometry drifted");
+
+// A symbol pin's ANCHOR is where a wire lands; rot=R270 points the pin down.
+var pin1 = def.Symbol.PinNumbered("1");
+Console.WriteLine($"pin 1 anchor {pin1.Anchor}, points {pin1.Direction}");
+if (pin1.Direction != SymbolPinDirection.Down) throw new Exception("pin direction drifted");
+
+// The loaded part is data: it round-trips through the schematic file byte-for-byte.
+var sch = new Schematic("one resistor");
+sch.Add("R1", def, value: "330");
+var json = sch.Save();
+if (Schematic.Load(json).Save() != json) throw new Exception("not a persistence fixed point");
+```
+
+Eagle's covered subset mirrors KiCad's: symbol `wire`/`rectangle`/`circle`/`polygon`/`text`
+graphics and `pin`s (a pin's `rot` gives its direction, `length` its length, `direction` its
+`PinType`), and package `smd` pads and `pad` plated through-holes of the standard shapes
+(round/square/octagon/long) with their drill. A package `<hole>`/`<via>` (not a pad), a graphic
+kind outside the set, a multi-gate deviceset (a gate array), and a symbol pin with no `<connect>`
+(an unmapped pin) are each **ignored with a diagnostic or refused by name**; whole `.brd`/`.sch`
+board/schematic import is out of scope, refused at the root.
+
 ## When the symbol and footprint disagree
 
 A `PinIdentity.Check` names every mismatch. If a footprint were missing pad `"8"` and carried a
@@ -106,6 +191,7 @@ The reader maps the **common subset** and NAMES anything else rather than mis-re
   **with a note**.
 
 Malformed input — a file that is not a KiCad symbol library or footprint, an unbalanced
-parenthesis, an unterminated string — is refused **by name** (the `StepReader`/`IgesReader`
-rule). Eagle `.lbr`, IPC-7351 footprint *generation*, and the KiCad 3D model reference
+parenthesis, an unterminated string; or an Eagle file that is not a library, or whose XML is
+malformed — is refused **by name** (the `StepReader`/`IgesReader` rule). IPC-7351 footprint
+*generation*, EDIF, whole `.brd`/`.sch` board/schematic import, and the KiCad 3D model reference
 (`.wrl`/`.step`) are later work; the path to a 3D model is noted, not loaded.
