@@ -382,6 +382,10 @@ drawing-sheet rule), so a CSV centroid and a KiCad-style `.pos` cannot disagree 
 - `PcbPickAndPlace.ToCsv(layout)` — the ubiquitous CSV: `Designator,X,Y,Rotation,Side,Value`.
 - `PcbPickAndPlace.ToPos(layout)` — a KiCad-style aligned `.pos`: `Ref Val Package PosX PosY Rot Side`.
 - `PcbPickAndPlace.Write(layout, dir)` writes both (`<name>-pos.csv`, `<name>.pos`) and reports the paths.
+- `PcbPickAndPlace.WriteBySide(layout, dir)` writes a **separate top and bottom pair** (`<name>-top-pos.csv`
+  / `<name>-top.pos` and the `-bottom-` pair) — the assembly-house need, since each side is a different
+  machine setup. It is a partition of the same rows filtered by side (nothing re-projected), and a side
+  with no components gets no file (a single-sided board yields exactly one pair).
 
 **The pose is the placement, not the 3D body.** A machine places by the footprint origin, which is the
 layout's `PcbPlacement` pose — independent of any 3D-model offset — so a row is exactly the placement.

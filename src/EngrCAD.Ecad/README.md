@@ -939,7 +939,11 @@ order, so the output is deterministic (two emissions byte-identical). **The twin
 `ParseCsv` reads back what `ToCsv` wrote and recovers the designator, X, Y, rotation, side and value
 exactly (RFC-4180 quoting survives a comma or quote in a value), refusing a wrong header / field count /
 number / side by name. `Package` is the component's footprint name, or its definition type name when it
-carries no footprint. Docs: `examples/ecad-fabrication.md`.
+carries no footprint. `Write` drops the whole board as one pair; **`WriteBySide`** drops a separate top
+and bottom pair (`<name>-top-pos.csv` / `.pos` and the `-bottom-` pair) — the assembly-house need, since
+each side is a different machine setup — one pair per POPULATED side (a single-sided board yields exactly
+one), a PARTITION of the same `Compute` rows filtered by side, so the union of the two side files is the
+combined file pose for pose. Docs: `examples/ecad-fabrication.md`.
 
 **The IPC-D-356A netlist** (`PcbIpc356`) is the board-house **electrical-test / net-compare** deliverable:
 per NET, every conductive **access point** — every component pad and every net-carrying via — with its

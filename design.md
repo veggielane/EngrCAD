@@ -8032,7 +8032,13 @@ order, so the output is a deterministic function of the layout (two emissions by
 round-trippable, fields RFC-4180 quoted only when they carry a comma / quote / newline, so a value like
 `10k, 5%` survives — and it refuses a wrong header / field count / number / side / unterminated quote by
 name (the reader scoped to what the writer emits). `Package` is the component's footprint name, or its
-definition type name when it carries no footprint. Docs: `examples/ecad-fabrication.md`.
+definition type name when it carries no footprint. `Write` drops the whole board as one pair;
+**`WriteBySide`** drops a SEPARATE top and bottom pair (`<name>-top-pos.csv` / `.pos` and the `-bottom-`
+pair) — the assembly-house need, since populating each side is a different machine setup. It is a
+PARTITION of the same `Compute` rows filtered by side (nothing re-projected), one pair per POPULATED side
+(a single-sided board yields exactly one, an honest empty rather than a stub for the empty side), so the
+oracle is that the union of the two side files' parsed rows is the combined file's pose for pose and each
+side file carries only its own side. Docs: `examples/ecad-fabrication.md`.
 
 ### IPC-D-356A netlist (electrical test / net compare) (`PcbIpc356`)
 

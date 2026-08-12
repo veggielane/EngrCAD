@@ -66,6 +66,12 @@ public readonly record struct PickAndPlaceRow(
 /// writes and recovers the designator, X, Y, rotation, side and value EXACTLY (to the file's
 /// precision) — the repo's rule that a fab file must survive the round trip, not merely a
 /// structural check.</para>
+///
+/// <para><b>One combined file or one per side.</b> <see cref="Write"/> drops the whole board as one
+/// pair; <see cref="WriteBySide"/> drops a separate top and bottom pair (the assembly-house need — each
+/// side is a different machine setup), one pair per POPULATED side. The split is a partition of the same
+/// <see cref="Compute"/> rows filtered by side, so the union of the two side files' rows is exactly the
+/// combined file's, pose for pose.</para>
 /// </summary>
 public static class PcbPickAndPlace
 {
@@ -239,9 +245,7 @@ public static class PcbPickAndPlace
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentException.ThrowIfNullOrEmpty(directory);
         Directory.CreateDirectory(directory);
-        string b = string.IsNullOrEmpty(name)
-            ? (layout.Schematic.Name.Length > 0 ? layout.Schematic.Name : "pnp")
-            : name;
+        string b = BaseName(layout, name);
 
         var rows = Compute(layout, bottomFlip);
         string csvPath = Path.Combine(directory, b + "-pos.csv");
@@ -250,6 +254,44 @@ public static class PcbPickAndPlace
         File.WriteAllText(posPath, ToPos(rows));
         return [csvPath, posPath];
     }
+
+    /// <summary>Writes SEPARATE top- and bottom-side pick-and-place file sets — the common assembly-house
+    /// need, since populating each side is a different machine setup. One CSV + <c>.pos</c> pair per side
+    /// that carries at least one component (<c>&lt;name&gt;-top-pos.csv</c> / <c>&lt;name&gt;-top.pos</c>
+    /// and the <c>-bottom-</c> pair), and nothing for a side with no components (a single-sided board
+    /// yields exactly one pair). The rows are the SAME projection <see cref="Compute"/> gives, filtered by
+    /// side, so a side file's poses are byte-identical to the combined <see cref="Write"/>'s for those
+    /// rows — the split is a partition, not a re-projection. Returns the paths written, top pair first.</summary>
+    public static IReadOnlyList<string> WriteBySide(
+        PcbLayout layout, string directory, string? name = null,
+        BottomFlipAxis bottomFlip = BottomFlipAxis.X)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentException.ThrowIfNullOrEmpty(directory);
+        Directory.CreateDirectory(directory);
+        string b = BaseName(layout, name);
+
+        var rows = Compute(layout, bottomFlip);
+        var files = new List<string>();
+        foreach (var side in new[] { CopperSide.Top, CopperSide.Bottom })
+        {
+            var sideRows = rows.Where(r => r.Side == side).ToList();
+            if (sideRows.Count == 0)
+                continue;   // no components on this side — no file, an honest empty rather than a stub
+            string token = side == CopperSide.Top ? "top" : "bottom";
+            string csvPath = Path.Combine(directory, $"{b}-{token}-pos.csv");
+            string posPath = Path.Combine(directory, $"{b}-{token}.pos");
+            File.WriteAllText(csvPath, ToCsv(sideRows));
+            File.WriteAllText(posPath, ToPos(sideRows));
+            files.Add(csvPath);
+            files.Add(posPath);
+        }
+        return files;
+    }
+
+    private static string BaseName(PcbLayout layout, string? name) => string.IsNullOrEmpty(name)
+        ? (layout.Schematic.Name.Length > 0 ? layout.Schematic.Name : "pnp")
+        : name;
 
     // ---- helpers ------------------------------------------------------------
 

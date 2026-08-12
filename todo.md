@@ -2758,8 +2758,11 @@ from what was already understood rather than from scratch.
     emission; Y = `180 − rot`, the other machine convention), both a sign swap so a quarter turn stays
     exact):** MULTI-VALUE / VARIANT P&P (a do-not-populate mask, or a configuration's per-variant values
     — needs an assembly-variant concept the layout does not yet carry, and would ride `Configurations`
-    when it reaches ECAD). SEPARATE top/bottom centroid FILES (some machines want one file per side; v1
-    carries a `Side` column, which every modern feeder reads). EMBEDDED-part handling (v1 emits an
+    when it reaches ECAD). SEPARATE top/bottom centroid FILES have LANDED — `PcbPickAndPlace.WriteBySide`
+    drops one CSV + `.pos` pair per POPULATED side (`<name>-top-pos.csv`/`.pos` and the `-bottom-` pair),
+    a PARTITION of the same `Compute` rows filtered by side (nothing re-projected), a single-sided board
+    yielding exactly one pair; the oracle is that the union of the two side files' parsed rows is the
+    combined file's pose for pose. EMBEDDED-part handling (v1 emits an
     embedded placement by its 2D pose like any other; a buried die is not surface-placed, so a real
     assembly line would filter it — a scope decision, not a defect).
   - **Copper-pour follow-ups (filed, the pour + POUR PRIORITY have LANDED — see CLAUDE.md's ECAD
