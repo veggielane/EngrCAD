@@ -2712,9 +2712,13 @@ from what was already understood rather than from scratch.
     `%TO.N,<net>*%` object attribute (a fab's net-compare datum) on each copper object, a
     `%TF.GenerationSoftware%` file attribute, and a copper layer's `%TF.FileFunction,Copper,L<n>,<side>%`
     role, via `Generate`/`Write(..., includeX2: true)`, off = byte-identical, the reader ignoring
-    attributes so an X2 file round-trips its copper exactly; STILL FILED are `FileFunction` on the
-    mask / silk / paste / outline files, the `.C`/`.P` component / pad object attributes, `%TA` aperture
-    attributes, and the JOB FILE (`.gbrjob`). A
+    attributes so an X2 file round-trips its copper exactly; STILL FILED are the X2 `FileFunction`
+    ATTRIBUTE inside the mask / silk / paste / outline Gerbers, the `.C`/`.P` component / pad object
+    attributes, and `%TA` aperture attributes. The JOB FILE has LANDED — `Write(..., includeJobFile:
+    true)` drops `<name>.gbrjob`, the JSON manifest a modern fab reads (board size/thickness, copper
+    layer count, surface finish, and every Gerber file with its `FileFunction` — the roles gathered from
+    the whole set), deterministic (no CreationDate/GUID salt, a byte fixed point) and opt-in (off =
+    Gerbers byte-identical); the oracle is that every listed file was actually written. A
     Gerber IMPORT of a foreign board is a different project (this is EXPORT; the reader is the
     round-trip oracle scoped to what the writer emits). Full topological push-and-route INSIDE the maze
     search (the router shoving DURING A*, not just the standalone `ShoveRouter` primitive) is the

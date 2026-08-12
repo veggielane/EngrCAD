@@ -818,6 +818,10 @@ are byte-identical (the netlist adds a file, it does not touch the copper). Pass
 read straight from the Gerbers), a `%TF.GenerationSoftware%` file attribute, and each copper layer's
 `%TF.FileFunction,Copper,L<n>,<side>%` role (its stackup position/side); opt-in, so off is
 byte-identical and the reader ignores the attributes, so an X2 file round-trips its copper exactly.
+Pass `includeJobFile: true` (the `Write` disk path) for the **`.gbrjob` job file** — the JSON manifest
+a modern fab reads to identify the whole set (board size/thickness, copper-layer count, surface finish,
+and every Gerber file with its `FileFunction`); deterministic (no CreationDate/GUID salt, a byte fixed
+point) and an honest manifest (every listed file is one it actually wrote).
 
 | Type | What it is |
 | --- | --- |

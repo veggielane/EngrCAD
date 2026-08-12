@@ -15,8 +15,12 @@ trace region), via pads become solid disc flashes with the drill cleared to leav
 and anything else — a rotated pad, a copper pour — becomes a region **fill** (`G36`/`G37`), exact for
 any shape. Pass `includeX2: true` for **Gerber X2**: each copper object gains a `%TO.N,<net>*%` object
 attribute (the net-compare datum, read straight from the Gerbers) and the file a
-`%TF.GenerationSoftware%` attribute — opt-in, so off is byte-identical, and since X2 adds only metadata
-(not geometry) the reader ignores the attributes and an X2 file round-trips its copper exactly.
+`%TF.GenerationSoftware%` attribute and each copper layer's `%TF.FileFunction,Copper,L<n>,<side>%` role
+— opt-in, so off is byte-identical, and since X2 adds only metadata (not geometry) the reader ignores
+the attributes and an X2 file round-trips its copper exactly. `Write(layout, dir, includeJobFile: true)`
+also drops the **`.gbrjob` job file** — the JSON manifest a fab reads to identify the whole set (board
+size/thickness, copper-layer count, surface finish, and every Gerber file with its `FileFunction`),
+deterministic (no clock/GUID salt) and an honest manifest (every file it lists is one it wrote).
 
 ## The bar: the twin-decoder round trip
 

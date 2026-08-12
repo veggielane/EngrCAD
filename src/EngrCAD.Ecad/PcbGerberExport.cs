@@ -65,11 +65,16 @@ public sealed record GerberExportResult(
     /// without a netlist is byte-identical to before.</summary>
     public bool NetlistWritten { get; init; }
 
+    /// <summary>Whether a Gerber job file (<c>&lt;name&gt;.gbrjob</c>) was written beside the Gerber set.
+    /// Default false.</summary>
+    public bool JobFileWritten { get; init; }
+
     /// <summary>A human-readable summary.</summary>
     public override string ToString() =>
         $"wrote {CopperLayerCount} copper + {MaskLayerCount} mask + {SilkLayerCount} silk + "
         + $"{PasteLayerCount} paste Gerber(s) + outline + {DrillHitCount} drill hits"
         + (NetlistWritten ? " + IPC-356 netlist" : "")
+        + (JobFileWritten ? " + job file" : "")
         + $" ({Files.Count} files) to {Directory}";
 }
 
@@ -239,18 +244,78 @@ public static class PcbGerberExport
     /// what they were.</summary>
     public static GerberExportResult Write(
         PcbLayout layout, string directory, string? name = null, PasteStencil? stencil = null,
-        bool includeNetlist = false, bool includeX2 = false)
+        bool includeNetlist = false, bool includeX2 = false, bool includeJobFile = false)
     {
         ArgumentNullException.ThrowIfNull(layout);
         var output = Generate(layout, name, stencil, includeX2);
         var result = WriteOutput(output, directory);
-        if (!includeNetlist)
-            return result;
 
-        string ipcPath = Path.Combine(directory, output.Name + ".ipc");
-        File.WriteAllText(ipcPath, PcbIpc356.Write(layout));
-        return result with { Files = [.. result.Files, ipcPath], NetlistWritten = true };
+        if (includeNetlist)
+        {
+            string ipcPath = Path.Combine(directory, output.Name + ".ipc");
+            File.WriteAllText(ipcPath, PcbIpc356.Write(layout));
+            result = result with { Files = [.. result.Files, ipcPath], NetlistWritten = true };
+        }
+        if (includeJobFile)
+        {
+            string jobPath = Path.Combine(directory, output.Name + ".gbrjob");
+            File.WriteAllText(jobPath, BuildJobFile(output, layout.Board, layout.Fabrication));
+            result = result with { Files = [.. result.Files, jobPath], JobFileWritten = true };
+        }
+        return result;
     }
+
+    /// <summary>Builds the <c>.gbrjob</c> JSON for a written fabrication set — the board size and
+    /// thickness, the copper-layer count, the surface finish, and every Gerber file with its
+    /// <c>FileFunction</c> (copper roles by stackup position/side, mask/silk/paste by side, the outline
+    /// as the profile). The file names mirror <see cref="WriteOutput"/>'s exactly.</summary>
+    private static string BuildJobFile(FabricationOutput output, PcbBoard board, PcbFabricationSpec? spec)
+    {
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        foreach (var p in board.OutlinePoints)
+        {
+            minX = Math.Min(minX, p.X); minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X); maxY = Math.Max(maxY, p.Y);
+        }
+
+        string top = board.Stackup.Top.Name;
+        string Side(string layer) => layer == top ? "Top" : "Bot";
+
+        var files = new List<(string, string)>();
+        for (int i = 0; i < output.CopperLayers.Count; i++)
+        {
+            string side = i == 0 ? "Top" : i == output.CopperLayers.Count - 1 ? "Bot" : "Inr";
+            files.Add(($"{output.Name}-{Sanitize(output.CopperLayers[i].Layer)}.gbr", $"Copper,L{i + 1},{side}"));
+        }
+        foreach (var l in output.MaskLayers)
+            files.Add(($"{output.Name}-{Sanitize(l.Layer)}_Mask.gbr", $"Soldermask,{Side(l.Layer)}"));
+        foreach (var l in output.SilkLayers)
+            files.Add(($"{output.Name}-{Sanitize(l.Layer)}_Silkscreen.gbr", $"Legend,{Side(l.Layer)}"));
+        foreach (var l in output.PasteLayers)
+        {
+            string suffix = string.IsNullOrEmpty(l.PasteLevelToken) ? "" : "_" + l.PasteLevelToken;
+            files.Add(($"{output.Name}-{Sanitize(l.Layer)}_Paste{suffix}.gbr", $"SolderPaste,{Side(l.Layer)}"));
+        }
+        files.Add(($"{output.Name}-Edge_Cuts.gbr", "Profile,NP"));
+
+        double thickness = spec?.FinishedThicknessMm ?? board.Thickness;
+        return GerberJobFile.Build(
+            output.Name, maxX - minX, maxY - minY, output.CopperLayers.Count, thickness, FinishName(spec), files);
+    }
+
+    private static string? FinishName(PcbFabricationSpec? spec) => spec?.SurfaceFinish switch
+    {
+        null => null,
+        PcbSurfaceFinish.Enig => "ENIG",
+        PcbSurfaceFinish.Hasl => "HAL",
+        PcbSurfaceFinish.HaslLeadFree => "HAL lead free",
+        PcbSurfaceFinish.Osp => "OSP",
+        PcbSurfaceFinish.ImmersionSilver => "Immersion silver",
+        PcbSurfaceFinish.ImmersionTin => "Immersion tin",
+        PcbSurfaceFinish.Other => string.IsNullOrEmpty(spec.SurfaceFinishOther) ? null : spec.SurfaceFinishOther,
+        _ => null,
+    };
 
     /// <summary>Writes the fabrication set for a raw copper model to files (see the layout overload).</summary>
     public static GerberExportResult Write(

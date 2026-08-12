@@ -7835,8 +7835,14 @@ the Gerbers), the file a `%TF.GenerationSoftware%` attribute, and each copper la
 `%TF.FileFunction,Copper,L<n>,<side>%` role (its stackup position/side) — X2 changes no geometry, so
 the oracle is that stripping the attribute lines recovers the plain Gerber byte-for-byte, off is
 byte-identical, and the reader ignores X2 attributes (metadata, not geometry) so an X2 file round-trips
-its copper exactly. Filed: `FileFunction` on the mask/silk/paste/outline files, the `.C`/`.P`
-component/pad attributes, `%TA` aperture attributes, and the `.gbrjob` job file. Pads flash (`D03`),
+its copper exactly. The **`.gbrjob` job file** rides opt-in on the `Write` disk path (`includeJobFile:
+true`): the JSON manifest a fab reads to identify the set — board size/thickness, copper-layer count,
+surface finish (from the `PcbFabricationSpec`), and every Gerber file with its `FileFunction` (`GerberJobFile`,
+a pure formatter; the roles gathered one level up from the whole set). It is DETERMINISTIC (the two
+clock/random-salted fields the spec allows, `CreationDate` and the project `GUID`, are OMITTED — the same
+`PdfDrawing`-no-`/Info`-date reasoning), so it is a byte fixed point, and the oracle is that every file it
+lists was actually written. Filed: the X2 `FileFunction` ATTRIBUTE inside the mask/silk/paste/outline
+Gerbers, the `.C`/`.P` component/pad attributes, and `%TA` aperture attributes. Pads flash (`D03`),
 traces draw
 (`D01`/`D02` with a round aperture, whose swept stroke IS the copper model's trace region), via pads
 flash as solid discs, and anything else — a rotated pad, a copper pour — is a region fill
