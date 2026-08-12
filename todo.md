@@ -2712,13 +2712,16 @@ from what was already understood rather than from scratch.
     and the JOB FILE (`.gbrjob`) carry per-object net/component metadata a modern fab reads. A
     Gerber IMPORT of a foreign board is a different project (this is EXPORT; the reader is the
     round-trip oracle scoped to what the writer emits). Full topological push-and-route INSIDE the maze
-    search (the router shoving DURING A*, not just the standalone `ShoveRouter` primitive) and a
-    diff-pair-aware DRC for TIGHT intra-pair gaps (so `CoupledRouter` can route a tight pair) are the
-    remaining routing stages (LENGTH MATCHING, differential-pair ANALYSIS + skew matching, SHOVE
-    insertion, and COUPLED routing have LANDED — `LengthMatch.Tune`/`MatchGroup`, `DiffPair`/
-    `DiffPairs.Check`/`MatchSkew`, `ShoveRouter.Insert`, and `CoupledRouter.Route` generating a pair as
-    the two parallel offsets of a centre-line, all DRC-gated; see CLAUDE.md's ECAD status, design.md
-    §6d, `examples/ecad-routing.md`). A CONFORMAL
+    search (the router shoving DURING A*, not just the standalone `ShoveRouter` primitive) is the
+    remaining routing stage (LENGTH MATCHING, differential-pair ANALYSIS + skew matching, SHOVE
+    insertion, COUPLED routing, and the DIFF-PAIR-AWARE DRC for TIGHT intra-pair gaps have LANDED —
+    `LengthMatch.Tune`/`MatchGroup`, `DiffPair`/`DiffPairs.Check`/`MatchSkew`, `ShoveRouter.Insert`,
+    `CoupledRouter.Route` generating a pair as the two parallel offsets of a centre-line, and
+    `DrcRuleSet.MinDiffPairGap` + `PcbDrc.Check`/`Violates` taking an optional named-pair list so a
+    pair's two nets are checked at the tighter intra-pair floor while each half still clears everything
+    ELSE at the general clearance and a short within the pair is still a short — all DRC-gated, and with
+    no pairs named the DRC is bit-identical; see CLAUDE.md's ECAD status, design.md §6d,
+    `examples/ecad-routing.md`). A CONFORMAL
     mask/silk/paste on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
     MID/surface side's territory).
   - **IPC-D-356A netlist follow-ups (filed; the netlist itself has LANDED — `PcbIpc356`, see

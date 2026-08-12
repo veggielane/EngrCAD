@@ -36,10 +36,12 @@ public readonly record struct CoupledRouteResult(
 ///
 /// <para><b>v1 scope.</b> The caller supplies the centre-line (typically routed as a single virtual
 /// net, or drawn); this generates and DRC-checks the pair. The gap must exceed the trace width (or the
-/// two traces merge) and the pair must clear the rest of the board at the general clearance — a
-/// TIGHT intra-pair gap below the general copper clearance needs a diff-pair-aware DRC rule, which is
-/// filed. Also filed: routing the centre-line itself (a fat-net maze), and matched-length coupled
-/// routing that tunes the bend skew inside the pair (<see cref="DiffPairs.MatchSkew"/> tunes it after).</para>
+/// two traces merge). The pair is checked DIFF-PAIR-AWARE — its two nets clear each other at the
+/// tighter <see cref="DrcRuleSet.MinDiffPairGap"/> while each half clears the rest of the board at the
+/// general clearance — so a TIGHT coupled pair (an intra-pair gap below the general clearance, at or
+/// above the fab's diff-pair floor) routes clean. Filed: routing the centre-line itself (a fat-net
+/// maze), and matched-length coupled routing that tunes the bend skew inside the pair
+/// (<see cref="DiffPairs.MatchSkew"/> tunes it after).</para>
 /// </summary>
 public static class CoupledRouter
 {
@@ -86,10 +88,14 @@ public static class CoupledRouter
             copper.Add(new CopperFeature(layer, pair.NegativeNet, "coupled-n", region));
         var candidate = new PcbCopperModel(baseModel.Board, copper, baseModel.Drills, baseModel.Cavities, baseModel.Vias);
 
-        if (PcbDrc.Check(candidate, rules).Violations.Count > 0)
+        // The pair is checked diff-pair-aware: its own two nets clear each other at the tighter
+        // intra-pair gap (rules.MinDiffPairGap), so a TIGHT coupled pair — one whose intra-pair gap is
+        // below the general clearance but at or above the fab's diff-pair floor — routes clean, while
+        // each half still clears everything ELSE at the general clearance.
+        if (PcbDrc.Check(candidate, rules, [pair]).Violations.Count > 0)
             return new CoupledRouteResult(CoupledOutcome.Refused, default, default,
-                "the coupled pair violates the DRC (the centre-line is too close to other copper, or the gap is "
-                + "below the general clearance — a tight intra-pair gap needs a diff-pair DRC rule, which is filed).");
+                "the coupled pair violates the DRC (the centre-line is too close to other copper, or the "
+                + "intra-pair gap is below the fab's diff-pair floor).");
 
         return new CoupledRouteResult(CoupledOutcome.Routed, pTrace, nTrace,
             $"Routed {pair.PositiveNet}/{pair.NegativeNet} coupled at {gap:g4} mm, DRC-clean.");

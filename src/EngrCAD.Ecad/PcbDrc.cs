@@ -130,18 +130,24 @@ public sealed record DrcReport(
 /// </summary>
 public static class PcbDrc
 {
-    /// <summary>Runs the whole DRC over a placed layout against a rule set (null = the defaults).</summary>
-    public static DrcReport Check(PcbLayout layout, DrcRuleSet? rules = null) =>
-        Check(PcbCopperModel.FromLayout(layout), rules);
+    /// <summary>Runs the whole DRC over a placed layout against a rule set (null = the defaults),
+    /// optionally naming the differential pairs whose two nets are checked at the tighter intra-pair
+    /// gap (<see cref="DrcRuleSet.MinDiffPairGap"/>) rather than the general clearance. With no pairs
+    /// named the result is bit-identical to a stage-4 run.</summary>
+    public static DrcReport Check(PcbLayout layout, DrcRuleSet? rules = null, IReadOnlyList<DiffPair>? diffPairs = null) =>
+        Check(PcbCopperModel.FromLayout(layout), rules, diffPairs);
 
-    /// <summary>Runs the whole DRC over a copper model against a rule set (null = the defaults).</summary>
-    public static DrcReport Check(PcbCopperModel model, DrcRuleSet? rules = null)
+    /// <summary>Runs the whole DRC over a copper model against a rule set (null = the defaults),
+    /// optionally naming the differential pairs whose intra-pair gap uses
+    /// <see cref="DrcRuleSet.MinDiffPairGap"/> in place of <see cref="DrcRuleSet.MinCopperClearance"/>
+    /// (see the layout overload). With no pairs named the result is bit-identical.</summary>
+    public static DrcReport Check(PcbCopperModel model, DrcRuleSet? rules = null, IReadOnlyList<DiffPair>? diffPairs = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         rules ??= DrcRuleSet.Default;
 
         var violations = new List<DrcViolation>();
-        CheckClearanceAndShorts(model, rules, violations);
+        CheckClearanceAndShorts(model, rules, violations, diffPairs);
         CheckAnnularRings(model, rules, violations);
         CheckDrillToCopper(model, rules, violations);
         CheckCopperToEdge(model, rules, violations);
@@ -161,19 +167,21 @@ public static class PcbDrc
     /// THIS copper violate anything". The via overload (<see cref="Violates(PcbCopperModel, PlacedVia,
     /// DrcRuleSet?)"/>) adds the drill / via rules a via carries.
     /// </summary>
-    public static DrcReport Violates(PcbCopperModel model, CopperFeature candidate, DrcRuleSet? rules = null)
+    public static DrcReport Violates(PcbCopperModel model, CopperFeature candidate, DrcRuleSet? rules = null,
+        IReadOnlyList<DiffPair>? diffPairs = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         rules ??= DrcRuleSet.Default;
 
         var violations = new List<DrcViolation>();
         var candidateGroup = NetGroup.One(candidate);
-        double c = rules.MinCopperClearance;
         foreach (var group in BuildGroups(model.Copper.Where(f => f.Layer == candidate.Layer)))
         {
             // Same-net copper is the intended connection — the candidate joining it is not a short.
             if (SameNet(candidate.Net, group.Net))
                 continue;
+            // The two halves of a named differential pair use the tighter intra-pair gap.
+            double c = ClearanceFor(candidate.Net, group.Net, rules, diffPairs);
             ComparePair(candidateGroup, group, candidate.Layer, c, violations);
         }
 
@@ -250,16 +258,38 @@ public static class PcbDrc
 
     // ---- clearance and shorts (the core rule) --------------------------------
 
-    private static void CheckClearanceAndShorts(PcbCopperModel model, DrcRuleSet rules, List<DrcViolation> v)
+    private static void CheckClearanceAndShorts(PcbCopperModel model, DrcRuleSet rules, List<DrcViolation> v,
+        IReadOnlyList<DiffPair>? diffPairs)
     {
-        double c = rules.MinCopperClearance;
         foreach (var layer in model.Layers)
         {
             var groups = BuildGroups(model.Copper.Where(f => f.Layer == layer));
             for (int i = 0; i < groups.Count; i++)
                 for (int j = i + 1; j < groups.Count; j++)
+                {
+                    // The two nets of a NAMED differential pair are checked at the tighter intra-pair
+                    // floor; every other pair (and each half vs unrelated copper) stays at the general
+                    // clearance. With no pairs named this is rules.MinCopperClearance for every pair.
+                    double c = ClearanceFor(groups[i].Net, groups[j].Net, rules, diffPairs);
                     ComparePair(groups[i], groups[j], layer, c, v);
+                }
         }
+    }
+
+    /// <summary>The clearance to hold between two nets: the tighter <see cref="DrcRuleSet.MinDiffPairGap"/>
+    /// when they are the two halves of a differential pair EXPLICITLY named in <paramref name="pairs"/>,
+    /// else the general <see cref="DrcRuleSet.MinCopperClearance"/>. Order-independent (a pair matches
+    /// either way round); a null/empty list returns the general clearance for every pair, which is what
+    /// keeps a diff-pair-unaware run bit-identical. A short is decided independently of this value, so a
+    /// named pair still cannot overlap.</summary>
+    private static double ClearanceFor(string? na, string? nb, DrcRuleSet rules, IReadOnlyList<DiffPair>? pairs)
+    {
+        if (pairs is not null && na is not null && nb is not null)
+            foreach (var p in pairs)
+                if ((p.PositiveNet == na && p.NegativeNet == nb) ||
+                    (p.PositiveNet == nb && p.NegativeNet == na))
+                    return rules.MinDiffPairGap;
+        return rules.MinCopperClearance;
     }
 
     /// <summary>Compares two different-net copper groups: a positive-area overlap is a SHORT,

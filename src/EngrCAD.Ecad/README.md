@@ -739,10 +739,22 @@ differential pair's two nets TOGETHER — the pair is the two parallel offsets o
 at ±*gap*/2, so it holds the gap EXACTLY along the whole run by construction (parallel offset curves
 stay a constant distance apart, mitred through every bend), which is what makes it well-coupled
 without a search. The whole pair is DRC-checked and committed only if clean, and it reads back as a
-good pair through `DiffPairs.Check`. The gap must exceed the trace width (or the traces merge). v1
-takes a caller-supplied centre-line at a gap ≥ the general clearance; filed: a diff-pair-aware DRC for
-TIGHT intra-pair gaps, routing the centre-line itself (a fat-net maze), and matched-length coupled
-routing.
+good pair through `DiffPairs.Check`. The gap must exceed the trace width (or the traces merge). It
+takes a caller-supplied centre-line; filed: routing the centre-line itself (a fat-net maze) and
+matched-length coupled routing.
+
+**Diff-pair-aware DRC (tight intra-pair gaps).** A controlled-impedance pair runs at an intra-pair gap
+tighter than the general copper clearance — legal because its two conductors are one differential
+signal. `DrcRuleSet.MinDiffPairGap` is that tighter floor (a value-with-default, ⚠ verify-against-
+datasheet, not on the positional constructor), and `PcbDrc.Check`/`Violates` take an optional list of
+the differential pairs whose two nets are then checked at it in place of `MinCopperClearance` — while
+each half still clears every OTHER net at the general clearance, the two halves TOUCHING is still a
+short (the exemption relaxes the near-miss, never a short), and a gap below even the diff-pair floor
+still flags. `CoupledRouter` passes the pair to its own gate, so it routes a tight pair. **With no
+pairs named the DRC is bit-identical to a stage-4 run** (`ClearanceFor` returns the general clearance
+for every pair), so the exemption reaches nothing it was not explicitly told about — the mutation
+tested both ways: the same tight pair flags un-named and passes when named, and a third net too close
+to one half still flags.
 
 ## Copper pours — ground / power planes
 

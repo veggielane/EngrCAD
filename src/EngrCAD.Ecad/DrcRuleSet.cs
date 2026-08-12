@@ -45,6 +45,18 @@ public sealed record DrcRuleSet(
     /// <see cref="MinDrillToCopper"/> — a via pad is copper and a via drill is a drilled hole.</summary>
     public double MinViaToVia { get; init; } = 0.2;
 
+    /// <summary>Minimum edge-to-edge copper gap WITHIN a differential pair (mm) — the tighter
+    /// intra-pair floor a controlled-impedance pair is allowed to run at, below the general
+    /// <see cref="MinCopperClearance"/>. It applies ONLY to the two nets of a pair EXPLICITLY named
+    /// to the DRC (<see cref="PcbDrc.Check(PcbCopperModel, DrcRuleSet?, IReadOnlyList{DiffPair}?)"/>);
+    /// with no diff pairs named the DRC never consults it and is bit-identical to a stage-4 run. Each
+    /// half of a named pair still clears every OTHER net (and the other pair) at
+    /// <see cref="MinCopperClearance"/>, and the two halves TOUCHING is still a short — the exemption
+    /// relaxes the near-miss clearance, never a short. Not on the positional constructor (a value with
+    /// a default), so a six-argument stage-4 caller is unaffected; ≈ 4 mil at the default, a common
+    /// controlled-impedance intra-pair gap. ⚠ Verify against your fabricator's datasheet.</summary>
+    public double MinDiffPairGap { get; init; } = 0.1;
+
     /// <summary>
     /// Nominal defaults (⚠ verify against your fabricator's datasheet): 0.15 mm (≈ 6 mil)
     /// clearance, trace width and annular ring; 0.2 mm drill-to-copper; 0.25 mm copper-to-edge;
@@ -90,7 +102,7 @@ public sealed record DrcRuleSet(
             MinAnnularRing: 0.10,
             MinDrillToCopper: 0.15,
             MinCopperToEdge: 0.20,
-            MinAcuteAngleDegrees: 90) { MinViaToVia = 0.15 },
+            MinAcuteAngleDegrees: 90) { MinViaToVia = 0.15, MinDiffPairGap = 0.075 },
         // Class 2 (Level B) — dedicated-service electronics; the Class-2-ish Default figures
         // (this branch is field-identical to Default, asserted by test).
         2 => new(
@@ -99,7 +111,7 @@ public sealed record DrcRuleSet(
             MinAnnularRing: 0.15,
             MinDrillToCopper: 0.20,
             MinCopperToEdge: 0.25,
-            MinAcuteAngleDegrees: 90) { MinViaToVia = 0.20 },
+            MinAcuteAngleDegrees: 90) { MinViaToVia = 0.20, MinDiffPairGap = 0.10 },
         // Class 3 (Level C) — high-reliability (aerospace/medical), the strictest floor.
         3 => new(
             MinCopperClearance: 0.20,
@@ -107,7 +119,7 @@ public sealed record DrcRuleSet(
             MinAnnularRing: 0.20,
             MinDrillToCopper: 0.25,
             MinCopperToEdge: 0.30,
-            MinAcuteAngleDegrees: 90) { MinViaToVia = 0.25 },
+            MinAcuteAngleDegrees: 90) { MinViaToVia = 0.25, MinDiffPairGap = 0.125 },
         _ => throw new ArgumentOutOfRangeException(nameof(producibilityClass), producibilityClass,
             "An IPC-6012 producibility class must be 1, 2 or 3."),
     };
@@ -176,6 +188,7 @@ public sealed record DrcRuleSet(
             MinDrillToCopper = MinDrillToCopper * factor,
             MinCopperToEdge = MinCopperToEdge * factor,
             MinViaToVia = MinViaToVia * factor,
+            MinDiffPairGap = MinDiffPairGap * factor,
         };
     }
 }

@@ -7727,13 +7727,34 @@ polyline offset (interior vertices are the intersection of the two offset segmen
 they are parallel), so a straight pair is perfectly length-matched while a BENT pair picks up the
 inside-corner skew a real diff pair has — which is exactly what `DiffPairs.MatchSkew` then tunes out,
 the two features composing. The whole pair is committed only if `PcbDrc.Check` of the board with both
-traces added is clean. The deliberate v1 boundaries are two and both are stated: the caller supplies
-the centre-line (routing it is a FAT-NET maze, filed), and the pair must clear the rest of the board
-at the GENERAL clearance — a TIGHT intra-pair gap below that needs a diff-pair-aware DRC rule (filed),
-so v1 routes a comfortable pair and the gap must exceed the trace width or the two traces merge
-(refused by name). Verified: a straight coupled route is well-coupled + low-skew + DRC-clean + both
-nets connected, a bent one routes clean and stays coupled, the gap-too-small and centre-too-close
-refusals, and determinism. Docs: `examples/ecad-routing.md`.
+traces added is clean, checked DIFF-PAIR-AWARE (below) so a TIGHT pair routes. The deliberate v1
+boundary is one and it is stated: the caller supplies the centre-line (routing it is a FAT-NET maze,
+filed); the gap must still exceed the trace width or the two traces merge (refused by name). Verified:
+a straight coupled route is well-coupled + low-skew + DRC-clean + both nets connected, a bent one
+routes clean and stays coupled, the gap-too-small and centre-too-close refusals, and determinism.
+Docs: `examples/ecad-routing.md`.
+
+**Diff-pair-aware DRC** (`DrcRuleSet.MinDiffPairGap`; `PcbDrc.Check`/`Violates` take an optional
+`IReadOnlyList<DiffPair>`). A controlled-impedance pair runs at an intra-pair gap tighter than the
+general copper clearance, and the general clearance rule would flag that — so the two nets of a
+differential pair EXPLICITLY named to the DRC are checked at the tighter `MinDiffPairGap` instead. The
+decision is that WHICH nets pair is a DESIGN fact (the `DiffPair` list, passed to the check) while the
+tighter floor is a FABRICATOR-capability number (a value-with-default on `DrcRuleSet`, ⚠ verify, off
+the positional constructor and scaled/ForIpcClass'd like `MinViaToVia`) — the same split the whole
+`DrcRuleSet` rests on. It is SURGICAL: the clearance for a pair comes from one `ClearanceFor` helper
+that returns `MinDiffPairGap` for a named pair (either order) and `MinCopperClearance` otherwise, so
+**with no pairs named it is the general clearance for every pair and the DRC is bit-identical to a
+stage-4 run** (the null path). Three things it deliberately does NOT relax: the exemption is
+INTRA-PAIR only (each half still clears every OTHER net, and the OTHER pair, at the general clearance,
+so naming a pair does not make either net "special"); a SHORT is decided independently of the
+clearance value, so the two halves touching is still a short; and a gap below even the diff-pair floor
+still flags (the fab's own minimum). The incremental `Violates` seam is diff-pair-aware too, so a
+future maze router can route a tight pair the same way `CoupledRouter` does. Verified by the mutation
+that proves the exemption earns its place — the SAME tight geometry flags un-named and passes when
+named — plus: the exemption reaches nothing but the pair (a third net too close to one half still
+flags), a short within a named pair is still a short, a gap below the floor still flags at the
+tighter limit, null/empty/an-unrelated-pair are all the stage-4 run, and `CoupledRouter` routes a
+tight pair the general clearance would refuse. Docs: `examples/ecad-routing.md`.
 
 ### Drawing the schematic sheet (`SchematicSheet`, `SchematicDrawing`)
 

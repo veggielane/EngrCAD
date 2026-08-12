@@ -214,9 +214,41 @@ if (!routed.Ok || !check.WellCoupled || !PcbDrc.Check(layout, rules).Ok)
     throw new Exception("the coupled pair must route well-coupled and DRC-clean");
 ```
 
-The gap must exceed the trace width (or the two traces merge) and the pair must clear the rest of the
-board — a **tight** intra-pair gap below the general clearance needs a diff-pair-aware DRC rule, which
-is filed along with routing the centre-line itself (a fat-net maze) and matched-length coupled routing.
+The gap must exceed the trace width (or the two traces merge). Routing the centre-line itself (a
+fat-net maze) and matched-length coupled routing that tunes the bend skew are filed.
+
+**Tight (diff-pair-aware) DRC.** A controlled-impedance pair often runs at an intra-pair gap *below*
+the general copper clearance — legal because the two conductors are one differential signal, not two
+independent nets. `PcbDrc.Check` (and the incremental `Violates`) take an optional list of the
+differential pairs whose two nets are then checked at the tighter `DrcRuleSet.MinDiffPairGap` instead
+of `MinCopperClearance` — while each half still clears every *other* net at the general clearance, the
+two halves touching is still a short, and a gap below even the diff-pair floor still flags. `CoupledRouter`
+passes the pair to its own gate, so it routes a tight pair. **With no pairs named the DRC is byte-for-byte
+a stage-4 run**, so the exemption reaches nothing it was not told about:
+
+```csharp run:ecad-diffpair-drc
+var board = new PcbBoard(new[] {
+    new Vector2d(0, 0), new Vector2d(30, 0), new Vector2d(30, 20), new Vector2d(0, 20) }, 1.6);
+var layout = new PcbLayout(new Schematic("dp"), board);
+string layer = layout.Board.Stackup.Coppers[0].Name;
+
+// two 0.4 mm traces 0.6 mm centre-to-centre: an edge-to-edge gap of 0.2 mm.
+layout.AddTrace("D_P", layer, 0.4, new[] { new Vector2d(4, 10.3), new Vector2d(26, 10.3) });
+layout.AddTrace("D_N", layer, 0.4, new[] { new Vector2d(4, 9.7), new Vector2d(26, 9.7) });
+
+// general clearance 0.3 mm > the 0.2 mm gap; the diff-pair floor 0.15 mm < it.
+var rules = new DrcRuleSet(
+    MinCopperClearance: 0.3, MinTraceWidth: 0.2, MinAnnularRing: 0.2,
+    MinDrillToCopper: 0.3, MinCopperToEdge: 0.3, MinAcuteAngleDegrees: 80) { MinDiffPairGap = 0.15 };
+var pair = new DiffPair("D_P", "D_N", TargetGapMm: 0.6);
+
+bool plain = PcbDrc.Check(layout, rules).Ok;                 // un-named: a clearance violation
+bool aware = PcbDrc.Check(layout, rules, new[] { pair }).Ok; // named as a pair: clean
+Console.WriteLine($"un-named DRC clean: {plain}; diff-pair-aware DRC clean: {aware}");
+
+if (plain || !aware)
+    throw new Exception("the tight pair must flag un-named and pass when named");
+```
 
 ## Shove (push-and-route)
 
@@ -275,8 +307,8 @@ An honest v1: a grid/maze A* with rip-up-reroute, **through-vias** (spanning all
 layer changes, and 2-pin MST decomposition of multi-pin nets. Deterministic — a fixed net order and
 grid give bit-identical routes. **[Length matching](#length-matching-serpentine-tuning)**,
 **[differential pairs](#differential-pairs)** (analysis, skew matching, and coupled routing) and
-**[shove insertion](#shove-push-and-route)** have landed. Not in v1 (each filed): topological
-push-and-route inside the maze, a diff-pair-aware DRC for tight intra-pair gaps, teardrops, and cavity
-walls as routing obstacles.
+**[shove insertion](#shove-push-and-route)** and the **[diff-pair-aware DRC](#differential-pairs)** for
+tight intra-pair gaps have landed. Not in v1 (each filed): topological push-and-route inside the maze,
+teardrops, and cavity walls as routing obstacles.
 **[Copper pours / ground planes with thermal reliefs](ecad-pcb.md)** and **[Gerber / Excellon
 fabrication export](ecad-fabrication.md)** of the routed board — the fab output — have landed.
