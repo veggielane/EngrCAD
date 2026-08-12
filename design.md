@@ -8313,6 +8313,39 @@ geometry beyond the spoke default is filed; and conformal placement on a doubly-
 offered (the distortion would land in the pitch, the tamper-mesh lesson). Docs: `examples/ecad-pcb.md`
 (Copper pours).
 
+### Teardrops — drill-breakout relief (`TeardropSettings`, `TeardropBuilder`)
+
+The tapered copper a trace gains where it meets a ROUND pad or a via of its own net, relieving the
+drill-breakout crack at the sharp junction. It is the pour's integration verbatim — LAYOUT TRUTH
+(`layout.WithTeardrops()`), DERIVED by `FromLayout`, off = byte-identical, rides in the file
+write-only-when-stated — with one deliberate choice: each teardrop carries its TRACE's source (a trace
+already shares one source across its stroke regions), so it merges into the trace's copper and the
+connectivity engine reads it as a CONNECTOR not a terminal, needing no new source kind and leaving the
+net's pad count unchanged.
+
+**The GEOMETRY is where the finding is, and a first attempt got it wrong.** A teardrop must fill the
+CONCAVE CORNERS where the trace edge leaves the pad circle — copper OUTSIDE the pad — and the naïve
+straight chamfer from the pad's perpendicular diameter (±R) to the trace edges (±w/2 at length L) lies
+ENTIRELY INSIDE the pad∪trace union for a trace ending at the pad centre (the common case, since routers
+route to pad centres) and adds ZERO copper: a broken teardrop that looks plausible. The correct shape is
+the CONVEX HULL of the pad DISC (sampled) and the two trace-edge points at `length·dir ± (w/2)·n` — the
+hull is the pad plus a wedge reaching those points, so unioned with the pad and trace it fills the
+corners. The pad arc is sampled into the hull, so the added copper's pad-side boundary is a fine polygon
+that lies UNDER the exact pad disc — the visible teardrop boundary, the two flanks, is exact straight
+copper. The oracle is therefore that the teardropped layer's union AREA strictly EXCEEDS the plain one
+(a no-op teardrop fails it), which the naïve chamfer would not pass. The length is `LengthRatio·R`
+(default 2, one pad diameter) clamped to the trace's first segment, and it must exceed the pad radius or
+the trace-edge points do not reach past the pad. Each teardrop is same-net (never shorts its own pad) and
+DRC-gated against OTHER-net copper (grow-and-intersect at its `Clearance`; dropped if it would violate),
+so teardrops never turn a clean board dirty. Round pads/vias only (a rectangular/oval pad is skipped, its
+`Round`-shape gate the same the copper model uses); a pad no wider than the trace gets none.
+
+Verified (`PcbTeardropTests`): the area strictly exceeds the plain one (the oracle with teeth), the net's
+PAD COUNT is unchanged (connector not terminal) and the net stays connected, a teardropped board is
+DRC-clean, off is unchanged, a rectangular pad gets none (area unchanged), a clean board stays clean with
+teardrops on (the gate's guarantee), and the persistence fixed point. Docs: `examples/ecad-pcb.md`
+(Teardrops).
+
 ### Stage 7 — enclosure fit (the MCAD/ECAD boundary) (`PcbEnclosure`)
 
 Does the placed board go in the box? An `Enclosure` is a housing built from the ordinary `Shape`

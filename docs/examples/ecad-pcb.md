@@ -551,6 +551,52 @@ if (centre.Count != 1 || centre[0] != "GND" || !noShort)
     throw new Exception("the higher-priority pour must win the overlap with no short");
 ```
 
+## Teardrops (drill-breakout relief)
+
+A **teardrop** is the tapered copper a trace gains where it meets a ROUND pad or a via of its own net —
+it relieves the drill-breakout crack that starts at the sharp trace-to-pad junction. `layout.WithTeardrops()`
+turns them on; `PcbCopperModel.FromLayout` then DERIVES the fill (same-net, merged into the trace's own
+copper), so the DRC, Gerber export and everything downstream read it like any other copper. It is opt-in
+and layout truth (it rides in the file), so a layout with no teardrops is unchanged.
+
+The geometry is the **convex hull of the pad disc and the two trace-edge points**, which fills the
+concave corners *outside* the pad — the copper a teardrop actually adds. (A naïve straight chamfer from
+the pad's perpendicular diameter to the trace edges lies entirely *inside* the pad for a trace ending at
+the pad centre, and adds nothing.) Each teardrop is same-net, so it never shorts its own pad, and it is
+DRC-gated against OTHER-net copper (a teardrop that would come within its clearance of another net is
+dropped, never shipped as a violation):
+
+```csharp run:ecad-teardrops
+PartDefinition Hdr() => new("J", "J",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint("J", new[] {
+        Pad.ThroughHole("1", new Vector2d(0, 0), pad: 2.0, drill: 1.0),
+        Pad.ThroughHole("2", new Vector2d(12, 0), pad: 2.0, drill: 1.0) }));
+
+var sch = new Schematic("td");
+var j = sch.Add("J1", Hdr());
+sch.Connect("SIG", j.Pin("1"), j.Pin("2"));
+var board = new PcbBoard(new[] {
+    new Vector2d(-4, -8), new Vector2d(24, -8), new Vector2d(24, 8), new Vector2d(-4, 8) }, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("J1", 4, 0);
+string top = layout.Board.Stackup.Coppers[0].Name;
+layout.AddTrace("SIG", top, 0.4, new[] { new Vector2d(4, 0), new Vector2d(16, 0) });
+
+int Count(PcbLayout l) => PcbCopperModel.FromLayout(l).Copper.Count(f => f.Layer == top);
+int plain = Count(layout);
+layout.WithTeardrops();
+int withTd = Count(layout);
+Console.WriteLine($"Top copper features: {plain} -> {withTd} (teardrops added {withTd - plain}); "
+    + $"DRC clean: {PcbDrc.Check(layout).Ok}");
+
+if (withTd <= plain || !PcbDrc.Check(layout).Ok)
+    throw new Exception("teardrops must add copper and keep the board DRC-clean");
+```
+
+Only ROUND pads and vias are teardropped (a rectangular or oval pad is skipped), and a pad no wider than
+the trace gets none. Persistence is a byte fixed point.
+
 ## Interchange: IDF import
 
 `IdfReader` imports an IDF 3.0/4.0 board (`.emn`) file — board outline, thickness, drilled holes,

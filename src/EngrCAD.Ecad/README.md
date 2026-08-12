@@ -805,6 +805,25 @@ shorts. Priority rides in the layout file write-only-when-stated (a priority-0 p
 a pre-priority file is byte-identical). Custom relief geometry beyond the spoke default is filed, and
 conformal placement on a curved wall is not offered. Docs: `examples/ecad-pcb.md` (Copper pours).
 
+## Teardrops — drill-breakout relief
+
+`layout.WithTeardrops()` turns on **teardrops**: the tapered copper a trace gains where it meets a ROUND
+pad or a via of its own net, relieving the drill-breakout crack at the sharp junction. Like a pour it is
+LAYOUT TRUTH and DERIVED — `PcbCopperModel.FromLayout` builds the same-net teardrop copper and tags it
+with the TRACE's source, so it merges into the trace's copper and the connectivity engine reads it as a
+CONNECTOR, not a new terminal (a trace already shares one source across its stroke regions). Off = the
+copper is exactly what it was; it rides in the file write-only-when-stated.
+
+**The geometry is the convex hull of the pad DISC and the two trace-EDGE points** (the trace edges a
+length back along the trace), which fills the concave corners OUTSIDE the pad — the copper a teardrop
+actually adds. The instructive finding: a naïve straight chamfer from the pad's perpendicular diameter to
+the trace edges lies ENTIRELY INSIDE the pad for a trace ending at the pad centre (the common case) and
+adds nothing, so the oracle is that the teardropped layer's union area strictly EXCEEDS the plain one.
+Each teardrop is same-net (never shorts its own pad) and DRC-gated against OTHER-net copper (a teardrop
+that would come within its clearance of another net is dropped, never shipped as a violation — so
+teardrops never turn a clean board dirty). Round pads/vias only; a pad no wider than the trace gets none.
+Docs: `examples/ecad-pcb.md` (Teardrops).
+
 ## Fabrication export — Gerber (RS-274X) + Excellon
 
 The fab output that makes a routed board manufacturable AND reflow-assemblable.

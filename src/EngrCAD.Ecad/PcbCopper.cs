@@ -239,6 +239,19 @@ public sealed class PcbCopperModel
             }
         }
 
+        // Teardrops: same-net drill-breakout relief at each trace-to-round-pad / trace-to-via junction,
+        // DERIVED when the layout asks for it. Each teardrop carries its TRACE's source (a trace already
+        // shares one source across its stroke regions), so it merges into the trace's copper and the
+        // connectivity engine reads it as a connector, not a terminal — no new source kind. Built against
+        // the copper as it stands (pads / vias / traces / pours), so the DRC gate sees every other net;
+        // a layout stating no teardrops derives nothing and the copper is exactly what it was.
+        if (layout.Teardrops is { } teardropSettings)
+        {
+            var teardropBase = new PcbCopperModel(
+                layout.Board, copper, drills, layout.Cavities(), placedVias, traceSources, pourSources);
+            copper.AddRange(TeardropBuilder.Generate(teardropBase, layout, teardropSettings));
+        }
+
         return new PcbCopperModel(
             layout.Board, copper, drills, layout.Cavities(), placedVias, traceSources, pourSources);
     }

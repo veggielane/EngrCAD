@@ -145,7 +145,23 @@ internal static class PcbLayoutWriter
         if (layout.Fabrication is { } fab)
             root["fabrication"] = SaveFabrication(fab);
 
+        // Teardrops are LAYOUT TRUTH too — written only when set, each field write-only-when-stated, so
+        // a layout with no teardrops saves byte-identically to a pre-teardrop one.
+        if (layout.Teardrops is { } teardrops)
+            root["teardrops"] = SaveTeardrops(teardrops);
+
         return root;
+    }
+
+    private static JsonObject SaveTeardrops(TeardropSettings t)
+    {
+        var def = TeardropSettings.Default;
+        var record = new JsonObject();
+        if (t.LengthRatio != def.LengthRatio)
+            record["lengthRatio"] = t.LengthRatio;
+        if (t.Clearance != def.Clearance)
+            record["clearance"] = t.Clearance;
+        return record;
     }
 
     private static JsonObject SaveFabrication(PcbFabricationSpec fab)
@@ -433,6 +449,10 @@ internal static class PcbLayoutReader
             layout.SetLoadedPasteSettings(ReadPaste(pasteObj));
         if (root.TryGetPropertyValue("fabrication", out var fabNode) && fabNode is JsonObject fabObj)
             layout.SetLoadedFabrication(ReadFabrication(fabObj));
+        if (root.TryGetPropertyValue("teardrops", out var tdNode) && tdNode is JsonObject tdObj)
+            layout.SetLoadedTeardrops(new TeardropSettings(
+                tdObj["lengthRatio"]?.GetValue<double>() ?? TeardropSettings.Default.LengthRatio,
+                tdObj["clearance"]?.GetValue<double>() ?? TeardropSettings.Default.Clearance));
 
         return layout;
     }

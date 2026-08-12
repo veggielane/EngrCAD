@@ -460,6 +460,12 @@ public sealed partial class PcbLayout
     /// fixed point.</summary>
     public PcbFabricationSpec? Fabrication { get; private set; }
 
+    /// <summary>The teardrop settings (drill-breakout relief at trace-to-round-pad / trace-to-via
+    /// junctions), or null for none. LAYOUT TRUTH — when set, <see cref="PcbCopperModel.FromLayout"/>
+    /// DERIVES same-net teardrop copper into the trace's own copper; when null nothing is derived and
+    /// the copper is exactly what it was. It rides in the layout file write-only-when-stated.</summary>
+    public TeardropSettings? Teardrops { get; private set; }
+
     /// <summary>Sets the solder-mask settings (see <see cref="MaskSettings"/>); returns this layout.</summary>
     public PcbLayout WithMask(PcbMaskSettings settings)
     {
@@ -500,6 +506,16 @@ public sealed partial class PcbLayout
         return this;
     }
 
+    /// <summary>Turns on teardrops (drill-breakout relief) with the given settings (see
+    /// <see cref="Teardrops"/>); returns this layout.</summary>
+    public PcbLayout WithTeardrops(TeardropSettings? settings = null)
+    {
+        settings ??= TeardropSettings.Default;
+        settings.Validate();
+        Teardrops = settings;
+        return this;
+    }
+
     // Loader entry points — validated the same way, so a saved-then-loaded setting is refused for the
     // same reasons a freshly-set one is.
     internal void SetLoadedMaskSettings(PcbMaskSettings settings)
@@ -524,5 +540,11 @@ public sealed partial class PcbLayout
     {
         spec.Validate();
         Fabrication = spec;
+    }
+
+    internal void SetLoadedTeardrops(TeardropSettings settings)
+    {
+        settings.Validate();
+        Teardrops = settings;
     }
 }
