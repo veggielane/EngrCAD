@@ -166,8 +166,10 @@ internal sealed class GerberBuilder
     /// <paramref name="function"/> is the aperture's X2 <c>%TA.AperFunction%</c> role (e.g.
     /// <c>Conductor</c>).</summary>
     internal void Draw(
-        double width, IReadOnlyList<Vector2d> polyline, string? net = null, string? function = null) =>
-        _objects.Add(GObject.Draw(ApertureCode(GerberAperture.Circle(width), function), polyline, dark: true, net));
+        double width, IReadOnlyList<Vector2d> polyline, string? net = null, string? function = null,
+        string? component = null) =>
+        _objects.Add(GObject.Draw(
+            ApertureCode(GerberAperture.Circle(width), function), polyline, dark: true, net, component));
 
     /// <summary>A region fill (`G36`/`G37`) of ONE closed contour of lines and circular arcs, in the
     /// given polarity. A Bézier boundary is refused (Gerber region contours carry no cubic).
@@ -237,7 +239,9 @@ internal sealed class GerberBuilder
             }
             if (_x2)
             {
-                string? component = o.Pad?.Reference;
+                // %TO.C comes from an explicit component (a silk stroke's refdes, no pad) or, for a pad
+                // flash, from its %TO.P's own refdes — so a pad carries a consistent .C and .P.
+                string? component = o.Component ?? o.Pad?.Reference;
                 if (!string.Equals(component, currentComponent, StringComparison.Ordinal))
                 {
                     sb.Append(component is null ? "%TD.C*%" : $"%TO.C,{EscapeAttr(component)}*%").Append('\n');
@@ -385,13 +389,14 @@ internal sealed class GerberBuilder
     private readonly record struct GObject(
         GObjectKind Kind, int DCode, Vector2d Center,
         IReadOnlyList<Vector2d>? Polyline, IReadOnlyList<CurvedEdge2d>? Loop, bool Dark, string? Net,
-        (string Reference, string Pad)? Pad = null)
+        (string Reference, string Pad)? Pad = null, string? Component = null)
     {
         public static GObject Flash(int code, in Vector2d c, bool dark, string? net, (string, string)? pad) =>
             new(GObjectKind.Flash, code, c, null, null, dark, net, pad);
 
-        public static GObject Draw(int code, IReadOnlyList<Vector2d> poly, bool dark, string? net) =>
-            new(GObjectKind.Draw, code, default, poly, null, dark, net);
+        public static GObject Draw(
+            int code, IReadOnlyList<Vector2d> poly, bool dark, string? net, string? component = null) =>
+            new(GObjectKind.Draw, code, default, poly, null, dark, net, null, component);
 
         public static GObject Region(IReadOnlyList<CurvedEdge2d> loop, bool dark, string? net, (string, string)? pad) =>
             new(GObjectKind.Region, 0, default, null, loop, dark, net, pad);
@@ -565,16 +570,19 @@ public static class GerberWriter
     /// still yields a well-formed empty Gerber.
     /// </summary>
     public static string Silkscreen(
-        string layerName, IEnumerable<IReadOnlyList<Vector2d>> strokes, double lineWidth,
-        GerberFormat format, bool x2 = false, string? fileFunction = null)
+        string layerName, IEnumerable<(IReadOnlyList<Vector2d> Points, string? Component)> strokes,
+        double lineWidth, GerberFormat format, bool x2 = false, string? fileFunction = null)
     {
         ArgumentNullException.ThrowIfNull(strokes);
         if (!(lineWidth > 0))
             throw new ArgumentOutOfRangeException(nameof(lineWidth), "The silkscreen pen width must be positive.");
         var builder = new GerberBuilder(format, $"EngrCAD silkscreen '{layerName}'", x2, fileFunction);
-        foreach (var polyline in strokes)
-            if (polyline.Count >= 2)
-                builder.Draw(lineWidth, polyline);
+        // A silk stroke draws its component's mark (refdes / courtyard / value), so it carries that
+        // component's refdes for the X2 %TO.C% attribute (an assembly-documentation datum tying the
+        // printed marking to its component). Silk has no pins, so no %TO.P%. Ignored unless x2 is on.
+        foreach (var (points, component) in strokes)
+            if (points.Count >= 2)
+                builder.Draw(lineWidth, points, component: component);
         return builder.Finish();
     }
 

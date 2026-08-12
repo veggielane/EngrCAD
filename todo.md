@@ -2729,8 +2729,12 @@ from what was already understood rather than from scratch.
     pour region-FILLS so has no aperture, no `%TA`). A mask WINDOW and a paste APERTURE over a component
     pad also carry the `%TO.C`/`%TO.P` assembly datum, looked up by the opening's own `Source`
     (`MaskOpening`/`PasteAperture` already carry it — an AOI/SPI datum), the writers staying layer-clean by
-    taking the pad identity as a plain tuple. STILL FILED are the X2 `%TA` aperture functions on the mask /
-    paste and silk `.C` refdes tagging. The JOB FILE has LANDED — `Write(..., includeJobFile:
+    taking the pad identity as a plain tuple. A silk refdes/value/courtyard stroke also carries the
+    `%TO.C` of the component it marks (`SilkStroke.Source` IS the refdes, so no lookup; a generic Mark
+    carries none), `.C` decoupled from `.P` in the writer so a silk stroke gets `.C` without a spurious
+    `.P` — so the X2 OBJECT attributes are now complete across EVERY layer. STILL FILED are the X2 `%TA`
+    aperture functions on the mask / paste (less standard for a non-copper aperture). The JOB FILE has
+    LANDED — `Write(..., includeJobFile:
     true)` drops `<name>.gbrjob`, the JSON manifest a modern fab reads (board size/thickness, copper
     layer count, surface finish, and every Gerber file with its `FileFunction` — the roles gathered from
     the whole set), deterministic (no CreationDate/GUID salt, a byte fixed point) and opt-in (off =

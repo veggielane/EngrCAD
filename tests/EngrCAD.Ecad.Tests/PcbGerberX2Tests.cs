@@ -229,6 +229,27 @@ public sealed class PcbGerberX2Tests
         Assert.Equal(plainPaste, StripX2(paste));
     }
 
+    // ==== .C on the silkscreen (the assembly-documentation datum) =================
+
+    [Fact]
+    public void X2_TagsSilkStrokesWithTheirComponentRefdes()
+    {
+        var o = PcbGerberExport.Generate(Routed(), includeX2: true);
+        string top = Routed().Board.Stackup.Top.Name;
+        string silk = o.SilkLayers.Single(s => s.Layer == top).Gerber;
+
+        // A silk refdes / courtyard stroke names the component it marks (%TO.C), and no %TO.P — silk has
+        // no pins.
+        Assert.Contains("%TO.C,R1*%", silk);
+        Assert.Contains("%TO.C,U1*%", silk);
+        Assert.DoesNotContain("%TO.P", silk);
+
+        // Off carries none; stripping the attribute lines recovers the plain silk byte-for-byte.
+        string plain = PcbGerberExport.Generate(Routed()).SilkLayers.Single(s => s.Layer == top).Gerber;
+        Assert.DoesNotContain("%TO.C", plain);
+        Assert.Equal(plain, StripX2(silk));
+    }
+
     [Fact]
     public void AnX2MaskGerber_RoundTripsItsWindowsExactly_TheReaderIgnoresAttributes()
     {

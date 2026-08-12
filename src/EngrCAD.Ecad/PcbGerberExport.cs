@@ -118,7 +118,9 @@ public sealed record GerberExportResult(
 /// their source pad — an AOI / SPI datum), the only X2 the pad-bearing non-copper layers need. Opt-in, so
 /// with it off every Gerber is byte-identical (the function collapses so dedup is by shape alone); the
 /// reader ignores X2 attributes (they carry metadata, not geometry), so an X2 file round-trips its copper
-/// exactly. Filed: <c>%TA</c> aperture functions on the mask / paste, and silk <c>.C</c> refdes tagging.</para>
+/// exactly. A silk refdes / value / courtyard stroke also carries the <c>%TO.C%</c> of the component it
+/// marks (an assembly-documentation datum), so the X2 object attributes are complete across every layer.
+/// Filed: <c>%TA</c> aperture functions on the mask / paste (less standard for a non-copper aperture).</para>
 ///
 /// <para><b>What it does not do (each filed):</b> step / multi-level stencils, paste-volume optimisation,
 /// window-paning of large apertures, the assembly pick-and-place file (a different output), fine mask
@@ -265,8 +267,12 @@ public static class PcbGerberExport
     private static IReadOnlyList<GerberLayerFile> SilkGerbers(
         PcbSilkscreen silk, GerberFormat format, bool x2, PcbCopperModel model) =>
         [.. silk.Layers.Select(s => new GerberLayerFile(
-            s.Layer, GerberWriter.Silkscreen(s.Layer, s.Strokes.Select(st => st.Points), s.LineWidth, format,
-                x2, NonCopperFileFunction(x2, model, s.Layer, "Legend"))))];
+            s.Layer, GerberWriter.Silkscreen(
+                // A refdes / value / courtyard stroke belongs to its component, so it carries %TO.C%; a
+                // generic Mark (a fiducial / logo) belongs to no component, so it does not.
+                s.Layer, s.Strokes.Select(st =>
+                    (st.Points, x2 && st.Kind != SilkKind.Mark ? (string?)st.Source : null)),
+                s.LineWidth, format, x2, NonCopperFileFunction(x2, model, s.Layer, "Legend"))))];
 
     /// <summary>A well-formed empty silkscreen Gerber per side (the raw-model path, which has no
     /// placements to draw). With <paramref name="x2"/> on each carries its X2 <c>Legend,&lt;side&gt;</c>
@@ -275,12 +281,13 @@ public static class PcbGerberExport
     {
         double pen = PcbSilkscreenSettings.Default.LineWidth;
         string top = model.Board.Stackup.Top.Name, bottom = model.Board.Stackup.Bottom.Name;
+        (IReadOnlyList<Vector2d>, string?)[] none = [];
         return
         [
             new GerberLayerFile(top, GerberWriter.Silkscreen(
-                top, [], pen, format, x2, NonCopperFileFunction(x2, model, top, "Legend"))),
+                top, none, pen, format, x2, NonCopperFileFunction(x2, model, top, "Legend"))),
             new GerberLayerFile(bottom, GerberWriter.Silkscreen(
-                bottom, [], pen, format, x2, NonCopperFileFunction(x2, model, bottom, "Legend"))),
+                bottom, none, pen, format, x2, NonCopperFileFunction(x2, model, bottom, "Legend"))),
         ];
     }
 

@@ -7863,9 +7863,14 @@ collision (a via pad and a trace both Ø0.3) and asserts one `%ADD` off, two on.
 has no aperture and no `%TA`. A mask WINDOW and a paste APERTURE over a component pad also carry the
 `%TO.C` / `%TO.P` assembly datum, looked up by the opening's own `Source` (`MaskOpening`/`PasteAperture`
 already carry it) — what an AOI / SPI tool reads — while the writers stay layer-clean by taking the pad
-identity as a plain tuple rather than an ECAD type; a via window carries none. Filed: `%TA` aperture
-functions on the mask / paste (a non-copper aperture-function is less standard), and silk `.C` refdes
-tagging (silk strokes carry no source yet). Pads flash (`D03`),
+identity as a plain tuple rather than an ECAD type; a via window carries none. A silk refdes / value /
+courtyard stroke also carries the `%TO.C` of the component it marks (`SilkStroke.Source` IS the refdes,
+so no lookup — an assembly-documentation datum), a generic Mark (a fiducial / logo, belonging to no
+component) carrying none; `.C` was decoupled from `.P` in the writer (a `GObject.Component` field beside
+`Pad`, with `.C` = `Component ?? Pad?.Reference`) so a silk stroke gets `.C` without a spurious `.P`. So
+the X2 OBJECT attributes are now complete across every layer (copper `.N`/`.C`/`.P`, mask/paste `.C`/`.P`,
+silk `.C`). Filed: `%TA` aperture functions on the mask / paste (a non-copper aperture-function is less
+standard). Pads flash (`D03`),
 traces draw
 (`D01`/`D02` with a round aperture, whose swept stroke IS the copper model's trace region), via pads
 flash as solid discs, and anything else — a rotated pad, a copper pour — is a region fill
