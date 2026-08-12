@@ -2913,11 +2913,13 @@ from what was already understood rather than from scratch.
     expands to its whitespace-separated members (each a bare signal OR a bus vector expanded in turn),
     declaring the namespace exactly as a vector does so the tap validation and connectivity
     reconstruction are unchanged; verified by the member partition (bare signals + a vector token), a
-    non-member tap reported by name, and a nested group refused by name. `.kicad_sch` RESIDUALS still
-    filed: **named bus ALIASES** (a `(bus_alias …)` definition referenced by a bare name — needs its own
-    alias table; an anonymous `{…}` group is supported), and **buses ACROSS sheets** (hierarchical bus
-    PINS carrying a bundle over a sheet boundary — the connecting role becomes load-bearing there; buses
-    stay refused in the hierarchical entry points).
+    non-member tap reported by name, and a nested group refused by name. **Named bus ALIASES have LANDED
+    too** — a `(bus_alias "PCI" (members A B DATA[0..1]))` builds an alias TABLE, and a bare label
+    matching an alias is read as a bus declaring those members (each a bare signal OR a vector expanded);
+    so the single-sheet bus import now handles VECTORS, anonymous GROUPS and named ALIASES. `.kicad_sch`
+    RESIDUAL still filed: **buses ACROSS sheets** (hierarchical bus PINS carrying a bundle over a sheet
+    boundary — the connecting role becomes load-bearing there; buses stay refused in the hierarchical
+    entry points).
     **Multi-unit symbols merge** now (a `PartDefinition` gains `Units` — one `Symbol` per unit, `Pins`
     the union — and `KiCadSchReader` merges the same-refdes `(unit N)` instances into ONE component,
     placing each unit's pins at its own location; single-unit / symbol-less definitions are

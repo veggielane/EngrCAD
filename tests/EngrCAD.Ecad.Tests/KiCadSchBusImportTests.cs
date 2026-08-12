@@ -77,6 +77,26 @@ public sealed class KiCadSchBusImportTests
         Assert.Contains("nests a group", ex.Message);
     }
 
+    // ==== named bus ALIAS (bus_alias "PCI" (members …)) ======================
+
+    [Fact]
+    public void ANamedBusAlias_DeclaresItsMembersAndReconstructsTheNets()
+    {
+        var read = KiCadSchReader.Read(KiCadSchBusFixtures.AliasBusTwoSided);
+        var sch = read.Schematic;
+
+        // The bare alias name "PCI" is NOT a signal net — the (bus_alias …) table makes it a bus that
+        // declares its members (AD0, AD1, and DATA0/DATA1 from the vector member expanded inside it).
+        Assert.DoesNotContain(sch.Nets, n => n.Name == "PCI");
+        AssertNet(sch, "AD0", ("RA0", "1"), ("RB0", "1"));
+        AssertNet(sch, "AD1", ("RA1", "1"), ("RB1", "1"));
+        AssertNet(sch, "DATA0", ("RA2", "1"), ("RB2", "1"));
+        AssertNet(sch, "DATA1", ("RA3", "1"), ("RB3", "1"));
+
+        Assert.DoesNotContain(read.Diagnostics, d => d.Contains("not a member"));
+        Assert.True(sch.Check().Ok, sch.Check().ToString());
+    }
+
     // ==== 2. the mutation that bites: relabel a tap ==========================
 
     [Fact]

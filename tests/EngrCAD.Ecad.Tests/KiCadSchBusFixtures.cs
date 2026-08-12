@@ -110,6 +110,14 @@ internal static class KiCadSchBusFixtures
     internal static string GroupSheet(string busLabel) =>
         BusSheet("nested", busLabel, new[] { ("R0", 100, "A") });
 
+    // ---- a NAMED bus ALIAS: (bus_alias "PCI" (members AD0 AD1 DATA[0..1])), the bus wire labelled by
+    //      the bare alias name "PCI", tapped on both sides. A member DATA[0..1] expands inside the alias.
+    internal static readonly string AliasBusTwoSided = BusSheet("aliasbus", "PCI", new[]
+    {
+        ("RA0", 100, "AD0"), ("RA1", 110, "AD1"), ("RA2", 120, "DATA0"), ("RA3", 130, "DATA1"),
+        ("RB0", 160, "AD0"), ("RB1", 170, "AD1"), ("RB2", 180, "DATA0"), ("RB3", 190, "DATA1"),
+    }, extra: "  (bus_alias \"PCI\" (members \"AD0\" \"AD1\" \"DATA[0..1]\"))\n");
+
     // ---- range parsing -----------------------------------------------------
     internal static readonly string VectorForward = BusSheet("vec", "NAME[0..7]", VectorTaps("NAME", 0, 7));
     internal static readonly string VectorReversed = BusSheet("vec", "NAME[7..0]", VectorTaps("NAME", 0, 7));

@@ -92,9 +92,10 @@ public sealed record KiCadSchematic(
 /// sheet; local labels stay local). The single-sheet <see cref="Read"/> deliberately REFUSES a
 /// hierarchical design by name so a flat import cannot silently drop a whole subsheet.</para>
 ///
-/// <para><b>Refused BY NAME</b>: a named bus ALIAS (a <c>(bus_alias …)</c> definition referenced by a
-/// bare name — needs an alias table; an anonymous <c>{A B …}</c> group is supported), a NESTED group,
-/// and a malformed bus range (<c>DATA[]</c>, a non-integer bound); buses in the HIERARCHICAL entry points
+/// <para><b>Refused BY NAME</b>: a NESTED bus group (<c>{A {B C}}</c>) and a malformed bus range
+/// (<c>DATA[]</c>, a non-integer bound) — while bus VECTORS (<c>NAME[m..n]</c>), anonymous GROUPS
+/// (<c>{A B …}</c>) and named ALIASES (a <c>(bus_alias …)</c> definition) are all supported; buses in the
+/// HIERARCHICAL entry points
 /// (out of scope there); and, in <see cref="Read"/> only, hierarchical sheets (<c>sheet</c>
 /// subsheets, <c>hierarchical_label</c>). A netless wire, an instance referencing an unknown symbol,
 /// a dangling pin, or a dangling / non-member bus entry is REPORTED (a diagnostic), not thrown
@@ -202,13 +203,15 @@ public static class KiCadSchReader
             if (TryAt(junction, out var at))
                 junctions.Add(at);
 
-        // Labels split two ways: a bus-VECTOR label declares a member namespace (it is NOT a signal
-        // net), an ordinary label is a signal net point (the existing rule).
+        // Labels split two ways: a bus label (a VECTOR, an anonymous GROUP, or a name matching a bus
+        // ALIAS) declares a member namespace (it is NOT a signal net), an ordinary label is a signal net
+        // point. The alias table is built first so a bare name that matches an alias is read as a bus.
+        var aliases = BuildAliasTable(root);
         var busLabels = new List<BusLabel>();
         foreach (var label in root.Lists("label"))
-            ReadLabelOrBus(label, LabelPriority.Local, labelPoints, busLabels);
+            ReadLabelOrBus(label, LabelPriority.Local, labelPoints, busLabels, aliases);
         foreach (var label in root.Lists("global_label"))
-            ReadLabelOrBus(label, LabelPriority.Global, labelPoints, busLabels);
+            ReadLabelOrBus(label, LabelPriority.Global, labelPoints, busLabels, aliases);
 
         var noConnects = new List<Vector2d>();
         foreach (var nc in root.Lists("no_connect"))
@@ -509,8 +512,8 @@ public static class KiCadSchReader
 
     /// <summary>Whether a label is an ANONYMOUS bus GROUP — the <c>{A B …}</c> brace form (supported in
     /// the single-sheet <see cref="Read"/> via <see cref="ExpandBusGroup"/>; still refused ACROSS sheets).
-    /// A named bus ALIAS is a BARE name, so it is not caught here — it needs its own alias table and stays
-    /// out of scope, treated as a plain signal label.</summary>
+    /// A named bus ALIAS is a BARE name, so it is not caught here — it is resolved by the
+    /// <see cref="BuildAliasTable"/> table instead.</summary>
     private static bool IsBusGroup(string? name) =>
         name is not null && (name.Contains('{') || name.Contains('}'));
 
@@ -582,11 +585,13 @@ public static class KiCadSchReader
         return members;
     }
 
-    /// <summary>Reads a <c>(label …)</c> / <c>(global_label …)</c>: a bus-VECTOR or anonymous bus-GROUP
-    /// label is expanded into a <see cref="BusLabel"/> (it declares members, it is NOT a signal net),
-    /// everything else is an ordinary signal-label point.</summary>
+    /// <summary>Reads a <c>(label …)</c> / <c>(global_label …)</c>: a bus label — a VECTOR, an anonymous
+    /// GROUP, or a bare name matching a bus <paramref name="aliases"/> entry — is expanded into a
+    /// <see cref="BusLabel"/> (it declares members, it is NOT a signal net), everything else is an
+    /// ordinary signal-label point.</summary>
     private static void ReadLabelOrBus(
-        SList label, LabelPriority priority, List<LabelPoint> labelPoints, List<BusLabel> busLabels)
+        SList label, LabelPriority priority, List<LabelPoint> labelPoints, List<BusLabel> busLabels,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> aliases)
     {
         if (!TryLabel(label, out var at, out var name))
             return;
@@ -594,8 +599,40 @@ public static class KiCadSchReader
             busLabels.Add(new BusLabel(at, name, ExpandBusGroup(name)));
         else if (IsBusVector(name))
             busLabels.Add(new BusLabel(at, name, ExpandBusVector(name)));
+        else if (aliases.TryGetValue(name, out var aliasMembers))   // a NAMED bus alias
+            busLabels.Add(new BusLabel(at, name, aliasMembers));
         else
             labelPoints.Add(new LabelPoint(at, name, priority));
+    }
+
+    /// <summary>Builds the bus-ALIAS table from a sheet's <c>(bus_alias "NAME" (members A B DATA[0..3]))</c>
+    /// definitions — the named-group form. Each member is a bare signal OR a bus vector (expanded in turn);
+    /// a label whose name matches an alias is then read as a bus declaring those members. A malformed
+    /// member range is refused by name up front (through <see cref="ExpandBusVector"/>).</summary>
+    private static Dictionary<string, IReadOnlyList<string>> BuildAliasTable(SList root)
+    {
+        var table = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        foreach (var alias in root.Lists("bus_alias"))
+        {
+            string? name = alias.Arg(0);
+            if (string.IsNullOrEmpty(name))
+                continue;
+            var membersList = alias.List("members");
+            if (membersList is null)
+                continue;
+            var members = new List<string>();
+            foreach (var atom in membersList.Args)
+            {
+                string m = atom.Text;
+                if (IsBusVector(m))
+                    members.AddRange(ExpandBusVector(m));
+                else if (m.Length > 0)
+                    members.Add(m);
+            }
+            if (members.Count > 0)
+                table[name] = members;
+        }
+        return table;
     }
 
     /// <summary>Reads a bus wire <c>(bus (pts (xy …) …))</c> into its consecutive segments (a bus
