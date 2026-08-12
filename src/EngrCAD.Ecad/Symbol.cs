@@ -143,18 +143,34 @@ public sealed class Symbol
     /// <summary>The pins, in declaration order.</summary>
     public IReadOnlyList<SymbolPin> Pins { get; }
 
-    /// <summary>Builds a symbol from a name, its pins and its graphics.</summary>
+    /// <summary>The De Morgan / ALTERNATE body of this unit, or <c>null</c> when it has none. A KiCad
+    /// <c>unit_style</c> 2 sub-symbol (a NAND drawn as an OR with bubbles, etc.) is a different DRAWING of
+    /// the same unit — same pin NUMBERS — so it is carried as its own <see cref="Symbol"/> here rather
+    /// than replacing the default body. The alternate never nests (its own <see cref="Alternate"/> is
+    /// null). A caller decides per instance which body to draw; the default is this (the primary) body.</summary>
+    public Symbol? Alternate { get; }
+
+    /// <summary>Builds a symbol from a name, its pins and its graphics, optionally with a De Morgan
+    /// alternate body.</summary>
     /// <param name="name">The symbol name.</param>
     /// <param name="pins">The pins; numbers must be non-empty and unique.</param>
     /// <param name="graphics">The graphic primitives (may be empty).</param>
-    /// <exception cref="ArgumentException"><paramref name="name"/> is empty, or a pin number is
-    /// empty or repeated.</exception>
-    public Symbol(string name, IEnumerable<SymbolPin> pins, IEnumerable<SymbolGraphic>? graphics = null)
+    /// <param name="alternate">The De Morgan / alternate body, or null. It must not itself carry an
+    /// alternate (the style is a single toggle, not a chain).</param>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is empty, a pin number is
+    /// empty or repeated, or <paramref name="alternate"/> itself carries an alternate.</exception>
+    public Symbol(
+        string name, IEnumerable<SymbolPin> pins, IEnumerable<SymbolGraphic>? graphics = null,
+        Symbol? alternate = null)
     {
         ArgumentNullException.ThrowIfNull(pins);
         if (string.IsNullOrEmpty(name))
             throw new ArgumentException("A symbol needs a name.", nameof(name));
+        if (alternate?.Alternate is not null)
+            throw new ArgumentException(
+                $"Symbol '{name}': an alternate body must not itself carry an alternate.", nameof(alternate));
         Name = name;
+        Alternate = alternate;
         Graphics = graphics is null ? [] : [.. graphics];
         Pins = [.. pins];
 

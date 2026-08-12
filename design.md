@@ -7226,8 +7226,14 @@ tractable** — it reads the DRAWN wire geometry (`AnchorOf` just needs the righ
 across two amp units of one package draws as two symbols wired together and `Verify()` reconstructs it as
 one net, with no change to the reconstruction itself. A multi-unit part with a unit unplaced is refused BY
 NAME (`U1B`); verified by the cross-unit net being joined, the two units drawing well apart, and the
-single-unit path staying byte-identical. Filed: De Morgan / alternate unit BODIES (`unit_style` 2 —
-carrying the alternate needs a per-instance style selector; the drawing consumer now exists to use it).
+single-unit path staying byte-identical. **De Morgan / alternate unit BODIES are now CARRIED** (not
+drawn): the reader collects the `_1_2` (`unit_style` 2) sub-symbols per unit in PARALLEL and builds each
+unit's `Symbol.Alternate` (same pin numbers, a different drawing) rather than discarding them with a
+diagnostic, and it round-trips through the schematic file write-only-when-stated (a symbol with no
+alternate saves byte-identically; one with an alternate is a save→load→save fixed point, the recursion one
+level deep since an alternate never nests). Filed: DRAWING the alternate — the alternate's pin ANCHORS
+differ from the primary's, so a per-instance style toggle would have to thread through `AnchorOf`/`UnitOf`
+(a `SymbolPose.Alternate` flag); the data is now preserved for that consumer.
 
 **Single-sheet BUS import.** A bus is a labelled bundle of signal nets — a bus-VECTOR label
 `DATA[m..n]` on a `(bus …)` wire declares the members `DATA`+m..`DATA`+n (`DATA[0..7]` is

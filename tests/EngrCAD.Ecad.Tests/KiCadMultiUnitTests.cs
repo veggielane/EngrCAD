@@ -239,16 +239,57 @@ public sealed class KiCadMultiUnitTests
     }
 
     [Fact]
-    public void DeMorganAlternateBodyStyle_IsIgnoredWithANamedDiagnostic()
+    public void DeMorganAlternateBodyStyle_IsCarriedOnTheSymbolsAlternate()
     {
-        // The Gate has a default body (_1_1) and a De Morgan alternate (_1_2, style 2). The alternate
-        // is out of scope — ignored by name — leaving a single-unit part with its three pins.
+        // The Gate has a default body (_1_1) and a De Morgan alternate (_1_2, style 2). The alternate is
+        // now CARRIED as its own body on Symbol.Alternate (same pin numbers), for a consumer to draw
+        // instead of the default — rather than being discarded.
         var symbol = KiCadSymbolReader.Read(KiCadMultiUnitFixtures.DeMorganSym);
 
-        Assert.Contains(symbol.Diagnostics,
-            d => d.Contains("De Morgan") || d.Contains("alternate body style"));
         Assert.Single(symbol.Units);
         Assert.Equal(new[] { "1", "2", "3" }, symbol.Symbol.PinNumbers);
+        // The alternate body is present, carries the same pin numbers, and does not itself nest.
+        Assert.NotNull(symbol.Symbol.Alternate);
+        Assert.Equal(new[] { "1", "2", "3" }, symbol.Symbol.Alternate!.PinNumbers);
+        Assert.Null(symbol.Symbol.Alternate.Alternate);
+    }
+
+    [Fact]
+    public void ADeMorganAlternateBody_RoundTripsThroughTheSchematicFile()
+    {
+        // A symbol whose primary body is a box and whose De Morgan alternate adds a bubble — the same
+        // three pins. It must survive save -> load -> save as a byte fixed point, alternate and all.
+        SymbolPin P(string n, string nm, Vector2d at, SymbolPinDirection d, PinType t) =>
+            new(n, nm, at, d, 2.54, t);
+        SymbolPin[] Pins() =>
+        [
+            P("1", "A", new Vector2d(-5, 2.54), SymbolPinDirection.Right, PinType.Input),
+            P("2", "B", new Vector2d(-5, -2.54), SymbolPinDirection.Right, PinType.Input),
+            P("3", "Y", new Vector2d(5, 0), SymbolPinDirection.Left, PinType.Output),
+        ];
+        var main = new Symbol("Gate", Pins(),
+            graphics: [new SymbolRectangle(new Vector2d(-4, -4), new Vector2d(4, 4))],
+            alternate: new Symbol("Gate", Pins(),
+                graphics: [new SymbolCircle(new Vector2d(4.5, 0), 0.5)]));   // the De Morgan bubble
+        var def = new PartDefinition("Gate", "U",
+            [new Pin("1", "A", PinType.Input), new Pin("2", "B", PinType.Input), new Pin("3", "Y", PinType.Output)],
+            symbol: main);
+
+        var sch = new Schematic("dm");
+        var u = sch.Add("U1", def);
+        sch.Stub("A", u.Pin("1"));
+
+        string s1 = sch.Save();
+        Assert.Contains("alternate", s1);          // the alternate really was written
+        var loaded = Schematic.Load(s1);
+        Assert.Equal(s1, loaded.Save());           // byte fixed point
+
+        var loadedDef = loaded.Find("U1")!.Definition;
+        Assert.NotNull(loadedDef.Symbol!.Alternate);
+        Assert.Equal(new[] { "1", "2", "3" }, loadedDef.Symbol.Alternate!.PinNumbers);
+        // The primary body is a rectangle, the alternate a circle — the two bodies stay distinct.
+        Assert.Contains(loadedDef.Symbol.Graphics, g => g is SymbolRectangle);
+        Assert.Contains(loadedDef.Symbol.Alternate.Graphics, g => g is SymbolCircle);
     }
 
     [Fact]

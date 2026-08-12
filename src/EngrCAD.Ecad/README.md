@@ -412,9 +412,10 @@ validating structure up front and refusing malformed input **by name** (the
   every unit), `rectangle`/`circle`/`arc`/`polyline`/`text` graphics, and `pin`s (electrical type →
   `PinType`, name, number, position, angle → `SymbolPinDirection`, length). A `SymbolPin.Anchor` is
   the connection point where a wire lands, and the direction points from there into the body (KiCad's
-  pin angle convention). A bezier graphic, an alternate pin function, a De Morgan alternate body
-  style (`_1_2`), or an electrical type with no exact `PinType` is ignored **with a diagnostic**; two
-  units disagreeing about one pin are reported by name (the first is kept).
+  pin angle convention). A bezier graphic, an alternate pin function, or an electrical type with no
+  exact `PinType` is ignored **with a diagnostic**; a De Morgan alternate body style (`_1_2`) is now
+  **carried** on `Symbol.Alternate` (see Multi-unit symbols); two units disagreeing about one pin are
+  reported by name (the first is kept).
 
 **Multi-unit symbols.** A dual op-amp is ONE physical package (one footprint, one reference
 designator) drawn as SEVERAL schematic symbols — amp A, amp B, a power unit. A `PartDefinition` gains
@@ -435,8 +436,12 @@ usual (a wrong merge silently mis-wires an IC): a dual op-amp parses to three un
 per-unit pins and the union; a sheet placing its three units under "U1" imports as EXACTLY one
 component with all eight pins (the mutation against the old two-component behaviour); the two units'
 nets are distinct and land on the right pins; a net physically SPANS the two amp units; identity spans
-the units; persistence and determinism; the inconsistent-units and De Morgan refusals by name.
-Multi-unit schematic DRAWING (placing each unit at its own sheet location) is a filed follow-up.
+the units; persistence and determinism; the inconsistent-units report by name. **Multi-unit schematic
+DRAWING has landed** (`SchematicSheet` places and draws each unit as its own symbol — see the drawing
+table above). **De Morgan / alternate unit bodies are now carried**: the `_1_2` (`unit_style` 2)
+sub-symbols build each unit's `Symbol.Alternate` (same pin numbers, a different drawing) and round-trip
+through the schematic file write-only-when-stated (a symbol with no alternate saves byte-identically);
+DRAWING the alternate (a per-instance style toggle, since the alternate's pin anchors differ) is filed.
 - **Footprint** (`.kicad_mod`): SMD and plated through-hole pads of the standard shapes
   (`circle`/`rect`/`roundrect`/`oval`) with their `at`/`size`/`drill` — mapped onto the existing
   `Footprint`/`Pad` with **no change to `Pad` or `PadShape`** (the drill a through pad needs was

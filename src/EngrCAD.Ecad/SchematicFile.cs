@@ -301,6 +301,11 @@ internal static class SchematicWriter
             pins.Add(pinRecord);
         }
         record["pins"] = pins;
+
+        // The De Morgan / alternate body, write-only-when-stated (a symbol without one omits the key, so
+        // it saves byte-identically). The alternate never nests, so this recursion is one level deep.
+        if (symbol.Alternate is { } alternate)
+            record["alternate"] = SaveSymbol(alternate);
         return record;
     }
 
@@ -511,7 +516,11 @@ internal static class SchematicReader
             pins.Add(new SymbolPin(number, pinName, at, dir, length, type));
         }
 
-        return new Symbol(name, pins, graphics);
+        // The De Morgan / alternate body, present only when the symbol was saved with one.
+        Symbol? alternate = symbol.TryGetPropertyValue("alternate", out var altNode)
+            ? ReadSymbol(Object(altNode, $"the alternate body of symbol '{name}'"))
+            : null;
+        return new Symbol(name, pins, graphics, alternate);
     }
 
     private static SymbolGraphic ReadGraphic(JsonObject g)

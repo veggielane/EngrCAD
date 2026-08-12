@@ -2923,11 +2923,16 @@ from what was already understood rather than from scratch.
     under the first unit), resolves each pin to the unit whose symbol carries it, and the connectivity
     reconstruction is UNIT-AGNOSTIC (it reads the drawn wire geometry), so a net across two amp units of
     one package draws as two symbols wired together and `Verify()` reconstructs it as one net; a
-    multi-unit part with a unit unplaced is refused BY NAME (`U1B`). Residual still filed: **De Morgan /
-    alternate unit BODIES** (`unit_style` 2, the `_1_2` sub-symbol — currently ignored with a named
-    diagnostic; carrying the alternate body needs a per-instance "which style" selector, and with the
-    drawing consumer now present it would let a schematic draw the alternate body). Whole Eagle
-    `.brd`/`.sch` import and IPC-7351 footprint GENERATION remain.
+    multi-unit part with a unit unplaced is refused BY NAME (`U1B`). **De Morgan / alternate unit BODIES
+    are now CARRIED** — the `_1_2` (`unit_style` 2) sub-symbols are collected per unit in parallel and
+    built into each unit's `Symbol.Alternate` (same pin numbers, a different drawing) rather than
+    discarded, round-tripping through the schematic file write-only-when-stated (a symbol with no
+    alternate saves byte-identically; one with an alternate is a save→load→save fixed point). Residual
+    still filed: **DRAWING the alternate body** — `SchematicSheet` draws the primary body; selecting the
+    alternate per instance is entangled because the alternate's pin ANCHORS differ from the primary's, so
+    `AnchorOf`/`UnitOf` would need the per-instance "which style" flag (a `SymbolPose.Alternate` toggle
+    threaded into the pin resolution); the data is now preserved for it. Whole Eagle `.brd`/`.sch` import
+    and IPC-7351 footprint GENERATION remain.
     **3D-model residuals, filed by name** (each RECORDED as a reference but not
     loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
     needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import

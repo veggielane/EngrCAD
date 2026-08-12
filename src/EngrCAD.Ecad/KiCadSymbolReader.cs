@@ -124,10 +124,11 @@ public static class KiCadSymbolReader
     /// <para>A KiCad symbol is drawn as one or more UNIT sub-symbols named
     /// <c>&lt;name&gt;_&lt;unit&gt;_&lt;style&gt;</c>: unit <c>0</c> is graphics/pins COMMON to every
     /// unit, unit <c>1</c>… are the distinct schematic units (a dual op-amp's amp A / amp B / power),
-    /// and <c>style</c> <c>1</c> is the default body while <c>2</c> is the De Morgan alternate (out of
-    /// scope — ignored with a named diagnostic). Each unit's <see cref="Ecad.Symbol"/> carries the
-    /// common pins plus its own, so a schematic can place each unit at its own location while the
-    /// part stays ONE component whose <see cref="ParsedSymbol.Pins"/> are the union.</para></summary>
+    /// and <c>style</c> <c>1</c> is the default body while <c>2</c> is the De Morgan ALTERNATE, carried
+    /// on <see cref="Ecad.Symbol.Alternate"/> (same pin numbers, a different drawing) for a consumer to
+    /// draw instead of the default. Each unit's <see cref="Ecad.Symbol"/> carries the common pins plus
+    /// its own, so a schematic can place each unit at its own location while the part stays ONE component
+    /// whose <see cref="ParsedSymbol.Pins"/> are the union.</para></summary>
     internal static ParsedSymbol ParseSymbolList(SList top, List<string> diagnostics)
     {
         string name = top.Arg(0) ?? throw new FormatException("A (symbol ...) has no name.");
@@ -158,19 +159,28 @@ public static class KiCadSymbolReader
         var common = new UnitCollector();
         CollectDirect(top, common, diagnostics, name);
         var units = new SortedDictionary<int, UnitCollector>();
+        // Style-2 (De Morgan / ALTERNATE) sub-symbols are collected in PARALLEL, per unit, into the
+        // alternate collectors — so each unit's alternate body is CARRIED (on Symbol.Alternate) rather
+        // than discarded. Only styles 1 and 2 exist in KiCad; a higher style is unknown and still
+        // skipped with a diagnostic.
+        var commonAlt = new UnitCollector();
+        var altUnits = new SortedDictionary<int, UnitCollector>();
         foreach (var sub in top.Lists("symbol"))
         {
             var (unit, style) = ParseUnitStyle(sub.Arg(0));
-            if (style >= 2)
+            if (style > 2)
             {
                 diagnostics.Add(
-                    $"Symbol '{name}': a De Morgan / alternate body style (unit_style {style}) is not "
-                    + "supported and was ignored.");
+                    $"Symbol '{name}': an unknown body style (unit_style {style}) is not supported and "
+                    + "was ignored.");
                 continue;
             }
+            bool alt = style == 2;
             var target = unit == 0
-                ? common
-                : units.TryGetValue(unit, out var c) ? c : units[unit] = new UnitCollector();
+                ? (alt ? commonAlt : common)
+                : alt
+                    ? (altUnits.TryGetValue(unit, out var ca) ? ca : altUnits[unit] = new UnitCollector())
+                    : (units.TryGetValue(unit, out var c) ? c : units[unit] = new UnitCollector());
             CollectDirect(sub, target, diagnostics, name);
         }
 
@@ -182,7 +192,9 @@ public static class KiCadSymbolReader
         var unitNumbers = new List<int>();
         if (units.Count == 0)
         {
-            unitSymbols.Add(new Symbol(name, DedupPins(name, 1, common.Pins, diagnostics), common.Graphics));
+            unitSymbols.Add(new Symbol(
+                name, DedupPins(name, 1, common.Pins, diagnostics), common.Graphics,
+                BuildAlternate(name, 1, commonAlt, altUnits, diagnostics)));
             unitNumbers.Add(1);
         }
         else
@@ -192,7 +204,8 @@ public static class KiCadSymbolReader
                 var graphics = new List<SymbolGraphic>(common.Graphics);
                 graphics.AddRange(collector.Graphics);
                 unitSymbols.Add(new Symbol(
-                    name, DedupPins(name, unitNo, common.Pins.Concat(collector.Pins), diagnostics), graphics));
+                    name, DedupPins(name, unitNo, common.Pins.Concat(collector.Pins), diagnostics), graphics,
+                    BuildAlternate(name, unitNo, commonAlt, altUnits, diagnostics)));
                 unitNumbers.Add(unitNo);
             }
         }
@@ -261,6 +274,28 @@ public static class KiCadSymbolReader
                     + "the extra was ignored.");
         }
         return result;
+    }
+
+    /// <summary>Builds a unit's De Morgan / ALTERNATE body from the style-2 collectors — the common
+    /// alternate items plus this unit's own — or <c>null</c> when the unit declared no alternate. The
+    /// alternate carries the same pin NUMBERS as the primary body (De Morgan is a redraw), deduped the
+    /// same way; it never nests (its own <see cref="Symbol.Alternate"/> stays null).</summary>
+    private static Symbol? BuildAlternate(
+        string name, int unitNo, UnitCollector commonAlt,
+        SortedDictionary<int, UnitCollector> altUnits, List<string> diagnostics)
+    {
+        bool hasUnit = altUnits.TryGetValue(unitNo, out var unitAlt);
+        bool hasCommon = commonAlt.Graphics.Count > 0 || commonAlt.Pins.Count > 0;
+        if (!hasUnit && !hasCommon)
+            return null;
+        var graphics = new List<SymbolGraphic>(commonAlt.Graphics);
+        var pins = new List<SymbolPin>(commonAlt.Pins);
+        if (hasUnit)
+        {
+            graphics.AddRange(unitAlt!.Graphics);
+            pins.AddRange(unitAlt.Pins);
+        }
+        return new Symbol(name, DedupPins(name, unitNo, pins, diagnostics), graphics);
     }
 
     /// <summary>The graphics and pins collected from ONE unit's sub-symbol (or the common/top level),
