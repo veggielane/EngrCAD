@@ -39,6 +39,44 @@ public sealed class KiCadSchBusImportTests
         Assert.True(report.Ok, report.ToString());
     }
 
+    // ==== anonymous bus GROUP {A B DATA[0..1]} ===============================
+
+    [Fact]
+    public void AnAnonymousBusGroup_DeclaresItsMembersAndReconstructsTheNets()
+    {
+        var read = KiCadSchReader.Read(KiCadSchBusFixtures.GroupBusTwoSided);
+        var sch = read.Schematic;
+
+        // The group label is NOT a signal net — it declares the member namespace (bare signals AND a
+        // vector token, expanded).
+        Assert.DoesNotContain(sch.Nets, n => n.Name.Contains('{'));
+
+        // Each member joins its two taps — including DATA0/DATA1, the vector expanded inside the group.
+        AssertNet(sch, "SDA", ("RA0", "1"), ("RB0", "1"));
+        AssertNet(sch, "SCL", ("RA1", "1"), ("RB1", "1"));
+        AssertNet(sch, "DATA0", ("RA2", "1"), ("RB2", "1"));
+        AssertNet(sch, "DATA1", ("RA3", "1"), ("RB3", "1"));
+
+        Assert.DoesNotContain(read.Diagnostics, d => d.Contains("not a member"));
+        Assert.True(sch.Check().Ok, sch.Check().ToString());
+    }
+
+    [Fact]
+    public void ABusGroupTap_OnANonMember_IsReportedByName()
+    {
+        // RA1's tap is labelled XYZ, which is not a member of {SDA SCL}.
+        var read = KiCadSchReader.Read(KiCadSchBusFixtures.GroupBusNonMember);
+        Assert.Contains(read.Diagnostics, d => d.Contains("not a member") && d.Contains("XYZ"));
+    }
+
+    [Fact]
+    public void ANestedBusGroup_IsRefusedByName()
+    {
+        var ex = Assert.Throws<FormatException>(
+            () => KiCadSchReader.Read(KiCadSchBusFixtures.GroupSheet("{A {B C}}")));
+        Assert.Contains("nests a group", ex.Message);
+    }
+
     // ==== 2. the mutation that bites: relabel a tap ==========================
 
     [Fact]

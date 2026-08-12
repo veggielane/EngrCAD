@@ -2909,10 +2909,15 @@ from what was already understood rather than from scratch.
     sheet the bus's connecting role is subsumed and the bus model's job reduces to declaring the
     member namespace — so a bus-vector label is not mistaken for a signal net — and validating the
     taps; verified by the member partition + a relabel mutation, reversed-range parsing, and dangling
-    / non-member / bad-range reports), with these `.kicad_sch` RESIDUALS still filed: **bus GROUPS**
-    (`{…}` named groups / aliases — refused by name; a group needs its own member-set resolution),
-    and **buses ACROSS sheets** (hierarchical bus PINS carrying a bundle over a sheet boundary — the
-    connecting role becomes load-bearing there; buses stay refused in the hierarchical entry points).
+    / non-member / bad-range reports). **Anonymous bus GROUPS have LANDED** — a `{A B DATA[0..1]}` label
+    expands to its whitespace-separated members (each a bare signal OR a bus vector expanded in turn),
+    declaring the namespace exactly as a vector does so the tap validation and connectivity
+    reconstruction are unchanged; verified by the member partition (bare signals + a vector token), a
+    non-member tap reported by name, and a nested group refused by name. `.kicad_sch` RESIDUALS still
+    filed: **named bus ALIASES** (a `(bus_alias …)` definition referenced by a bare name — needs its own
+    alias table; an anonymous `{…}` group is supported), and **buses ACROSS sheets** (hierarchical bus
+    PINS carrying a bundle over a sheet boundary — the connecting role becomes load-bearing there; buses
+    stay refused in the hierarchical entry points).
     **Multi-unit symbols merge** now (a `PartDefinition` gains `Units` — one `Symbol` per unit, `Pins`
     the union — and `KiCadSchReader` merges the same-refdes `(unit N)` instances into ONE component,
     placing each unit's pins at its own location; single-unit / symbol-less definitions are

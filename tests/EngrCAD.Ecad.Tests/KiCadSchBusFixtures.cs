@@ -91,6 +91,25 @@ internal static class KiCadSchBusFixtures
         ("RB0", 160, "DATA0"), ("RB1", 170, "DATA1"), ("RB2", 180, "DATA2"), ("RB3", 190, "DATA3"),
     });
 
+    // ---- anonymous bus GROUP {SDA SCL DATA[0..1]} : members SDA, SCL, DATA0, DATA1 (a vector
+    //      token expands inside the group), each tapped on both sides.
+    internal static readonly string GroupBusTwoSided = BusSheet("groupbus", "{SDA SCL DATA[0..1]}", new[]
+    {
+        ("RA0", 100, "SDA"), ("RA1", 110, "SCL"), ("RA2", 120, "DATA0"), ("RA3", 130, "DATA1"),
+        ("RB0", 160, "SDA"), ("RB1", 170, "SCL"), ("RB2", 180, "DATA0"), ("RB3", 190, "DATA1"),
+    });
+
+    // A group {SDA SCL} whose RA1 tap is labelled XYZ — NOT a member of the group.
+    internal static readonly string GroupBusNonMember = BusSheet("groupbus", "{SDA SCL}", new[]
+    {
+        ("RA0", 100, "SDA"), ("RA1", 110, "XYZ"),
+        ("RB0", 160, "SDA"), ("RB1", 170, "SCL"),
+    });
+
+    /// <summary>A one-tap bus sheet for a given group label — used to drive the nested-group refusal.</summary>
+    internal static string GroupSheet(string busLabel) =>
+        BusSheet("nested", busLabel, new[] { ("R0", 100, "A") });
+
     // ---- range parsing -----------------------------------------------------
     internal static readonly string VectorForward = BusSheet("vec", "NAME[0..7]", VectorTaps("NAME", 0, 7));
     internal static readonly string VectorReversed = BusSheet("vec", "NAME[7..0]", VectorTaps("NAME", 0, 7));

@@ -78,9 +78,10 @@ public sealed record KiCadSchematic(
 /// bus member (e.g. <c>DATA3</c>) — that label names the net, and same-named labels are already one
 /// net by local-label equivalence, so on a single flat sheet the bus's CONNECTING role is entirely
 /// subsumed by that equivalence. The bus model's job here is therefore (a) to declare the member
-/// NAMESPACE by expanding a <c>NAME[m..n]</c> label into members <c>NAME</c>+i (so a bus-vector
-/// label is NOT mistaken for a signal net), and (b) to validate that a ripped tap's label is a
-/// declared member. The bus's connecting role becomes load-bearing only ACROSS sheets (hierarchical
+/// NAMESPACE by expanding a <c>NAME[m..n]</c> vector or an anonymous <c>{A B …}</c> GROUP label into
+/// its members (so a bus label is NOT mistaken for a signal net), and (b) to validate that a ripped
+/// tap's label is a declared member. The bus's connecting role becomes load-bearing only ACROSS sheets
+/// (hierarchical
 /// bus pins), which stays out of scope. Buses are supported only in the single-sheet
 /// <see cref="Read"/>; the hierarchical entry points still refuse them by name.</para>
 ///
@@ -91,8 +92,9 @@ public sealed record KiCadSchematic(
 /// sheet; local labels stay local). The single-sheet <see cref="Read"/> deliberately REFUSES a
 /// hierarchical design by name so a flat import cannot silently drop a whole subsheet.</para>
 ///
-/// <para><b>Refused BY NAME</b>: bus GROUP labels (<c>{…}</c> named groups / aliases) and a
-/// malformed bus range (<c>DATA[]</c>, a non-integer bound); buses in the HIERARCHICAL entry points
+/// <para><b>Refused BY NAME</b>: a named bus ALIAS (a <c>(bus_alias …)</c> definition referenced by a
+/// bare name — needs an alias table; an anonymous <c>{A B …}</c> group is supported), a NESTED group,
+/// and a malformed bus range (<c>DATA[]</c>, a non-integer bound); buses in the HIERARCHICAL entry points
 /// (out of scope there); and, in <see cref="Read"/> only, hierarchical sheets (<c>sheet</c>
 /// subsheets, <c>hierarchical_label</c>). A netless wire, an instance referencing an unknown symbol,
 /// a dangling pin, or a dangling / non-member bus entry is REPORTED (a diagnostic), not thrown
@@ -479,13 +481,12 @@ public static class KiCadSchReader
         foreach (var label in root.Lists("label").Concat(root.Lists("global_label")))
         {
             string? name = label.Arg(0);
+            // Validate the member expansion up front (a malformed vector range or group is refused by
+            // name before any work), the same way a bad geometry file fails early.
             if (IsBusGroup(name))
-                throw new FormatException(
-                    $"This KiCad schematic uses a bus GROUP label ('{name}') — a named bus group / "
-                    + "alias — which is out of scope. Bus VECTORS (NAME[m..n]) are supported; spell a "
-                    + "group's members individually, or file bus groups as a follow-up.");
-            if (IsBusVector(name))
-                ExpandBusVector(name!);   // refuses a malformed range by name before the read proper
+                ExpandBusGroup(name!);
+            else if (IsBusVector(name))
+                ExpandBusVector(name!);
         }
     }
 
@@ -506,9 +507,10 @@ public static class KiCadSchReader
     /// this to refuse buses by name (buses across sheets stay out of scope).</summary>
     private static bool LooksLikeBus(string? name) => IsBusGroup(name) || IsBusVector(name);
 
-    /// <summary>Whether a label is a bus GROUP — the <c>{…}</c> named-group / alias form. Out of
-    /// scope (a group needs its own member-set resolution), so it is refused by name where it
-    /// appears.</summary>
+    /// <summary>Whether a label is an ANONYMOUS bus GROUP — the <c>{A B …}</c> brace form (supported in
+    /// the single-sheet <see cref="Read"/> via <see cref="ExpandBusGroup"/>; still refused ACROSS sheets).
+    /// A named bus ALIAS is a BARE name, so it is not caught here — it needs its own alias table and stays
+    /// out of scope, treated as a plain signal label.</summary>
     private static bool IsBusGroup(string? name) =>
         name is not null && (name.Contains('{') || name.Contains('}'));
 
@@ -551,15 +553,46 @@ public static class KiCadSchReader
         return members;
     }
 
-    /// <summary>Reads a <c>(label …)</c> / <c>(global_label …)</c>: a bus-VECTOR label is expanded
-    /// into a <see cref="BusLabel"/> (it declares members, it is NOT a signal net), everything else
-    /// is an ordinary signal-label point.</summary>
+    /// <summary>Expands an ANONYMOUS bus GROUP label <c>{A B DATA[0..3]}</c> into its member net names —
+    /// the whitespace-separated tokens, each a bare signal OR itself a bus VECTOR (expanded in turn). A
+    /// named bus ALIAS (a bare name referencing a <c>(bus_alias …)</c> definition, not spelled <c>{…}</c>)
+    /// is NOT this and stays out of scope. A nested group is refused by name.</summary>
+    private static IReadOnlyList<string> ExpandBusGroup(string name)
+    {
+        int lb = name.IndexOf('{');
+        int rb = name.LastIndexOf('}');
+        if (lb < 0 || rb <= lb)
+            throw new FormatException(
+                $"The bus group label '{name}' is malformed (expected a brace group like '{{A B C}}').");
+        string inner = name[(lb + 1)..rb].Trim();
+        if (inner.Length == 0)
+            throw new FormatException($"The bus group label '{name}' declares no members (an empty '{{}}').");
+        var members = new List<string>();
+        foreach (var token in inner.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (token.Contains('{') || token.Contains('}'))
+                throw new FormatException(
+                    $"The bus group label '{name}' nests a group ('{token}'); a v1 group contains bare "
+                    + "signals and bus vectors only.");
+            if (IsBusVector(token))
+                members.AddRange(ExpandBusVector(token));
+            else
+                members.Add(token);
+        }
+        return members;
+    }
+
+    /// <summary>Reads a <c>(label …)</c> / <c>(global_label …)</c>: a bus-VECTOR or anonymous bus-GROUP
+    /// label is expanded into a <see cref="BusLabel"/> (it declares members, it is NOT a signal net),
+    /// everything else is an ordinary signal-label point.</summary>
     private static void ReadLabelOrBus(
         SList label, LabelPriority priority, List<LabelPoint> labelPoints, List<BusLabel> busLabels)
     {
         if (!TryLabel(label, out var at, out var name))
             return;
-        if (IsBusVector(name))   // a bus GROUP was already refused in RefuseOutOfScope
+        if (IsBusGroup(name))    // an anonymous {A B …} group — validated in RefuseOutOfScope
+            busLabels.Add(new BusLabel(at, name, ExpandBusGroup(name)));
+        else if (IsBusVector(name))
             busLabels.Add(new BusLabel(at, name, ExpandBusVector(name)));
         else
             labelPoints.Add(new LabelPoint(at, name, priority));

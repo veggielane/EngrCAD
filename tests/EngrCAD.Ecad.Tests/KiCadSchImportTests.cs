@@ -168,13 +168,13 @@ public sealed class KiCadSchImportTests
     }
 
     [Fact]
-    public void BusGroups_AreRefusedByName()
+    public void AnAnonymousBusGroup_IsImported_AndItsLabelIsNotANet()
     {
-        // Bus VECTORS (NAME[m..n]) are supported (see KiCadSchBusImportTests); a bus GROUP ({…}
-        // named group / alias) stays out of scope and is refused by name.
-        var ex = Assert.Throws<FormatException>(
-            () => KiCadSchReader.Read(KiCadSchFixtures.BusGroupSheet));
-        Assert.Contains("bus GROUP", ex.Message);
+        // Bus VECTORS (NAME[m..n]) and anonymous bus GROUPS ({A B …}) are both supported now (see
+        // KiCadSchBusImportTests): the group label declares its member namespace, so it is NOT a signal
+        // net. (A named bus ALIAS and a NESTED group stay out of scope.)
+        var sch = KiCadSchReader.Read(KiCadSchFixtures.BusGroupSheet).Schematic;
+        Assert.DoesNotContain(sch.Nets, n => n.Name.Contains('{'));
     }
 
     [Fact]

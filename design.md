@@ -7254,8 +7254,13 @@ is what stops a bus-vector label being mistaken for a signal net (`DATA[0..7]` i
 component of bus wires, tracked by a separate union-find so a bus point is never a signal net, and a
 tap's member checked by reading the ripped wire's net label back off the signal graph. The connecting
 role becomes load-bearing only ACROSS sheets (hierarchical bus pins carrying a bundle over a sheet
-boundary), so **buses stay refused in the hierarchical entry points**; a bus GROUP (`{…}` named group
-/ alias) needs its own member-set resolution and is refused by name, as is a malformed range
+boundary), so **buses stay refused in the hierarchical entry points**; an anonymous bus GROUP
+(`{A B DATA[0..1]}`) is now SUPPORTED — its members are the whitespace-separated tokens, each a bare
+signal or itself a bus vector (expanded in turn), declaring the namespace exactly as a vector does, so
+the tap validation and the connectivity reconstruction are unchanged (a group is a bundle of member
+nets; on one sheet its connecting role is subsumed by local-label equivalence). A NESTED group and a
+named bus ALIAS (a bare name referencing a `(bus_alias …)` definition — it needs its own alias table)
+stay out of scope and are refused by name, as is a malformed range
 (`DATA[]`, a non-integer bound — stricter than KiCad, which would treat those as ordinary labels, but
 the refuse-by-name ethos), while a dangling bus entry (its bus side or wire side touching nothing) or
 a non-member tap is REPORTED not thrown. **The oracle is the member partition asserted exactly plus a
@@ -7264,8 +7269,10 @@ membership-blind importer would pass the partition test and fail this), with rev
 (forward and reversed expand to the same eight members, so all eight taps validate clean),
 plain-net non-contamination (a bus beside a plain net leaves it exactly what it was, structural since
 the signal union-find never sees a bus point), and the bad-range / non-member / dangling reports each
-pinned. Filed: bus groups / aliases, and buses across sheets (drawing buses on the schematic
-sheet has since landed — see `Drawing the schematic sheet`). Docs: `examples/ecad-library.md`.
+pinned. **Anonymous groups since landed** with the same oracle — the member partition (bare signals AND
+a vector token expanded inside the group), a non-member tap reported by name, and a nested group refused
+by name. Filed: named bus ALIASES (needs an alias table) and buses across sheets (drawing buses on the
+schematic sheet has since landed — see `Drawing the schematic sheet`). Docs: `examples/ecad-library.md`.
 
 **Hierarchical / multi-sheet import** (`KiCadSchReader.ReadProject(rootPath)` /
 `ReadProjectFrom(rootFile, sheetsByFile)`) flattens a real KiCad hierarchy — a root `.kicad_sch` plus

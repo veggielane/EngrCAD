@@ -562,8 +562,9 @@ markers (their `Value` is the net name), not components. This is exactly the rul
 **Coverage** of `Read` is a single sheet: embedded `lib_symbols` → `PartDefinition`s (interned per
 `lib_id`, so two `Device:R` instances share one definition), placed `(symbol …)` instances (Reference
 → refdes, Value → value), power symbols, `wire`, `junction`, local `label`, `global_label`,
-`no_connect`, and **buses** (see below). **Refused BY NAME**: bus GROUP labels (`{…}` named groups /
-aliases) and a malformed bus range; and — in the single-sheet `Read` only — hierarchical sheets
+`no_connect`, and **buses** (see below). **Refused BY NAME**: a named bus ALIAS (a `(bus_alias …)`
+referenced by a bare name — an anonymous `{A B …}` group is supported), a NESTED group, and a malformed
+bus range; and — in the single-sheet `Read` only — hierarchical sheets
 (`sheet` subsheets, `hierarchical_label`), so a flat import cannot silently drop a whole subsheet; a
 `(sheet_instances …)`, present in every flat sheet, is NOT a subsheet and passes. A netless wire, an
 instance referencing an unknown symbol, a dangling pin, or a dangling / non-member bus entry is
@@ -580,8 +581,10 @@ equivalence, and the bus model's job reduces to (a) declaring the member NAMESPA
 label is not mistaken for a signal net — `DATA[0..7]` is never a net) and (b) VALIDATING each tap
 against it (a stray tap, a dangling entry, or a bad range is reported / refused by name). The
 connecting role becomes load-bearing only ACROSS sheets (hierarchical bus pins), so buses stay refused
-in the hierarchical entry points; a bus GROUP (`{…}`) needs its own member-set resolution and is out of
-scope. Verified higher than usual (a mis-expanded bus is a silent failure): the member PARTITION is
+in the hierarchical entry points; an anonymous bus GROUP (`{A B DATA[0..1]}`) is now supported (its
+members are the whitespace-separated tokens, each a bare signal or a bus vector expanded in turn), while
+a named bus ALIAS and a NESTED group stay out of scope. Verified higher than usual (a mis-expanded bus is
+a silent failure): the member PARTITION is
 reconstructed exactly with `Check()` passing, and the MUTATION that proves it bites is a RELABELLED tap
 — moving a tap's label moves its pin to a different member (a positional / membership-blind importer
 would pass the partition test and fail this) — plus reversed-range parsing, the plain-net
@@ -624,8 +627,9 @@ proves the reader reads geometry (move a wire endpoint off a pin → the net spl
 reported); the junction rule from both sides (a crossing needs a junction to join); label
 equivalence (same label = one net, different = two); no_connect (an isolated marked pin is on no
 signal net); the symbol == netlist pin identity (`PinIdentity`); determinism (two reads save
-byte-identically); and the refusals. Filed follow-ups: bus GROUPS (`{…}` aliases) and buses across
-sheets (hierarchical bus pins). Docs: `examples/ecad-library.md`.
+byte-identically); and the refusals. **Anonymous bus GROUPS (`{A B …}`) since landed** (member partition
++ non-member + nested-group refusal). Filed follow-ups: named bus ALIASES (a `(bus_alias …)` table) and
+buses across sheets (hierarchical bus pins). Docs: `examples/ecad-library.md`.
 
 ## Drawing the schematic sheet
 
