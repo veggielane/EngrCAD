@@ -2718,7 +2718,10 @@ from what was already understood rather than from scratch.
     `PasteLayer` / `Silkscreen` / `Outline` via a `NonCopperFileFunction` helper so the same
     `GerberBuilder` emits every role and the whole package is self-describing and matches the `.gbrjob`
     manifest (off = byte-identical on the non-copper files too, with a mask round-trip beside the copper
-    one). STILL FILED are the X2 `.C`/`.P` component / pad object attributes and `%TA` aperture
+    one). Each COMPONENT PAD flash on a copper layer also carries the X2 `%TO.C,<refdes>*%` and
+    `%TO.P,<refdes>,<pad>*%` ASSEMBLY attributes (the copper tied back to its component pin), the identity
+    looked up by the feature SOURCE (`"R1.1"` = `PlacedPad.Name`, no string parsing) so a via / trace /
+    pour carries none. STILL FILED are the X2 `.C`/`.P` on the paste / silk layers and `%TA` aperture
     attributes. The JOB FILE has LANDED — `Write(..., includeJobFile:
     true)` drops `<name>.gbrjob`, the JSON manifest a modern fab reads (board size/thickness, copper
     layer count, surface finish, and every Gerber file with its `FileFunction` — the roles gathered from

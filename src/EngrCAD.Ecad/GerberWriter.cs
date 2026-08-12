@@ -148,9 +148,13 @@ internal sealed class GerberBuilder
     }
 
     /// <summary>A flash (`D03`) of an aperture at a point, in the given polarity. <paramref name="net"/>
-    /// is the object's net for an X2 <c>%TO.N%</c> attribute (ignored unless the builder is in X2 mode).</summary>
-    internal void Flash(GerberAperture aperture, in Vector2d center, bool dark = true, string? net = null) =>
-        _objects.Add(GObject.Flash(ApertureCode(aperture), center, dark, net));
+    /// is the object's net for an X2 <c>%TO.N%</c> attribute, and <paramref name="pad"/> the component
+    /// pin it realises for the X2 <c>%TO.C%</c> / <c>%TO.P%</c> attributes (both ignored unless the
+    /// builder is in X2 mode).</summary>
+    internal void Flash(
+        GerberAperture aperture, in Vector2d center, bool dark = true, string? net = null,
+        (string Reference, string Pad)? pad = null) =>
+        _objects.Add(GObject.Flash(ApertureCode(aperture), center, dark, net, pad));
 
     /// <summary>A stroked polyline: a dark draw (`D01`) with a round aperture of the trace width — the
     /// Minkowski sum of the centre-line with a disc, exactly the copper model's trace stroke.</summary>
@@ -158,9 +162,13 @@ internal sealed class GerberBuilder
         _objects.Add(GObject.Draw(ApertureCode(GerberAperture.Circle(width)), polyline, dark: true, net));
 
     /// <summary>A region fill (`G36`/`G37`) of ONE closed contour of lines and circular arcs, in the
-    /// given polarity. A Bézier boundary is refused (Gerber region contours carry no cubic).</summary>
-    internal void Contour(IReadOnlyList<CurvedEdge2d> loop, bool dark, string? net = null) =>
-        _objects.Add(GObject.Region(loop, dark, net));
+    /// given polarity. A Bézier boundary is refused (Gerber region contours carry no cubic).
+    /// <paramref name="pad"/> is the component pin it realises (for a rounded / rotated pad that
+    /// region-fills instead of flashing) — the X2 <c>%TO.C%</c> / <c>%TO.P%</c> datum.</summary>
+    internal void Contour(
+        IReadOnlyList<CurvedEdge2d> loop, bool dark, string? net = null,
+        (string Reference, string Pad)? pad = null) =>
+        _objects.Add(GObject.Region(loop, dark, net, pad));
 
     /// <summary>Whether any object has been added.</summary>
     internal bool IsEmpty => _objects.Count == 0;
@@ -189,7 +197,8 @@ internal sealed class GerberBuilder
         bool dark = true;
         int currentAperture = -1;
         string mode = "G01";
-        string? currentNet = null;
+        string? currentNet = null, currentComponent = null;
+        (string Reference, string Pad)? currentPad = null;
         foreach (var o in _objects)
         {
             if (o.Dark != dark)
@@ -197,12 +206,30 @@ internal sealed class GerberBuilder
                 sb.Append(o.Dark ? "%LPD*%" : "%LPC*%").Append('\n');
                 dark = o.Dark;
             }
-            // X2 object attribute: the net this object belongs to (%TO.N,<net>*%), set when it changes
-            // and deleted (%TD.N*%) when an object carries no net. Off unless the builder is in X2 mode.
+            // X2 object attributes, set when they change and deleted (%TD.*) when an object carries none.
+            // Off unless the builder is in X2 mode. The net (%TO.N) is a fab's net-compare datum; the
+            // component refdes (%TO.C) and pad (%TO.P,<refdes>,<pad>) are the assembly datum tying a copper
+            // flash back to its component pin (emitted only on component pads — traces/vias/pours carry none).
             if (_x2 && !string.Equals(o.Net, currentNet, StringComparison.Ordinal))
             {
                 sb.Append(o.Net is null ? "%TD.N*%" : $"%TO.N,{EscapeAttr(o.Net)}*%").Append('\n');
                 currentNet = o.Net;
+            }
+            if (_x2)
+            {
+                string? component = o.Pad?.Reference;
+                if (!string.Equals(component, currentComponent, StringComparison.Ordinal))
+                {
+                    sb.Append(component is null ? "%TD.C*%" : $"%TO.C,{EscapeAttr(component)}*%").Append('\n');
+                    currentComponent = component;
+                }
+                if (o.Pad != currentPad)
+                {
+                    sb.Append(o.Pad is { } p
+                        ? $"%TO.P,{EscapeAttr(p.Reference)},{EscapeAttr(p.Pad)}*%"
+                        : "%TD.P*%").Append('\n');
+                    currentPad = o.Pad;
+                }
             }
             switch (o.Kind)
             {
@@ -337,16 +364,17 @@ internal sealed class GerberBuilder
 
     private readonly record struct GObject(
         GObjectKind Kind, int DCode, Vector2d Center,
-        IReadOnlyList<Vector2d>? Polyline, IReadOnlyList<CurvedEdge2d>? Loop, bool Dark, string? Net)
+        IReadOnlyList<Vector2d>? Polyline, IReadOnlyList<CurvedEdge2d>? Loop, bool Dark, string? Net,
+        (string Reference, string Pad)? Pad = null)
     {
-        public static GObject Flash(int code, in Vector2d c, bool dark, string? net) =>
-            new(GObjectKind.Flash, code, c, null, null, dark, net);
+        public static GObject Flash(int code, in Vector2d c, bool dark, string? net, (string, string)? pad) =>
+            new(GObjectKind.Flash, code, c, null, null, dark, net, pad);
 
         public static GObject Draw(int code, IReadOnlyList<Vector2d> poly, bool dark, string? net) =>
             new(GObjectKind.Draw, code, default, poly, null, dark, net);
 
-        public static GObject Region(IReadOnlyList<CurvedEdge2d> loop, bool dark, string? net) =>
-            new(GObjectKind.Region, 0, default, null, loop, dark, net);
+        public static GObject Region(IReadOnlyList<CurvedEdge2d> loop, bool dark, string? net, (string, string)? pad) =>
+            new(GObjectKind.Region, 0, default, null, loop, dark, net, pad);
     }
 }
 
@@ -383,7 +411,8 @@ public static class GerberWriter
         IEnumerable<CurvedRegion2d> clearAir,
         GerberFormat format,
         bool x2 = false,
-        string? fileFunction = null)
+        string? fileFunction = null,
+        IReadOnlyDictionary<string, (string Reference, string Pad)>? padIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(features);
         ArgumentNullException.ThrowIfNull(vias);
@@ -394,9 +423,15 @@ public static class GerberWriter
 
         // Dark solids — every feature's OUTER copper: pads / pours as flashes-or-region-fills, via
         // pads as solid discs, traces as round-aperture draws. Each carries its NET for the X2
-        // %TO.N% object attribute (a fab's net-compare datum); ignored unless x2 is on.
+        // %TO.N% object attribute (a fab's net-compare datum), and a component pad additionally its
+        // (refdes, pad) for the X2 %TO.C% / %TO.P% assembly datum (looked up by feature source; a pour
+        // or a non-component feature has none). All ignored unless x2 is on.
         foreach (var f in features)
-            EmitSolid(builder, f.Region, x2 ? f.Net : null);
+        {
+            (string, string)? pad = x2 && padIdentity is not null && padIdentity.TryGetValue(f.Source, out var id)
+                ? id : null;
+            EmitSolid(builder, f.Region, x2 ? f.Net : null, pad);
+        }
         foreach (var v in vias)
             builder.Flash(GerberAperture.Circle(v.PadDiameter), v.Center, dark: true, net: x2 ? v.Net : null);
         foreach (var (points, width, net) in traces)
@@ -508,15 +543,16 @@ public static class GerberWriter
         return builder.Finish();
     }
 
-    private static void EmitSolid(GerberBuilder builder, CurvedRegion2d region, string? net = null)
+    private static void EmitSolid(
+        GerberBuilder builder, CurvedRegion2d region, string? net = null, (string, string)? pad = null)
     {
         if (GerberShapes.TryDisc(region, out var c, out double d))
-            builder.Flash(GerberAperture.Circle(d), c, net: net);
+            builder.Flash(GerberAperture.Circle(d), c, net: net, pad: pad);
         else if (GerberShapes.TryAxisAlignedRect(region, out c, out double w, out double h))
-            builder.Flash(GerberAperture.Rectangle(w, h), c, net: net);
+            builder.Flash(GerberAperture.Rectangle(w, h), c, net: net, pad: pad);
         else if (GerberShapes.TryAxisAlignedObround(region, out c, out w, out h))
-            builder.Flash(GerberAperture.Obround(w, h), c, net: net);
+            builder.Flash(GerberAperture.Obround(w, h), c, net: net, pad: pad);
         else
-            builder.Contour(region.Outer, dark: true, net: net);
+            builder.Contour(region.Outer, dark: true, net: net, pad: pad);
     }
 }

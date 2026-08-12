@@ -130,6 +130,32 @@ public sealed class PcbGerberX2Tests
         Assert.Equal(plain.OutlineGerber, StripX2(x2.OutlineGerber));
     }
 
+    // ==== component / pad object attributes (%TO.C / %TO.P) on copper pad flashes =================
+
+    [Fact]
+    public void X2_EmitsComponentAndPadObjectAttributesOnCopperPads()
+    {
+        string g = Top(PcbGerberExport.Generate(Routed(), includeX2: true));
+
+        // Each component pad flash is tied back to its component pin (the assembly datum): %TO.C,<refdes>
+        // and %TO.P,<refdes>,<pad>. R1 and U1 each have pads 1 and 2 on the top layer.
+        Assert.Contains("%TO.C,R1*%", g);
+        Assert.Contains("%TO.P,R1,1*%", g);
+        Assert.Contains("%TO.P,R1,2*%", g);
+        Assert.Contains("%TO.C,U1*%", g);
+        Assert.Contains("%TO.P,U1,1*%", g);
+        Assert.Contains("%TO.P,U1,2*%", g);
+
+        // A plain (non-X2) Gerber carries none — and the traces / drills are NOT tagged with a pad.
+        string plain = Top(PcbGerberExport.Generate(Routed()));
+        Assert.DoesNotContain("%TO.C", plain);
+        Assert.DoesNotContain("%TO.P", plain);
+
+        // Stripping the attribute lines still recovers the plain geometry byte-for-byte (the assembly
+        // attributes carry no geometry, exactly as %TO.N and %TF do).
+        Assert.Equal(plain, StripX2(g));
+    }
+
     [Fact]
     public void AnX2MaskGerber_RoundTripsItsWindowsExactly_TheReaderIgnoresAttributes()
     {

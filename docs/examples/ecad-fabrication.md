@@ -18,8 +18,10 @@ attribute (the net-compare datum, read straight from the Gerbers), and *every* G
 `%TF.GenerationSoftware%` attribute and its `%TF.FileFunction%` role — `Copper,L<n>,<side>` for a copper
 layer, `Soldermask,<side>` / `Legend,<side>` / `SolderPaste,<side>` for the mask / silk / paste, and
 `Profile,NP` for the (non-plated) board outline — so the whole package is self-describing and matches the
-`.gbrjob` manifest. Opt-in, so off is byte-identical, and since X2 adds only metadata (not geometry) the
-reader ignores the attributes and an X2 file round-trips its copper exactly. `Write(layout, dir, includeJobFile: true)`
+`.gbrjob` manifest. Each **component pad** flash on the copper layer additionally carries the assembly
+datum `%TO.C,<refdes>*%` and `%TO.P,<refdes>,<pad>*%` (the flash tied back to its component pin — a
+via / trace / pour carries none). Opt-in, so off is byte-identical, and since X2 adds only metadata (not
+geometry) the reader ignores the attributes and an X2 file round-trips its copper exactly. `Write(layout, dir, includeJobFile: true)`
 also drops the **`.gbrjob` job file** — the JSON manifest a fab reads to identify the whole set (board
 size/thickness, copper-layer count, surface finish, and every Gerber file with its `FileFunction`),
 deterministic (no clock/GUID salt) and an honest manifest (every file it lists is one it wrote).
@@ -610,9 +612,9 @@ its own output, above, and the **IPC-D-356A netlist** the electrical-test / net-
 each filed: step / multi-level stencils, paste-volume optimisation, window-paning of large apertures,
 fine mask tenting control beyond the tented/opened via policy, curved conformal mask / silk / paste on a
 MID surface (refused for the distortion reason), a lowercase silk font (a value's lowercase advances as a
-blank), the Gerber X2 `.C` / `.P` component / pad object attributes and `%TA` aperture attributes (the
-X2 net object attribute, per-Gerber `FileFunction` and the `.gbrjob` job file are done), and a Gerber
-IMPORT of a foreign board (this is export).
+blank), the Gerber X2 `.C` / `.P` on the paste / silk layers and `%TA` aperture attributes (the X2 net
+object attribute, the per-Gerber `FileFunction`, the `.C` / `.P` component / pad attributes on the copper
+pads, and the `.gbrjob` job file are done), and a Gerber IMPORT of a foreign board (this is export).
 The IPC-D-356A netlist now carries **blind/buried-via layer spans** (an explicit `L<from>-<to>` token
 beside the top-most-layer access code) and **wide net-name / refdes fields** (an over-width identity rides
 a `379` continuation record instead of being refused); it still files conductor (trace-midpoint, op `378`)
