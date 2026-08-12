@@ -2756,6 +2756,24 @@ from what was already understood rather than from scratch.
     thermal-relief-aware DRC exemption, would let the default rule pass); and a CONFORMAL pour on a
     doubly-curved MID wall (refused for the tamper-mesh reason — `MeshLocalParam`'s 2–5% distortion
     would land in the clearance).
+  - **TEARDROPS (drill-breakout relief at trace-to-round-pad / trace-to-via junctions) — filed, with
+    the geometry finding that a first attempt got WRONG.** A teardrop is same-net copper (never shorts
+    its own pad, DRC-gated only against OTHER-net copper), so the integration is the pour's:
+    `TeardropSettings` as LAYOUT TRUTH, `FromLayout` derives the copper tagged with the TRACE's source
+    (a trace already shares one source across its stroke regions, so a teardrop is a CONNECTOR not a
+    terminal with no new source kind), off = byte-identical. **The geometry is the hard part and the
+    naive one is a NO-OP**: a straight CHAMFER trapezoid from the pad's perpendicular diameter (±R) to
+    the trace edges (±w/2 at length L) lies ENTIRELY INSIDE the pad∪trace union for a trace ending at
+    the pad centre (the common case — routers route to pad centres), so it adds zero copper. The
+    correct teardrop fills the CONCAVE CORNERS where the trace edge exits the pad circle (at
+    `(√(R²−(w/2)²), ±w/2)` from the pad centre), OUTSIDE the pad — a TANGENT-line chamfer (flanks
+    tangent to the pad from the trace-edge points) or the convex hull of {pad disc, the two trace-edge
+    points}, unioned with the trace. That needs an ARC on the pad rim (a `CurvedRegion2d` of lines +
+    a pad arc, winding-correct) OR a polygonal hull with the pad sampled (stated as approximate). The
+    oracle: the teardropped layer's union AREA strictly EXCEEDS the un-teardropped one (a no-op
+    teardrop fails this), plus connectivity unchanged (PadCount identical — the connector-not-terminal
+    check), DRC-clean, the DRC-gate drops a teardrop near other-net copper (mutation), round-only
+    (a rectangular pad gets none), and the persistence fixed point.
   - **MID / LDS 3D surface routing — LANDED (stage 9), now INTRINSIC (works on ANY surface)**
     (`MidSurface`/`SurfacePoint`/`LocalExpChart`/`MidBoard`/`SurfaceTrace`/`MidRouting`/`Mid3dDrc` in
     `EngrCAD.Ecad`; docs `examples/ecad-mid.md` incl. the `ecad-mid-wearable` self-verifying showcase
