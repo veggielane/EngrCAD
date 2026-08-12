@@ -7115,8 +7115,10 @@ in that frame, matching `PcbLayout.PlacementPose`. Covered: `(general)` thicknes
 `(layers)` stackup (any `.Cu`-suffixed layer, F.Cu first at z = thickness), the `Edge.Cuts` outline
 (`gr_line` chained by endpoint, `gr_rect`/`gr_poly`, `gr_arc` flattened to a sampled polyline), the
 `(net)` table, `(segment)`/`(arc)` tracks, `(via)`s (type derived from the layer span), and `(zone)`s
-as `CopperPour`s whose FILL EngrCAD re-derives (KiCad's stored `filled_polygon`/hatch geometry is not
-read — the "hatch/fill best-effort with a note" boundary). Ignored / refused BY NAME: keepout / rule
+as `CopperPour`s carrying their outline, net and `(priority)` (which maps straight onto
+`CopperPour.Priority`, so an imported overlapping-zone board resolves the same way KiCad drew it) whose
+FILL EngrCAD re-derives (KiCad's stored `filled_polygon`/hatch geometry is not read — the "hatch/fill
+best-effort with a note" boundary). Ignored / refused BY NAME: keepout / rule
 areas, teardrops, dimension graphics, 3D-model references, a netless track/via/zone, and a
 non-`(kicad_pcb ...)` root — including a `.kicad_sym` or `.kicad_mod` handed here (the head-tag check).
 The reader NEVER throws on dirty per-element geometry (a bad via is caught and noted, the

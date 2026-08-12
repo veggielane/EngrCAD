@@ -54,7 +54,8 @@ public sealed record KiCadPcb(
 /// flattened); each <c>(footprint ...)</c> as a placed data-only part (its <c>(at)</c>, side, reference,
 /// and its <c>(pad ...)</c>s of the standard shapes on their nets); the <c>(net ...)</c> table; copper
 /// <c>(segment ...)</c> / <c>(arc ...)</c> tracks; <c>(via ...)</c>; and copper <c>(zone ...)</c>s as
-/// pours (their outline + net — EngrCAD RE-DERIVES the fill).</para>
+/// pours (their outline + net + <c>(priority)</c> — EngrCAD RE-DERIVES the fill, and priority resolves
+/// overlapping zones the same way KiCad drew them).</para>
 ///
 /// <para><b>Coordinate convention.</b> KiCad stores Y downward. This reader imports coordinates
 /// VERBATIM into the board frame (no Y-flip), so the board lives in the file's own coordinate frame —
@@ -778,9 +779,16 @@ public static class KiCadPcbReader
 
         note("Copper zones were imported as pours; EngrCAD RE-DERIVES the fill (KiCad's stored "
             + "filled_polygon / hatch geometry is not read).");
+
+        // KiCad zones carry (priority N) (default 0 = absent, higher wins an overlap); it maps straight
+        // onto CopperPour.Priority so an imported overlapping-zone board resolves the same way KiCad drew it.
+        int priority = 0;
+        if (zone.List("priority")?.Arg(0) is { } prio && int.TryParse(prio, out int p))
+            priority = p;
+
         try
         {
-            layout.AddPour(new CopperPour(net, layer, outline));
+            layout.AddPour(new CopperPour(net, layer, outline, Priority: priority));
         }
         catch (ArgumentException ex)
         {

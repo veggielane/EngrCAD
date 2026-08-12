@@ -569,7 +569,8 @@ file is refused by name.
 covered-subset / refuse-by-name discipline. It reconstructs a `PcbLayout`: the `(general)`
 thickness, the copper `(layers)` stackup (every `.Cu` layer, F.Cu first), the board outline from the
 `Edge.Cuts` graphics, each `(footprint)` as a placed data-only part with its pads, the `(net)`
-table, copper `(segment)`/`(arc)` tracks, `(via)`s, and copper `(zone)`s as pours.
+table, copper `(segment)`/`(arc)` tracks, `(via)`s, and copper `(zone)`s as pours (outline + net +
+`(priority)`, so overlapping zones resolve as KiCad drew them; the fill is re-derived).
 
 **Like [IDF](#interchange-idf-import), a bare board carries no schematic, so the reader synthesizes
 one from the pads' own net tags** — a footprint becomes a `PartDefinition`, and each pad's

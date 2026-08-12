@@ -149,7 +149,8 @@ discipline. It reconstructs the `(general)` thickness, the copper `(layers)` sta
 layer, F.Cu first, mapped to a `PcbStackup`), the board outline from the `Edge.Cuts` graphics
 (`gr_line` chained, `gr_rect`/`gr_poly`, `gr_arc` flattened), each `(footprint)` as a placed
 data-only `PartDefinition` with its pads, the `(net)` table, copper `(segment)`/`(arc)` tracks,
-`(via)`s, and copper `(zone)`s as pours.
+`(via)`s, and copper `(zone)`s as pours (their outline + net + `(priority)`, which resolves
+overlapping zones the same way KiCad drew them — the fill itself is re-derived).
 
 **Like IDF, a bare board carries no schematic, so the reader synthesizes one from the pads' own net
 tags** — a footprint becomes a `PartDefinition`, and each pad's `(net n name)` reconstructs the nets
