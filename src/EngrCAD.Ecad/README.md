@@ -734,6 +734,16 @@ that would push a blocker into a third trace is refused). `NoShoveNeeded` when n
 shoves a single straight parallel blocker per obstacle; filed: cascading shoves, bent blockers, and
 push-and-route inside the maze search.
 
+**Coupled routing.** `CoupledRouter.Route(layout, pair, centreLine, layer, width, rules)` routes a
+differential pair's two nets TOGETHER — the pair is the two parallel offsets of a shared centre-line
+at ±*gap*/2, so it holds the gap EXACTLY along the whole run by construction (parallel offset curves
+stay a constant distance apart, mitred through every bend), which is what makes it well-coupled
+without a search. The whole pair is DRC-checked and committed only if clean, and it reads back as a
+good pair through `DiffPairs.Check`. The gap must exceed the trace width (or the traces merge). v1
+takes a caller-supplied centre-line at a gap ≥ the general clearance; filed: a diff-pair-aware DRC for
+TIGHT intra-pair gaps, routing the centre-line itself (a fat-net maze), and matched-length coupled
+routing.
+
 ## Copper pours — ground / power planes
 
 A `CopperPour` floods a copper layer on one net (a ground plane, a power plane). It is **layout

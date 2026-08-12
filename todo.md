@@ -2712,12 +2712,13 @@ from what was already understood rather than from scratch.
     and the JOB FILE (`.gbrjob`) carry per-object net/component metadata a modern fab reads. A
     Gerber IMPORT of a foreign board is a different project (this is EXPORT; the reader is the
     round-trip oracle scoped to what the writer emits). Full topological push-and-route INSIDE the maze
-    search and differential-pair COUPLED routing are the remaining routing stages (LENGTH MATCHING,
-    differential-pair ANALYSIS + skew matching, and SHOVE insertion have LANDED — `LengthMatch.Tune`/
-    `MatchGroup` serpentine tuning gated on the exact DRC, `DiffPair`/`DiffPairs.Check`/`MatchSkew`
-    measuring a pair's coupling + skew and equalising its halves, and `ShoveRouter.Insert` placing a
-    direct trace by jogging a parallel blocker aside, DRC-gated and non-cascading; see CLAUDE.md's ECAD
-    status, design.md §6d, `examples/ecad-routing.md`). A CONFORMAL
+    search (the router shoving DURING A*, not just the standalone `ShoveRouter` primitive) and a
+    diff-pair-aware DRC for TIGHT intra-pair gaps (so `CoupledRouter` can route a tight pair) are the
+    remaining routing stages (LENGTH MATCHING, differential-pair ANALYSIS + skew matching, SHOVE
+    insertion, and COUPLED routing have LANDED — `LengthMatch.Tune`/`MatchGroup`, `DiffPair`/
+    `DiffPairs.Check`/`MatchSkew`, `ShoveRouter.Insert`, and `CoupledRouter.Route` generating a pair as
+    the two parallel offsets of a centre-line, all DRC-gated; see CLAUDE.md's ECAD status, design.md
+    §6d, `examples/ecad-routing.md`). A CONFORMAL
     mask/silk/paste on a doubly-curved MID wall is refused for the tamper-mesh distortion reason (the
     MID/surface side's territory).
   - **IPC-D-356A netlist follow-ups (filed; the netlist itself has LANDED — `PcbIpc356`, see

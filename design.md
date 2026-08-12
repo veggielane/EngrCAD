@@ -7717,6 +7717,24 @@ without the shove the same trace violates), the blocker's endpoints are unmoved 
 connected, the no-cascade guard refuses a shove that would collide with a third trace, and the bent /
 no-shove-needed / determinism cases. Docs: `examples/ecad-routing.md`.
 
+**Coupled routing of a differential pair** (`CoupledRouter`). Where `DiffPairs` ANALYSES a pair that
+is already routed, this ROUTES the two nets together: given a shared centre-line, the pair is its two
+parallel offsets at ±`gap/2`, so it holds the gap EXACTLY along the whole run BY CONSTRUCTION — a pair
+of parallel offset curves stays a constant distance apart, mitred through every bend — which is what
+makes the result well-coupled with no search, verified by feeding it straight back through
+`DiffPairs.Check` (well-coupled, and low-skew on a straight run). The offset is a mitred perpendicular
+polyline offset (interior vertices are the intersection of the two offset segments, a butt join where
+they are parallel), so a straight pair is perfectly length-matched while a BENT pair picks up the
+inside-corner skew a real diff pair has — which is exactly what `DiffPairs.MatchSkew` then tunes out,
+the two features composing. The whole pair is committed only if `PcbDrc.Check` of the board with both
+traces added is clean. The deliberate v1 boundaries are two and both are stated: the caller supplies
+the centre-line (routing it is a FAT-NET maze, filed), and the pair must clear the rest of the board
+at the GENERAL clearance — a TIGHT intra-pair gap below that needs a diff-pair-aware DRC rule (filed),
+so v1 routes a comfortable pair and the gap must exceed the trace width or the two traces merge
+(refused by name). Verified: a straight coupled route is well-coupled + low-skew + DRC-clean + both
+nets connected, a bent one routes clean and stays coupled, the gap-too-small and centre-too-close
+refusals, and determinism. Docs: `examples/ecad-routing.md`.
+
 ### Drawing the schematic sheet (`SchematicSheet`, `SchematicDrawing`)
 
 The human-readable VIEW of a schematic — placed symbols, orthogonal wires, junction dots, net

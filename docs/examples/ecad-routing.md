@@ -176,10 +176,47 @@ if (!report.Ok)
 `Check` reports the two lengths, the skew, the median gap, and the coupled fraction (1.0 for a
 perfectly parallel pair), each net's trace resolved by name. A pair whose nets are not routed (or
 routed to several traces) is reported *not checkable* rather than throwing. `MatchSkew` lengthens the
-shorter half to the longer, DRC-clean, and hands back the tuned traces for `ReplaceTrace`. **v1 is
-analysis + skew tuning, not coupled routing** — filed: coupled routing (routing the two together
-while holding the gap), per-segment skew tuning that preserves coupling, and impedance from the
-stackup.
+shorter half to the longer, DRC-clean, and hands back the tuned traces for `ReplaceTrace`.
+
+**Coupled routing.** `CoupledRouter.Route` routes the two nets TOGETHER — given a shared centre-line,
+the pair is its two parallel offsets at ±*gap*/2, so they hold the gap exactly along the whole run by
+construction (parallel offset curves stay a constant distance apart, mitred through every bend). The
+result is DRC-checked as a whole and reads back as a well-coupled pair through the same `DiffPairs.Check`:
+
+```csharp run:ecad-coupled
+PartDefinition Tp(string n) => new(n, "TP", new[] { new Pin("1", PinType.Passive) },
+    new Footprint(n + "_fp", new[] { Pad.Smd("1", new Vector2d(0, 0), 0.4, 0.4) }));
+
+var sch = new Schematic("t");
+var pp0 = sch.Add("PP0", Tp("PP0")); var pp1 = sch.Add("PP1", Tp("PP1"));
+var nn0 = sch.Add("NN0", Tp("NN0")); var nn1 = sch.Add("NN1", Tp("NN1"));
+sch.Connect("D_P", pp0.Pin("1"), pp1.Pin("1"));
+sch.Connect("D_N", nn0.Pin("1"), nn1.Pin("1"));
+var board = new PcbBoard(new[] {
+    new Vector2d(0, 0), new Vector2d(28, 0), new Vector2d(28, 28), new Vector2d(0, 28) }, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("PP0", 4, 10.5); layout.Place("PP1", 24, 10.5);   // pads straddle the centre-line
+layout.Place("NN0", 4, 9.5); layout.Place("NN1", 24, 9.5);     // at +/- gap/2
+
+var rules = new DrcRuleSet(
+    MinCopperClearance: 0.3, MinTraceWidth: 0.2, MinAnnularRing: 0.2,
+    MinDrillToCopper: 0.3, MinCopperToEdge: 0.3, MinAcuteAngleDegrees: 80);
+var pair = new DiffPair("D_P", "D_N", TargetGapMm: 1.0);
+var centre = new[] { new Vector2d(4, 10), new Vector2d(24, 10) };
+
+var routed = CoupledRouter.Route(layout, pair, centre, layout.Board.Stackup.Coppers[0].Name, 0.4, rules);
+layout.AddTrace(routed.Positive); layout.AddTrace(routed.Negative);
+var check = DiffPairs.Check(layout, pair);
+Console.WriteLine(routed.Message);
+Console.WriteLine($"coupled: {check.WellCoupled}, skew {check.Skew:0.000} mm, DRC {PcbDrc.Check(layout, rules).Ok}");
+
+if (!routed.Ok || !check.WellCoupled || !PcbDrc.Check(layout, rules).Ok)
+    throw new Exception("the coupled pair must route well-coupled and DRC-clean");
+```
+
+The gap must exceed the trace width (or the two traces merge) and the pair must clear the rest of the
+board — a **tight** intra-pair gap below the general clearance needs a diff-pair-aware DRC rule, which
+is filed along with routing the centre-line itself (a fat-net maze) and matched-length coupled routing.
 
 ## Shove (push-and-route)
 
@@ -237,8 +274,9 @@ inside the maze search.
 An honest v1: a grid/maze A* with rip-up-reroute, **through-vias** (spanning all copper layers) for
 layer changes, and 2-pin MST decomposition of multi-pin nets. Deterministic — a fixed net order and
 grid give bit-identical routes. **[Length matching](#length-matching-serpentine-tuning)**,
-**[differential-pair analysis](#differential-pairs)** and **[shove insertion](#shove-push-and-route)**
-have landed. Not in v1 (each filed): topological push-and-route inside the maze, differential-pair
-coupled routing, teardrops, and cavity walls as routing obstacles.
+**[differential pairs](#differential-pairs)** (analysis, skew matching, and coupled routing) and
+**[shove insertion](#shove-push-and-route)** have landed. Not in v1 (each filed): topological
+push-and-route inside the maze, a diff-pair-aware DRC for tight intra-pair gaps, teardrops, and cavity
+walls as routing obstacles.
 **[Copper pours / ground planes with thermal reliefs](ecad-pcb.md)** and **[Gerber / Excellon
 fabrication export](ecad-fabrication.md)** of the routed board — the fab output — have landed.
