@@ -2927,12 +2927,14 @@ from what was already understood rather than from scratch.
     are now CARRIED** — the `_1_2` (`unit_style` 2) sub-symbols are collected per unit in parallel and
     built into each unit's `Symbol.Alternate` (same pin numbers, a different drawing) rather than
     discarded, round-tripping through the schematic file write-only-when-stated (a symbol with no
-    alternate saves byte-identically; one with an alternate is a save→load→save fixed point). Residual
-    still filed: **DRAWING the alternate body** — `SchematicSheet` draws the primary body; selecting the
-    alternate per instance is entangled because the alternate's pin ANCHORS differ from the primary's, so
-    `AnchorOf`/`UnitOf` would need the per-instance "which style" flag (a `SymbolPose.Alternate` toggle
-    threaded into the pin resolution); the data is now preserved for it. Whole Eagle `.brd`/`.sch` import
-    and IPC-7351 footprint GENERATION remain.
+    alternate saves byte-identically; one with an alternate is a save→load→save fixed point). **DRAWING
+    the alternate body has LANDED too** — `SymbolPose` gained an `Alternate` toggle, and `SchematicSheet`
+    draws `symbol.Alternate` (via one `EffectiveBody` helper) when a placement asks for it, with
+    `AnchorOf`/`LeaveDirection` reading the pin anchor off the EFFECTIVE body (the alternate's pin anchors
+    differ, so the wire follows the drawn body; a partial alternate lacking a pin falls back to the
+    primary). Single-unit / primary-body drawing is byte-identical. So De Morgan is complete end to end
+    (carried, round-tripped, and drawable). Whole Eagle `.brd`/`.sch` import and IPC-7351 footprint
+    GENERATION remain.
     **3D-model residuals, filed by name** (each RECORDED as a reference but not
     loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
     needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import

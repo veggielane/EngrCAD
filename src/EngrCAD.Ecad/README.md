@@ -440,8 +440,10 @@ the units; persistence and determinism; the inconsistent-units report by name. *
 DRAWING has landed** (`SchematicSheet` places and draws each unit as its own symbol — see the drawing
 table above). **De Morgan / alternate unit bodies are now carried**: the `_1_2` (`unit_style` 2)
 sub-symbols build each unit's `Symbol.Alternate` (same pin numbers, a different drawing) and round-trip
-through the schematic file write-only-when-stated (a symbol with no alternate saves byte-identically);
-DRAWING the alternate (a per-instance style toggle, since the alternate's pin anchors differ) is filed.
+through the schematic file write-only-when-stated (a symbol with no alternate saves byte-identically).
+**Drawing it landed too**: a `SymbolPose.Alternate` toggle makes `SchematicSheet` draw `Symbol.Alternate`,
+with the pin's world anchor following the drawn body — so De Morgan is complete end to end (carried,
+round-tripped, drawable); byte-identical when the toggle is off.
 - **Footprint** (`.kicad_mod`): SMD and plated through-hole pads of the standard shapes
   (`circle`/`rect`/`roundrect`/`oval`) with their `at`/`size`/`drill` — mapped onto the existing
   `Footprint`/`Pad` with **no change to `Pad` or `PadShape`** (the drill a through pad needs was

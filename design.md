@@ -7231,9 +7231,14 @@ drawn): the reader collects the `_1_2` (`unit_style` 2) sub-symbols per unit in 
 unit's `Symbol.Alternate` (same pin numbers, a different drawing) rather than discarding them with a
 diagnostic, and it round-trips through the schematic file write-only-when-stated (a symbol with no
 alternate saves byte-identically; one with an alternate is a save→load→save fixed point, the recursion one
-level deep since an alternate never nests). Filed: DRAWING the alternate — the alternate's pin ANCHORS
-differ from the primary's, so a per-instance style toggle would have to thread through `AnchorOf`/`UnitOf`
-(a `SymbolPose.Alternate` flag); the data is now preserved for that consumer.
+level deep since an alternate never nests). **DRAWING the alternate landed too**: `SymbolPose` gained an
+`Alternate` toggle and `SchematicSheet` draws `symbol.Alternate` when a placement asks for it, through one
+`EffectiveBody` helper the symbol rendering AND the pin resolution (`AnchorOf`/`LeaveDirection`) both ask —
+so a pin's world anchor moves to the ALTERNATE body's own anchor and the wire follows it (a partial
+alternate lacking a pin falls back to the primary). Verified by the pin anchor moving between the two
+bodies (95 → 93 on the fixture) with both drawings `Verify()`-clean; single-unit / primary-body drawing is
+byte-identical (the toggle defaults off). So De Morgan is complete end to end — carried, round-tripped and
+drawable.
 
 **Single-sheet BUS import.** A bus is a labelled bundle of signal nets — a bus-VECTOR label
 `DATA[m..n]` on a `(bus …)` wire declares the members `DATA`+m..`DATA`+n (`DATA[0..7]` is

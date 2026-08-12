@@ -580,4 +580,37 @@ public class SchematicSheetTests
         Assert.Contains("U1B", ex.Message);   // unit B named as unplaced
         Assert.Contains("U1C", ex.Message);   // unit C too
     }
+
+    [Fact]
+    public void ADeMorganAlternateBody_IsDrawnWhenThePoseAsksForIt()
+    {
+        // A part whose PRIMARY body puts pin 1 at x = -5 and whose ALTERNATE body (a different drawing)
+        // puts the same pin 1 at x = -7 — so which body is drawn moves the pin's world anchor.
+        var alt = new Symbol("G",
+            [new SymbolPin("1", "A", new Vector2d(-7, 0), SymbolPinDirection.Right, 2.0, PinType.Input)],
+            graphics: [new SymbolCircle(new Vector2d(3, 0), 1.0)]);
+        var main = new Symbol("G",
+            [new SymbolPin("1", "A", new Vector2d(-5, 0), SymbolPinDirection.Right, 2.0, PinType.Input)],
+            graphics: [new SymbolRectangle(new Vector2d(-2, -2), new Vector2d(2, 2))],
+            alternate: alt);
+        var def = new PartDefinition("G", "U", [new Pin("1", "A", PinType.Input)], symbol: main);
+
+        var sch = new Schematic("dm");
+        var u = sch.Add("U1", def);
+        sch.Stub("A", u.Pin("1"));
+        var at = new Vector2d(100, 100);
+
+        // Drawn with the PRIMARY body: pin 1 anchors at x = 100 + (-5) = 95.
+        var primary = new SchematicSheet(sch,
+            new SchematicPlacement().Place("U1", new SymbolPose(at))).Draw();
+        Assert.Equal(95, primary.Pins.Single(p => p.Pin.Number == "1").Anchor.X, 6);
+        Assert.True(primary.Verify().Ok, primary.Verify().ToString());
+
+        // Drawn with the ALTERNATE body (pose asks for it): pin 1 anchors at x = 100 + (-7) = 93, and the
+        // stub wire follows it — the alternate body really is what was drawn.
+        var alternate = new SchematicSheet(sch,
+            new SchematicPlacement().Place("U1", new SymbolPose(at, Alternate: true))).Draw();
+        Assert.Equal(93, alternate.Pins.Single(p => p.Pin.Number == "1").Anchor.X, 6);
+        Assert.True(alternate.Verify().Ok, alternate.Verify().ToString());
+    }
 }

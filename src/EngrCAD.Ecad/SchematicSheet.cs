@@ -16,7 +16,12 @@ namespace EngrCAD.Ecad;
 /// <param name="Position">The symbol origin on the sheet, mm.</param>
 /// <param name="QuarterTurns">Counter-clockwise rotation in units of 90°.</param>
 /// <param name="Mirror">Reflect the symbol across its own vertical (local Y) axis.</param>
-public readonly record struct SymbolPose(Vector2d Position, int QuarterTurns = 0, bool Mirror = false)
+/// <param name="Alternate">Draw the unit's De Morgan / alternate body (<see cref="Symbol.Alternate"/>)
+/// instead of its primary one, when it has one; ignored for a symbol with no alternate. The alternate is
+/// a different DRAWING of the same pins, so a pin's world anchor moves to the alternate body's own
+/// anchor — the wire follows it.</param>
+public readonly record struct SymbolPose(
+    Vector2d Position, int QuarterTurns = 0, bool Mirror = false, bool Alternate = false)
 {
     /// <summary>Maps a point from the symbol's own frame onto the sheet.</summary>
     public Vector2d Apply(in Vector2d p) => Position + Linear(p);
@@ -196,7 +201,8 @@ public sealed record SchematicSheetOptions
 /// <c>U1A</c>/<c>U1B</c>/…; each pin is drawn by the unit whose symbol carries it, so a net between two
 /// amps of one package draws as two symbols wired together. Because the connectivity reconstruction reads
 /// the DRAWN wire geometry, it is unit-agnostic — a single-unit part places and draws exactly as before
-/// (byte-identical).</para>
+/// (byte-identical). A placement whose <see cref="SymbolPose.Alternate"/> is set draws the unit's De
+/// Morgan alternate body (<see cref="Symbol.Alternate"/>) instead, the pin anchors following it.</para>
 ///
 /// <para><b>What it refuses, by name.</b> A component with no <see cref="PartDefinition.Symbol"/>
 /// cannot be drawn; a net that connects a pin NO unit of the component draws (the symbol and the netlist
@@ -400,9 +406,14 @@ public sealed class SchematicSheet
                 // Multi-unit units are labelled "U1A", "U1B", … (the KiCad convention); a single-unit
                 // part keeps its bare refdes. The value is drawn once (under the first unit).
                 string label = multi ? component.ReferenceDesignator + (char)('A' + u) : component.ReferenceDesignator;
-                DrawUnit(component, units[u], pose, label, showValue: u == 0);
+                DrawUnit(component, EffectiveBody(units[u], pose), pose, label, showValue: u == 0);
             }
         }
+
+        /// <summary>The body a unit is drawn with under a pose — the De Morgan alternate when the pose
+        /// asks for it and the unit has one, else the primary body.</summary>
+        private static Symbol EffectiveBody(Symbol symbol, in SymbolPose pose) =>
+            pose.Alternate && symbol.Alternate is not null ? symbol.Alternate : symbol;
 
         private void DrawUnit(
             Component component, Symbol symbol, in SymbolPose pose, string label, bool showValue)
@@ -600,11 +611,14 @@ public sealed class SchematicSheet
         /// <summary>The world anchor of a terminal — the point where its wire lands.</summary>
         private Vector2d AnchorOf(PinRef pin)
         {
-            // Resolve which UNIT draws the pin, and use THAT unit's pose and symbol — so a pin of a
-            // dual op-amp's second amp anchors on the second symbol. Single-unit reduces to unit 1.
+            // Resolve which UNIT draws the pin, and use THAT unit's pose and (effective) body — so a pin
+            // of a dual op-amp's second amp anchors on the second symbol, and a pin of a unit drawn with
+            // its De Morgan alternate anchors on the ALTERNATE body's pin. Single-unit / primary-body
+            // reduces to unit 1's own symbol.
             var (unit, symbol) = UnitOf(pin.Component, pin.Number);
             var pose = _placement.PoseOf(pin.ReferenceDesignator, unit)!.Value;
-            return pose.Apply(symbol.PinNumbered(pin.Number).Anchor);   // Validate() proved the pin exists
+            var body = BodyDrawing(symbol, pose, pin.Number);
+            return pose.Apply(body.PinNumbered(pin.Number).Anchor);   // Validate() proved the pin exists
         }
 
         /// <summary>The direction a wire leaves a pin's anchor — away from the body, opposite the
@@ -613,7 +627,16 @@ public sealed class SchematicSheet
         {
             var (unit, symbol) = UnitOf(pin.Component, pin.Number);
             var pose = _placement.PoseOf(pin.ReferenceDesignator, unit)!.Value;
-            return pose.ApplyDirection(-symbol.PinNumbered(pin.Number).Direction.ToVector());
+            var body = BodyDrawing(symbol, pose, pin.Number);
+            return pose.ApplyDirection(-body.PinNumbered(pin.Number).Direction.ToVector());
+        }
+
+        /// <summary>The body that actually draws a pin — the effective (alternate-or-primary) body,
+        /// falling back to the primary if a partial alternate happens not to carry the pin.</summary>
+        private static Symbol BodyDrawing(Symbol symbol, in SymbolPose pose, string pinNumber)
+        {
+            var body = EffectiveBody(symbol, pose);
+            return body.HasPin(pinNumber) ? body : symbol;
         }
 
         /// <summary>
