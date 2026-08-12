@@ -113,10 +113,12 @@ public sealed record GerberExportResult(
 /// Each copper APERTURE also declares its <c>%TA.AperFunction%</c> role (<c>SMDPad,CuDef</c> /
 /// <c>ComponentPad</c> for a component pad, <c>ViaPad</c> for a via, <c>Conductor</c> for a trace,
 /// <c>Profile</c> for the outline), so apertures dedupe by (shape, function) under X2 — a via pad and a
-/// trace of the same diameter but different role split into two D-codes. Opt-in, so with it off every
-/// Gerber is byte-identical (the function collapses so dedup is by shape alone); the reader ignores X2
-/// attributes (they carry metadata, not geometry), so an X2 file round-trips its copper exactly. Filed:
-/// the <c>.C</c>/<c>.P</c> and <c>%TA</c> on the mask / silk / paste layers.</para>
+/// trace of the same diameter but different role split into two D-codes. A mask WINDOW and a paste
+/// APERTURE over a component pad also carry the <c>%TO.C%</c> / <c>%TO.P%</c> assembly datum (tied to
+/// their source pad — an AOI / SPI datum), the only X2 the pad-bearing non-copper layers need. Opt-in, so
+/// with it off every Gerber is byte-identical (the function collapses so dedup is by shape alone); the
+/// reader ignores X2 attributes (they carry metadata, not geometry), so an X2 file round-trips its copper
+/// exactly. Filed: <c>%TA</c> aperture functions on the mask / paste, and silk <c>.C</c> refdes tagging.</para>
 ///
 /// <para><b>What it does not do (each filed):</b> step / multi-level stencils, paste-volume optimisation,
 /// window-paning of large apertures, the assembly pick-and-place file (a different output), fine mask
@@ -168,8 +170,9 @@ public static class PcbGerberExport
         var silk = PcbSilkscreen.For(layout, layout.SilkscreenSettings);
         var paste = stencil is null ? PcbPaste.For(model, layout.PasteSettings) : PcbPaste.For(model, stencil);
         return Build(design, model, layers, format,
-            MaskGerbers(mask, format, includeX2, model), SilkGerbers(silk, format, includeX2, model),
-            PasteGerbers(paste, format, includeX2, model), includeX2);
+            MaskGerbers(mask, format, includeX2, model, padIdentity),
+            SilkGerbers(silk, format, includeX2, model),
+            PasteGerbers(paste, format, includeX2, model, padIdentity), includeX2);
     }
 
     /// <summary>Generates the fabrication set (as text) for a raw copper model — every copper feature
@@ -203,9 +206,11 @@ public static class PcbGerberExport
         // the step stencil, when one is supplied).
         var mask = PcbMask.For(model);
         var paste = stencil is null ? PcbPaste.For(model) : PcbPaste.For(model, stencil);
+        // The raw-model path has no placements, so no pad identity — mask/paste windows carry no
+        // %TO.C% / %TO.P% (a hand-built copper model does not know which component a pad belongs to).
         return Build(design, model, layers, format,
-            MaskGerbers(mask, format, includeX2, model), EmptySilk(model, format, includeX2),
-            PasteGerbers(paste, format, includeX2, model), includeX2);
+            MaskGerbers(mask, format, includeX2, model, null), EmptySilk(model, format, includeX2),
+            PasteGerbers(paste, format, includeX2, model, null), includeX2);
     }
 
     private static FabricationOutput Build(
@@ -221,11 +226,14 @@ public static class PcbGerberExport
     }
 
     /// <summary>One solder-mask Gerber per side (the pad windows imaged dark). With <paramref name="x2"/>
-    /// on each carries its X2 <c>Soldermask,&lt;side&gt;</c> file function.</summary>
+    /// on each carries its X2 <c>Soldermask,&lt;side&gt;</c> file function, and a window over a component
+    /// pad the <c>%TO.C%</c> / <c>%TO.P%</c> assembly datum (looked up by the opening's source pad).</summary>
     private static IReadOnlyList<GerberLayerFile> MaskGerbers(
-        PcbMask mask, GerberFormat format, bool x2, PcbCopperModel model) =>
+        PcbMask mask, GerberFormat format, bool x2, PcbCopperModel model,
+        IReadOnlyDictionary<string, (string, string, string)>? padIdentity) =>
         [.. mask.Layers.Select(m => new GerberLayerFile(
-            m.Layer, GerberWriter.MaskLayer(m.Layer, m.Openings.Select(o => o.Region), format,
+            m.Layer, GerberWriter.MaskLayer(
+                m.Layer, m.Openings.Select(o => (o.Region, ObjectPad(x2, padIdentity, o.Source))), format,
                 x2, NonCopperFileFunction(x2, model, m.Layer, "Soldermask"))))];
 
     /// <summary>One solder-paste (stencil) Gerber per layer (the SMD-pad apertures imaged dark) — one per
@@ -234,12 +242,23 @@ public static class PcbGerberExport
     /// the side, so a one-level step at the default expansion is byte-identical to a flat stencil. With
     /// <paramref name="x2"/> on each carries its X2 <c>SolderPaste,&lt;side&gt;</c> file function.</summary>
     private static IReadOnlyList<GerberLayerFile> PasteGerbers(
-        PcbPaste paste, GerberFormat format, bool x2, PcbCopperModel model) =>
+        PcbPaste paste, GerberFormat format, bool x2, PcbCopperModel model,
+        IReadOnlyDictionary<string, (string, string, string)>? padIdentity) =>
         [.. paste.Layers.Select(p => new GerberLayerFile(
             p.Layer,
-            GerberWriter.PasteLayer(p.Layer, p.Apertures.Select(a => a.Region), format,
+            GerberWriter.PasteLayer(
+                p.Layer, p.Apertures.Select(a => (a.Region, ObjectPad(x2, padIdentity, a.Source))), format,
                 x2, NonCopperFileFunction(x2, model, p.Layer, "SolderPaste")),
             p.Level?.ThicknessToken))];
+
+    /// <summary>The (refdes, pad) an X2 <c>%TO.C%</c> / <c>%TO.P%</c> object attribute needs for a
+    /// mask/paste opening over a component pad — looked up by the opening's SOURCE in the pad-identity
+    /// map, or <c>null</c> when X2 is off, the map is absent, or the source is not a component pad (a via
+    /// window / a pad the map does not carry).</summary>
+    private static (string, string)? ObjectPad(
+        bool x2, IReadOnlyDictionary<string, (string, string, string)>? padIdentity, string source) =>
+        x2 && padIdentity is not null && padIdentity.TryGetValue(source, out var id)
+            ? (id.Item1, id.Item2) : null;
 
     /// <summary>One silkscreen Gerber per side (reference / value / outline line-work). With
     /// <paramref name="x2"/> on each carries its X2 <c>Legend,&lt;side&gt;</c> file function.</summary>

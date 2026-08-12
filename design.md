@@ -7860,7 +7860,12 @@ the aperture DEDUP to key on (shape, function): a via pad and a trace of the SAM
 role split into two D-codes under X2, while OFF the function collapses so the key reduces to the shape and
 the dedup — hence the whole file — is byte-identical. The discriminating test builds exactly that
 collision (a via pad and a trace both Ø0.3) and asserts one `%ADD` off, two on. A pour region-FILLS so it
-has no aperture and no `%TA`. Filed: the `.C`/`.P` and `%TA` on the mask / silk / paste layers. Pads flash (`D03`),
+has no aperture and no `%TA`. A mask WINDOW and a paste APERTURE over a component pad also carry the
+`%TO.C` / `%TO.P` assembly datum, looked up by the opening's own `Source` (`MaskOpening`/`PasteAperture`
+already carry it) — what an AOI / SPI tool reads — while the writers stay layer-clean by taking the pad
+identity as a plain tuple rather than an ECAD type; a via window carries none. Filed: `%TA` aperture
+functions on the mask / paste (a non-copper aperture-function is less standard), and silk `.C` refdes
+tagging (silk strokes carry no source yet). Pads flash (`D03`),
 traces draw
 (`D01`/`D02` with a round aperture, whose swept stroke IS the copper model's trace region), via pads
 flash as solid discs, and anything else — a rotated pad, a copper pour — is a region fill

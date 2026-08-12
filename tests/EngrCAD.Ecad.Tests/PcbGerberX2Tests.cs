@@ -202,6 +202,33 @@ public sealed class PcbGerberX2Tests
     private static int CountAdd(string gerber) =>
         gerber.Split('\n').Count(l => l.StartsWith("%ADD", StringComparison.Ordinal));
 
+    // ==== .C / .P on the mask and paste (the AOI / SPI assembly datum) ============
+
+    [Fact]
+    public void X2_TiesMaskAndPasteAperturesBackToTheirComponentPins()
+    {
+        var o = PcbGerberExport.Generate(Routed(), includeX2: true);
+        string top = Routed().Board.Stackup.Top.Name;
+        string mask = o.MaskLayers.Single(m => m.Layer == top).Gerber;
+        string paste = o.PasteLayers.Single(p => p.Layer == top).Gerber;
+
+        // A mask window / paste aperture over a component pad names its pin — the AOI / SPI datum.
+        Assert.Contains("%TO.C,R1*%", mask);
+        Assert.Contains("%TO.P,R1,1*%", mask);
+        Assert.Contains("%TO.C,U1*%", paste);
+        Assert.Contains("%TO.P,U1,1*%", paste);
+
+        // Off carries none; stripping the attribute lines recovers the plain Gerber byte-for-byte (the
+        // datum carries no geometry).
+        var plain = PcbGerberExport.Generate(Routed());
+        string plainMask = plain.MaskLayers.Single(m => m.Layer == top).Gerber;
+        string plainPaste = plain.PasteLayers.Single(p => p.Layer == top).Gerber;
+        Assert.DoesNotContain("%TO.P", plainMask);
+        Assert.DoesNotContain("%TO.P", plainPaste);
+        Assert.Equal(plainMask, StripX2(mask));
+        Assert.Equal(plainPaste, StripX2(paste));
+    }
+
     [Fact]
     public void AnX2MaskGerber_RoundTripsItsWindowsExactly_TheReaderIgnoresAttributes()
     {

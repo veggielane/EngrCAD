@@ -841,8 +841,10 @@ whole package is self-describing and matches the `.gbrjob` manifest. Each **comp
 copper additionally carries `%TO.C,<refdes>*%` and `%TO.P,<refdes>,<pad>*%` (the assembly datum tying a
 copper flash to its component pin), and each copper **aperture** its `%TA.AperFunction` role (`SMDPad,CuDef`
 / `ComponentPad` / `ViaPad` / `Conductor` / `Profile`) — so apertures dedupe by (shape, function) under
-X2. Opt-in, so off is byte-identical (the function collapses to shape-only dedup) and the reader ignores
-the attributes, so an X2 file round-trips its geometry exactly.
+X2. A mask **window** and a paste **aperture** over a component pad also carry the `%TO.C` / `%TO.P`
+datum (tied to their source pad — the AOI / SPI datum). Opt-in, so off is byte-identical (the function
+collapses to shape-only dedup) and the reader ignores the attributes, so an X2 file round-trips its
+geometry exactly.
 Pass `includeJobFile: true` (the `Write` disk path) for the **`.gbrjob` job file** — the JSON manifest
 a modern fab reads to identify the whole set (board size/thickness, copper-layer count, surface finish,
 and every Gerber file with its `FileFunction`); deterministic (no CreationDate/GUID salt, a byte fixed
@@ -918,10 +920,10 @@ passed to the export, not saved — a full serializable grammar for its zones/se
 a per-fabricator foil-thickness catalogue, paste-volume optimisation, window-paning of
 large apertures, fine mask tenting control beyond
 the tented/opened via policy, curved conformal mask / silk / paste on a MID surface (refused for the
-distortion reason), a lowercase silk font (a value's lowercase advances as a blank), the Gerber X2 `.C` /
-`.P` / `%TA` on the mask / silk / paste layers (the X2 net attribute, the per-Gerber `FileFunction`, and
-the `.C` / `.P` component / pad attributes and `%TA` aperture functions on the copper are done), and a
-Gerber IMPORT of a foreign board (this is export). Docs: `examples/ecad-fabrication.md`.
+distortion reason), a lowercase silk font (a value's lowercase advances as a blank), the Gerber X2 `%TA`
+aperture functions on the mask / paste and silk `.C` refdes tagging (the X2 net attribute, the per-Gerber
+`FileFunction`, the `.C` / `.P` and `%TA` on the copper, and the `.C` / `.P` on the mask / paste are
+done), and a Gerber IMPORT of a foreign board (this is export). Docs: `examples/ecad-fabrication.md`.
 
 **The assembly pick-and-place (centroid) file** (`PcbPickAndPlace`) is the assembly twin of the copper
 Gerber/Excellon set — the file a P&amp;P machine reads to *populate* the board: one row per placed

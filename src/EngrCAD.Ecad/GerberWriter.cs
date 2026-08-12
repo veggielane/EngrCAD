@@ -519,14 +519,18 @@ public static class GerberWriter
     /// with no openings still yields a well-formed empty Gerber.
     /// </summary>
     public static string MaskLayer(
-        string layerName, IEnumerable<CurvedRegion2d> openings, GerberFormat format,
-        bool x2 = false, string? fileFunction = null)
+        string layerName,
+        IEnumerable<(CurvedRegion2d Region, (string Reference, string Pad)? Pad)> openings,
+        GerberFormat format, bool x2 = false, string? fileFunction = null)
     {
         ArgumentNullException.ThrowIfNull(openings);
         var builder = new GerberBuilder(
             format, $"EngrCAD solder mask '{layerName}' (openings imaged dark)", x2, fileFunction);
+        // A window over a component pad carries that pad's (refdes, pad) for the X2 %TO.C% / %TO.P%
+        // assembly datum (a via window carries none); ignored unless x2 is on. Mask openings are not
+        // copper, so they take no net or aperture-function attribute.
         foreach (var opening in openings)
-            EmitSolid(builder, opening);
+            EmitSolid(builder, opening.Region, pad: opening.Pad);
         return builder.Finish();
     }
 
@@ -539,14 +543,18 @@ public static class GerberWriter
     /// with no apertures still yields a well-formed empty Gerber.
     /// </summary>
     public static string PasteLayer(
-        string layerName, IEnumerable<CurvedRegion2d> apertures, GerberFormat format,
-        bool x2 = false, string? fileFunction = null)
+        string layerName,
+        IEnumerable<(CurvedRegion2d Region, (string Reference, string Pad)? Pad)> apertures,
+        GerberFormat format, bool x2 = false, string? fileFunction = null)
     {
         ArgumentNullException.ThrowIfNull(apertures);
         var builder = new GerberBuilder(
             format, $"EngrCAD solder paste '{layerName}' (apertures imaged dark)", x2, fileFunction);
+        // A stencil aperture prints paste onto ONE SMD pad, so it carries that pad's (refdes, pad) for
+        // the X2 %TO.C% / %TO.P% assembly datum an SPI / paste-inspection tool reads; ignored unless x2
+        // is on. Paste apertures are not copper, so they take no net or aperture-function attribute.
         foreach (var aperture in apertures)
-            EmitSolid(builder, aperture);
+            EmitSolid(builder, aperture.Region, pad: aperture.Pad);
         return builder.Finish();
     }
 

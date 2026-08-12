@@ -2726,8 +2726,11 @@ from what was already understood rather than from scratch.
     DEDUP to key on (shape, function) — a via pad and a trace of the same diameter but different role split
     into two D-codes under X2, while OFF the function collapses so dedup stays by shape and the file is
     byte-identical (the discriminating test is a Ø0.3 via-vs-trace collision, one `%ADD` off / two on; a
-    pour region-FILLS so has no aperture, no `%TA`). STILL FILED are the X2 `.C`/`.P`/`%TA` on the mask /
-    silk / paste layers. The JOB FILE has LANDED — `Write(..., includeJobFile:
+    pour region-FILLS so has no aperture, no `%TA`). A mask WINDOW and a paste APERTURE over a component
+    pad also carry the `%TO.C`/`%TO.P` assembly datum, looked up by the opening's own `Source`
+    (`MaskOpening`/`PasteAperture` already carry it — an AOI/SPI datum), the writers staying layer-clean by
+    taking the pad identity as a plain tuple. STILL FILED are the X2 `%TA` aperture functions on the mask /
+    paste and silk `.C` refdes tagging. The JOB FILE has LANDED — `Write(..., includeJobFile:
     true)` drops `<name>.gbrjob`, the JSON manifest a modern fab reads (board size/thickness, copper
     layer count, surface finish, and every Gerber file with its `FileFunction` — the roles gathered from
     the whole set), deterministic (no CreationDate/GUID salt, a byte fixed point) and opt-in (off =

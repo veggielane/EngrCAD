@@ -21,7 +21,9 @@ layer, `Soldermask,<side>` / `Legend,<side>` / `SolderPaste,<side>` for the mask
 `.gbrjob` manifest. Each **component pad** flash on the copper layer additionally carries the assembly
 datum `%TO.C,<refdes>*%` and `%TO.P,<refdes>,<pad>*%` (the flash tied back to its component pin — a
 via / trace / pour carries none), and each copper aperture its `%TA.AperFunction` role (`SMDPad,CuDef` /
-`ComponentPad` for a pad, `ViaPad` for a via, `Conductor` for a trace, `Profile` for the outline).
+`ComponentPad` for a pad, `ViaPad` for a via, `Conductor` for a trace, `Profile` for the outline). A
+mask window and a paste aperture over a component pad likewise carry the `%TO.C` / `%TO.P` datum (tied to
+their source pad — what an AOI / paste-inspection tool reads).
 Opt-in, so off is byte-identical, and since X2 adds only metadata (not
 geometry) the reader ignores the attributes and an X2 file round-trips its copper exactly. `Write(layout, dir, includeJobFile: true)`
 also drops the **`.gbrjob` job file** — the JSON manifest a fab reads to identify the whole set (board
@@ -618,9 +620,9 @@ its own output, above, and the **IPC-D-356A netlist** the electrical-test / net-
 each filed: step / multi-level stencils, paste-volume optimisation, window-paning of large apertures,
 fine mask tenting control beyond the tented/opened via policy, curved conformal mask / silk / paste on a
 MID surface (refused for the distortion reason), a lowercase silk font (a value's lowercase advances as a
-blank), the Gerber X2 `.C` / `.P` / `%TA` on the mask / silk / paste layers (the X2 net object attribute,
-the per-Gerber `FileFunction`, and the `.C` / `.P` component / pad attributes and `%TA` aperture functions
-on the copper are done), and a Gerber IMPORT of a foreign board (this is export).
+blank), the Gerber X2 `%TA` aperture functions on the mask / paste and silk `.C` refdes tagging (the X2
+net object attribute, the per-Gerber `FileFunction`, the `.C` / `.P` and `%TA` on the copper, and the
+`.C` / `.P` on the mask / paste are done), and a Gerber IMPORT of a foreign board (this is export).
 The IPC-D-356A netlist now carries **blind/buried-via layer spans** (an explicit `L<from>-<to>` token
 beside the top-most-layer access code) and **wide net-name / refdes fields** (an over-width identity rides
 a `379` continuation record instead of being refused); it still files conductor (trace-midpoint, op `378`)
