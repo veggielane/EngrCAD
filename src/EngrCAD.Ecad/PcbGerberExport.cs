@@ -110,9 +110,13 @@ public sealed record GerberExportResult(
 /// <c>.gbrjob</c> manifest. Each COMPONENT PAD flash on the copper layer additionally carries the X2
 /// <c>%TO.C,&lt;refdes&gt;*%</c> and <c>%TO.P,&lt;refdes&gt;,&lt;pad&gt;*%</c> assembly attributes (the
 /// pad tied back to its component pin, looked up by feature source — a via / trace / pour carries none).
-/// Opt-in, so with it off every Gerber is byte-identical; the reader ignores X2 attributes (they carry
-/// metadata, not geometry), so an X2 file round-trips its copper exactly. Filed: the <c>.C</c>/<c>.P</c>
-/// on the paste / silk layers, and <c>%TA</c> aperture attributes.</para>
+/// Each copper APERTURE also declares its <c>%TA.AperFunction%</c> role (<c>SMDPad,CuDef</c> /
+/// <c>ComponentPad</c> for a component pad, <c>ViaPad</c> for a via, <c>Conductor</c> for a trace,
+/// <c>Profile</c> for the outline), so apertures dedupe by (shape, function) under X2 — a via pad and a
+/// trace of the same diameter but different role split into two D-codes. Opt-in, so with it off every
+/// Gerber is byte-identical (the function collapses so dedup is by shape alone); the reader ignores X2
+/// attributes (they carry metadata, not geometry), so an X2 file round-trips its copper exactly. Filed:
+/// the <c>.C</c>/<c>.P</c> and <c>%TA</c> on the mask / silk / paste layers.</para>
 ///
 /// <para><b>What it does not do (each filed):</b> step / multi-level stencils, paste-volume optimisation,
 /// window-paning of large apertures, the assembly pick-and-place file (a different output), fine mask
@@ -139,10 +143,12 @@ public static class PcbGerberExport
         var viaSources = new HashSet<string>(model.Vias.Select(v => v.Source), StringComparer.Ordinal);
         var traceSources = new HashSet<string>(model.TraceSources, StringComparer.Ordinal);
 
-        // The map from a pad feature's SOURCE ("R1.1") to its (refdes, pad) for the X2 %TO.C% / %TO.P%
-        // assembly attributes. Keyed on PlacedPad.Name, which IS the source the copper model builds, so
-        // it needs no string parsing. Only built (and only consulted) when X2 is on.
-        IReadOnlyDictionary<string, (string, string)>? padIdentity = includeX2 ? PadIdentity(layout) : null;
+        // The map from a pad feature's SOURCE ("R1.1") to its (refdes, pad, aperture-function) for the X2
+        // %TO.C% / %TO.P% assembly attributes and its %TA.AperFunction% (SMDPad / ComponentPad). Keyed on
+        // PlacedPad.Name, which IS the source the copper model builds, so it needs no string parsing.
+        // Only built (and only consulted) when X2 is on.
+        IReadOnlyDictionary<string, (string, string, string)>? padIdentity =
+            includeX2 ? PadIdentity(layout) : null;
 
         var layers = new List<GerberLayerFile>();
         foreach (var name2 in model.Layers)
@@ -402,15 +408,20 @@ public static class PcbGerberExport
     /// where n is the 1-based stackup position and the side is Top (first copper), Bot (last) or Inr
     /// (an inner layer). It tells a fab the copper layer order and side straight from the Gerber.</summary>
     /// <summary>The map from a component pad's copper-feature SOURCE (<c>"R1.1"</c>) to its (refdes,
-    /// pad-number), for the X2 <c>%TO.C%</c> / <c>%TO.P%</c> assembly attributes. The key is
-    /// <see cref="PlacedPad.Name"/>, which is exactly the source <see cref="PcbCopperModel.FromLayout"/>
-    /// builds a pad feature with — so a flash is tied back to its component pin with no string parsing.
-    /// A repeated name (never, since a refdes is unique and its pad numbers are) keeps the last.</summary>
-    private static Dictionary<string, (string, string)> PadIdentity(PcbLayout layout)
+    /// pad-number, aperture-function), for the X2 <c>%TO.C%</c> / <c>%TO.P%</c> assembly attributes and
+    /// the pad's <c>%TA.AperFunction%</c> (<c>SMDPad,CuDef</c> for a surface pad, <c>ComponentPad</c> for
+    /// a through-hole one). The key is <see cref="PlacedPad.Name"/>, which is exactly the source
+    /// <see cref="PcbCopperModel.FromLayout"/> builds a pad feature with — so a flash is tied back to its
+    /// component pin with no string parsing. A repeated name (never, since a refdes is unique and its pad
+    /// numbers are) keeps the last.</summary>
+    private static Dictionary<string, (string, string, string)> PadIdentity(PcbLayout layout)
     {
-        var map = new Dictionary<string, (string, string)>(StringComparer.Ordinal);
+        var map = new Dictionary<string, (string, string, string)>(StringComparer.Ordinal);
         foreach (var pad in layout.PlacedPads())
-            map[pad.Name] = (pad.Reference, pad.PadNumber);
+        {
+            string aperFunction = pad.Kind == PadKind.ThroughHole ? "ComponentPad" : "SMDPad,CuDef";
+            map[pad.Name] = (pad.Reference, pad.PadNumber, aperFunction);
+        }
         return map;
     }
 

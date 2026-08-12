@@ -156,6 +156,52 @@ public sealed class PcbGerberX2Tests
         Assert.Equal(plain, StripX2(g));
     }
 
+    // ==== aperture attributes (%TA.AperFunction) on the copper apertures =========
+
+    [Fact]
+    public void X2_EmitsApertureFunctionsOnCopperAndTheOutline()
+    {
+        var o = PcbGerberExport.Generate(Routed(), includeX2: true);
+        string top = o.CopperLayers[0].Gerber;
+
+        // The SMD component pads, the traces, and the outline each declare their aperture's role.
+        Assert.Contains("%TA.AperFunction,SMDPad,CuDef*%", top);
+        Assert.Contains("%TA.AperFunction,Conductor*%", top);
+        Assert.Contains("%TA.AperFunction,Profile*%", o.OutlineGerber);
+
+        // A plain Gerber carries none; stripping the attribute lines still recovers it byte-for-byte.
+        string plain = Top(PcbGerberExport.Generate(Routed()));
+        Assert.DoesNotContain("%TA", plain);
+        Assert.Equal(plain, StripX2(top));
+    }
+
+    [Fact]
+    public void X2_SplitsAnApertureSharedByAViaAndATraceByFunction()
+    {
+        // A via whose pad diameter EQUALS a trace width. Off, they share one D-code (dedup by shape); on,
+        // each carries its own %TA.AperFunction (ViaPad vs Conductor), so they must be DIFFERENT
+        // apertures — the discriminating property of aperture-function dedup.
+        PcbLayout WithVia()
+        {
+            var layout = Routed();
+            layout.AddVia("VCC", 0, 5, "Top", "Bottom", drill: 0.2, pad: 0.3);   // pad 0.3 == the trace width
+            return layout;
+        }
+
+        string off = Top(PcbGerberExport.Generate(WithVia()));
+        string on = Top(PcbGerberExport.Generate(WithVia(), includeX2: true));
+
+        Assert.Contains("%TA.AperFunction,ViaPad*%", on);
+        Assert.Contains("%TA.AperFunction,Conductor*%", on);
+
+        // The shared 0.3 aperture is ONE D-code off and TWO on (split by function), so on has more %ADDs.
+        Assert.True(CountAdd(on) > CountAdd(off),
+            $"X2 must split the shared 0.3 aperture by function: off {CountAdd(off)} ADDs, on {CountAdd(on)}");
+    }
+
+    private static int CountAdd(string gerber) =>
+        gerber.Split('\n').Count(l => l.StartsWith("%ADD", StringComparison.Ordinal));
+
     [Fact]
     public void AnX2MaskGerber_RoundTripsItsWindowsExactly_TheReaderIgnoresAttributes()
     {

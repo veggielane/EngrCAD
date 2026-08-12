@@ -7854,7 +7854,13 @@ component pin (an AOI / placement-verification datum). The pad identity is looke
 SOURCE (`"R1.1"`, which IS `PlacedPad.Name` — no string parsing), so a via / trace / pour, which carries
 no such source, gets none; the `%TO.C` / `%TO.P` lifecycle mirrors `%TO.N`'s (set on change, `%TD` on
 clear), and a rounded / rotated pad that region-fills carries them on its contour just as a flashed pad
-does. Filed: the `.C`/`.P` on the paste / silk layers, and `%TA` aperture attributes. Pads flash (`D03`),
+does. Each copper APERTURE also declares its `%TA.AperFunction` role (`SMDPad,CuDef` / `ComponentPad` for
+a component pad by its kind, `ViaPad`, `Conductor` for a trace, `Profile` for the outline), which changed
+the aperture DEDUP to key on (shape, function): a via pad and a trace of the SAME diameter but different
+role split into two D-codes under X2, while OFF the function collapses so the key reduces to the shape and
+the dedup — hence the whole file — is byte-identical. The discriminating test builds exactly that
+collision (a via pad and a trace both Ø0.3) and asserts one `%ADD` off, two on. A pour region-FILLS so it
+has no aperture and no `%TA`. Filed: the `.C`/`.P` and `%TA` on the mask / silk / paste layers. Pads flash (`D03`),
 traces draw
 (`D01`/`D02` with a round aperture, whose swept stroke IS the copper model's trace region), via pads
 flash as solid discs, and anything else — a rotated pad, a copper pour — is a region fill
@@ -7997,9 +8003,9 @@ foil-thickness catalogue, paste-volume optimisation, window-paning of
 large apertures, fine mask tenting control beyond
 the tented/opened via policy, curved conformal mask/silk/paste on a MID surface (refused for the
 tamper-mesh distortion reason), a lowercase silk font (a value's lowercase advances as a blank), the
-Gerber X2 `.C`/`.P` on the paste / silk layers and `%TA` aperture attributes (the X2 net attribute, the
-per-Gerber `FileFunction`, the `.C`/`.P` component/pad attributes on the copper pads, and the `.gbrjob`
-job file are done), and a Gerber IMPORT of a foreign board (this is export). Docs:
+Gerber X2 `.C`/`.P`/`%TA` on the mask / silk / paste layers (the X2 net attribute, the per-Gerber
+`FileFunction`, and the `.C`/`.P` component/pad attributes and `%TA` aperture functions on the copper are
+done), and a Gerber IMPORT of a foreign board (this is export). Docs:
 `examples/ecad-fabrication.md`.
 
 ### Assembly pick-and-place (the centroid file) (`PcbPickAndPlace`)

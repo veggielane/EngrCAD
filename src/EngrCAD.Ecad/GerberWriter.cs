@@ -128,7 +128,10 @@ internal sealed class GerberBuilder
     private readonly string _comment;
     private readonly bool _x2;
     private readonly string? _fileFunction;
-    private readonly Dictionary<GerberAperture, int> _apertures = [];
+    // Apertures dedupe by (shape, X2 aperture-function) so a via pad and a trace of the same diameter but
+    // different function get distinct D-codes when X2 is on (each carries its own %TA.AperFunction). When
+    // X2 is off the function is always null, so the key reduces to the shape — byte-identical dedup.
+    private readonly Dictionary<(GerberAperture Aperture, string? Function), int> _apertures = [];
     private readonly List<GObject> _objects = [];
     private int _nextDCode = 10;
 
@@ -140,26 +143,31 @@ internal sealed class GerberBuilder
         _fileFunction = fileFunction;
     }
 
-    private int ApertureCode(GerberAperture aperture)
+    private int ApertureCode(GerberAperture aperture, string? function)
     {
-        if (!_apertures.TryGetValue(aperture, out int code))
-            _apertures[aperture] = code = _nextDCode++;
+        // The function only distinguishes apertures under X2; off, collapse it so dedup is by shape alone.
+        var key = (aperture, _x2 ? function : null);
+        if (!_apertures.TryGetValue(key, out int code))
+            _apertures[key] = code = _nextDCode++;
         return code;
     }
 
     /// <summary>A flash (`D03`) of an aperture at a point, in the given polarity. <paramref name="net"/>
-    /// is the object's net for an X2 <c>%TO.N%</c> attribute, and <paramref name="pad"/> the component
-    /// pin it realises for the X2 <c>%TO.C%</c> / <c>%TO.P%</c> attributes (both ignored unless the
-    /// builder is in X2 mode).</summary>
+    /// is the object's net for an X2 <c>%TO.N%</c> attribute, <paramref name="pad"/> the component pin it
+    /// realises for the X2 <c>%TO.C%</c> / <c>%TO.P%</c> attributes, and <paramref name="function"/> the
+    /// aperture's X2 <c>%TA.AperFunction%</c> role (all ignored unless the builder is in X2 mode).</summary>
     internal void Flash(
         GerberAperture aperture, in Vector2d center, bool dark = true, string? net = null,
-        (string Reference, string Pad)? pad = null) =>
-        _objects.Add(GObject.Flash(ApertureCode(aperture), center, dark, net, pad));
+        (string Reference, string Pad)? pad = null, string? function = null) =>
+        _objects.Add(GObject.Flash(ApertureCode(aperture, function), center, dark, net, pad));
 
     /// <summary>A stroked polyline: a dark draw (`D01`) with a round aperture of the trace width — the
-    /// Minkowski sum of the centre-line with a disc, exactly the copper model's trace stroke.</summary>
-    internal void Draw(double width, IReadOnlyList<Vector2d> polyline, string? net = null) =>
-        _objects.Add(GObject.Draw(ApertureCode(GerberAperture.Circle(width)), polyline, dark: true, net));
+    /// Minkowski sum of the centre-line with a disc, exactly the copper model's trace stroke.
+    /// <paramref name="function"/> is the aperture's X2 <c>%TA.AperFunction%</c> role (e.g.
+    /// <c>Conductor</c>).</summary>
+    internal void Draw(
+        double width, IReadOnlyList<Vector2d> polyline, string? net = null, string? function = null) =>
+        _objects.Add(GObject.Draw(ApertureCode(GerberAperture.Circle(width), function), polyline, dark: true, net));
 
     /// <summary>A region fill (`G36`/`G37`) of ONE closed contour of lines and circular arcs, in the
     /// given polarity. A Bézier boundary is refused (Gerber region contours carry no cubic).
@@ -189,8 +197,20 @@ internal sealed class GerberBuilder
                 sb.Append("%TF.FileFunction,").Append(_fileFunction).Append("*%").Append('\n');
         }
         sb.Append("G04 ").Append(_comment).Append("*").Append('\n');
-        foreach (var (aperture, code) in _apertures.OrderBy(kv => kv.Value))
-            sb.Append(ApertureDefinition(code, aperture)).Append('\n');
+        // Aperture definitions, each preceded (under X2) by its %TA.AperFunction role, set when it changes
+        // and deleted (%TD.AperFunction) for an aperture with no role. Off unless the builder is in X2 mode.
+        string? curAperFunc = null;
+        foreach (var kv in _apertures.OrderBy(kv => kv.Value))
+        {
+            if (_x2 && !string.Equals(kv.Key.Function, curAperFunc, StringComparison.Ordinal))
+            {
+                sb.Append(kv.Key.Function is null
+                    ? "%TD.AperFunction*%"
+                    : $"%TA.AperFunction,{kv.Key.Function}*%").Append('\n');
+                curAperFunc = kv.Key.Function;
+            }
+            sb.Append(ApertureDefinition(kv.Value, kv.Key.Aperture)).Append('\n');
+        }
         sb.Append("G75*").Append('\n');   // multi-quadrant arcs (region contours may carry them)
         sb.Append("G01*").Append('\n');   // linear interpolation is the default mode
 
@@ -412,7 +432,7 @@ public static class GerberWriter
         GerberFormat format,
         bool x2 = false,
         string? fileFunction = null,
-        IReadOnlyDictionary<string, (string Reference, string Pad)>? padIdentity = null)
+        IReadOnlyDictionary<string, (string Reference, string Pad, string AperFunction)>? padIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(features);
         ArgumentNullException.ThrowIfNull(vias);
@@ -422,20 +442,27 @@ public static class GerberWriter
         var builder = new GerberBuilder(format, $"EngrCAD copper layer '{layerName}'", x2, fileFunction);
 
         // Dark solids — every feature's OUTER copper: pads / pours as flashes-or-region-fills, via
-        // pads as solid discs, traces as round-aperture draws. Each carries its NET for the X2
-        // %TO.N% object attribute (a fab's net-compare datum), and a component pad additionally its
-        // (refdes, pad) for the X2 %TO.C% / %TO.P% assembly datum (looked up by feature source; a pour
-        // or a non-component feature has none). All ignored unless x2 is on.
+        // pads as solid discs, traces as round-aperture draws. Each carries its NET for the X2 %TO.N%
+        // object attribute (a fab's net-compare datum), a component pad additionally its (refdes, pad)
+        // for the X2 %TO.C% / %TO.P% assembly datum and its aperture's %TA.AperFunction% (SMDPad /
+        // ComponentPad), a via pad the ViaPad function and a trace the Conductor function. A pour
+        // region-fills, so it has no aperture and no %TA. All ignored unless x2 is on.
         foreach (var f in features)
         {
-            (string, string)? pad = x2 && padIdentity is not null && padIdentity.TryGetValue(f.Source, out var id)
-                ? id : null;
-            EmitSolid(builder, f.Region, x2 ? f.Net : null, pad);
+            (string, string)? pad = null;
+            string? function = null;
+            if (x2 && padIdentity is not null && padIdentity.TryGetValue(f.Source, out var id))
+            {
+                pad = (id.Reference, id.Pad);
+                function = id.AperFunction;
+            }
+            EmitSolid(builder, f.Region, x2 ? f.Net : null, pad, function);
         }
         foreach (var v in vias)
-            builder.Flash(GerberAperture.Circle(v.PadDiameter), v.Center, dark: true, net: x2 ? v.Net : null);
+            builder.Flash(GerberAperture.Circle(v.PadDiameter), v.Center, dark: true,
+                net: x2 ? v.Net : null, function: x2 ? "ViaPad" : null);
         foreach (var (points, width, net) in traces)
-            builder.Draw(width, points, x2 ? net : null);
+            builder.Draw(width, points, x2 ? net : null, function: x2 ? "Conductor" : null);
 
         // Clear the TRUE AIR of the final union — the air pockets (via drills, pour anti-pads). An
         // air pocket may be a RING: a pour's clearance hole with an other-net pad ISLAND sitting in it,
@@ -478,7 +505,7 @@ public static class GerberWriter
             double extent = Math.Max(b.Max.X - b.Min.X, b.Max.Y - b.Min.Y);
             double width = Math.Max(extent * 1e-6, extent * 0.001);
             var closed = new List<Vector2d>(outline) { outline[0] };
-            builder.Draw(width, closed);
+            builder.Draw(width, closed, function: x2 ? "Profile" : null);
         }
         return builder.Finish();
     }
@@ -544,14 +571,17 @@ public static class GerberWriter
     }
 
     private static void EmitSolid(
-        GerberBuilder builder, CurvedRegion2d region, string? net = null, (string, string)? pad = null)
+        GerberBuilder builder, CurvedRegion2d region, string? net = null, (string, string)? pad = null,
+        string? function = null)
     {
+        // A standard-aperture pad FLASHES (and carries the aperture function); anything else region-FILLS
+        // (a region has no aperture, so no %TA — it keeps its %TO object attributes only).
         if (GerberShapes.TryDisc(region, out var c, out double d))
-            builder.Flash(GerberAperture.Circle(d), c, net: net, pad: pad);
+            builder.Flash(GerberAperture.Circle(d), c, net: net, pad: pad, function: function);
         else if (GerberShapes.TryAxisAlignedRect(region, out c, out double w, out double h))
-            builder.Flash(GerberAperture.Rectangle(w, h), c, net: net, pad: pad);
+            builder.Flash(GerberAperture.Rectangle(w, h), c, net: net, pad: pad, function: function);
         else if (GerberShapes.TryAxisAlignedObround(region, out c, out w, out h))
-            builder.Flash(GerberAperture.Obround(w, h), c, net: net, pad: pad);
+            builder.Flash(GerberAperture.Obround(w, h), c, net: net, pad: pad, function: function);
         else
             builder.Contour(region.Outer, dark: true, net: net, pad: pad);
     }
