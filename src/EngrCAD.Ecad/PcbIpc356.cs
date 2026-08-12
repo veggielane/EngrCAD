@@ -92,6 +92,47 @@ public readonly record struct Ipc356AccessPoint(
 /// <param name="AccessPoints">The access points on this net, in file order.</param>
 public readonly record struct Ipc356Net(string Name, IReadOnlyList<Ipc356AccessPoint> AccessPoints);
 
+/// <summary>One point of a conductor path, in the file's micrometre quantum (integer µm, so the round
+/// trip is exact). <see cref="Xmm"/>/<see cref="Ymm"/> are the millimetre views.</summary>
+/// <param name="Xum">The X coordinate in micrometres.</param>
+/// <param name="Yum">The Y coordinate in micrometres.</param>
+public readonly record struct Ipc356PathPoint(long Xum, long Yum)
+{
+    /// <summary>The X coordinate in millimetres.</summary>
+    public double Xmm => Xum / 1000.0;
+
+    /// <summary>The Y coordinate in millimetres.</summary>
+    public double Ymm => Yum / 1000.0;
+}
+
+/// <summary>
+/// A CONDUCTOR record (op <c>378</c>) — a net's copper PATH on one layer, the more-thorough net-compare
+/// datum an access-point list (pads / vias) does not carry. It names the net, the 1-based copper
+/// <see cref="Access"/> layer the conductor is on, its <see cref="WidthUm"/>, and its centre-line
+/// <see cref="Path"/> (≥ 2 points). Emitted only when the caller asks for conductors
+/// (<see cref="PcbIpc356.Write(PcbLayout, bool)"/>) — the default netlist lists access points only, so
+/// it is byte-identical to before.
+/// </summary>
+/// <param name="Net">The net the conductor carries.</param>
+/// <param name="Access">The 1-based copper-layer number the conductor is on (top = 1).</param>
+/// <param name="WidthUm">The conductor width in micrometres.</param>
+/// <param name="Path">The conductor centre-line, ≥ 2 points, in the file's micrometre quantum.</param>
+public readonly record struct Ipc356Conductor(
+    string Net, int Access, long WidthUm, IReadOnlyList<Ipc356PathPoint> Path)
+{
+    /// <summary>The conductor width in millimetres.</summary>
+    public double WidthMm => WidthUm / 1000.0;
+}
+
+/// <summary>The two halves of a parsed IPC-D-356A file — the ACCESS POINTS (pads / vias) and the
+/// CONDUCTORS (op <c>378</c> paths, empty when the file carried none). The twin of what
+/// <see cref="PcbIpc356.Write(IReadOnlyList{Ipc356AccessPoint}, IReadOnlyList{Ipc356Conductor}, string)"/>
+/// emits.</summary>
+/// <param name="AccessPoints">Every access point (pad / via) in the file.</param>
+/// <param name="Conductors">Every conductor (op <c>378</c>) in the file (empty when none).</param>
+public readonly record struct Ipc356File(
+    IReadOnlyList<Ipc356AccessPoint> AccessPoints, IReadOnlyList<Ipc356Conductor> Conductors);
+
 /// <summary>
 /// <b>IPC-D-356A bare-board netlist export</b> — the board-house electrical-test / netlist-compare
 /// deliverable, the fab-netlist twin of the copper <see cref="PcbGerberExport">Gerber</see> /
@@ -145,8 +186,11 @@ public readonly record struct Ipc356Net(string Name, IReadOnlyList<Ipc356AccessP
 /// reference). An unconnected / no-connect pad is each its OWN single-point net (a unique
 /// <c>N/C-######</c> name), which is exactly how the copper model treats a null-net feature — so the
 /// reconstructed partition matches. Board mounting / legacy holes are EXCLUDED (they carry no net — a
-/// netlist lists NET access points). Conductor (trace, op <c>378</c>) records are NOT emitted: this is a
-/// bare-board netlist (access points), not a conductor topology (filed).</item>
+/// netlist lists NET access points). Conductor (trace, op <c>378</c>) records are OPT-IN
+/// (<see cref="Write(PcbLayout, bool)"/>): one per routed trace — its net, its 1-based copper layer,
+/// its width, and its centre-line path — for a more thorough net-compare (the conductor topology, not
+/// just the access points). The default netlist emits access points ONLY, so it is byte-identical to
+/// before; <see cref="ParseFile"/> reads both halves back.</item>
 /// <item><b>An identity field is REFUSED, never sanitized, when neither the record NOR a continuation can
 /// spell it</b> (the topological-naming rule — the net name IS the reconstruction key, so squashing
 /// whitespace would misresolve two nets into one). Whitespace in any identity, or a real net colliding
@@ -162,12 +206,12 @@ public readonly record struct Ipc356Net(string Name, IReadOnlyList<Ipc356AccessP
 /// col 27-30  pin number            (4,  left-justified; blank for a via; HEAD only when continued)
 /// col 32+    A&lt;nn&gt; X&lt;±µm&gt; Y&lt;±µm&gt; [D&lt;µm&gt;] [L&lt;from&gt;-&lt;to&gt;]   (access, midpoint, drill on drilled records, layer span on blind/buried vias)
 ///
+/// 378 &lt;net&gt; A&lt;nn&gt; W&lt;µm&gt; X&lt;±µm&gt; Y&lt;±µm&gt; …   (a CONDUCTOR: net + copper layer + width + a ≥2-point centre-line path; opt-in)
 /// 379 [N&lt;full net&gt;] [R&lt;full refdes&gt;] [P&lt;full pin&gt;]   (a continuation record, on the line BEFORE the record it applies to; only over-width fields)
 /// </code>
 /// <para>with a header of <c>C</c> comment and <c>P</c> parameter records (<c>P UNITS CUST 2</c>,
 /// <c>P VER IPC-D-356A</c>) and a trailing <c>999</c> end record. The reader is the round-trip oracle
-/// SCOPED to what the writer emits (an unknown record code or units is refused by name). The <c>379</c>
-/// continuation code is distinct from the (unimplemented) <c>378</c> conductor record.</para>
+/// SCOPED to what the writer emits (an unknown record code or units is refused by name).</para>
 /// </summary>
 public static class PcbIpc356
 {
@@ -175,7 +219,8 @@ public static class PcbIpc356
     private const int RefDesFieldWidth = 6;    // reference-designator field
     private const int PinFieldWidth = 4;       // pin-number field
     private const int GeometryStart = 31;      // 0-based index of column 32 (the token stream)
-    private const string ContinuationCode = "379";   // wide-identity continuation record (378 = conductor, unused)
+    private const string ContinuationCode = "379";   // wide-identity continuation record
+    private const string ConductorCode = "378";       // a conductor (a net's copper path on one layer)
 
     // ---- the one Compute both the writer and the oracle project --------------
 
@@ -268,32 +313,96 @@ public static class PcbIpc356
         return points;
     }
 
+    /// <summary>
+    /// The CONDUCTOR records (op <c>378</c>) — one per routed trace, carrying the net, the 1-based
+    /// copper-layer it is on, its width, and its centre-line path. A trace is copper on ONE layer, so a
+    /// conductor's <see cref="Ipc356Conductor.Access"/> is that layer's number. Sorted deterministically
+    /// (by net, then first point), so two emissions are byte-identical. A degenerate trace (fewer than
+    /// two points) carries no path and is skipped.
+    /// </summary>
+    /// <param name="layout">The board layout.</param>
+    /// <exception cref="ArgumentException">A trace net collides with the synthetic namespace — refused
+    /// by name (the same rule the access points obey).</exception>
+    public static IReadOnlyList<Ipc356Conductor> ComputeConductors(PcbLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        var coppers = layout.Board.Stackup.Coppers;
+        var layerIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < coppers.Count; i++)
+            layerIndex[coppers[i].Name] = i;
+
+        var conductors = new List<Ipc356Conductor>();
+        foreach (var trace in layout.Traces)
+        {
+            if (trace.Points.Count < 2)
+                continue;   // a conductor needs a path
+            RequireRealNetName(trace.Net);
+            int access = layerIndex.GetValueOrDefault(trace.Layer, 0) + 1;   // 1-based single layer
+            var path = trace.Points
+                .Select(p => new Ipc356PathPoint(ToMicrons(p.X), ToMicrons(p.Y)))
+                .ToList();
+            conductors.Add(new Ipc356Conductor(trace.Net, access, ToMicrons(trace.Width), path));
+        }
+        conductors.Sort(ConductorOrder);
+        return conductors;
+    }
+
     // ---- writing --------------------------------------------------------------
 
-    /// <summary>Writes the IPC-D-356A netlist text for a layout (no disk touched).</summary>
-    public static string Write(PcbLayout layout)
+    /// <summary>Writes the IPC-D-356A netlist text for a layout (no disk touched) — access points only,
+    /// byte-identical to before. Pass <see cref="Write(PcbLayout, bool)"/> with <c>true</c> to also emit
+    /// conductor (op <c>378</c>) records.</summary>
+    public static string Write(PcbLayout layout) => Write(layout, includeConductors: false);
+
+    /// <summary>Writes the IPC-D-356A netlist text for a layout, optionally including CONDUCTOR records
+    /// (op <c>378</c>, a net's copper path per routed trace) for a more thorough net-compare. With
+    /// <paramref name="includeConductors"/> false the output is byte-identical to the access-point-only
+    /// netlist.</summary>
+    public static string Write(PcbLayout layout, bool includeConductors)
     {
         ArgumentNullException.ThrowIfNull(layout);
         string design = string.IsNullOrWhiteSpace(layout.Schematic.Name) ? "board" : layout.Schematic.Name;
-        return Write(Compute(layout), design);
+        var conductors = includeConductors
+            ? ComputeConductors(layout)
+            : (IReadOnlyList<Ipc356Conductor>)[];
+        return Write(Compute(layout), conductors, design);
     }
 
     /// <summary>Writes the IPC-D-356A netlist text from computed access points and a design name.</summary>
     /// <exception cref="ArgumentException">An identity field (net / refdes / pin) is too long or carries
     /// whitespace to be spelled in a record — refused by name (an identity is never sanitized).</exception>
-    public static string Write(IReadOnlyList<Ipc356AccessPoint> points, string design = "board")
+    public static string Write(IReadOnlyList<Ipc356AccessPoint> points, string design = "board") =>
+        Write(points, [], design);
+
+    /// <summary>Writes the IPC-D-356A netlist text from computed access points AND conductors. An empty
+    /// conductor list emits no <c>378</c> records, so the output is byte-identical to the access-point
+    /// overload — which is what keeps a conductor-free file (the default) unchanged.</summary>
+    /// <exception cref="ArgumentException">An identity field is too long or carries whitespace — refused
+    /// by name.</exception>
+    public static string Write(
+        IReadOnlyList<Ipc356AccessPoint> points,
+        IReadOnlyList<Ipc356Conductor> conductors,
+        string design = "board")
     {
         ArgumentNullException.ThrowIfNull(points);
+        ArgumentNullException.ThrowIfNull(conductors);
 
-        // Coordinate / drill field widths are DERIVED from the data (min IPC widths), so a large board
-        // widens the column rather than overflowing; they are cosmetic (the tokens are self-delimiting
-        // by their leading letter and sign), so the reader needs no a-priori knowledge of them.
+        // Coordinate / drill field widths are DERIVED from the data (min IPC widths) over BOTH the access
+        // points and the conductors' path points / widths, so a large board widens the column rather than
+        // overflowing; they are cosmetic (the tokens are self-delimiting by their leading letter and
+        // sign), so the reader needs no a-priori knowledge of them.
         long maxCoord = 1, maxDrill = 1;
         foreach (var p in points)
         {
             maxCoord = Math.Max(maxCoord, Math.Max(Math.Abs(p.Xum), Math.Abs(p.Yum)));
             if (p.IsDrilled)
                 maxDrill = Math.Max(maxDrill, p.DrillUm);
+        }
+        foreach (var cnd in conductors)
+        {
+            maxDrill = Math.Max(maxDrill, cnd.WidthUm);
+            foreach (var pt in cnd.Path)
+                maxCoord = Math.Max(maxCoord, Math.Max(Math.Abs(pt.Xum), Math.Abs(pt.Yum)));
         }
         int coordWidth = Math.Max(6, maxCoord.ToString(CultureInfo.InvariantCulture).Length);
         int drillWidth = Math.Max(4, maxDrill.ToString(CultureInfo.InvariantCulture).Length);
@@ -314,6 +423,16 @@ public static class PcbIpc356
             if (continuation.Length > 0)
                 sb.Append(continuation).Append('\n');
             sb.Append(FormatRecord(p, coordWidth, drillWidth)).Append('\n');
+        }
+
+        // Conductor records follow the access points. An over-width net rides the SAME 379 continuation
+        // (an N token only — a conductor has no refdes / pin), so the fixed net field holds its head.
+        foreach (var cnd in conductors)
+        {
+            string continuation = ConductorContinuation(cnd.Net);
+            if (continuation.Length > 0)
+                sb.Append(continuation).Append('\n');
+            sb.Append(FormatConductor(cnd, coordWidth, drillWidth)).Append('\n');
         }
 
         sb.Append("999\n");   // end record
@@ -400,6 +519,58 @@ public static class PcbIpc356
         tokens.Append(tag).Append(value);   // whitespace is refused by Field on the same point
     }
 
+    // A conductor (op 378) record: op + net(14) + A<layer> W<widthµm> then one X/Y token pair per path
+    // point (the same self-delimiting geometry stream the access-point records use). The net rides the
+    // same fixed field (over-width → a preceding 379 N-token continuation), so a legacy reader still
+    // gets a usable name.
+    private static string FormatConductor(in Ipc356Conductor c, int coordWidth, int drillWidth)
+    {
+        if (c.Path.Count < 2)
+            throw new ArgumentException(
+                $"A conductor on net '{c.Net}' has fewer than two path points, so it has no path.", nameof(c));
+        var sb = new StringBuilder(64);
+        sb.Append(ConductorCode);                                 // cols 1-3
+        sb.Append(' ');                                           // col 4
+        sb.Append(Field(c.Net, NetFieldWidth, "net name"));       // cols 5-18
+        sb.Append(' ');                                           // col 19
+        sb.Append('A').Append(c.Access.ToString("D2", CultureInfo.InvariantCulture));
+        sb.Append(" W").Append(c.WidthUm.ToString(CultureInfo.InvariantCulture).PadLeft(drillWidth, '0'));
+        foreach (var pt in c.Path)
+        {
+            sb.Append(" X").Append(Coord(pt.Xum, coordWidth));
+            sb.Append(" Y").Append(Coord(pt.Yum, coordWidth));
+        }
+        return sb.ToString();
+    }
+
+    // A conductor's wide-net continuation — the 379 record carrying the full net when it overflows its
+    // fixed field (a conductor has no refdes / pin, so only an N token). "" when the net fits.
+    private static string ConductorContinuation(string net)
+    {
+        var tokens = new StringBuilder();
+        AppendWide(tokens, 'N', net, NetFieldWidth);
+        return tokens.Length == 0 ? "" : ContinuationCode + " " + tokens;
+    }
+
+    // A stable total order for conductors (by net, layer, first point, width, point count), so two
+    // emissions are byte-identical.
+    private static int ConductorOrder(Ipc356Conductor a, Ipc356Conductor b)
+    {
+        int c = string.CompareOrdinal(a.Net, b.Net);
+        if (c != 0) return c;
+        c = a.Access.CompareTo(b.Access);
+        if (c != 0) return c;
+        var pa = a.Path.Count > 0 ? a.Path[0] : default;
+        var pb = b.Path.Count > 0 ? b.Path[0] : default;
+        c = pa.Xum.CompareTo(pb.Xum);
+        if (c != 0) return c;
+        c = pa.Yum.CompareTo(pb.Yum);
+        if (c != 0) return c;
+        c = a.WidthUm.CompareTo(b.WidthUm);
+        if (c != 0) return c;
+        return a.Path.Count.CompareTo(b.Path.Count);
+    }
+
     // ---- the twin decoder (the round-trip oracle) ----------------------------
 
     /// <summary>Reads an IPC-D-356A netlist back into access points — the TWIN of <see cref="Write"/>,
@@ -409,14 +580,29 @@ public static class PcbIpc356
     /// <exception cref="FormatException">The text is not IPC-D-356A of the writer's shape — a missing /
     /// unsupported units record, an unknown record code, a malformed record (too short, no net, missing
     /// coordinate token, a drilled record with no drill or an SMD record with one) — each refused by name.</exception>
-    public static IReadOnlyList<Ipc356AccessPoint> Parse(string text)
+    public static IReadOnlyList<Ipc356AccessPoint> Parse(string text) => ParseFile(text).AccessPoints;
+
+    /// <summary>Reads an IPC-D-356A netlist back into its CONDUCTOR (op <c>378</c>) records — the twin of
+    /// <see cref="ComputeConductors"/>. Empty when the file carries none.</summary>
+    public static IReadOnlyList<Ipc356Conductor> ParseConductors(string text) => ParseFile(text).Conductors;
+
+    /// <summary>Reads an IPC-D-356A netlist back into BOTH halves — access points (pads / vias) and
+    /// conductors (op <c>378</c>) — the twin of the combined <see cref="Write(IReadOnlyList{Ipc356AccessPoint},
+    /// IReadOnlyList{Ipc356Conductor}, string)"/>, so the round trip is provable rather than assumed. It
+    /// is scoped to what the writer emits: only <c>317</c>/<c>327</c>/<c>378</c> records, a <c>379</c>
+    /// continuation, and <c>P UNITS CUST 2</c> are accepted, everything else refused by name.</summary>
+    /// <exception cref="FormatException">The text is not IPC-D-356A of the writer's shape — a missing /
+    /// unsupported units record, an unknown record code, a malformed record — each refused by name.</exception>
+    public static Ipc356File ParseFile(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
         var points = new List<Ipc356AccessPoint>();
+        var conductors = new List<Ipc356Conductor>();
         bool unitsSeen = false;
         int lineNo = 0;
-        // A pending wide-identity continuation (379) applies to the NEXT test record — accumulate then
-        // consume. A continuation followed by no record, or by another continuation, is malformed.
+        // A pending wide-identity continuation (379) applies to the NEXT record (a test record OR a
+        // conductor) — accumulate then consume. A continuation followed by no record, or by another
+        // continuation, is malformed.
         string? contNet = null, contRef = null, contPin = null;
         bool pending = false;
 
@@ -463,6 +649,16 @@ public static class PcbIpc356
                 continue;
             }
 
+            if (line.Length >= 3 && line[..3] == ConductorCode)
+            {
+                // A conductor record — its net may ride the pending continuation (an N token); refdes/pin
+                // do not apply to a conductor.
+                conductors.Add(ParseConductorRecord(line, lineNo, contNet));
+                contNet = contRef = contPin = null;
+                pending = false;
+                continue;
+            }
+
             points.Add(ParseRecord(line, lineNo, contNet, contRef, contPin));
             contNet = contRef = contPin = null;
             pending = false;
@@ -470,12 +666,12 @@ public static class PcbIpc356
 
         if (pending)
             throw new FormatException(
-                "The IPC-D-356A file ends with a continuation record (379) that no test record follows.");
+                "The IPC-D-356A file ends with a continuation record (379) that no record follows.");
         if (!unitsSeen)
             throw new FormatException(
                 "The IPC-D-356A file declares no units — a 'P UNITS CUST 2' record is required so the "
                 + "coordinate scale is unambiguous (a wrong scale is a 10^n tell).");
-        return points;
+        return new Ipc356File(points, conductors);
     }
 
     // Parses a 379 wide-identity continuation record — the full net / refdes / pin as letter-tagged
@@ -567,6 +763,55 @@ public static class PcbIpc356
 
         return new Ipc356AccessPoint(
             net, refDes, pin, feature, access.Value, x.Value, y.Value, drill ?? 0, fromLayer, toLayer);
+    }
+
+    // Parses a conductor (378) record: net (fixed field, or a preceding 379 N continuation) + a token
+    // stream A<layer> W<widthµm> then one X/Y pair per path point. Refuses a missing access/width, a
+    // mismatched X/Y count, or fewer than two points — by name.
+    private static Ipc356Conductor ParseConductorRecord(string line, int lineNo, string? contNet)
+    {
+        if (line.Length < 4 + NetFieldWidth)
+            throw new FormatException(
+                $"IPC-D-356A conductor record (378) on line {lineNo} is too short ('{line.Trim()}').");
+        string net = contNet ?? line.Substring(4, NetFieldWidth).TrimEnd();
+        if (net.Length == 0)
+            throw new FormatException($"IPC-D-356A conductor record (378) on line {lineNo} names no net.");
+
+        var tokens = line[(4 + NetFieldWidth)..].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        int? access = null;
+        long? width = null;
+        var xs = new List<long>();
+        var ys = new List<long>();
+        foreach (var tok in tokens)
+        {
+            char k = tok[0];
+            string rest = tok[1..];
+            switch (k)
+            {
+                case 'A': access = ParseInt(rest, lineNo, "access"); break;
+                case 'W': width = ParseLong(rest, lineNo, "width"); break;
+                case 'X': xs.Add(ParseLong(rest, lineNo, "X")); break;
+                case 'Y': ys.Add(ParseLong(rest, lineNo, "Y")); break;
+                default:
+                    throw new FormatException(
+                        $"IPC-D-356A conductor record (378) on line {lineNo} has an unknown token '{tok}'.");
+            }
+        }
+        if (access is null || width is null)
+            throw new FormatException(
+                $"IPC-D-356A conductor record (378) on line {lineNo} is missing an access (A) or width (W) token.");
+        if (xs.Count != ys.Count)
+            throw new FormatException(
+                $"IPC-D-356A conductor record (378) on line {lineNo} has mismatched X/Y coordinate tokens "
+                + $"({xs.Count} X, {ys.Count} Y).");
+        if (xs.Count < 2)
+            throw new FormatException(
+                $"IPC-D-356A conductor record (378) on line {lineNo} has fewer than two path points.");
+
+        var path = new List<Ipc356PathPoint>(xs.Count);
+        for (int i = 0; i < xs.Count; i++)
+            path.Add(new Ipc356PathPoint(xs[i], ys[i]));
+        return new Ipc356Conductor(net, access.Value, width.Value, path);
     }
 
     // Parses an L<from>-<to> layer-span token into its two 1-based copper-layer numbers.

@@ -467,12 +467,18 @@ the netname-carrying revision (the original IPC-D-356 carried none).
   whose identities all fit is **byte-identical** — the mechanism only changes over-width records. (The
   standard's single fixed field cannot spell a range or an over-width name, so both are the repo's own
   additive tokens in the same letter-prefixed stream the format already uses; `379` is distinct from the
-  unimplemented `378` conductor record.)
+  `378` conductor record.)
 - **Included:** every component pad (op `327` for SMD, `317` for a drilled through-hole pad) and every
   net-carrying via (op `317`, no component reference). An unconnected / no-connect pad is each its **own
   single-point net** (a unique `N/C-######` name) — exactly how the copper model treats a null-net
-  feature. Board mounting / legacy holes are **excluded** (they carry no net), and conductor (trace)
-  records are not emitted: this is a bare-board netlist (access points), not a conductor topology.
+  feature. Board mounting / legacy holes are **excluded** (they carry no net).
+- **Conductor records (op `378`) are opt-in** (`Write(layout, includeConductors: true)`): one per routed
+  trace, carrying its net, its 1-based copper layer, its width, and its ≥2-point centre-line path — the
+  more-thorough net-compare an access-point list does not carry (the conductor topology). With
+  conductors **off** (the default) the output is byte-identical to the access-point netlist, so the
+  feature adds nothing a caller did not ask for. `ParseFile` reads both halves back (`ParseConductors`
+  the conductors alone), and a conductor round-trips its whole path **exactly** — a writer that dropped a
+  midpoint would fail the twin-decoder oracle.
 
 **The bar is the twin-decoder round trip plus a net reconstruction.** `PcbIpc356.Parse` reads the output
 back, and the net partition it reconstructs — which access points share a net — equals the board's OWN,

@@ -2726,11 +2726,13 @@ from what was already understood rather than from scratch.
     MID/surface side's territory).
   - **IPC-D-356A netlist follow-ups (filed; the netlist itself has LANDED — `PcbIpc356`, see
     CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`; wider net-name/refdes fields
-    via a `379` continuation record and per-inner-layer blind/buried-via access spans via an `L<from>-<to>`
-    token have since LANDED too):** CONDUCTOR (trace-midpoint, op `378`) records (v1 lists access points —
-    pads and vias — not the conductor topology; a `378` record traces a net's copper path for a more
-    thorough net-compare). An `.ipc` disk verb / MCP export tool (v1 has `PcbIpc356.WriteFile`; wiring it
-    into the fabrication-export CLI/MCP surface beside the Gerber set is plumbing).
+    via a `379` continuation record, per-inner-layer blind/buried-via access spans via an `L<from>-<to>`
+    token, and CONDUCTOR (op `378`) records — one per routed trace, opt-in via
+    `Write(layout, includeConductors: true)`, carrying the net + copper layer + width + centre-line path
+    for a more thorough net-compare, with conductors OFF byte-identical and `ParseFile`/`ParseConductors`
+    reading them back exactly — have since LANDED too):** An `.ipc` disk verb / MCP export tool (v1 has
+    `PcbIpc356.WriteFile`; wiring it into the fabrication-export CLI/MCP surface beside the Gerber set is
+    plumbing).
   - **Pick-and-place follow-ups (filed; the centroid file itself has LANDED — `PcbPickAndPlace`,
     see CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`):** MULTI-VALUE / VARIANT P&P (a
     do-not-populate mask, or a configuration's per-variant values — needs an assembly-variant concept

@@ -8046,8 +8046,7 @@ drill token and every `327` carries none.
 unconnected / no-connect pad is each its **own single-point net**, given a unique `N/C-######` name —
 which is exactly how the copper model treats a null-net feature, so the reconstructed partition matches.
 Board mounting / legacy holes are EXCLUDED (they carry no net — a netlist lists NET access points), and
-conductor (trace, op `378`) records are not emitted (this is a bare-board netlist — access points, not a
-conductor topology).
+conductor (trace, op `378`) records are OPT-IN (below).
 
 **The oracle is the twin-decoder round trip plus a NET RECONSTRUCTION**, because a netlist that mislabels
 an access point is a silent fab failure that a structural validator waves through. `PcbIpc356.Parse` reads
@@ -8062,9 +8061,23 @@ over 6 / a pin over 4, whitespace in an identity, or a real net colliding with t
 namespace, all refuse rather than silently squash two nets into one. A drill that rounds below the file's
 1 µm quantum is refused too (a drilled record must spell a positive drill, not an unparseable `D0`). The
 reader refuses an unknown record code / units / a `317` with no drill / a `327` with a drill / a malformed
-layer span / a dangling-or-unknown-token continuation by name (scoped to what the writer emits). **Not in
-v1** (filed): conductor (trace-midpoint, op `378`) records — v1 lists access points (pads and vias), not
-the conductor topology. Docs: `examples/ecad-fabrication.md`.
+layer span / a dangling-or-unknown-token continuation by name (scoped to what the writer emits).
+
+**Conductor records (op `378`) are OPT-IN** (`Write(layout, includeConductors: true)`; `ComputeConductors`,
+`Ipc356Conductor`, `ParseFile`/`ParseConductors`): one per routed trace — its net, its 1-based copper
+layer (a trace is copper on ONE layer, so its access code IS that layer), its width, and its ≥2-point
+centre-line path as an `A<layer> W<µm> X<±µm> Y<±µm> …` token stream (the same self-delimiting geometry
+stream the access-point records use; an over-width net rides the SAME `379` continuation with an `N`
+token). This is the more-thorough net-compare the access-point list does not carry — the conductor
+topology, not just the pads and vias. **The load-bearing decision is that it is opt-in and empty-by-
+default**: `Write` with no conductors emits no `378` records, so the default netlist is BYTE-IDENTICAL to
+before, which is what lets the feature add nothing a caller did not ask for; and `Parse` skips `378`
+records into the conductor half so a file carrying them still parses its access points unchanged. The
+oracle is the same twin decoder: a conductor round-trips its net, layer, width and WHOLE path exactly
+(coordinates in the file's µm quantum, so integer-exact), asserted per conductor and as a byte fixed
+point, with the mutation that a dropped midpoint would fail; malformed `378` records (a missing access /
+width, mismatched X/Y counts, fewer than two points, an unknown token) are refused by name. Docs:
+`examples/ecad-fabrication.md`.
 
 ### The fabrication drawing (the shared frame's third consumer) (`PcbFabricationSheet`)
 

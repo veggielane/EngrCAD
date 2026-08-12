@@ -935,8 +935,13 @@ sanitized — it is the reconstruction key): whitespace in an identity (unspella
 token; an over-width identity is CARRIED by a continuation, not refused), a real net colliding with the
 `N/C-######` namespace, a drill below the file's 1 µm resolution; the reader refuses an unknown record / units / a
 drilled record with no drill / an SMD record with one / a malformed layer span / a dangling or unknown-token
-continuation by name. **Not in v1** (filed): conductor (trace-midpoint, op `378`) records — v1 lists
-access points (pads and vias), not the conductor topology. Docs: `examples/ecad-fabrication.md`.
+continuation by name. **Conductor records (op `378`) are opt-in** (`Write(layout, includeConductors:
+true)`): one per routed trace — its net, its 1-based copper layer, its width, and its ≥2-point
+centre-line path — for the more-thorough net-compare an access-point list does not carry (the conductor
+topology). With conductors OFF (the default) the output is byte-identical to the access-point netlist,
+so the feature adds nothing a caller did not ask for; `ParseFile` reads both halves back
+(`ParseConductors` the conductors alone), and a conductor round-trips its whole path EXACTLY — a writer
+that dropped a midpoint would fail the twin-decoder oracle. Docs: `examples/ecad-fabrication.md`.
 
 ## The fabrication drawing — the shared frame's third consumer
 
