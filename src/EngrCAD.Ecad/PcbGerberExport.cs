@@ -97,11 +97,12 @@ public sealed record GerberExportResult(
 ///
 /// <para><b>Gerber X2 (opt-in):</b> <c>Generate(..., includeX2: true)</c> / <c>Write(..., includeX2:
 /// true)</c> adds the X2 <c>%TO.N,&lt;net&gt;*%</c> object attribute to each copper object (a board
-/// house's net-compare datum) plus a <c>%TF.GenerationSoftware%</c> file attribute. Opt-in, so with it
-/// off the copper Gerbers are byte-identical; the reader ignores X2 attributes (they carry metadata,
-/// not geometry), so an X2 file round-trips its copper exactly. Filed: the <c>%TF.FileFunction%</c>
-/// layer-role attribute (needs each layer's stackup role/position), the <c>.C</c>/<c>.P</c> component /
-/// pad object attributes, and the job file (<c>.gbrjob</c>).</para>
+/// house's net-compare datum), a <c>%TF.GenerationSoftware%</c> file attribute, and a copper layer's
+/// <c>%TF.FileFunction,Copper,L&lt;n&gt;,&lt;side&gt;%</c> role (its stackup position and side). Opt-in,
+/// so with it off the copper Gerbers are byte-identical; the reader ignores X2 attributes (they carry
+/// metadata, not geometry), so an X2 file round-trips its copper exactly. Filed: <c>FileFunction</c> on
+/// the mask / silk / paste / outline files, the <c>.C</c>/<c>.P</c> component / pad object attributes,
+/// <c>%TA</c> aperture attributes, and the job file (<c>.gbrjob</c>).</para>
 ///
 /// <para><b>What it does not do (each filed):</b> step / multi-level stencils, paste-volume optimisation,
 /// window-paning of large apertures, the assembly pick-and-place file (a different output), fine mask
@@ -138,7 +139,8 @@ public static class PcbGerberExport
                 .Where(t => t.Layer == name2)
                 .Select(t => ((IReadOnlyList<Vector2d>)t.Points, t.Width, (string?)t.Net));
             layers.Add(new GerberLayerFile(
-                name2, GerberWriter.CopperLayer(name2, features, vias, traces, LayerHoles(model, name2), format, includeX2)));
+                name2, GerberWriter.CopperLayer(name2, features, vias, traces, LayerHoles(model, name2), format,
+                    includeX2, includeX2 ? CopperFileFunction(model, name2) : null)));
         }
 
         var mask = PcbMask.For(model, layout.MaskSettings);
@@ -170,7 +172,8 @@ public static class PcbGerberExport
                 name2, GerberWriter.CopperLayer(
                     name2, features, vias,
                     Array.Empty<(IReadOnlyList<Vector2d>, double, string?)>(),
-                    LayerHoles(model, name2), format, includeX2)));
+                    LayerHoles(model, name2), format,
+                    includeX2, includeX2 ? CopperFileFunction(model, name2) : null)));
         }
 
         // The raw-model path has no placements, so no silk (an empty, well-formed Gerber per side); the
@@ -298,6 +301,19 @@ public static class PcbGerberExport
         return new GerberExportResult(
             directory, files, output.CopperLayers.Count, output.DrillHitCount,
             output.MaskLayers.Count, output.SilkLayers.Count, output.PasteLayers.Count);
+    }
+
+    /// <summary>The X2 <c>%TF.FileFunction%</c> value for a copper layer — <c>Copper,L&lt;n&gt;,&lt;side&gt;</c>,
+    /// where n is the 1-based stackup position and the side is Top (first copper), Bot (last) or Inr
+    /// (an inner layer). It tells a fab the copper layer order and side straight from the Gerber.</summary>
+    private static string CopperFileFunction(PcbCopperModel model, string layer)
+    {
+        var coppers = model.Layers;
+        int i = 0;
+        for (int k = 0; k < coppers.Count; k++)
+            if (coppers[k] == layer) { i = k; break; }
+        string side = i == 0 ? "Top" : i == coppers.Count - 1 ? "Bot" : "Inr";
+        return $"Copper,L{i + 1},{side}";
     }
 
     /// <summary>The TRUE AIR of a layer's final copper UNION — the pockets the Gerber must CLEAR

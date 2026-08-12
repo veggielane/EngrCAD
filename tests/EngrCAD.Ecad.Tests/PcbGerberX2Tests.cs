@@ -45,6 +45,7 @@ public sealed class PcbGerberX2Tests
     {
         string g = Top(PcbGerberExport.Generate(Routed(), includeX2: true));
         Assert.Contains("%TF.GenerationSoftware,EngrCAD,EngrCAD*%", g);
+        Assert.Contains("%TF.FileFunction,Copper,L1,Top*%", g);   // the top copper layer's role
         Assert.Contains("%TO.N,VCC*%", g);   // the VCC trace's object attribute
         Assert.Contains("%TO.N,GND*%", g);
     }

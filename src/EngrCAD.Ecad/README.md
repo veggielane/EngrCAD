@@ -815,7 +815,8 @@ returns the same as text. Pass `includeNetlist: true` to drop the **IPC-D-356A n
 the board house's net-compare) beside the Gerber set — opt-in, so with it off the Gerber / drill files
 are byte-identical (the netlist adds a file, it does not touch the copper). Pass `includeX2: true` for
 **Gerber X2** — a `%TO.N,<net>*%` object attribute on each copper object (the same net-compare datum,
-read straight from the Gerbers) plus a `%TF.GenerationSoftware%` file attribute; opt-in, so off is
+read straight from the Gerbers), a `%TF.GenerationSoftware%` file attribute, and each copper layer's
+`%TF.FileFunction,Copper,L<n>,<side>%` role (its stackup position/side); opt-in, so off is
 byte-identical and the reader ignores the attributes, so an X2 file round-trips its copper exactly.
 
 | Type | What it is |

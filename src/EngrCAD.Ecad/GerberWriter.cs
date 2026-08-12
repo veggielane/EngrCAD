@@ -127,15 +127,17 @@ internal sealed class GerberBuilder
     private readonly GerberFormat _format;
     private readonly string _comment;
     private readonly bool _x2;
+    private readonly string? _fileFunction;
     private readonly Dictionary<GerberAperture, int> _apertures = [];
     private readonly List<GObject> _objects = [];
     private int _nextDCode = 10;
 
-    internal GerberBuilder(GerberFormat format, string comment, bool x2 = false)
+    internal GerberBuilder(GerberFormat format, string comment, bool x2 = false, string? fileFunction = null)
     {
         _format = format;
         _comment = comment;
         _x2 = x2;
+        _fileFunction = fileFunction;
     }
 
     private int ApertureCode(GerberAperture aperture)
@@ -172,7 +174,12 @@ internal sealed class GerberBuilder
         // X2 file attributes: who made the file. Opt-in, so a non-X2 file is byte-identical (nothing
         // emitted). The net-compare value is the per-object %TO.N% attribute below.
         if (_x2)
+        {
             sb.Append("%TF.GenerationSoftware,EngrCAD,EngrCAD*%").Append('\n');
+            // The layer's ROLE (copper L1 top, etc.) — what a fab reads to identify the file.
+            if (_fileFunction is not null)
+                sb.Append("%TF.FileFunction,").Append(_fileFunction).Append("*%").Append('\n');
+        }
         sb.Append("G04 ").Append(_comment).Append("*").Append('\n');
         foreach (var (aperture, code) in _apertures.OrderBy(kv => kv.Value))
             sb.Append(ApertureDefinition(code, aperture)).Append('\n');
@@ -375,14 +382,15 @@ public static class GerberWriter
         IEnumerable<(IReadOnlyList<Vector2d> Points, double Width, string? Net)> traces,
         IEnumerable<CurvedRegion2d> clearAir,
         GerberFormat format,
-        bool x2 = false)
+        bool x2 = false,
+        string? fileFunction = null)
     {
         ArgumentNullException.ThrowIfNull(features);
         ArgumentNullException.ThrowIfNull(vias);
         ArgumentNullException.ThrowIfNull(traces);
         ArgumentNullException.ThrowIfNull(clearAir);
 
-        var builder = new GerberBuilder(format, $"EngrCAD copper layer '{layerName}'", x2);
+        var builder = new GerberBuilder(format, $"EngrCAD copper layer '{layerName}'", x2, fileFunction);
 
         // Dark solids — every feature's OUTER copper: pads / pours as flashes-or-region-fills, via
         // pads as solid discs, traces as round-aperture draws. Each carries its NET for the X2

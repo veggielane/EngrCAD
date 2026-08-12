@@ -2709,12 +2709,12 @@ from what was already understood rather than from scratch.
     does not slump). FINE MASK TENTING control beyond the tented/opened via policy (per-via
     tenting, a mask dam width); and a LOWERCASE silk font (v1's `SilkFont` covers uppercase + digits +
     punctuation, so a value's lowercase advances as a blank). GERBER X2 has LANDED opt-in — the
-    `%TO.N,<net>*%` object attribute (a fab's net-compare datum) on each copper object plus a
-    `%TF.GenerationSoftware%` file attribute, via `Generate`/`Write(..., includeX2: true)`, off =
-    byte-identical, the reader ignoring attributes so an X2 file round-trips its copper exactly; STILL
-    FILED are the `%TF.FileFunction%` layer-role attribute (needs each layer's stackup role/position),
-    the `.C`/`.P` component / pad object attributes, `%TA` aperture attributes, and the JOB FILE
-    (`.gbrjob`). A
+    `%TO.N,<net>*%` object attribute (a fab's net-compare datum) on each copper object, a
+    `%TF.GenerationSoftware%` file attribute, and a copper layer's `%TF.FileFunction,Copper,L<n>,<side>%`
+    role, via `Generate`/`Write(..., includeX2: true)`, off = byte-identical, the reader ignoring
+    attributes so an X2 file round-trips its copper exactly; STILL FILED are `FileFunction` on the
+    mask / silk / paste / outline files, the `.C`/`.P` component / pad object attributes, `%TA` aperture
+    attributes, and the JOB FILE (`.gbrjob`). A
     Gerber IMPORT of a foreign board is a different project (this is EXPORT; the reader is the
     round-trip oracle scoped to what the writer emits). Full topological push-and-route INSIDE the maze
     search (the router shoving DURING A*, not just the standalone `ShoveRouter` primitive) is the
