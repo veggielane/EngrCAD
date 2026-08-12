@@ -8263,11 +8263,22 @@ intersection asserted directly; the THT relief connected-AND-gap; the island rem
 (and kept under the opt-in); the pour area a closed form of board/clearance/hole; determinism (a pure
 function → bit-identical area); the Gerber round-trip by area and symmetric difference; a
 save→load→save byte fixed point (pour-free byte-identical); the refusals by name; and scale
-invariance (area ∝ s²). **v1 does no inter-pour PRIORITY** (each pour is filled against the base
-copper, not other pours — two overlapping same-layer different-net pours would need an ordering);
-custom relief geometry beyond the spoke default is filed; and conformal placement on a doubly-curved
-wall is not offered (the distortion would land in the pitch, the tamper-mesh lesson). Docs:
-`examples/ecad-pcb.md` (Copper pours).
+invariance (area ∝ s²). **Pour PRIORITY resolves overlapping pours** (`CopperPour.Priority`): two
+different-net pours flooding one area would short, so the HIGHER-priority pour fills first and keeps
+its copper, and the lower-priority one is carved back by its own clearance around it (same-net pours
+merge). The IMPLEMENTATION is not a new algorithm — `FromLayout` fills pours highest-priority-first
+(ties by declaration order) and feeds each already-filled higher pour into the base copper the next
+one sees, so a lower pour treats it as ordinary OTHER-net copper and the existing other-net
+subtraction in `Fill` does the carve. So a single pour, or pours that do not overlap, are UNAFFECTED
+(the base copper they see is the same), and only the shorting case changes; the source ids stay keyed
+by DECLARATION index, so they do not depend on fill order. Priority rides in the layout file
+write-only-when-stated (a priority-0 pour writes no key, so a pre-priority file is byte-identical).
+Verified (`PcbPourPriorityTests`) by the mutation that proves it: which net covers the shared area
+FLIPS with the priority and NEITHER configuration shorts, ties break by declaration order, disjoint
+pours keep equal per-net area whichever has priority, and the persistence fixed point. Custom relief
+geometry beyond the spoke default is filed; and conformal placement on a doubly-curved wall is not
+offered (the distortion would land in the pitch, the tamper-mesh lesson). Docs: `examples/ecad-pcb.md`
+(Copper pours).
 
 ### Stage 7 — enclosure fit (the MCAD/ECAD boundary) (`PcbEnclosure`)
 

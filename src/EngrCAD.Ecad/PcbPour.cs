@@ -147,6 +147,11 @@ public sealed record HatchStyle(
 /// <see cref="PourFill.Hatched"/>; null = <see cref="HatchStyle.Default"/>.</param>
 /// <param name="DeadCopper">What to do with copper islands the net cannot reach (default:
 /// remove).</param>
+/// <param name="Priority">Which pour WINS where two overlap: a HIGHER priority fills first and keeps
+/// its copper, so a lower-priority DIFFERENT-net pour is carved back by its own <see cref="Clearance"/>
+/// around it (same-net pours merge). Ties break by declaration order (an earlier pour wins). The
+/// default is 0, and a single pour, or pours that do not overlap, are unaffected by it — so it changes
+/// only overlapping pours, exactly the case that would otherwise short. Higher = wins.</param>
 public sealed record CopperPour(
     string Net,
     string Layer,
@@ -157,7 +162,8 @@ public sealed record CopperPour(
     double EdgeClearance = 0.3,
     ThermalRelief? Relief = null,
     HatchStyle? Hatch = null,
-    DeadCopperPolicy DeadCopper = DeadCopperPolicy.Remove)
+    DeadCopperPolicy DeadCopper = DeadCopperPolicy.Remove,
+    int Priority = 0)
 {
     /// <summary>The resolved relief (the stated one, or <see cref="ThermalRelief.Default"/>).</summary>
     public ThermalRelief ResolvedRelief => Relief ?? ThermalRelief.Default;
@@ -219,10 +225,13 @@ public sealed record PouredPour(
 public static class CopperPourBuilder
 {
     /// <summary>
-    /// Fills a pour over a board's base copper (the pads / vias / traces — NOT other pours; v1 does
-    /// no inter-pour priority). The result is the kept connected region(s) plus diagnostics.
+    /// Fills a pour over whatever base copper it is handed — the pads / vias / traces, and (when the
+    /// caller orchestrates <see cref="CopperPour.Priority"/> in <see cref="PcbCopperModel.FromLayout"/>)
+    /// any already-filled HIGHER-priority pours, which a lower pour then carves its own clearance
+    /// around like ordinary other-net copper. The result is the kept connected region(s) plus diagnostics.
     /// </summary>
-    /// <param name="baseModel">The board's copper WITHOUT pours (pads, vias, traces, drills).</param>
+    /// <param name="baseModel">The board's copper the pour is filled against — pads, vias, traces,
+    /// drills, and any higher-priority pours the caller has accumulated into it.</param>
     /// <param name="pour">The pour to fill.</param>
     /// <exception cref="ArgumentException">The pour outline lies entirely off the board, refused by
     /// name.</exception>

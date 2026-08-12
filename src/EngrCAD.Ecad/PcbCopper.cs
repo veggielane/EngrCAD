@@ -209,19 +209,26 @@ public sealed class PcbCopperModel
                 copper.Add(new CopperFeature(trace.Layer, trace.Net, source, region));
         }
 
-        // Pours: a ground / power plane flooded over a layer. Each is filled against the BASE copper
-        // (pads / vias / traces — not other pours; v1 does no inter-pour priority), and every kept
-        // connected component becomes a copper feature of the pour's net, with a UNIQUE source so two
-        // disjoint pieces stay disjoint in connectivity. The pour sources are CONNECTORS (like traces),
-        // so a GND pour joins every GND pad it touches without being counted as a pin.
+        // Pours: a ground / power plane flooded over a layer. Pours are filled HIGHEST-PRIORITY-FIRST
+        // (ties by declaration order), each against the copper accumulated so far — so an already-filled
+        // higher-priority pour is ordinary OTHER-net copper to a lower-priority one, which carves its
+        // own clearance around it (the existing other-net subtraction in Fill), while same-net pours
+        // merge. This is what stops two overlapping different-net pours shorting; a single pour, or
+        // pours that do not overlap, are unaffected (the base copper they see is the same). Every kept
+        // connected component becomes a copper feature of the pour's net, with a UNIQUE source
+        // (keyed by DECLARATION index, so ids do not depend on fill order) — the pour sources are
+        // CONNECTORS (like traces), so a GND pour joins every GND pad it touches without being a pin.
         var pourSources = new List<string>();
         if (layout.Pours.Count > 0)
         {
-            var baseModel = new PcbCopperModel(
-                layout.Board, copper, drills, layout.Cavities(), placedVias, traceSources);
-            for (int i = 0; i < layout.Pours.Count; i++)
+            var fillOrder = Enumerable.Range(0, layout.Pours.Count)
+                .OrderByDescending(i => layout.Pours[i].Priority)
+                .ThenBy(i => i);
+            foreach (int i in fillOrder)
             {
                 var pour = layout.Pours[i];
+                var baseModel = new PcbCopperModel(
+                    layout.Board, copper, drills, layout.Cavities(), placedVias, traceSources, pourSources);
                 var filled = CopperPourBuilder.Fill(baseModel, pour);
                 for (int j = 0; j < filled.Regions.Count; j++)
                 {

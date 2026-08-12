@@ -2740,10 +2740,11 @@ from what was already understood rather than from scratch.
     like any other; a buried die is not surface-placed, so a real assembly line would filter it — a
     scope decision, not a defect). A configurable bottom-flip axis (v1 is flip-about-X = negate the
     angle; flip-about-Y = `180 − rot` is the other convention, a per-fab option).
-  - **Copper-pour follow-ups (filed, the pour itself has LANDED — see CLAUDE.md's ECAD status,
-    design.md §6d, `examples/ecad-pcb.md`):** POUR PRIORITY / ordering when several pours overlap
-    (v1 fills each pour against the base copper, not other pours, so two overlapping same-layer
-    different-net pours would short — priority resolves which wins where); CUSTOM RELIEF geometry
+  - **Copper-pour follow-ups (filed, the pour + POUR PRIORITY have LANDED — see CLAUDE.md's ECAD
+    status, design.md §6d, `examples/ecad-pcb.md`; `CopperPour.Priority` fills higher-priority pours
+    first and carves lower-priority different-net pours around them, so overlapping pours no longer
+    short — ties break by declaration order, and single / non-overlapping pours are unaffected):**
+    CUSTOM RELIEF geometry
     beyond the four-spoke default (a different spoke count is a parameter, but a non-radial relief —
     a solid-with-notches, a keep-out-shaped relief — is filed); a POUR that clears other-net copper
     at the acute-angle rule's own default 90° threshold robustly (thermal-relief spokes meet the

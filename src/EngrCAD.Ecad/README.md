@@ -766,7 +766,7 @@ ratsnest empties.
 
 | Type | What it is |
 | --- | --- |
-| `CopperPour` | The declaration: net + layer + optional outline, fill (solid / hatched), clearances, thermal-relief and hatch settings, and a dead-copper policy. Refuses a nonexistent net/layer or an off-board outline by name. |
+| `CopperPour` | The declaration: net + layer + optional outline, fill (solid / hatched), clearances, thermal-relief and hatch settings, a dead-copper policy, and a `Priority` (which pour wins an overlap). Refuses a nonexistent net/layer or an off-board outline by name. |
 | `CopperPourBuilder.Fill(baseModel, pour)` → `PouredPour` | Fills a pour against the board's base copper (pads/vias/traces) and returns the kept connected region(s) plus diagnostics (dead-copper count/area, relieved pads, spokes). |
 | `ThermalRelief` / `HatchStyle` | The relief spoke pattern and the crosshatch pattern; `ThermalRelief.None` floods a through-hole pad. |
 
@@ -791,9 +791,18 @@ stay disjoint in connectivity — a pour never force-joins pads its copper does 
 `PourFill.Hatched` intersects the fill with a crosshatch grid (region ∩ a line pattern) for a lighter
 plane. A pour exports to Gerber as a `G36`/`G37` region fill and round-trips (an other-net pad in a
 pour's clearance hole is a copper island the clear pass re-darkens, so it survives the round trip).
-**v1 does no inter-pour priority** (each pour is filled against the base copper, not other pours),
-custom relief geometry beyond the spoke default is filed, and conformal placement on a curved wall is
-not offered. Docs: `examples/ecad-pcb.md` (Copper pours).
+
+**Priority** resolves where two pours OVERLAP. Two different-net pours flooding the same area would
+short, so `CopperPour.Priority` fills the higher-priority pour first and keeps its copper, and the
+lower-priority DIFFERENT-net pour is carved back by its own clearance around it (same-net pours merge)
+— which is just the existing other-net subtraction, because `FromLayout` fills pours
+highest-priority-first (ties by declaration order) and feeds each already-filled higher pour into the
+base copper the next one sees. So a single pour, or pours that do not overlap, are UNAFFECTED (the
+base copper they see is the same), and only the case that would otherwise short changes. The mutation
+tested both ways: which net covers the shared area FLIPS with the priority, and NEITHER configuration
+shorts. Priority rides in the layout file write-only-when-stated (a priority-0 pour writes no key, so
+a pre-priority file is byte-identical). Custom relief geometry beyond the spoke default is filed, and
+conformal placement on a curved wall is not offered. Docs: `examples/ecad-pcb.md` (Copper pours).
 
 ## Fabrication export — Gerber (RS-274X) + Excellon
 

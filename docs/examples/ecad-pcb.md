@@ -513,6 +513,44 @@ reach, walled off by other-net copper — is removed by default (kept only when
 exports to [Gerber](ecad-fabrication.md) as a `G36`/`G37` region fill and round-trips, and rides in
 the layout file (write-only-when-stated, so a pour-free layout is byte-identical).
 
+**Priority** resolves where two pours overlap. Two different-net pours flooding the same area would
+short; `CopperPour.Priority` makes the higher-priority pour fill first and keep its copper, so the
+lower-priority one is carved back by its own clearance around it (same-net pours merge). Ties break by
+declaration order, and a single pour — or pours that do not overlap — are unaffected, so it changes
+only the case that would otherwise short:
+
+```csharp run:ecad-pour-priority
+PartDefinition Sq(string n) => new(n, "R",
+    new[] { new Pin("1", PinType.Passive), new Pin("2", PinType.Passive) },
+    new Footprint(n + "_fp", new[] {
+        Pad.Smd("1", new Vector2d(-1, 0), 1, 1, PadShape.Rectangular),
+        Pad.Smd("2", new Vector2d(1, 0), 1, 1, PadShape.Rectangular) }));
+
+var sch = new Schematic("pp");
+var g = sch.Add("G", Sq("G")); var v = sch.Add("V", Sq("V"));
+sch.Connect("GND", g.Pin("1"), g.Pin("2"));
+sch.Connect("VCC", v.Pin("1"), v.Pin("2"));
+var board = new PcbBoard(new[] {
+    new Vector2d(-20, -15), new Vector2d(20, -15), new Vector2d(20, 15), new Vector2d(-20, 15) }, 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("G", -15, 0); layout.Place("V", 15, 0);
+
+// GND covers the left+centre, VCC the centre+right — overlapping in x ∈ [-3, 3]. GND wins the overlap.
+Vector2d[] Rect(double x0, double x1) => new[] {
+    new Vector2d(x0, -13), new Vector2d(x1, -13), new Vector2d(x1, 13), new Vector2d(x0, 13) };
+layout.AddPour(new CopperPour("GND", "Top", Outline: Rect(-19, 3), Priority: 10));
+layout.AddPour(new CopperPour("VCC", "Top", Outline: Rect(-3, 19), Priority: 0));
+
+var model = PcbCopperModel.FromLayout(layout);
+var centre = model.Copper.Where(f => f.Region.Contains(new Vector2d(0, 0)) && f.Net != null)
+    .Select(f => f.Net).ToList();
+bool noShort = PcbDrc.Check(layout).OfRule(DrcRule.Short).Count() == 0;
+Console.WriteLine($"centre column belongs to: [{string.Join(", ", centre)}]; shorts: {(noShort ? "none" : "SOME")}");
+
+if (centre.Count != 1 || centre[0] != "GND" || !noShort)
+    throw new Exception("the higher-priority pour must win the overlap with no short");
+```
+
 ## Interchange: IDF import
 
 `IdfReader` imports an IDF 3.0/4.0 board (`.emn`) file — board outline, thickness, drilled holes,

@@ -271,6 +271,8 @@ internal static class PcbLayoutWriter
             };
         if (pour.DeadCopper != def.DeadCopper)
             record["deadCopper"] = pour.DeadCopper.ToString();
+        if (pour.Priority != def.Priority)
+            record["priority"] = pour.Priority;
         return record;
     }
 
@@ -558,6 +560,7 @@ internal static class PcbLayoutReader
             Relief = relief,
             Hatch = hatch,
             DeadCopper = deadCopper,
+            Priority = record["priority"]?.GetValue<int>() ?? def.Priority,
         };
     }
 
