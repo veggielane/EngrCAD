@@ -2730,9 +2730,11 @@ from what was already understood rather than from scratch.
     token, and CONDUCTOR (op `378`) records — one per routed trace, opt-in via
     `Write(layout, includeConductors: true)`, carrying the net + copper layer + width + centre-line path
     for a more thorough net-compare, with conductors OFF byte-identical and `ParseFile`/`ParseConductors`
-    reading them back exactly — have since LANDED too):** An `.ipc` disk verb / MCP export tool (v1 has
-    `PcbIpc356.WriteFile`; wiring it into the fabrication-export CLI/MCP surface beside the Gerber set is
-    plumbing).
+    reading them back exactly; and the netlist now RIDES IN the fabrication package —
+    `PcbGerberExport.Write(layout, dir, includeNetlist: true)` drops `<name>.ipc` beside the Gerber set,
+    opt-in so the Gerber / drill files stay byte-identical — have since LANDED too):** An MCP export tool
+    surfacing the fab package (the library `Write` overload exists; wiring it into the MCP tool surface
+    is plumbing).
   - **Pick-and-place follow-ups (filed; the centroid file itself has LANDED — `PcbPickAndPlace`,
     see CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`):** MULTI-VALUE / VARIANT P&P (a
     do-not-populate mask, or a configuration's per-variant values — needs an assembly-variant concept

@@ -811,7 +811,9 @@ The fab output that makes a routed board manufacturable AND reflow-assemblable.
 `PcbGerberExport.Write(layout, dir)` writes the full set — one **Gerber** per copper layer, a
 **solder-mask**, a **silkscreen** and a **solder-paste (stencil)** Gerber per outer side, a board-outline
 Gerber, and an **Excellon** NC-drill program (and reports what it wrote); `PcbGerberExport.Generate(layout)`
-returns the same as text.
+returns the same as text. Pass `includeNetlist: true` to drop the **IPC-D-356A netlist** (`<name>.ipc`,
+the board house's net-compare) beside the Gerber set — opt-in, so with it off the Gerber / drill files
+are byte-identical (the netlist adds a file, it does not touch the copper).
 
 | Type | What it is |
 | --- | --- |

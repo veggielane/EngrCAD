@@ -7826,7 +7826,10 @@ GROUPS (`{…}` aliases) and buses ACROSS sheets. Docs: `examples/ecad-schematic
 
 The fab output that makes a routed board manufacturable — one Gerber per copper layer, a
 board-outline Gerber, and an Excellon drill program. `PcbGerberExport.Write(layout, dir)` writes the
-set (and reports what it wrote); `Generate` returns it as text. Pads flash (`D03`), traces draw
+set (and reports what it wrote); `Generate` returns it as text. `Write(layout, dir, includeNetlist:
+true)` also drops the IPC-D-356A netlist (`<name>.ipc`) beside the Gerber set for the board house's
+net-compare — opt-in, so with it off the Gerber / drill files are byte-identical (the netlist adds a
+file, it does not touch the copper). Pads flash (`D03`), traces draw
 (`D01`/`D02` with a round aperture, whose swept stroke IS the copper model's trace region), via pads
 flash as solid discs, and anything else — a rotated pad, a copper pour — is a region fill
 (`G36`/`G37`), exact for any shape.

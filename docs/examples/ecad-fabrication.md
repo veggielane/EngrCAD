@@ -439,7 +439,9 @@ connectivity, and a test house programs a flying-probe or bed-of-nails tester fr
 the netname-carrying revision (the original IPC-D-356 carried none).
 
 `PcbIpc356.Write(layout)` returns the netlist text; `PcbIpc356.WriteFile(layout, dir)` writes
-`<name>.ipc`. The conventions, each **stated** so it cannot drift:
+`<name>.ipc`, and `PcbGerberExport.Write(layout, dir, includeNetlist: true)` drops it **beside the
+Gerber set** so the whole fab package travels together (opt-in — with it off the Gerber / drill files
+are byte-identical). The conventions, each **stated** so it cannot drift:
 
 - **Units are metric micrometres**, declared `P UNITS CUST 2`, coordinates written
   `X<sign><µm>`/`Y<sign><µm>` — the file's own integer quantum, so the round trip is exact and a wrong

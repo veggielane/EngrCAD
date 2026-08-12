@@ -60,11 +60,17 @@ public sealed record GerberExportResult(
     int SilkLayerCount = 0,
     int PasteLayerCount = 0)
 {
+    /// <summary>Whether an IPC-D-356A netlist (<c>&lt;name&gt;.ipc</c>) was written beside the Gerber
+    /// set (only when the layout <c>Write</c> overload was asked for it). Default false — a fab package
+    /// without a netlist is byte-identical to before.</summary>
+    public bool NetlistWritten { get; init; }
+
     /// <summary>A human-readable summary.</summary>
     public override string ToString() =>
         $"wrote {CopperLayerCount} copper + {MaskLayerCount} mask + {SilkLayerCount} silk + "
-        + $"{PasteLayerCount} paste Gerber(s) + outline + {DrillHitCount} drill hits "
-        + $"({Files.Count} files) to {Directory}";
+        + $"{PasteLayerCount} paste Gerber(s) + outline + {DrillHitCount} drill hits"
+        + (NetlistWritten ? " + IPC-356 netlist" : "")
+        + $" ({Files.Count} files) to {Directory}";
 }
 
 /// <summary>
@@ -211,10 +217,24 @@ public static class PcbGerberExport
     /// <summary>Writes the fabrication set for a routed layout to files under <paramref name="directory"/>
     /// (created if needed) — one <c>&lt;name&gt;-&lt;Layer&gt;.gbr</c> per copper layer, a
     /// <c>&lt;name&gt;-Edge_Cuts.gbr</c> outline, and a <c>&lt;name&gt;.drl</c> drill program — and
-    /// reports what it wrote.</summary>
+    /// reports what it wrote. With <paramref name="includeNetlist"/> true, an IPC-D-356A netlist
+    /// (<c>&lt;name&gt;.ipc</c>, via <see cref="PcbIpc356.Write(PcbLayout)"/>) is written beside them for
+    /// the board house's net-compare; with it false (the default) the Gerber / drill files are exactly
+    /// what they were.</summary>
     public static GerberExportResult Write(
-        PcbLayout layout, string directory, string? name = null, PasteStencil? stencil = null) =>
-        WriteOutput(Generate(layout, name, stencil), directory);
+        PcbLayout layout, string directory, string? name = null, PasteStencil? stencil = null,
+        bool includeNetlist = false)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        var output = Generate(layout, name, stencil);
+        var result = WriteOutput(output, directory);
+        if (!includeNetlist)
+            return result;
+
+        string ipcPath = Path.Combine(directory, output.Name + ".ipc");
+        File.WriteAllText(ipcPath, PcbIpc356.Write(layout));
+        return result with { Files = [.. result.Files, ipcPath], NetlistWritten = true };
+    }
 
     /// <summary>Writes the fabrication set for a raw copper model to files (see the layout overload).</summary>
     public static GerberExportResult Write(
