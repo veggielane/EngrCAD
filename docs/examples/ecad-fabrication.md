@@ -376,9 +376,11 @@ drawing-sheet rule), so a CSV centroid and a KiCad-style `.pos` cannot disagree 
 layout's `PcbPlacement` pose — independent of any 3D-model offset — so a row is exactly the placement.
 Units are **millimetres** and **degrees (CCW positive)**, and the board-frame X/Y are reported
 **verbatim** (no flip — the repo's coordinate honesty). The one real decision is the **bottom-side
-rotation**: a bottom part is physically mirrored (the board is flipped about its X axis to populate it),
-which **negates** the board-frame angle, so a bottom row's rotation is `(360 − rotation) mod 360` — a
-sign swap, never a `cos`, so a quarter turn is exact. A top row carries the placement rotation verbatim.
+rotation**: a bottom part is physically mirrored (the board is flipped to populate it), which reflects
+the board-frame angle. The flip AXIS is a per-fabricator choice (`BottomFlipAxis` on
+`Compute`/`ToCsv`/`ToPos`/`Write`): X (the default, `(360 − rotation) mod 360`) or Y
+(`(180 − rotation) mod 360`) — both a sign swap, never a `cos`, so a quarter turn is exact. A top row
+carries the placement rotation verbatim under either.
 
 The rows are in placement (declaration) order, so the output is a deterministic function of the layout
 (two emissions are byte-identical). And the CSV survives the **twin-decoder round trip** —

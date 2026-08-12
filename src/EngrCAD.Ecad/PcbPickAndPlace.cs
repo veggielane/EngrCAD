@@ -4,6 +4,20 @@ using EngrCAD.Core;
 
 namespace EngrCAD.Ecad;
 
+/// <summary>Which axis a bottom-side placement's rotation is mirrored about in a pick-and-place file —
+/// a per-fabricator convention. Both are a reflection of the board-frame angle (a sign swap, never a
+/// <c>cos</c>), so a quarter turn stays exact.</summary>
+public enum BottomFlipAxis
+{
+    /// <summary>Flip about the board X axis: a bottom row's rotation is <c>(360 − rotation) mod 360</c>
+    /// (i.e. −rotation). The default, and every prior emission.</summary>
+    X,
+
+    /// <summary>Flip about the board Y axis: a bottom row's rotation is <c>(180 − rotation) mod 360</c>.
+    /// The other common machine convention.</summary>
+    Y,
+}
+
 /// <summary>
 /// One row of a pick-and-place (centroid) file — the pose a P&amp;P machine populates one component
 /// by. It is a pure PROJECTION of a <see cref="PcbPlacement"/>: the reference designator, the
@@ -61,7 +75,12 @@ public static class PcbPickAndPlace
     /// placement yields exactly one row (a body-less or footprint-less component is still placed by
     /// its pose), so the row count equals the placement count.</summary>
     /// <param name="layout">The board layout.</param>
-    public static IReadOnlyList<PickAndPlaceRow> Compute(PcbLayout layout)
+    /// <param name="bottomFlip">How a BOTTOM-side row's rotation is mirrored — flip about the board X
+    /// axis (<c>(360 − rotation) mod 360</c>, the default and every prior emission) or about the Y axis
+    /// (<c>(180 − rotation) mod 360</c>). A per-fabricator convention; both are a sign swap, so a quarter
+    /// turn is exact. A TOP row is the placement angle verbatim either way.</param>
+    public static IReadOnlyList<PickAndPlaceRow> Compute(
+        PcbLayout layout, BottomFlipAxis bottomFlip = BottomFlipAxis.X)
     {
         ArgumentNullException.ThrowIfNull(layout);
         var rows = new List<PickAndPlaceRow>(layout.Placements.Count);
@@ -73,10 +92,11 @@ public static class PcbPickAndPlace
             string package = component.Definition.Footprint?.Name ?? component.Definition.Name;
 
             // Top: the placement angle verbatim (a pure projection). Bottom: mirrored — the board is
-            // flipped about its X axis to populate it, negating the board-frame angle (a sign swap).
+            // flipped to populate it, which reflects the board-frame angle (a sign swap, not a cos):
+            // about X → −rotation (the default), about Y → 180 − rotation.
             double rotation = p.Side == CopperSide.Top
                 ? p.RotationDegrees
-                : Normalize360(-p.RotationDegrees);
+                : Normalize360(bottomFlip == BottomFlipAxis.X ? -p.RotationDegrees : 180 - p.RotationDegrees);
 
             rows.Add(new PickAndPlaceRow(p.Reference, p.X, p.Y, rotation, p.Side, value, package));
         }
@@ -86,8 +106,11 @@ public static class PcbPickAndPlace
     // ---- CSV centroid (the machine format) ---------------------------------
 
     /// <summary>Writes the ubiquitous CSV centroid file for a layout — the header
-    /// <c>Designator,X,Y,Rotation,Side,Value</c> followed by one row per placement.</summary>
-    public static string ToCsv(PcbLayout layout) => ToCsv(Compute(layout));
+    /// <c>Designator,X,Y,Rotation,Side,Value</c> followed by one row per placement.
+    /// <paramref name="bottomFlip"/> chooses the bottom-side mirror axis (see
+    /// <see cref="Compute(PcbLayout, BottomFlipAxis)"/>).</summary>
+    public static string ToCsv(PcbLayout layout, BottomFlipAxis bottomFlip = BottomFlipAxis.X) =>
+        ToCsv(Compute(layout, bottomFlip));
 
     /// <summary>Writes the ubiquitous CSV centroid file from computed rows — columns
     /// <c>Designator,X,Y,Rotation,Side,Value</c>. Coordinates and the rotation are written with
@@ -113,7 +136,8 @@ public static class PcbPickAndPlace
 
     /// <summary>Writes a KiCad-style aligned <c>.pos</c> file for a layout — columns
     /// <c>Ref  Val  Package  PosX  PosY  Rot  Side</c>.</summary>
-    public static string ToPos(PcbLayout layout) => ToPos(Compute(layout));
+    public static string ToPos(PcbLayout layout, BottomFlipAxis bottomFlip = BottomFlipAxis.X) =>
+        ToPos(Compute(layout, bottomFlip));
 
     /// <summary>Writes a KiCad-style aligned <c>.pos</c> file from computed rows — a metadata header
     /// stating the units and the bottom-mirror convention, then columns
@@ -208,7 +232,9 @@ public static class PcbPickAndPlace
     /// (<c>&lt;name&gt;-pos.csv</c>) and the aligned <c>.pos</c> (<c>&lt;name&gt;.pos</c>) — and
     /// returns the paths written. <paramref name="name"/> defaults to the schematic's name (or
     /// <c>pnp</c>).</summary>
-    public static IReadOnlyList<string> Write(PcbLayout layout, string directory, string? name = null)
+    public static IReadOnlyList<string> Write(
+        PcbLayout layout, string directory, string? name = null,
+        BottomFlipAxis bottomFlip = BottomFlipAxis.X)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentException.ThrowIfNullOrEmpty(directory);
@@ -217,7 +243,7 @@ public static class PcbPickAndPlace
             ? (layout.Schematic.Name.Length > 0 ? layout.Schematic.Name : "pnp")
             : name;
 
-        var rows = Compute(layout);
+        var rows = Compute(layout, bottomFlip);
         string csvPath = Path.Combine(directory, b + "-pos.csv");
         string posPath = Path.Combine(directory, b + ".pos");
         File.WriteAllText(csvPath, ToCsv(rows));

@@ -898,9 +898,11 @@ KiCad-style aligned `Ref Val Package PosX PosY Rot Side`) cannot disagree about 
 placement, not the 3D body** — a machine places by the footprint origin, so a row is exactly the
 `PcbPlacement` pose (independent of any 3D-model offset); board-frame X/Y are reported **verbatim** (the
 coordinate-honesty rule) and rotations are degrees, CCW positive. The one real decision is the
-**bottom-side rotation**, which is **mirrored** — the board is flipped about its X axis to populate the
-bottom, negating the board-frame angle, so a bottom row's rotation is `(360 − rot) mod 360` (a sign swap,
-never a `cos`; a quarter turn is exact) while a top row is verbatim. Rows are in placement (declaration)
+**bottom-side rotation**, which is **mirrored** — the board is flipped to populate the bottom, reflecting
+the board-frame angle, so a bottom row's rotation is `(360 − rot) mod 360` while a top row is verbatim.
+The flip axis is a per-fabricator choice (`BottomFlipAxis` on `Compute`/`ToCsv`/`ToPos`/`Write`): X (the
+default = `360 − rot`, the prior emission) or Y (`180 − rot`, the other machine convention) — both a sign
+swap, never a `cos`, so a quarter turn is exact. Rows are in placement (declaration)
 order, so the output is deterministic (two emissions byte-identical). **The twin-decoder oracle**:
 `ParseCsv` reads back what `ToCsv` wrote and recovers the designator, X, Y, rotation, side and value
 exactly (RFC-4180 quoting survives a comma or quote in a value), refusing a wrong header / field count /

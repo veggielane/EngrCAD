@@ -7991,12 +7991,13 @@ the KiCad import states — no flip), units are mm and degrees CCW-positive.
 
 **The one real decision is the bottom-side rotation, and it is a mirror.** A bottom part is physically
 reflected (the layout realises it as the `FlipZ` part transform); a P&P machine populating the bottom
-flips the board about its X axis, which negates the board-frame angle — so a bottom row's rotation is
-`(360 − rot) mod 360` (normalised to `[0, 360)`) while a top row is the placement angle verbatim. It is a
-**sign swap, never a `cos`**, so a quarter turn is exact (90 → 270, 270 → 90). The flip-about-X choice
-(negate) is stated rather than a vendor default; flip-about-Y (`180 − rot`) is the other convention, filed
-as a per-fab option. Rows are in placement (declaration) order, so the output is a deterministic function
-of the layout (two emissions byte-identical).
+flips the board to reach it, reflecting the board-frame angle — so a bottom row's rotation is a
+reflection while a top row is the placement angle verbatim. It is a **sign swap, never a `cos`**, so a
+quarter turn is exact. The flip AXIS is a per-fabricator convention, so it is a `BottomFlipAxis`
+parameter on `Compute`/`ToCsv`/`ToPos`/`Write`: X (the default, `(360 − rot) mod 360`, negate — every
+prior emission) or Y (`(180 − rot) mod 360`). Both are exact on a quarter turn (X: 90 → 270; Y: 90 → 90,
+0 → 180), and the default is byte-identical to before (asserted). Rows are in placement (declaration)
+order, so the output is a deterministic function of the layout (two emissions byte-identical).
 
 **The oracle is the twin-decoder round trip** (the repo's fab-file rule): `ParseCsv` reads back what
 `ToCsv` wrote and recovers the designator, X, Y, rotation, side and value exactly — coordinates written

@@ -2735,15 +2735,16 @@ from what was already understood rather than from scratch.
     opt-in so the Gerber / drill files stay byte-identical — have since LANDED too):** An MCP export tool
     surfacing the fab package (the library `Write` overload exists; wiring it into the MCP tool surface
     is plumbing).
-  - **Pick-and-place follow-ups (filed; the centroid file itself has LANDED — `PcbPickAndPlace`,
-    see CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`):** MULTI-VALUE / VARIANT P&P (a
-    do-not-populate mask, or a configuration's per-variant values — needs an assembly-variant concept
-    the layout does not yet carry, and would ride `Configurations` when it reaches ECAD). SEPARATE
-    top/bottom centroid FILES (some machines want one file per side; v1 carries a `Side` column, which
-    every modern feeder reads). EMBEDDED-part handling (v1 emits an embedded placement by its 2D pose
-    like any other; a buried die is not surface-placed, so a real assembly line would filter it — a
-    scope decision, not a defect). A configurable bottom-flip axis (v1 is flip-about-X = negate the
-    angle; flip-about-Y = `180 − rot` is the other convention, a per-fab option).
+  - **Pick-and-place follow-ups (filed; the centroid file + a CONFIGURABLE BOTTOM-FLIP AXIS have LANDED
+    — `PcbPickAndPlace`, see CLAUDE.md's ECAD status, design.md §6d, `examples/ecad-fabrication.md`;
+    `Compute`/`ToCsv`/`ToPos`/`Write` take a `BottomFlipAxis` (X = default = `360 − rot`, the prior
+    emission; Y = `180 − rot`, the other machine convention), both a sign swap so a quarter turn stays
+    exact):** MULTI-VALUE / VARIANT P&P (a do-not-populate mask, or a configuration's per-variant values
+    — needs an assembly-variant concept the layout does not yet carry, and would ride `Configurations`
+    when it reaches ECAD). SEPARATE top/bottom centroid FILES (some machines want one file per side; v1
+    carries a `Side` column, which every modern feeder reads). EMBEDDED-part handling (v1 emits an
+    embedded placement by its 2D pose like any other; a buried die is not surface-placed, so a real
+    assembly line would filter it — a scope decision, not a defect).
   - **Copper-pour follow-ups (filed, the pour + POUR PRIORITY have LANDED — see CLAUDE.md's ECAD
     status, design.md §6d, `examples/ecad-pcb.md`; `CopperPour.Priority` fills higher-priority pours
     first and carves lower-priority different-net pours around them, so overlapping pours no longer
