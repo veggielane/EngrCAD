@@ -7217,8 +7217,17 @@ component). **The board side is unaffected**: a multi-unit component is one comp
 footprint and all pads, since `Pins` is the union and units are a schematic-drawing/placement concern.
 Persistence writes the per-unit symbols under a `units` key (a single-unit definition keeps the
 incumbent `symbol` key, so it saves byte-identically); `save → load → save` is a byte fixed point.
-Filed: De Morgan / alternate unit BODIES (`unit_style` 2 — carrying the alternate needs a per-instance
-style selector), and multi-unit schematic DRAWING (`SchematicSheet` places one symbol per component).
+**Multi-unit schematic DRAWING landed** (`SchematicSheet`): `SchematicPlacement` keys poses by (refdes,
+1-based UNIT), so `Place(refdes, pose)` places unit 1 (the whole single-unit API unchanged and its output
+byte-identical) while a multi-unit part places EACH unit at its own sheet location; the sheet draws one
+symbol per unit (labelled `U1A`/`U1B`/…, the value once under the first unit) and resolves each pin to the
+unit whose symbol carries it. **The connectivity reconstruction is UNIT-AGNOSTIC and that is what makes it
+tractable** — it reads the DRAWN wire geometry (`AnchorOf` just needs the right per-unit anchor), so a net
+across two amp units of one package draws as two symbols wired together and `Verify()` reconstructs it as
+one net, with no change to the reconstruction itself. A multi-unit part with a unit unplaced is refused BY
+NAME (`U1B`); verified by the cross-unit net being joined, the two units drawing well apart, and the
+single-unit path staying byte-identical. Filed: De Morgan / alternate unit BODIES (`unit_style` 2 —
+carrying the alternate needs a per-instance style selector; the drawing consumer now exists to use it).
 
 **Single-sheet BUS import.** A bus is a labelled bundle of signal nets — a bus-VECTOR label
 `DATA[m..n]` on a `(bus …)` wire declares the members `DATA`+m..`DATA`+n (`DATA[0..7]` is

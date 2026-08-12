@@ -2916,12 +2916,18 @@ from what was already understood rather than from scratch.
     **Multi-unit symbols merge** now (a `PartDefinition` gains `Units` — one `Symbol` per unit, `Pins`
     the union — and `KiCadSchReader` merges the same-refdes `(unit N)` instances into ONE component,
     placing each unit's pins at its own location; single-unit / symbol-less definitions are
-    byte-identical, persistence writes a `units` key), with these residuals filed: **De Morgan /
+    byte-identical, persistence writes a `units` key). **Multi-unit schematic DRAWING has LANDED** —
+    `SchematicPlacement` keys poses by (refdes, 1-based UNIT), so `Place(refdes, pose)` places unit 1 (the
+    whole single-unit API unchanged and byte-identical) while a multi-unit part places EACH unit at its
+    own sheet location; `SchematicSheet` draws one symbol per unit (labelled `U1A`/`U1B`/…, the value once
+    under the first unit), resolves each pin to the unit whose symbol carries it, and the connectivity
+    reconstruction is UNIT-AGNOSTIC (it reads the drawn wire geometry), so a net across two amp units of
+    one package draws as two symbols wired together and `Verify()` reconstructs it as one net; a
+    multi-unit part with a unit unplaced is refused BY NAME (`U1B`). Residual still filed: **De Morgan /
     alternate unit BODIES** (`unit_style` 2, the `_1_2` sub-symbol — currently ignored with a named
-    diagnostic; carrying the alternate body needs a per-instance "which style" selector), and
-    **multi-unit schematic DRAWING** (`SchematicSheet` places one symbol per component — a multi-unit
-    part wants each unit placed at its own sheet location). Whole Eagle `.brd`/`.sch` import and
-    IPC-7351 footprint GENERATION remain.
+    diagnostic; carrying the alternate body needs a per-instance "which style" selector, and with the
+    drawing consumer now present it would let a schematic draw the alternate body). Whole Eagle
+    `.brd`/`.sch` import and IPC-7351 footprint GENERATION remain.
     **3D-model residuals, filed by name** (each RECORDED as a reference but not
     loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
     needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import

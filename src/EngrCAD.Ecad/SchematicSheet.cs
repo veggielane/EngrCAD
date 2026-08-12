@@ -45,28 +45,48 @@ public readonly record struct SymbolPose(Vector2d Position, int QuarterTurns = 0
 /// </summary>
 public sealed class SchematicPlacement
 {
-    private readonly Dictionary<string, SymbolPose> _poses = new(StringComparer.Ordinal);
+    // Poses keyed by (reference designator, 1-based UNIT number). A single-unit component uses unit 1,
+    // so Place(refdes, pose) stores (refdes, 1) and PoseOf(refdes) reads it back — the whole existing
+    // single-unit API is unchanged. A MULTI-unit part (a dual op-amp) places EACH unit separately, so a
+    // net between two amps of one package draws as two symbols wired together.
+    private readonly Dictionary<(string Reference, int Unit), SymbolPose> _poses = [];
 
-    /// <summary>Places a component's symbol.</summary>
+    /// <summary>Places a single-unit component's symbol — equivalently, unit 1 of any component.</summary>
     /// <returns>This placement, so calls chain.</returns>
-    public SchematicPlacement Place(string referenceDesignator, in SymbolPose pose)
+    public SchematicPlacement Place(string referenceDesignator, in SymbolPose pose) =>
+        Place(referenceDesignator, 1, pose);
+
+    /// <summary>Places UNIT <paramref name="unit"/> (1-based) of a component — the multi-unit form (a
+    /// dual op-amp places unit 1 and unit 2 at their own poses).</summary>
+    public SchematicPlacement Place(string referenceDesignator, int unit, in SymbolPose pose)
     {
         ArgumentException.ThrowIfNullOrEmpty(referenceDesignator);
-        _poses[referenceDesignator] = pose;
+        if (unit < 1)
+            throw new ArgumentOutOfRangeException(nameof(unit), "A schematic unit number is 1-based.");
+        _poses[(referenceDesignator, unit)] = pose;
         return this;
     }
 
-    /// <summary>Places a component's symbol at a position, optionally turned or mirrored.</summary>
+    /// <summary>Places a single-unit component's symbol at a position, optionally turned or mirrored.</summary>
     public SchematicPlacement Place(
         string referenceDesignator, in Vector2d position, int quarterTurns = 0, bool mirror = false) =>
-        Place(referenceDesignator, new SymbolPose(position, quarterTurns, mirror));
+        Place(referenceDesignator, 1, new SymbolPose(position, quarterTurns, mirror));
 
-    /// <summary>The pose for a reference designator, or null when none is stored.</summary>
-    public SymbolPose? PoseOf(string referenceDesignator) =>
-        _poses.TryGetValue(referenceDesignator, out var pose) ? pose : null;
+    /// <summary>Places unit <paramref name="unit"/> (1-based) at a position, optionally turned or mirrored.</summary>
+    public SchematicPlacement Place(
+        string referenceDesignator, int unit, in Vector2d position, int quarterTurns = 0, bool mirror = false) =>
+        Place(referenceDesignator, unit, new SymbolPose(position, quarterTurns, mirror));
+
+    /// <summary>The pose for a component's unit 1 (a single-unit component's symbol), or null.</summary>
+    public SymbolPose? PoseOf(string referenceDesignator) => PoseOf(referenceDesignator, 1);
+
+    /// <summary>The pose for UNIT <paramref name="unit"/> (1-based) of a component, or null.</summary>
+    public SymbolPose? PoseOf(string referenceDesignator, int unit) =>
+        _poses.TryGetValue((referenceDesignator, unit), out var pose) ? pose : null;
 
     /// <summary>The reference designators this placement covers.</summary>
-    public IReadOnlyCollection<string> References => _poses.Keys;
+    public IReadOnlyCollection<string> References =>
+        [.. _poses.Keys.Select(k => k.Reference).Distinct(StringComparer.Ordinal)];
 
     /// <summary>
     /// A deterministic GRID auto-placement — a labelled PLACEHOLDER, not a good layout. Symbols
@@ -83,7 +103,18 @@ public sealed class SchematicPlacement
     {
         ArgumentNullException.ThrowIfNull(schematic);
         var paper = format ?? SchematicSheet.DefaultFormat;
-        int n = schematic.Components.Count;
+
+        // One cell per (component, UNIT) — a multi-unit part gets a cell per unit. A schematic of only
+        // single-unit components flattens to one cell per component in order, so its grid is unchanged.
+        var cells = new List<(string Reference, int Unit)>();
+        foreach (var c in schematic.Components)
+        {
+            int unitCount = Math.Max(1, c.Definition.Units.Count);
+            for (int u = 1; u <= unitCount; u++)
+                cells.Add((c.ReferenceDesignator, u));
+        }
+
+        int n = cells.Count;
         int cols = columns ?? Math.Max(1, (int)Math.Ceiling(Math.Sqrt(n)));
         double margin = SchematicSheet.DefaultMargin;
         double left = margin + spacing / 2;
@@ -94,7 +125,7 @@ public sealed class SchematicPlacement
         {
             int col = i % cols, row = i / cols;
             placement.Place(
-                schematic.Components[i].ReferenceDesignator,
+                cells[i].Reference, cells[i].Unit,
                 new SymbolPose(new Vector2d(left + col * spacing, top - row * spacing)));
         }
         return placement;
@@ -159,11 +190,18 @@ public sealed record SchematicSheetOptions
 /// VIEW of the graph, derived so it cannot disagree with the netlist (the one-declaration
 /// rule). Everything drawn is a function of the graph and the placement.</para>
 ///
+/// <para><b>Multi-unit parts draw as SEPARATE unit symbols.</b> A dual op-amp (a
+/// <see cref="PartDefinition"/> with several <see cref="PartDefinition.Units"/>) places EACH unit at its
+/// own sheet location (<see cref="SchematicPlacement.Place(string, int, in SymbolPose)"/>), labelled
+/// <c>U1A</c>/<c>U1B</c>/…; each pin is drawn by the unit whose symbol carries it, so a net between two
+/// amps of one package draws as two symbols wired together. Because the connectivity reconstruction reads
+/// the DRAWN wire geometry, it is unit-agnostic — a single-unit part places and draws exactly as before
+/// (byte-identical).</para>
+///
 /// <para><b>What it refuses, by name.</b> A component with no <see cref="PartDefinition.Symbol"/>
-/// cannot be drawn; a net that connects a pin the component's symbol does not draw (the symbol
-/// and the netlist disagreeing about the part's pins — a <see cref="PinIdentity"/> failure); a
-/// component the placement does not cover. All are refused at construction, naming the
-/// offenders.</para>
+/// cannot be drawn; a net that connects a pin NO unit of the component draws (the symbol and the netlist
+/// disagreeing about the part's pins — a <see cref="PinIdentity"/> failure); a component whose every UNIT
+/// the placement does not cover. All are refused at construction, naming the offenders.</para>
 /// </summary>
 public sealed class SchematicSheet
 {
@@ -253,9 +291,19 @@ public sealed class SchematicSheet
         foreach (var component in Schematic.Components)
         {
             if (component.Definition.Symbol is null)
+            {
                 noSymbol.Add($"{component.ReferenceDesignator} ({component.Definition.Name})");
-            if (_placement.PoseOf(component.ReferenceDesignator) is null)
-                unplaced.Add(component.ReferenceDesignator);
+                continue;
+            }
+            // EVERY unit must have a sheet position — a multi-unit part places each unit separately, so
+            // "U1" naming just unit A is not enough. A single-unit part checks unit 1, unchanged.
+            var units = component.Definition.Units;
+            bool multi = units.Count > 1;
+            for (int u = 1; u <= units.Count; u++)
+                if (_placement.PoseOf(component.ReferenceDesignator, u) is null)
+                    unplaced.Add(multi
+                        ? $"{component.ReferenceDesignator}{(char)('A' + u - 1)}"
+                        : component.ReferenceDesignator);
         }
         if (noSymbol.Count > 0)
             throw new ArgumentException(
@@ -268,12 +316,14 @@ public sealed class SchematicSheet
                 "These components have no sheet position: " + string.Join(", ", unplaced)
                 + ". Place them (SchematicPlacement.Place), or pass a null placement to grid-place all.");
 
-        // A net that names a pin the component's SYMBOL does not draw is the "pin with no
-        // anchor" case — the symbol and the netlist disagree about the part's pins.
+        // A net that names a pin NO unit of the component draws is the "pin with no anchor" case — the
+        // symbol(s) and the netlist disagree about the part's pins. A multi-unit part draws a pin on
+        // whichever unit carries it, so the check is over the UNION of the units' pins.
         var noAnchor = new List<string>();
         foreach (var net in Schematic.Nets)
             foreach (var pin in net.Pins)
-                if (pin.Component.Definition.Symbol is { } symbol && !symbol.HasPin(pin.Number))
+                if (pin.Component.Definition.Symbol is { } symbol
+                    && !pin.Component.Definition.Units.Any(s => s.HasPin(pin.Number)))
                     noAnchor.Add(
                         $"net '{net.Name}' connects {pin}, but {pin.ReferenceDesignator}'s symbol "
                         + $"('{symbol.Name}') draws no pin '{pin.Number}'");
@@ -339,9 +389,24 @@ public sealed class SchematicSheet
 
         private void DrawSymbol(Component component)
         {
-            var symbol = component.Definition.Symbol!;   // Validate() proved it is present
-            var pose = _placement.PoseOf(component.ReferenceDesignator)!.Value;
+            // Each UNIT of the part is a separate symbol at its own pose (a dual op-amp draws as two
+            // amp symbols wired together). A single-unit part has one unit, drawn at the refdes pose with
+            // its bare refdes — so its output is byte-identical.
+            var units = component.Definition.Units;
+            bool multi = units.Count > 1;
+            for (int u = 0; u < units.Count; u++)
+            {
+                var pose = _placement.PoseOf(component.ReferenceDesignator, u + 1)!.Value;
+                // Multi-unit units are labelled "U1A", "U1B", … (the KiCad convention); a single-unit
+                // part keeps its bare refdes. The value is drawn once (under the first unit).
+                string label = multi ? component.ReferenceDesignator + (char)('A' + u) : component.ReferenceDesignator;
+                DrawUnit(component, units[u], pose, label, showValue: u == 0);
+            }
+        }
 
+        private void DrawUnit(
+            Component component, Symbol symbol, in SymbolPose pose, string label, bool showValue)
+        {
             double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
             double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
             void Grow(Vector2d p)
@@ -373,12 +438,23 @@ public sealed class SchematicSheet
             double gap = _options.TextHeight;
             double cx = (minX + maxX) / 2;
             _texts.Add(new SheetText(
-                new Vector2d(cx, maxY + gap), component.ReferenceDesignator, _options.TextHeight,
+                new Vector2d(cx, maxY + gap), label, _options.TextHeight,
                 SheetTextAnchor.Center, SchematicLayers.References));
-            if (_options.ShowValues && component.Value.Length > 0)
+            if (showValue && _options.ShowValues && component.Value.Length > 0)
                 _texts.Add(new SheetText(
                     new Vector2d(cx, minY - gap - _options.TextHeight), component.Value, _options.TextHeight,
                     SheetTextAnchor.Center, SchematicLayers.Values));
+        }
+
+        /// <summary>The 1-based unit number and symbol that draw a pin — the unit whose symbol carries it.
+        /// For a single-unit part this is always (1, the symbol).</summary>
+        private static (int Unit, Symbol Symbol) UnitOf(Component component, string pinNumber)
+        {
+            var units = component.Definition.Units;
+            for (int i = 0; i < units.Count; i++)
+                if (units[i].HasPin(pinNumber))
+                    return (i + 1, units[i]);
+            return (1, component.Definition.Symbol!);   // Validate() proved some unit draws it
         }
 
         private void DrawGraphic(SymbolGraphic graphic, in SymbolPose pose, Action<Vector2d> grow)
@@ -524,8 +600,10 @@ public sealed class SchematicSheet
         /// <summary>The world anchor of a terminal — the point where its wire lands.</summary>
         private Vector2d AnchorOf(PinRef pin)
         {
-            var pose = _placement.PoseOf(pin.ReferenceDesignator)!.Value;
-            var symbol = pin.Component.Definition.Symbol!;
+            // Resolve which UNIT draws the pin, and use THAT unit's pose and symbol — so a pin of a
+            // dual op-amp's second amp anchors on the second symbol. Single-unit reduces to unit 1.
+            var (unit, symbol) = UnitOf(pin.Component, pin.Number);
+            var pose = _placement.PoseOf(pin.ReferenceDesignator, unit)!.Value;
             return pose.Apply(symbol.PinNumbered(pin.Number).Anchor);   // Validate() proved the pin exists
         }
 
@@ -533,8 +611,8 @@ public sealed class SchematicSheet
         /// symbol pin's <see cref="SymbolPinDirection"/> (which points INTO the body).</summary>
         private Vector2d LeaveDirection(PinRef pin)
         {
-            var pose = _placement.PoseOf(pin.ReferenceDesignator)!.Value;
-            var symbol = pin.Component.Definition.Symbol!;
+            var (unit, symbol) = UnitOf(pin.Component, pin.Number);
+            var pose = _placement.PoseOf(pin.ReferenceDesignator, unit)!.Value;
             return pose.ApplyDirection(-symbol.PinNumbered(pin.Number).Direction.ToVector());
         }
 

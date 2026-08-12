@@ -133,9 +133,17 @@ sets a symbol's origin (sheet millimetres), an orthogonal rotation (90° steps �
 convention) and an optional mirror. A quarter turn is an exact sign swap, so a pin's world
 anchor coincides with its wire endpoint to the bit.
 
+A **multi-unit part** — a dual op-amp, whose package is drawn as separate amplifier symbols —
+places each **unit** at its own location with `Place(refdes, unit, position, …)` (1-based unit
+number); the sheet draws each unit as its own symbol, labelled `U1A` / `U1B` / …, and a net between
+two units of one package draws as two symbols wired together. The connectivity is reconstructed
+from the drawn wire geometry, so it does not care how the part is split into units. A single-unit
+part uses the plain `Place(refdes, position, …)` (unit 1) and draws exactly as before; a multi-unit
+part with any unit left unplaced is refused by name.
+
 `SchematicPlacement.Grid(schematic, format)` is a deterministic grid **placeholder**, clearly
-labelled as such — enough to see a schematic at all. A real auto-placer that produces a
-*good* layout is its own problem and is deliberately not attempted.
+labelled as such — enough to see a schematic at all (it places every unit of every part). A real
+auto-placer that produces a *good* layout is its own problem and is deliberately not attempted.
 
 ## Wires, junctions and labels
 

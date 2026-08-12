@@ -631,7 +631,7 @@ one-declaration rule) — the same schematic and placement produce byte-identica
 
 | Type | What it is |
 | --- | --- |
-| `SchematicSheet` | A schematic + a `SchematicPlacement` + a paper size + a title block. `Draw()` computes the `SchematicDrawing`. Refuses **by name** at construction: a component with no `Symbol`, a net on a pin the symbol does not draw (a `PinIdentity` mismatch), a component the placement does not cover. |
+| `SchematicSheet` | A schematic + a `SchematicPlacement` + a paper size + a title block. `Draw()` computes the `SchematicDrawing`. A **multi-unit part** (a dual op-amp) places each UNIT at its own location (`Place(refdes, unit, pose)`) and draws as separate symbols (`U1A`/`U1B`/…) wired together — the connectivity reconstruction reads the drawn geometry, so it is unit-agnostic and a single-unit part is byte-identical. Refuses **by name** at construction: a component with no `Symbol`, a net on a pin no unit draws (a `PinIdentity` mismatch), a component whose every unit the placement does not cover. |
 | `SchematicPlacement` | Where each component's symbol sits (`Place(refdes, position, quarterTurns, mirror)`). Hand-placed in v1; `Grid(schematic, format)` is a deterministic grid PLACEHOLDER (a good auto-layout is a separate problem, not attempted). |
 | `SymbolPose` | A symbol's origin, an orthogonal rotation (90° steps — the schematic convention) and an optional mirror. The transform is EXACT (a quarter turn is a sign swap), so a pin's world anchor coincides with its wire endpoint to the bit. |
 | `SchematicSheetOptions` | The net-label rule (fanout threshold, power-net names) plus a few sizes. |

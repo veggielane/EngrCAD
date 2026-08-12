@@ -530,4 +530,54 @@ public class SchematicSheetTests
         Assert.Contains("DATA", ex.Message);
         Assert.Contains("at least two points", ex.Message);
     }
+
+    // ---- multi-unit parts draw as SEPARATE unit symbols -------------------------
+
+    private static PartDefinition DualOpamp() => ComponentLibrary.Read(
+        KiCadMultiUnitFixtures.DualOpampSym, KiCadMultiUnitFixtures.Soic8Mod).Definition;
+
+    [Fact]
+    public void MultiUnitPart_DrawsEachUnitSeparately_AndWiresAcrossUnits()
+    {
+        var part = DualOpamp();   // 3 units: amp A (1,2,3), amp B (5,6,7), power (4,8)
+        var sch = new Schematic("dual");
+        var u1 = sch.Add("U1", part);
+        // A net ACROSS the two amp units: amp A's output (pin 1) to amp B's + input (pin 5).
+        sch.Connect("MID", u1.Pin("1"), u1.Pin("5"));
+
+        var placement = new SchematicPlacement();
+        placement.Place("U1", 1, new Vector2d(80, 120));    // amp A
+        placement.Place("U1", 2, new Vector2d(160, 120));   // amp B
+        placement.Place("U1", 3, new Vector2d(120, 60));    // the power unit
+
+        var drawing = new SchematicSheet(sch, placement).Draw();
+        var c = drawing.Connectivity;
+
+        // The net across the two units is reconstructed from the drawn wire geometry as ONE net.
+        Assert.True(c.AreJoined(u1.Pin("1"), u1.Pin("5")),
+            "the wire between amp A's pin 1 and amp B's pin 5 must join them");
+        // A pin of unit A that the net does NOT connect (pin 2) is not joined to pin 1 — the drawing
+        // invents no connection between two pins of one unit.
+        Assert.False(c.AreJoined(u1.Pin("1"), u1.Pin("2")));
+
+        // Each unit is a SEPARATE symbol: pin 1 (unit A) and pin 5 (unit B) anchor near their own poses,
+        // well apart in x — had both units been drawn at one location, they would coincide.
+        var pin1 = drawing.Pins.First(p => p.Pin.Number == "1");
+        var pin5 = drawing.Pins.First(p => p.Pin.Number == "5");
+        Assert.True(Math.Abs(pin1.Anchor.X - pin5.Anchor.X) > 50,
+            $"the two units must be drawn apart (pin1.x={pin1.Anchor.X}, pin5.x={pin5.Anchor.X})");
+    }
+
+    [Fact]
+    public void AMultiUnitPart_WithAUnitUnplaced_IsRefusedByName()
+    {
+        var sch = new Schematic("dual");
+        sch.Add("U1", DualOpamp());
+        var placement = new SchematicPlacement();
+        placement.Place("U1", 1, new Vector2d(80, 120));   // only unit A; units B and C are unplaced
+
+        var ex = Assert.Throws<ArgumentException>(() => new SchematicSheet(sch, placement).Draw());
+        Assert.Contains("U1B", ex.Message);   // unit B named as unplaced
+        Assert.Contains("U1C", ex.Message);   // unit C too
+    }
 }
