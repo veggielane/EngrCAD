@@ -80,4 +80,66 @@ public sealed class PcbGerberX2Tests
         Assert.Equal(plainCopper.Count, x2Copper.Count);
         Assert.Equal(plainCopper.Sum(r => r.Area), x2Copper.Sum(r => r.Area), 9);
     }
+
+    // ==== FileFunction on EVERY Gerber (mask / silk / paste / outline), not just copper =============
+
+    [Fact]
+    public void X2_EmitsFileFunctionOnEveryGerber_MaskSilkPasteAndOutline()
+    {
+        var o = PcbGerberExport.Generate(Routed(), includeX2: true);
+        string top = Routed().Board.Stackup.Top.Name;
+        string Side(string layer) => layer == top ? "Top" : "Bot";
+
+        Assert.NotEmpty(o.MaskLayers);
+        Assert.NotEmpty(o.PasteLayers);
+
+        // Every non-copper Gerber names who made it AND its role, so the package is self-describing.
+        foreach (var m in o.MaskLayers)
+        {
+            Assert.Contains("%TF.GenerationSoftware,EngrCAD,EngrCAD*%", m.Gerber);
+            Assert.Contains($"%TF.FileFunction,Soldermask,{Side(m.Layer)}*%", m.Gerber);
+        }
+        foreach (var p in o.PasteLayers)
+            Assert.Contains($"%TF.FileFunction,SolderPaste,{Side(p.Layer)}*%", p.Gerber);
+        foreach (var s in o.SilkLayers)
+            Assert.Contains($"%TF.FileFunction,Legend,{Side(s.Layer)}*%", s.Gerber);
+
+        // The board outline is a NON-PLATED profile.
+        Assert.Contains("%TF.FileFunction,Profile,NP*%", o.OutlineGerber);
+        Assert.Contains("%TF.GenerationSoftware,EngrCAD,EngrCAD*%", o.OutlineGerber);
+    }
+
+    [Fact]
+    public void X2Off_EveryNonCopperGerberIsByteIdentical_AndStrippingX2Recovers()
+    {
+        var plain = PcbGerberExport.Generate(Routed());
+        var x2 = PcbGerberExport.Generate(Routed(), includeX2: true);
+
+        // Off: no X2 attribute anywhere. On: only attribute lines are added (strip recovers the plain file).
+        for (int i = 0; i < plain.MaskLayers.Count; i++)
+        {
+            Assert.DoesNotContain("%TF", plain.MaskLayers[i].Gerber);
+            Assert.Equal(plain.MaskLayers[i].Gerber, StripX2(x2.MaskLayers[i].Gerber));
+        }
+        for (int i = 0; i < plain.PasteLayers.Count; i++)
+            Assert.Equal(plain.PasteLayers[i].Gerber, StripX2(x2.PasteLayers[i].Gerber));
+        for (int i = 0; i < plain.SilkLayers.Count; i++)
+            Assert.Equal(plain.SilkLayers[i].Gerber, StripX2(x2.SilkLayers[i].Gerber));
+
+        Assert.DoesNotContain("%TF", plain.OutlineGerber);
+        Assert.Equal(plain.OutlineGerber, StripX2(x2.OutlineGerber));
+    }
+
+    [Fact]
+    public void AnX2MaskGerber_RoundTripsItsWindowsExactly_TheReaderIgnoresAttributes()
+    {
+        // The non-copper round-trip oracle: the mask reader recovers the SAME windows with X2 on, so the
+        // FileFunction/GenerationSoftware attributes carry no geometry.
+        var plain = PcbGerberExport.Generate(Routed());
+        var x2 = PcbGerberExport.Generate(Routed(), includeX2: true);
+        var pm = GerberReader.Read(plain.MaskLayers[0].Gerber).Copper;
+        var xm = GerberReader.Read(x2.MaskLayers[0].Gerber).Copper;
+        Assert.Equal(pm.Count, xm.Count);
+        Assert.Equal(pm.Sum(r => r.Area), xm.Sum(r => r.Area), 9);
+    }
 }

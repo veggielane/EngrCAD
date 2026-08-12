@@ -428,11 +428,13 @@ public static class GerberWriter
     }
 
     /// <summary>The board-outline (edge-cuts) Gerber: the closed outline polygon traced with a thin
-    /// round aperture. It is not copper, so it is not part of the copper round trip.</summary>
-    public static string Outline(IReadOnlyList<Vector2d> outline, GerberFormat format)
+    /// round aperture. It is not copper, so it is not part of the copper round trip. With
+    /// <paramref name="x2"/> on it carries the X2 <c>Profile,NP</c> file function (a non-plated edge).</summary>
+    public static string Outline(IReadOnlyList<Vector2d> outline, GerberFormat format, bool x2 = false)
     {
         ArgumentNullException.ThrowIfNull(outline);
-        var builder = new GerberBuilder(format, "EngrCAD board outline (Edge_Cuts)");
+        var builder = new GerberBuilder(
+            format, "EngrCAD board outline (Edge_Cuts)", x2, x2 ? "Profile,NP" : null);
         if (outline.Count >= 2)
         {
             var b = Aabb.Empty;
@@ -455,11 +457,12 @@ public static class GerberWriter
     /// with no openings still yields a well-formed empty Gerber.
     /// </summary>
     public static string MaskLayer(
-        string layerName, IEnumerable<CurvedRegion2d> openings, GerberFormat format)
+        string layerName, IEnumerable<CurvedRegion2d> openings, GerberFormat format,
+        bool x2 = false, string? fileFunction = null)
     {
         ArgumentNullException.ThrowIfNull(openings);
         var builder = new GerberBuilder(
-            format, $"EngrCAD solder mask '{layerName}' (openings imaged dark)");
+            format, $"EngrCAD solder mask '{layerName}' (openings imaged dark)", x2, fileFunction);
         foreach (var opening in openings)
             EmitSolid(builder, opening);
         return builder.Finish();
@@ -474,11 +477,12 @@ public static class GerberWriter
     /// with no apertures still yields a well-formed empty Gerber.
     /// </summary>
     public static string PasteLayer(
-        string layerName, IEnumerable<CurvedRegion2d> apertures, GerberFormat format)
+        string layerName, IEnumerable<CurvedRegion2d> apertures, GerberFormat format,
+        bool x2 = false, string? fileFunction = null)
     {
         ArgumentNullException.ThrowIfNull(apertures);
         var builder = new GerberBuilder(
-            format, $"EngrCAD solder paste '{layerName}' (apertures imaged dark)");
+            format, $"EngrCAD solder paste '{layerName}' (apertures imaged dark)", x2, fileFunction);
         foreach (var aperture in apertures)
             EmitSolid(builder, aperture);
         return builder.Finish();
@@ -492,12 +496,12 @@ public static class GerberWriter
     /// </summary>
     public static string Silkscreen(
         string layerName, IEnumerable<IReadOnlyList<Vector2d>> strokes, double lineWidth,
-        GerberFormat format)
+        GerberFormat format, bool x2 = false, string? fileFunction = null)
     {
         ArgumentNullException.ThrowIfNull(strokes);
         if (!(lineWidth > 0))
             throw new ArgumentOutOfRangeException(nameof(lineWidth), "The silkscreen pen width must be positive.");
-        var builder = new GerberBuilder(format, $"EngrCAD silkscreen '{layerName}'");
+        var builder = new GerberBuilder(format, $"EngrCAD silkscreen '{layerName}'", x2, fileFunction);
         foreach (var polyline in strokes)
             if (polyline.Count >= 2)
                 builder.Draw(lineWidth, polyline);

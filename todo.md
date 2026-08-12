@@ -2712,9 +2712,14 @@ from what was already understood rather than from scratch.
     `%TO.N,<net>*%` object attribute (a fab's net-compare datum) on each copper object, a
     `%TF.GenerationSoftware%` file attribute, and a copper layer's `%TF.FileFunction,Copper,L<n>,<side>%`
     role, via `Generate`/`Write(..., includeX2: true)`, off = byte-identical, the reader ignoring
-    attributes so an X2 file round-trips its copper exactly; STILL FILED are the X2 `FileFunction`
-    ATTRIBUTE inside the mask / silk / paste / outline Gerbers, the `.C`/`.P` component / pad object
-    attributes, and `%TA` aperture attributes. The JOB FILE has LANDED — `Write(..., includeJobFile:
+    attributes so an X2 file round-trips its copper exactly. The per-Gerber `FileFunction` now reaches
+    EVERY layer, not just copper — `Soldermask,<side>` / `Legend,<side>` / `SolderPaste,<side>` for the
+    mask / silk / paste and `Profile,NP` for the non-plated outline, threaded through `MaskLayer` /
+    `PasteLayer` / `Silkscreen` / `Outline` via a `NonCopperFileFunction` helper so the same
+    `GerberBuilder` emits every role and the whole package is self-describing and matches the `.gbrjob`
+    manifest (off = byte-identical on the non-copper files too, with a mask round-trip beside the copper
+    one). STILL FILED are the X2 `.C`/`.P` component / pad object attributes and `%TA` aperture
+    attributes. The JOB FILE has LANDED — `Write(..., includeJobFile:
     true)` drops `<name>.gbrjob`, the JSON manifest a modern fab reads (board size/thickness, copper
     layer count, surface finish, and every Gerber file with its `FileFunction` — the roles gathered from
     the whole set), deterministic (no CreationDate/GUID salt, a byte fixed point) and opt-in (off =

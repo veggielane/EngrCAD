@@ -102,12 +102,14 @@ public sealed record GerberExportResult(
 ///
 /// <para><b>Gerber X2 (opt-in):</b> <c>Generate(..., includeX2: true)</c> / <c>Write(..., includeX2:
 /// true)</c> adds the X2 <c>%TO.N,&lt;net&gt;*%</c> object attribute to each copper object (a board
-/// house's net-compare datum), a <c>%TF.GenerationSoftware%</c> file attribute, and a copper layer's
-/// <c>%TF.FileFunction,Copper,L&lt;n&gt;,&lt;side&gt;%</c> role (its stackup position and side). Opt-in,
-/// so with it off the copper Gerbers are byte-identical; the reader ignores X2 attributes (they carry
-/// metadata, not geometry), so an X2 file round-trips its copper exactly. Filed: <c>FileFunction</c> on
-/// the mask / silk / paste / outline files, the <c>.C</c>/<c>.P</c> component / pad object attributes,
-/// <c>%TA</c> aperture attributes, and the job file (<c>.gbrjob</c>).</para>
+/// house's net-compare datum), a <c>%TF.GenerationSoftware%</c> file attribute to EVERY Gerber, and each
+/// Gerber's <c>%TF.FileFunction%</c> role — <c>Copper,L&lt;n&gt;,&lt;side&gt;</c> for a copper layer
+/// (stackup position and side), <c>Soldermask,&lt;side&gt;</c> / <c>Legend,&lt;side&gt;</c> /
+/// <c>SolderPaste,&lt;side&gt;</c> for the mask / silk / paste, and <c>Profile,NP</c> for the
+/// (non-plated) board outline — so every file in the package is self-describing and matches the
+/// <c>.gbrjob</c> manifest. Opt-in, so with it off every Gerber is byte-identical; the reader ignores X2
+/// attributes (they carry metadata, not geometry), so an X2 file round-trips its copper exactly. Filed:
+/// the <c>.C</c>/<c>.P</c> component / pad object attributes and <c>%TA</c> aperture attributes.</para>
 ///
 /// <para><b>What it does not do (each filed):</b> step / multi-level stencils, paste-volume optimisation,
 /// window-paning of large apertures, the assembly pick-and-place file (a different output), fine mask
@@ -152,7 +154,8 @@ public static class PcbGerberExport
         var silk = PcbSilkscreen.For(layout, layout.SilkscreenSettings);
         var paste = stencil is null ? PcbPaste.For(model, layout.PasteSettings) : PcbPaste.For(model, stencil);
         return Build(design, model, layers, format,
-            MaskGerbers(mask, format), SilkGerbers(silk, format), PasteGerbers(paste, format));
+            MaskGerbers(mask, format, includeX2, model), SilkGerbers(silk, format, includeX2, model),
+            PasteGerbers(paste, format, includeX2, model), includeX2);
     }
 
     /// <summary>Generates the fabrication set (as text) for a raw copper model — every copper feature
@@ -187,53 +190,72 @@ public static class PcbGerberExport
         var mask = PcbMask.For(model);
         var paste = stencil is null ? PcbPaste.For(model) : PcbPaste.For(model, stencil);
         return Build(design, model, layers, format,
-            MaskGerbers(mask, format), EmptySilk(model, format), PasteGerbers(paste, format));
+            MaskGerbers(mask, format, includeX2, model), EmptySilk(model, format, includeX2),
+            PasteGerbers(paste, format, includeX2, model), includeX2);
     }
 
     private static FabricationOutput Build(
         string design, PcbCopperModel model, IReadOnlyList<GerberLayerFile> layers, GerberFormat format,
         IReadOnlyList<GerberLayerFile> maskLayers, IReadOnlyList<GerberLayerFile> silkLayers,
-        IReadOnlyList<GerberLayerFile> pasteLayers)
+        IReadOnlyList<GerberLayerFile> pasteLayers, bool x2 = false)
     {
-        var outline = GerberWriter.Outline(model.Board.OutlinePoints, format);
+        var outline = GerberWriter.Outline(model.Board.OutlinePoints, format, x2);
         var hits = model.Drills.Select(d => new DrillHit(d.Center, d.Diameter)).ToList();
         var drill = ExcellonWriter.Write(hits, format);
         return new FabricationOutput(
             design, layers, outline, drill, hits.Count, format, maskLayers, silkLayers, pasteLayers);
     }
 
-    /// <summary>One solder-mask Gerber per side (the pad windows imaged dark).</summary>
-    private static IReadOnlyList<GerberLayerFile> MaskGerbers(PcbMask mask, GerberFormat format) =>
+    /// <summary>One solder-mask Gerber per side (the pad windows imaged dark). With <paramref name="x2"/>
+    /// on each carries its X2 <c>Soldermask,&lt;side&gt;</c> file function.</summary>
+    private static IReadOnlyList<GerberLayerFile> MaskGerbers(
+        PcbMask mask, GerberFormat format, bool x2, PcbCopperModel model) =>
         [.. mask.Layers.Select(m => new GerberLayerFile(
-            m.Layer, GerberWriter.MaskLayer(m.Layer, m.Openings.Select(o => o.Region), format)))];
+            m.Layer, GerberWriter.MaskLayer(m.Layer, m.Openings.Select(o => o.Region), format,
+                x2, NonCopperFileFunction(x2, model, m.Layer, "Soldermask"))))];
 
     /// <summary>One solder-paste (stencil) Gerber per layer (the SMD-pad apertures imaged dark) — one per
     /// side for a flat stencil, one per (side, level) for a step stencil. A step level carries its
     /// foil-thickness token so its file NAME does not collide; the Gerber content itself is named only by
-    /// the side, so a one-level step at the default expansion is byte-identical to a flat stencil.</summary>
-    private static IReadOnlyList<GerberLayerFile> PasteGerbers(PcbPaste paste, GerberFormat format) =>
+    /// the side, so a one-level step at the default expansion is byte-identical to a flat stencil. With
+    /// <paramref name="x2"/> on each carries its X2 <c>SolderPaste,&lt;side&gt;</c> file function.</summary>
+    private static IReadOnlyList<GerberLayerFile> PasteGerbers(
+        PcbPaste paste, GerberFormat format, bool x2, PcbCopperModel model) =>
         [.. paste.Layers.Select(p => new GerberLayerFile(
             p.Layer,
-            GerberWriter.PasteLayer(p.Layer, p.Apertures.Select(a => a.Region), format),
+            GerberWriter.PasteLayer(p.Layer, p.Apertures.Select(a => a.Region), format,
+                x2, NonCopperFileFunction(x2, model, p.Layer, "SolderPaste")),
             p.Level?.ThicknessToken))];
 
-    /// <summary>One silkscreen Gerber per side (reference / value / outline line-work).</summary>
-    private static IReadOnlyList<GerberLayerFile> SilkGerbers(PcbSilkscreen silk, GerberFormat format) =>
+    /// <summary>One silkscreen Gerber per side (reference / value / outline line-work). With
+    /// <paramref name="x2"/> on each carries its X2 <c>Legend,&lt;side&gt;</c> file function.</summary>
+    private static IReadOnlyList<GerberLayerFile> SilkGerbers(
+        PcbSilkscreen silk, GerberFormat format, bool x2, PcbCopperModel model) =>
         [.. silk.Layers.Select(s => new GerberLayerFile(
-            s.Layer, GerberWriter.Silkscreen(s.Layer, s.Strokes.Select(st => st.Points), s.LineWidth, format)))];
+            s.Layer, GerberWriter.Silkscreen(s.Layer, s.Strokes.Select(st => st.Points), s.LineWidth, format,
+                x2, NonCopperFileFunction(x2, model, s.Layer, "Legend"))))];
 
     /// <summary>A well-formed empty silkscreen Gerber per side (the raw-model path, which has no
-    /// placements to draw).</summary>
-    private static IReadOnlyList<GerberLayerFile> EmptySilk(PcbCopperModel model, GerberFormat format)
+    /// placements to draw). With <paramref name="x2"/> on each carries its X2 <c>Legend,&lt;side&gt;</c>
+    /// file function.</summary>
+    private static IReadOnlyList<GerberLayerFile> EmptySilk(PcbCopperModel model, GerberFormat format, bool x2)
     {
         double pen = PcbSilkscreenSettings.Default.LineWidth;
         string top = model.Board.Stackup.Top.Name, bottom = model.Board.Stackup.Bottom.Name;
         return
         [
-            new GerberLayerFile(top, GerberWriter.Silkscreen(top, [], pen, format)),
-            new GerberLayerFile(bottom, GerberWriter.Silkscreen(bottom, [], pen, format)),
+            new GerberLayerFile(top, GerberWriter.Silkscreen(
+                top, [], pen, format, x2, NonCopperFileFunction(x2, model, top, "Legend"))),
+            new GerberLayerFile(bottom, GerberWriter.Silkscreen(
+                bottom, [], pen, format, x2, NonCopperFileFunction(x2, model, bottom, "Legend"))),
         ];
     }
+
+    /// <summary>The X2 <c>%TF.FileFunction%</c> value for a non-copper outer layer —
+    /// <c>&lt;role&gt;,&lt;side&gt;</c> (e.g. <c>Soldermask,Top</c>), the side read off the stackup's top
+    /// copper. Returns <c>null</c> when X2 is off, so the Gerber content is byte-identical.</summary>
+    private static string? NonCopperFileFunction(bool x2, PcbCopperModel model, string layer, string role) =>
+        x2 ? $"{role},{(layer == model.Board.Stackup.Top.Name ? "Top" : "Bot")}" : null;
 
     /// <summary>Writes the fabrication set for a routed layout to files under <paramref name="directory"/>
     /// (created if needed) — one <c>&lt;name&gt;-&lt;Layer&gt;.gbr</c> per copper layer, a

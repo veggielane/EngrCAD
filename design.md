@@ -7831,18 +7831,25 @@ true)` also drops the IPC-D-356A netlist (`<name>.ipc`) beside the Gerber set fo
 net-compare — opt-in, so with it off the Gerber / drill files are byte-identical (the netlist adds a
 file, it does not touch the copper). **Gerber X2** rides opt-in on the same call (`includeX2: true`):
 each copper object gains a `%TO.N,<net>*%` object attribute (the net-compare datum, read straight from
-the Gerbers), the file a `%TF.GenerationSoftware%` attribute, and each copper layer a
-`%TF.FileFunction,Copper,L<n>,<side>%` role (its stackup position/side) — X2 changes no geometry, so
-the oracle is that stripping the attribute lines recovers the plain Gerber byte-for-byte, off is
-byte-identical, and the reader ignores X2 attributes (metadata, not geometry) so an X2 file round-trips
-its copper exactly. The **`.gbrjob` job file** rides opt-in on the `Write` disk path (`includeJobFile:
+the Gerbers), and EVERY Gerber gains a `%TF.GenerationSoftware%` attribute and its `%TF.FileFunction%`
+role — `Copper,L<n>,<side>` for a copper layer (stackup position/side), `Soldermask,<side>` /
+`Legend,<side>` / `SolderPaste,<side>` for the mask / silk / paste (the side read off the stackup's top
+copper), and `Profile,NP` for the non-plated board outline — so the WHOLE package is self-describing and
+its per-file roles match the `.gbrjob` manifest's. X2 changes no geometry, so the oracle is that
+stripping the attribute lines recovers the plain Gerber byte-for-byte (on the non-copper files too), off
+is byte-identical, and the reader ignores X2 attributes (metadata, not geometry) so an X2 file (copper OR
+mask) round-trips its geometry exactly. The per-Gerber role was threaded through `MaskLayer` / `PasteLayer`
+/ `Silkscreen` / `Outline` (a `NonCopperFileFunction` helper reading the top-copper side), so the same
+`GerberBuilder` that already emitted the copper role now emits every layer's — no new emission path. The
+**`.gbrjob` job file** rides opt-in on the `Write` disk path (`includeJobFile:
 true`): the JSON manifest a fab reads to identify the set — board size/thickness, copper-layer count,
 surface finish (from the `PcbFabricationSpec`), and every Gerber file with its `FileFunction` (`GerberJobFile`,
-a pure formatter; the roles gathered one level up from the whole set). It is DETERMINISTIC (the two
+a pure formatter; the roles gathered one level up from the whole set, using the SAME role strings the
+Gerber content now carries). It is DETERMINISTIC (the two
 clock/random-salted fields the spec allows, `CreationDate` and the project `GUID`, are OMITTED — the same
 `PdfDrawing`-no-`/Info`-date reasoning), so it is a byte fixed point, and the oracle is that every file it
-lists was actually written. Filed: the X2 `FileFunction` ATTRIBUTE inside the mask/silk/paste/outline
-Gerbers, the `.C`/`.P` component/pad attributes, and `%TA` aperture attributes. Pads flash (`D03`),
+lists was actually written. Filed: the X2 `.C`/`.P` component/pad object attributes, and `%TA` aperture
+attributes. Pads flash (`D03`),
 traces draw
 (`D01`/`D02` with a round aperture, whose swept stroke IS the copper model's trace region), via pads
 flash as solid discs, and anything else — a rotated pad, a copper pour — is a region fill
@@ -7984,9 +7991,10 @@ expansion, an empty stencil, a non-positive `FinePitch` threshold). Docs: `examp
 foil-thickness catalogue, paste-volume optimisation, window-paning of
 large apertures, fine mask tenting control beyond
 the tented/opened via policy, curved conformal mask/silk/paste on a MID surface (refused for the
-tamper-mesh distortion reason), a lowercase silk font (a value's lowercase advances as a blank), Gerber
-X2 attributes and the job file, and a Gerber IMPORT of a foreign board (this is export). Docs:
-`examples/ecad-fabrication.md`.
+tamper-mesh distortion reason), a lowercase silk font (a value's lowercase advances as a blank), the
+Gerber X2 `.C`/`.P` component/pad object attributes and `%TA` aperture attributes (the X2 net attribute,
+per-Gerber `FileFunction` and the `.gbrjob` job file are done), and a Gerber IMPORT of a foreign board
+(this is export). Docs: `examples/ecad-fabrication.md`.
 
 ### Assembly pick-and-place (the centroid file) (`PcbPickAndPlace`)
 
