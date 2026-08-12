@@ -7829,7 +7829,13 @@ board-outline Gerber, and an Excellon drill program. `PcbGerberExport.Write(layo
 set (and reports what it wrote); `Generate` returns it as text. `Write(layout, dir, includeNetlist:
 true)` also drops the IPC-D-356A netlist (`<name>.ipc`) beside the Gerber set for the board house's
 net-compare — opt-in, so with it off the Gerber / drill files are byte-identical (the netlist adds a
-file, it does not touch the copper). Pads flash (`D03`), traces draw
+file, it does not touch the copper). **Gerber X2** rides opt-in on the same call (`includeX2: true`):
+each copper object gains a `%TO.N,<net>*%` object attribute (the net-compare datum, read straight from
+the Gerbers) and the file a `%TF.GenerationSoftware%` attribute — X2 changes no geometry, so the oracle
+is that stripping the attribute lines recovers the plain Gerber byte-for-byte, off is byte-identical,
+and the reader ignores X2 attributes (metadata, not geometry) so an X2 file round-trips its copper
+exactly. Filed: `%TF.FileFunction` (layer role/position), the `.C`/`.P` component/pad attributes, and
+the `.gbrjob` job file. Pads flash (`D03`), traces draw
 (`D01`/`D02` with a round aperture, whose swept stroke IS the copper model's trace region), via pads
 flash as solid discs, and anything else — a rotated pad, a copper pour — is a region fill
 (`G36`/`G37`), exact for any shape.

@@ -95,9 +95,17 @@ public sealed record GerberExportResult(
 /// <see cref="PcbLayout.PasteSettings"/>, write-only-when-stated). Paste covers SMD pads ONLY — a
 /// through-hole pad is wave/hand-soldered, so it gets no aperture (the SMD-only rule).</para>
 ///
+/// <para><b>Gerber X2 (opt-in):</b> <c>Generate(..., includeX2: true)</c> / <c>Write(..., includeX2:
+/// true)</c> adds the X2 <c>%TO.N,&lt;net&gt;*%</c> object attribute to each copper object (a board
+/// house's net-compare datum) plus a <c>%TF.GenerationSoftware%</c> file attribute. Opt-in, so with it
+/// off the copper Gerbers are byte-identical; the reader ignores X2 attributes (they carry metadata,
+/// not geometry), so an X2 file round-trips its copper exactly. Filed: the <c>%TF.FileFunction%</c>
+/// layer-role attribute (needs each layer's stackup role/position), the <c>.C</c>/<c>.P</c> component /
+/// pad object attributes, and the job file (<c>.gbrjob</c>).</para>
+///
 /// <para><b>What it does not do (each filed):</b> step / multi-level stencils, paste-volume optimisation,
 /// window-paning of large apertures, the assembly pick-and-place file (a different output), fine mask
-/// tenting control beyond the tented/opened via policy, Gerber X2 attributes and the job file, and a
+/// tenting control beyond the tented/opened via policy, and a
 /// Gerber IMPORT of a foreign board (this is EXPORT — the reader is the round-trip oracle scoped to what
 /// the writer emits). Plated and non-plated holes are not split (the copper model does not distinguish
 /// them at the drill), so all holes ride in one drill program.</para>
@@ -109,7 +117,8 @@ public static class PcbGerberExport
     /// (multi-level) solder-paste stencil (one paste Gerber per foil-thickness level); with none the paste
     /// is the SINGLE (flat) stencil the layout's <see cref="PcbLayout.PasteSettings"/> describe, and the
     /// output is byte-identical to before.</summary>
-    public static FabricationOutput Generate(PcbLayout layout, string? name = null, PasteStencil? stencil = null)
+    public static FabricationOutput Generate(
+        PcbLayout layout, string? name = null, PasteStencil? stencil = null, bool includeX2 = false)
     {
         ArgumentNullException.ThrowIfNull(layout);
         var model = PcbCopperModel.FromLayout(layout);
@@ -127,9 +136,9 @@ public static class PcbGerberExport
             var vias = model.Vias.Where(v => v.Layers.Contains(name2));
             var traces = layout.Traces
                 .Where(t => t.Layer == name2)
-                .Select(t => ((IReadOnlyList<Vector2d>)t.Points, t.Width));
+                .Select(t => ((IReadOnlyList<Vector2d>)t.Points, t.Width, (string?)t.Net));
             layers.Add(new GerberLayerFile(
-                name2, GerberWriter.CopperLayer(name2, features, vias, traces, LayerHoles(model, name2), format)));
+                name2, GerberWriter.CopperLayer(name2, features, vias, traces, LayerHoles(model, name2), format, includeX2)));
         }
 
         var mask = PcbMask.For(model, layout.MaskSettings);
@@ -144,7 +153,8 @@ public static class PcbGerberExport
     /// since a model carries no trace centre-lines to draw), plus the outline and drill. This is the
     /// path for a hand-built model with copper pours the layout does not yet carry. Pass a
     /// <paramref name="stencil"/> for a STEP (multi-level) solder-paste stencil.</summary>
-    public static FabricationOutput Generate(PcbCopperModel model, string? name = null, PasteStencil? stencil = null)
+    public static FabricationOutput Generate(
+        PcbCopperModel model, string? name = null, PasteStencil? stencil = null, bool includeX2 = false)
     {
         ArgumentNullException.ThrowIfNull(model);
         var format = FormatFor(model, []);
@@ -157,7 +167,10 @@ public static class PcbGerberExport
             var features = model.Copper.Where(f => f.Layer == name2 && !viaSources.Contains(f.Source));
             var vias = model.Vias.Where(v => v.Layers.Contains(name2));
             layers.Add(new GerberLayerFile(
-                name2, GerberWriter.CopperLayer(name2, features, vias, [], LayerHoles(model, name2), format)));
+                name2, GerberWriter.CopperLayer(
+                    name2, features, vias,
+                    Array.Empty<(IReadOnlyList<Vector2d>, double, string?)>(),
+                    LayerHoles(model, name2), format, includeX2)));
         }
 
         // The raw-model path has no placements, so no silk (an empty, well-formed Gerber per side); the
@@ -223,10 +236,10 @@ public static class PcbGerberExport
     /// what they were.</summary>
     public static GerberExportResult Write(
         PcbLayout layout, string directory, string? name = null, PasteStencil? stencil = null,
-        bool includeNetlist = false)
+        bool includeNetlist = false, bool includeX2 = false)
     {
         ArgumentNullException.ThrowIfNull(layout);
-        var output = Generate(layout, name, stencil);
+        var output = Generate(layout, name, stencil, includeX2);
         var result = WriteOutput(output, directory);
         if (!includeNetlist)
             return result;

@@ -122,6 +122,12 @@ public static class GerberReader
                 throw new FormatException(
                     "This Gerber reader does not support aperture macros (%AM…%); it decodes only the "
                     + "standard apertures (C/R/O/P) this exporter emits.");
+            else if (s.StartsWith("TF", StringComparison.Ordinal) || s.StartsWith("TO", StringComparison.Ordinal)
+                  || s.StartsWith("TA", StringComparison.Ordinal) || s.StartsWith("TD", StringComparison.Ordinal))
+            {
+                // X2 attributes (%TF file / %TA aperture / %TO object / %TD delete) carry METADATA, not
+                // geometry — the twin decoder ignores them, so an X2 file round-trips its copper exactly.
+            }
             else
                 throw new FormatException($"Unsupported Gerber parameter command '%{s}%'.");
         }

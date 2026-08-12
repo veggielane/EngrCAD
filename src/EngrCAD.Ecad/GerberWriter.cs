@@ -126,14 +126,16 @@ internal sealed class GerberBuilder
 {
     private readonly GerberFormat _format;
     private readonly string _comment;
+    private readonly bool _x2;
     private readonly Dictionary<GerberAperture, int> _apertures = [];
     private readonly List<GObject> _objects = [];
     private int _nextDCode = 10;
 
-    internal GerberBuilder(GerberFormat format, string comment)
+    internal GerberBuilder(GerberFormat format, string comment, bool x2 = false)
     {
         _format = format;
         _comment = comment;
+        _x2 = x2;
     }
 
     private int ApertureCode(GerberAperture aperture)
@@ -143,19 +145,20 @@ internal sealed class GerberBuilder
         return code;
     }
 
-    /// <summary>A flash (`D03`) of an aperture at a point, in the given polarity.</summary>
-    internal void Flash(GerberAperture aperture, in Vector2d center, bool dark = true) =>
-        _objects.Add(GObject.Flash(ApertureCode(aperture), center, dark));
+    /// <summary>A flash (`D03`) of an aperture at a point, in the given polarity. <paramref name="net"/>
+    /// is the object's net for an X2 <c>%TO.N%</c> attribute (ignored unless the builder is in X2 mode).</summary>
+    internal void Flash(GerberAperture aperture, in Vector2d center, bool dark = true, string? net = null) =>
+        _objects.Add(GObject.Flash(ApertureCode(aperture), center, dark, net));
 
     /// <summary>A stroked polyline: a dark draw (`D01`) with a round aperture of the trace width — the
     /// Minkowski sum of the centre-line with a disc, exactly the copper model's trace stroke.</summary>
-    internal void Draw(double width, IReadOnlyList<Vector2d> polyline) =>
-        _objects.Add(GObject.Draw(ApertureCode(GerberAperture.Circle(width)), polyline, dark: true));
+    internal void Draw(double width, IReadOnlyList<Vector2d> polyline, string? net = null) =>
+        _objects.Add(GObject.Draw(ApertureCode(GerberAperture.Circle(width)), polyline, dark: true, net));
 
     /// <summary>A region fill (`G36`/`G37`) of ONE closed contour of lines and circular arcs, in the
     /// given polarity. A Bézier boundary is refused (Gerber region contours carry no cubic).</summary>
-    internal void Contour(IReadOnlyList<CurvedEdge2d> loop, bool dark) =>
-        _objects.Add(GObject.Region(loop, dark));
+    internal void Contour(IReadOnlyList<CurvedEdge2d> loop, bool dark, string? net = null) =>
+        _objects.Add(GObject.Region(loop, dark, net));
 
     /// <summary>Whether any object has been added.</summary>
     internal bool IsEmpty => _objects.Count == 0;
@@ -166,6 +169,10 @@ internal sealed class GerberBuilder
         var sb = new StringBuilder();
         sb.Append(_format.FormatSpec).Append('\n');
         sb.Append("%MOMM*%").Append('\n');
+        // X2 file attributes: who made the file. Opt-in, so a non-X2 file is byte-identical (nothing
+        // emitted). The net-compare value is the per-object %TO.N% attribute below.
+        if (_x2)
+            sb.Append("%TF.GenerationSoftware,EngrCAD,EngrCAD*%").Append('\n');
         sb.Append("G04 ").Append(_comment).Append("*").Append('\n');
         foreach (var (aperture, code) in _apertures.OrderBy(kv => kv.Value))
             sb.Append(ApertureDefinition(code, aperture)).Append('\n');
@@ -175,12 +182,20 @@ internal sealed class GerberBuilder
         bool dark = true;
         int currentAperture = -1;
         string mode = "G01";
+        string? currentNet = null;
         foreach (var o in _objects)
         {
             if (o.Dark != dark)
             {
                 sb.Append(o.Dark ? "%LPD*%" : "%LPC*%").Append('\n');
                 dark = o.Dark;
+            }
+            // X2 object attribute: the net this object belongs to (%TO.N,<net>*%), set when it changes
+            // and deleted (%TD.N*%) when an object carries no net. Off unless the builder is in X2 mode.
+            if (_x2 && !string.Equals(o.Net, currentNet, StringComparison.Ordinal))
+            {
+                sb.Append(o.Net is null ? "%TD.N*%" : $"%TO.N,{EscapeAttr(o.Net)}*%").Append('\n');
+                currentNet = o.Net;
             }
             switch (o.Kind)
             {
@@ -293,20 +308,38 @@ internal sealed class GerberBuilder
         _ => throw new NotSupportedException($"Unknown aperture shape {a.Shape}."),
     };
 
+    // X2 attribute fields are comma-separated and terminated by `*%`, so a value carrying the field
+    // separator or a control char must escape it as \uXXXX (the spec's rule). Net names here are
+    // identifiers, so this is a robustness guard that rarely fires.
+    private static string EscapeAttr(string value)
+    {
+        if (!value.AsSpan().ContainsAny(",*%\\"))
+            return value;
+        var sb = new StringBuilder(value.Length + 8);
+        foreach (char c in value)
+        {
+            if (c is ',' or '*' or '%' or '\\')
+                sb.Append("\\u").Append(((int)c).ToString("X4", CultureInfo.InvariantCulture));
+            else
+                sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
     private enum GObjectKind { Flash, Draw, Region }
 
     private readonly record struct GObject(
         GObjectKind Kind, int DCode, Vector2d Center,
-        IReadOnlyList<Vector2d>? Polyline, IReadOnlyList<CurvedEdge2d>? Loop, bool Dark)
+        IReadOnlyList<Vector2d>? Polyline, IReadOnlyList<CurvedEdge2d>? Loop, bool Dark, string? Net)
     {
-        public static GObject Flash(int code, in Vector2d c, bool dark) =>
-            new(GObjectKind.Flash, code, c, null, null, dark);
+        public static GObject Flash(int code, in Vector2d c, bool dark, string? net) =>
+            new(GObjectKind.Flash, code, c, null, null, dark, net);
 
-        public static GObject Draw(int code, IReadOnlyList<Vector2d> poly, bool dark) =>
-            new(GObjectKind.Draw, code, default, poly, null, dark);
+        public static GObject Draw(int code, IReadOnlyList<Vector2d> poly, bool dark, string? net) =>
+            new(GObjectKind.Draw, code, default, poly, null, dark, net);
 
-        public static GObject Region(IReadOnlyList<CurvedEdge2d> loop, bool dark) =>
-            new(GObjectKind.Region, 0, default, null, loop, dark);
+        public static GObject Region(IReadOnlyList<CurvedEdge2d> loop, bool dark, string? net) =>
+            new(GObjectKind.Region, 0, default, null, loop, dark, net);
     }
 }
 
@@ -339,25 +372,27 @@ public static class GerberWriter
         string layerName,
         IEnumerable<CopperFeature> features,
         IEnumerable<PlacedVia> vias,
-        IEnumerable<(IReadOnlyList<Vector2d> Points, double Width)> traces,
+        IEnumerable<(IReadOnlyList<Vector2d> Points, double Width, string? Net)> traces,
         IEnumerable<CurvedRegion2d> clearAir,
-        GerberFormat format)
+        GerberFormat format,
+        bool x2 = false)
     {
         ArgumentNullException.ThrowIfNull(features);
         ArgumentNullException.ThrowIfNull(vias);
         ArgumentNullException.ThrowIfNull(traces);
         ArgumentNullException.ThrowIfNull(clearAir);
 
-        var builder = new GerberBuilder(format, $"EngrCAD copper layer '{layerName}'");
+        var builder = new GerberBuilder(format, $"EngrCAD copper layer '{layerName}'", x2);
 
         // Dark solids — every feature's OUTER copper: pads / pours as flashes-or-region-fills, via
-        // pads as solid discs, traces as round-aperture draws.
+        // pads as solid discs, traces as round-aperture draws. Each carries its NET for the X2
+        // %TO.N% object attribute (a fab's net-compare datum); ignored unless x2 is on.
         foreach (var f in features)
-            EmitSolid(builder, f.Region);
+            EmitSolid(builder, f.Region, x2 ? f.Net : null);
         foreach (var v in vias)
-            builder.Flash(GerberAperture.Circle(v.PadDiameter), v.Center, dark: true);
-        foreach (var (points, width) in traces)
-            builder.Draw(width, points);
+            builder.Flash(GerberAperture.Circle(v.PadDiameter), v.Center, dark: true, net: x2 ? v.Net : null);
+        foreach (var (points, width, net) in traces)
+            builder.Draw(width, points, x2 ? net : null);
 
         // Clear the TRUE AIR of the final union — the air pockets (via drills, pour anti-pads). An
         // air pocket may be a RING: a pour's clearance hole with an other-net pad ISLAND sitting in it,
@@ -461,15 +496,15 @@ public static class GerberWriter
         return builder.Finish();
     }
 
-    private static void EmitSolid(GerberBuilder builder, CurvedRegion2d region)
+    private static void EmitSolid(GerberBuilder builder, CurvedRegion2d region, string? net = null)
     {
         if (GerberShapes.TryDisc(region, out var c, out double d))
-            builder.Flash(GerberAperture.Circle(d), c);
+            builder.Flash(GerberAperture.Circle(d), c, net: net);
         else if (GerberShapes.TryAxisAlignedRect(region, out c, out double w, out double h))
-            builder.Flash(GerberAperture.Rectangle(w, h), c);
+            builder.Flash(GerberAperture.Rectangle(w, h), c, net: net);
         else if (GerberShapes.TryAxisAlignedObround(region, out c, out w, out h))
-            builder.Flash(GerberAperture.Obround(w, h), c);
+            builder.Flash(GerberAperture.Obround(w, h), c, net: net);
         else
-            builder.Contour(region.Outer, dark: true);
+            builder.Contour(region.Outer, dark: true, net: net);
     }
 }

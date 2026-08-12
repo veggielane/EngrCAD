@@ -13,7 +13,10 @@ manufactured *and* reflow-assembled.
 become round-aperture **draws** (the stroke a round aperture sweeps is exactly the copper model's
 trace region), via pads become solid disc flashes with the drill cleared to leave the annular ring,
 and anything else — a rotated pad, a copper pour — becomes a region **fill** (`G36`/`G37`), exact for
-any shape.
+any shape. Pass `includeX2: true` for **Gerber X2**: each copper object gains a `%TO.N,<net>*%` object
+attribute (the net-compare datum, read straight from the Gerbers) and the file a
+`%TF.GenerationSoftware%` attribute — opt-in, so off is byte-identical, and since X2 adds only metadata
+(not geometry) the reader ignores the attributes and an X2 file round-trips its copper exactly.
 
 ## The bar: the twin-decoder round trip
 
