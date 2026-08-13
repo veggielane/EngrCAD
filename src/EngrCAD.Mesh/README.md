@@ -1017,7 +1017,16 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   reported; polygonal faces triangulated in their Newell plane via
   `PolygonTriangulator` with a fan fallback when earcut filters collinear vertices —
   a dropped vertex a neighbor still references would open an unweldable T-junction),
-  `OffReader` (OFF + variants; extra color/normal columns ignored with warnings), and
+  `OffReader` (OFF + variants; extra color/normal columns ignored with warnings),
+  `VrmlReader` (VRML97 `.wrl`, KiCad's default 3D component-model format: every
+  `IndexedFaceSet` gathered through the `Transform`/`Group` scene graph with
+  `DEF`/`USE` instancing, `Switch` by `whichChoice` and `LOD` at its most detailed
+  level; the winding rule is one XOR — `ccw` against the transform's mirror
+  determinant — so a clockwise set and a mirrored instance both come back outward;
+  coordinates are read VERBATIM since VRML is unitless (the KiCad 0.1-inch convention
+  belongs to the consumer that knows the file is KiCad's); appearance/normals/colours
+  ignored, non-mesh geometry and external `Inline`s skipped with a named note, and a
+  missing/V1.0 header, `PROTO` and a truncated file refused by name), and
   the `MeshReader` extension-dispatch facade. All readers weld coincident vertices
   (spatial hash; representatives keep their exact file coordinates — welding never
   moves geometry; tolerance parameter defaults to the 1e-9 weld tier) and attempt the

@@ -27,7 +27,7 @@ schematic is then a bug in a derivation, not a difference between two hand-kept 
 | `Footprint` / `Pad` / `PadShape` | The 2D pad layout — **data now**, a placeholder the board-layout stage will consume. Nothing here builds board geometry. |
 | `PartDefinition` | A reusable part type built from its three views — a 2D `Symbol`, a `Footprint` and a 3D `Model` — plus a name/designation and an ordered `Pin` list (with the legacy `Body` hook, `Func<Shape>`, kept as a code model with the identity placement). Every view is optional; the definition is the source, a component is meaningless without one. |
 | `Symbol` / `SymbolPin` / `SymbolGraphic` | The 2D SCHEMATIC symbol — graphic primitives (`SymbolPolyline`/`SymbolRectangle`/`SymbolCircle`/`SymbolArc`/`SymbolText`) plus a `SymbolPin` per terminal carrying the pin NUMBER, name, the `Anchor` where a wire lands, a `SymbolPinDirection`, a length and a `PinType`. The representation a drawn schematic **sheet** consumes. |
-| `ComponentModel3D` / `ModelPlacement` | The 3D MODEL — a first-class peer of the symbol and footprint. Unifies a body SOURCE — a FILE reference (`.stl`/`.obj`/`.off`/`.step`, which travels as DATA and loads on demand) or a `Func<Shape>` (code, opaque like the legacy `Body`) — with a `ModelPlacement` (offset/rotate/scale) relative to the footprint origin. A quarter turn is exact (a sign swap, not a `cos`); `.wrl`/`.igs` are recorded but not loaded (refused by name). |
+| `ComponentModel3D` / `ModelPlacement` | The 3D MODEL — a first-class peer of the symbol and footprint. Unifies a body SOURCE — a FILE reference (`.stl`/`.obj`/`.off`/`.step`, which travels as DATA and loads on demand) or a `Func<Shape>` (code, opaque like the legacy `Body`) — with a `ModelPlacement` (offset/rotate/scale) relative to the footprint origin. A quarter turn is exact (a sign swap, not a `cos`); `.wrl` loads (VRML97, the KiCad 2.54 unit convention), `.igs` is recorded but not loaded (refused by name). |
 | `PinIdentity` / `PinIdentityReport` | The one-declaration identity check: symbol pin `"1"` == footprint pad `"1"` == netlist pin `"1"`. Names every symbol pin with no pad, pad with no pin, or pin with neither. |
 | `Component` | A placed instance of a `PartDefinition`: a reference designator (`R1`, `U3`) and an optional value (`"330"`, `"100nF"`). `component.Pin("1")` names a terminal. |
 | `PinRef` | A reference to one terminal of one placed component — the thing a `Net` connects. A reference, not a copy. |
@@ -487,9 +487,12 @@ var coded = ComponentModel3D.FromShape(() => Shape.Box(2, 1.25, 0.5).Translate(0
   the last bit), and a scale is exact.
 - **Loading is an explicit act, and refusals are by name.** Constructing a model never touches
   the filesystem, so a data-only load that only references a path is honest and complete for
-  persistence and connectivity. `.wrl` (VRML — KiCad's default 3D format, so this WILL be hit) has
-  no reader, and `.igs`/`.iges` is filed; both are RECORDED but refused by name at load, and a
-  missing/unreadable file is a not-loaded reference (a reason), never a data-load crash.
+  persistence and connectivity. `.wrl` (VRML — KiCad's default 3D model format) LOADS through the
+  mesh tier's `VrmlReader` with the KiCad unit convention (1 VRML unit = 0.1 inch = 2.54 mm)
+  applied here, at the consumer that knows a component model's `.wrl` is KiCad's (the reader
+  itself is verbatim — VRML is unitless); `.igs`/`.iges` stays filed, RECORDED but refused by
+  name at load, and a missing/unreadable file is a not-loaded reference (a reason), never a
+  data-load crash.
 - **Persistence.** A file-referenced model round-trips (`{ path, offset?, rotate?, scale? }`,
   write-only-when-stated) as a **byte-identical fixed point**; a definition with no model — or with
   a code model (opaque) — writes no `model` key, so a pre-model file is byte-identical.
@@ -1278,7 +1281,7 @@ subset is the two-layer board, and the board thickness is assumed 1.6 mm with a 
 complement** (`Ipc7351` + `StandardBodies` — a land pattern from the component's own datasheet
 dimensions rather than a library file; see the section above). What stays filed is EDIF, the newer
 Eagle/Fusion XML variants beyond the classic `.lbr`, and Eagle 3D package models (Eagle's
-`<packages3d>` reference a model by URN — materially more work than the classic `.lbr` carries). The **KiCad 3D model reference now imports** (the footprint's `(model …)` becomes the definition's `Model`); what stays filed on the model side is IGES (`.igs`/`.iges`) 3D-model loading (a face soup needing `ShapeHealing`) and a VRML (`.wrl`) reader — both refused by name, the reference recorded. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
+`<packages3d>` reference a model by URN — materially more work than the classic `.lbr` carries). The **KiCad 3D model reference now imports** (the footprint's `(model …)` becomes the definition's `Model`) **and a `.wrl` model LOADS** (the mesh tier's `VrmlReader` + the KiCad 2.54 unit convention at the consumer); what stays filed on the model side is IGES (`.igs`/`.iges`) 3D-model loading (a face soup needing `ShapeHealing`) — refused by name, the reference recorded. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
 drilling the plate is a later refinement). The drawn schematic **sheet** (`SchematicSheet` →
 SVG/DXF/PDF) has landed as a VIEW of the graph (see above); what stays open there is a real
 **auto-placer** (a good layout, not the grid placeholder) and an **obstacle-avoiding** wire

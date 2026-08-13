@@ -6945,17 +6945,28 @@ parameter (so every positional construction is byte-for-byte unchanged), and the
 as the spelling of a **code model with the identity placement** — the two seat bit-identically, and
 the seating resolves `Model ?? (Body as identity-placed model)`.
 
-**Two source kinds, and the split is the design.** A **file** reference — `.stl`/`.obj`/`.off` via
-`Shape.From`, `.step` via `StepReader` — travels through the schematic/board file as DATA (the path
-plus the placement) and loads on demand; a **code** model (a `Func<Shape>`) stays OPAQUE and is
-re-attached from a `PartLibrary` by definition name, exactly as `Body` is. Constructing a model
-never touches the filesystem, so a data-only load that only references a path is honest and complete
-for persistence and connectivity — loading is an explicit act (`TryLoad(out error)` soft,
-`Load()` hard), and a missing/unreadable file, a `.wrl` (VRML — KiCad's default 3D format, which has
-no reader) or an `.igs`/`.iges` (a face soup needing `ShapeHealing`, filed) is RECORDED but refused
-BY NAME, never a data-load crash (the "readers never throw on dirty geometry" culture). An
-unloadable model leaves the assembly without a 3D occurrence — the pads are still placed — exactly
-as a body-less component does.
+**Two source kinds, and the split is the design.** A **file** reference — `.stl`/`.obj`/`.off`/
+`.wrl` via `Shape.From`, `.step` via `StepReader` — travels through the schematic/board file as DATA
+(the path plus the placement) and loads on demand; a **code** model (a `Func<Shape>`) stays OPAQUE
+and is re-attached from a `PartLibrary` by definition name, exactly as `Body` is. Constructing a
+model never touches the filesystem, so a data-only load that only references a path is honest and
+complete for persistence and connectivity — loading is an explicit act (`TryLoad(out error)` soft,
+`Load()` hard), and a missing/unreadable file or an `.igs`/`.iges` (a face soup needing
+`ShapeHealing`, filed) is RECORDED but refused BY NAME, never a data-load crash (the "readers never
+throw on dirty geometry" culture). An unloadable model leaves the assembly without a 3D occurrence
+— the pads are still placed — exactly as a body-less component does. **A `.wrl` (VRML, KiCad's
+default 3D model format) LOADS now** — `VrmlReader` in EngrCAD.Mesh reads the VRML97 mesh subset
+(every `IndexedFaceSet` through the `Transform`/`Group` hierarchy, `DEF`/`USE` instancing, `Switch`
+by `whichChoice`, `LOD` at its most detailed level; the winding rule is one XOR, ccw against the
+transform's mirror determinant, so a clockwise set and a mirrored instance both come back OUTWARD;
+appearance/normals/colours ignored, a non-mesh geometry and an external `Inline` skipped with a
+NAMED note; a missing/V1.0 header, `PROTO` and a truncated file refused by name), and the reader
+reads coordinates VERBATIM because VRML is unitless — **the KiCad convention (1 VRML unit = 0.1
+inch = 2.54 mm) is applied at the ECAD consumer** (`ComponentModel3D.TryLoad` scales a `.wrl` body
+by 2.54), the format/convention split that keeps the mesh-tier reader honest for a non-KiCad file.
+The oracles are geometric — a unit cube's exact closed volume through every code path (the
+transform stack including `center`, instancing, both halves of the winding XOR) — because a
+scene-graph reader's classic failure is a plausible mesh under the wrong transform.
 
 **The placement seats into the pose, and a quarter turn is exact.** `PcbLayout.ToAssembly` bakes the
 `ModelPlacement` (translate · rotate · scale) into the body BEFORE the side reflection and the
@@ -6979,9 +6990,9 @@ footprint reader (`KiCadFootprintReader`, and the whole-board `KiCadPcbReader`) 
 `(model …)` reference into a `FromFile` model carrying the path plus KiCad's placement — offset in
 mm (a legacy inch `at` is converted with a note), rotate in degrees, scale unitless — so a
 `ComponentLibrary.Load` part arrives with its 3D model REFERENCE, not force-loaded (an empty library
-directory is normal). What stays filed on the model side: a VRML (`.wrl`) reader, IGES (`.igs`)
+directory is normal). What stays filed on the model side: IGES (`.igs`)
 3D-model loading, and Eagle 3D package models (Eagle's `<packages3d>` reference a model by URN —
-materially more than the classic `.lbr` carries).
+materially more than the classic `.lbr` carries); the VRML (`.wrl`) reader landed (above).
 
 **The Eagle `.lbr` reader is the SECOND interchange, and its structure — not effort — is the
 finding** (`EagleLibraryReader`, `EagleLibrary`; the KiCad reader's twin). An Eagle library is one

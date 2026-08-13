@@ -2,8 +2,9 @@
 title: "Importing meshes"
 ---
 
-`Shape.From(path)` imports a mesh file — STL (binary or ASCII, autodetected), OBJ, or
-OFF — as a mesh-backed shape. Underneath it is `MeshReader.ReadAndRepair`: dirty files
+`Shape.From(path)` imports a mesh file — STL (binary or ASCII, autodetected), OBJ,
+OFF, or VRML97 (`.wrl`) — as a mesh-backed shape. Underneath it is
+`MeshReader.ReadAndRepair`: dirty files
 weld instead of throwing, the repair pipeline runs (crack welding,
 degenerate/duplicate removal, consistent outward orientation, T-junction zipping), and
 the result composes with everything else in the vocabulary — booleans, transforms,
@@ -60,6 +61,13 @@ shape wrapper: `MeshReader.ReadFile` returns mesh-or-soup plus warnings and neve
 throws on dirty geometry; `MeshRepair.Clean`/`AutoRepair` are the pipeline.
 An imported mesh has no exact B-Rep — `imported.ToBrep()` honestly refuses
 (mesh-to-B-Rep reconstruction is future work); `ToMesh` and `ToImplicit` both work.
+
+A `.wrl` (VRML97 — KiCad's default 3D component-model format) reads its
+`IndexedFaceSet` meshes through the `Transform`/`DEF`/`USE` scene graph, with
+non-mesh geometry and external `Inline`s skipped by name; coordinates are read
+**verbatim**, since VRML is unitless — the KiCad convention (1 VRML unit = 0.1 inch
+= 2.54 mm) is applied by the ECAD component-model loader, which knows its `.wrl`
+files are KiCad's, not by the reader.
 
 ## Importing exact geometry: STEP, `.ecb` and IGES
 

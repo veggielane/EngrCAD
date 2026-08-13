@@ -104,9 +104,11 @@ public readonly record struct ModelPlacement(Vector3d Offset, Vector3d RotationD
 ///
 /// <list type="bullet">
 /// <item><b>File-referenced</b> (<see cref="FromFile"/>): a path to a mesh (<c>.stl</c>/<c>.obj</c>/
-/// <c>.off</c>) or a STEP (<c>.step</c>/<c>.stp</c>) file. This travels through the schematic/board
-/// file as DATA (the path plus the placement) and is loadable on demand. The path is RECORDED even
-/// when the format cannot be loaded — a <c>.wrl</c> (VRML, KiCad's default 3D model format) or an
+/// <c>.off</c>/<c>.wrl</c>) or a STEP (<c>.step</c>/<c>.stp</c>) file. This travels through the
+/// schematic/board file as DATA (the path plus the placement) and is loadable on demand. A
+/// <c>.wrl</c> (VRML, KiCad's default 3D model format) loads through <c>VrmlReader</c> with the
+/// KiCad unit convention applied here (1 VRML unit = 0.1 inch = 2.54 mm). The path is RECORDED even
+/// when the format cannot be loaded — an
 /// <c>.igs</c>/<c>.iges</c> is refused by name at load time but the reference still round-trips.</item>
 /// <item><b>Shape/code</b> (<see cref="FromShape"/>): a <c>Func&lt;Shape&gt;</c> — code, exactly like the
 /// legacy <see cref="PartDefinition.Body"/>, so it stays OPAQUE and is NOT serialized (re-attached from
@@ -145,8 +147,9 @@ public sealed class ComponentModel3D
     public bool IsCode => _builder is not null;
 
     /// <summary>A file-referenced model: a path (loaded on demand) plus a placement.</summary>
-    /// <param name="path">A mesh (<c>.stl</c>/<c>.obj</c>/<c>.off</c>) or STEP (<c>.step</c>/<c>.stp</c>)
-    /// file. Other formats (<c>.wrl</c>, <c>.igs</c>/<c>.iges</c>) are recorded but not loaded.</param>
+    /// <param name="path">A mesh (<c>.stl</c>/<c>.obj</c>/<c>.off</c>/<c>.wrl</c>) or STEP
+    /// (<c>.step</c>/<c>.stp</c>) file. Other formats (<c>.igs</c>/<c>.iges</c>) are recorded but
+    /// not loaded.</param>
     /// <param name="placement">Where the model sits relative to the footprint origin (default identity).</param>
     public static ComponentModel3D FromFile(string path, ModelPlacement placement = default)
     {
@@ -239,10 +242,25 @@ public sealed class ComponentModel3D
                 }
 
             case ".wrl":
-                // KiCad's default 3D model format. There is no VRML reader in EngrCAD, so the
-                // reference is recorded but not loaded — refused by name.
-                error = $"VRML ('{path}') has no reader in EngrCAD; the reference is recorded but not loaded.";
-                return null;
+                if (!System.IO.File.Exists(path))
+                {
+                    error = $"the 3D model file '{path}' does not exist.";
+                    return null;
+                }
+                try
+                {
+                    // KiCad's default 3D model format. VrmlReader reads the coordinates VERBATIM
+                    // (VRML is unitless); the KiCad convention — 1 VRML unit = 0.1 inch = 2.54 mm —
+                    // is applied HERE, at the consumer that knows a component model's .wrl is
+                    // KiCad's, so the body seats at millimetre scale beside its footprint. A
+                    // non-KiCad file wanting other units states it through the placement's Scale.
+                    return Shape.From(path).Scale(2.54, 2.54, 2.54);
+                }
+                catch (Exception ex)
+                {
+                    error = $"could not read the VRML model '{path}': {ex.Message}";
+                    return null;
+                }
 
             case ".igs":
             case ".iges":
@@ -269,6 +287,6 @@ public sealed class ComponentModel3D
     private static bool ExtensionSupported(string path)
     {
         string ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
-        return ext is ".stl" or ".obj" or ".off" or ".step" or ".stp";
+        return ext is ".stl" or ".obj" or ".off" or ".wrl" or ".step" or ".stp";
     }
 }

@@ -607,10 +607,14 @@ scene.AddTab("Board").Add(layout.ToAssembly());
 A **file-referenced** model is the other source — `ComponentModel3D.FromFile("models/R_0805.step",
 placement)` — and it travels as data (`{ path, offset?, rotate?, scale? }`, write-only-when-stated),
 a **byte-identical fixed point** through the schematic and board files. Loading is an explicit act
-(`model.TryLoad(out var error)` soft, `model.Load()` hard): a missing or unreadable file, a `.wrl`
-(VRML — KiCad's default 3D format, which has no reader) or an `.igs`/`.iges` is RECORDED but refused
+(`model.TryLoad(out var error)` soft, `model.Load()` hard): a missing or unreadable file or an
+`.igs`/`.iges` is RECORDED but refused
 **by name**, never a data-load crash — so a data-only model that only references a path is honest
-and complete for persistence and connectivity.
+and complete for persistence and connectivity. A `.wrl` (VRML — KiCad's default 3D model format)
+**loads** through the mesh tier's `VrmlReader` (the VRML97 `IndexedFaceSet` subset through the
+`Transform`/`DEF`/`USE` scene graph), with the KiCad unit convention — 1 VRML unit = 0.1 inch =
+2.54 mm — applied here, at the consumer that knows a component model's `.wrl` is KiCad's; the
+reader itself reads coordinates verbatim, since VRML is unitless.
 
 ## When the symbol and footprint disagree
 
@@ -683,6 +687,6 @@ paste divisions.
 Malformed input — a file that is not a KiCad symbol library or footprint, an unbalanced
 parenthesis, an unterminated string; or an Eagle file handed to the wrong reader, or whose XML is
 malformed — is refused **by name** (the `StepReader`/`IgesReader` rule). EDIF is later work (Eagle
-`.sch` schematics and `.brd` boards both import, and IPC-7351 footprint *generation* landed — see
-above); a VRML (`.wrl`)
-reader and IGES (`.igs`) 3D-model loading stay filed (both refused by name, the reference recorded).
+`.sch` schematics and `.brd` boards both import, and IPC-7351 footprint *generation* and the VRML
+(`.wrl`) reader landed — see above); IGES (`.igs`) 3D-model loading stays filed (refused by name,
+the reference recorded).

@@ -166,16 +166,39 @@ public class ComponentModelTests
     }
 
     [Fact]
-    public void VrmlModel_IsRecordedButRefusedByName()
+    public void VrmlModel_Loads_WithTheKiCadUnitConvention()
     {
-        var model = ComponentModel3D.FromFile("/models/R_0805.wrl");
-        Assert.True(model.IsFileReferenced);
-        Assert.Equal("/models/R_0805.wrl", model.FilePath);   // the path is RECORDED
-        Assert.False(model.CanLoad);
-        var shape = model.TryLoad(out var error);
-        Assert.Null(shape);
-        Assert.NotNull(error);
-        Assert.Contains("VRML", error);
+        // KiCad's default 3D format. VrmlReader reads coordinates VERBATIM (VRML is unitless);
+        // the KiCad convention — 1 VRML unit = 0.1 inch = 2.54 mm — is applied HERE, at the
+        // consumer that knows a component model's .wrl is KiCad's. So a unit cube in the file
+        // seats as a 2.54 mm body.
+        var path = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), $"engrcad-{Guid.NewGuid():N}.wrl");
+        System.IO.File.WriteAllText(path, """
+            #VRML V2.0 utf8
+            Shape {
+              geometry IndexedFaceSet {
+                coord Coordinate { point [ 0 0 0, 1 0 0, 1 1 0, 0 1 0, 0 0 1, 1 0 1, 1 1 1, 0 1 1 ] }
+                coordIndex [ 0 3 2 1 -1, 4 5 6 7 -1, 0 1 5 4 -1, 1 2 6 5 -1, 2 3 7 6 -1, 3 0 4 7 -1 ]
+              }
+            }
+            """);
+        try
+        {
+            var model = ComponentModel3D.FromFile(path);
+            Assert.True(model.CanLoad);
+            var shape = model.TryLoad(out var error);
+            Assert.NotNull(shape);
+            Assert.Null(error);
+            var bounds = shape!.Bounds();
+            Assert.Equal(2.54, bounds.Size.X, 9);
+            Assert.Equal(2.54, bounds.Size.Y, 9);
+            Assert.Equal(2.54, bounds.Size.Z, 9);
+        }
+        finally
+        {
+            System.IO.File.Delete(path);
+        }
     }
 
     [Fact]
@@ -190,13 +213,13 @@ public class ComponentModelTests
     [Fact]
     public void UnloadableModel_LeavesTheAssemblyWithoutA3dOccurrence_ButPadsArePlaced()
     {
-        var def = new PartDefinition("R_WRL", "R",
+        var def = new PartDefinition("R_IGS", "R",
             [new Pin("1", PinType.Passive), new Pin("2", PinType.Passive)],
             new Footprint("F", [Pad.Smd("1", new Vector2d(-1, 0), 1, 1), Pad.Smd("2", new Vector2d(1, 0), 1, 1)]),
-            model: ComponentModel3D.FromFile("/models/R_0805.wrl"));
+            model: ComponentModel3D.FromFile("/models/R_0805.igs"));
         var layout = OneComponentLayout(def, CopperSide.Top);
 
-        // No 3D occurrence for the .wrl part — only the board — but the pads are still placed.
+        // No 3D occurrence for the .igs part — only the board — but the pads are still placed.
         var instances = layout.ToAssembly().Flatten();
         Assert.Single(instances);
         Assert.Equal("board", instances[0].Part.Name);

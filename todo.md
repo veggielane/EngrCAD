@@ -2968,9 +2968,11 @@ from what was already understood rather than from scratch.
     ⚠ transcribed nominals; the zero-tolerance identity, monotonicity and the closed-gap refusal
     are the tests with teeth; the small-chip goal row, QFN/DFN, MELF, chip arrays and paste
     divisions stay filed by name).
-    **3D-model residuals, filed by name** (each RECORDED as a reference but not
-    loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
-    needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import
+    **The VRML (`.wrl`) reader landed** (`VrmlReader` in EngrCAD.Mesh — the VRML97 IndexedFaceSet
+    subset through the Transform/DEF/USE/Switch/LOD scene graph, coordinates verbatim with the
+    KiCad 2.54 unit convention applied at `ComponentModel3D`; `.wrl` now loads through
+    `MeshReader`/`Shape.From` too). **3D-model residuals, filed by name** (each RECORDED as a
+    reference but not loaded): **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import
     is a face soup needing `ShapeHealing`, the 3-step read→heal→`Shape.From`), and **Eagle 3D
     package models** (Eagle's `<packages3d>` reference a model by URN — materially more than the
     classic `.lbr` carries, alongside the newer Eagle/Fusion XML variants). **Gerber/Excellon are FABRICATION formats** — copper artwork

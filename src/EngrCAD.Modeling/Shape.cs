@@ -1326,7 +1326,7 @@ public abstract class Shape
     public static Shape From(Sdf sdf) => new SourceShape(sdf);
 
     /// <summary>
-    /// Imports a mesh file (.stl, .obj, or .off) as a mesh-backed shape — the
+    /// Imports a mesh file (.stl, .obj, .off, or .wrl) as a mesh-backed shape — the
     /// user-facing wrapper over <see cref="MeshReader.ReadAndRepair"/>: the file is
     /// read (dirty files weld rather than throw), run through the
     /// <see cref="MeshRepair"/> pipeline (crack welding, degenerate/duplicate removal,
