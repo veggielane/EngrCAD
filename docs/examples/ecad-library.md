@@ -167,8 +167,24 @@ graphics and `pin`s (a pin's `rot` gives its direction, `length` its length, `di
 `PinType`), and package `smd` pads and `pad` plated through-holes of the standard shapes
 (round/square/octagon/long) with their drill. A package `<hole>`/`<via>` (not a pad), a graphic
 kind outside the set, a multi-gate deviceset (a gate array), and a symbol pin with no `<connect>`
-(an unmapped pin) are each **ignored with a diagnostic or refused by name**; whole `.brd`/`.sch`
-board/schematic import is out of scope, refused at the root.
+(an unmapped pin) are each **ignored with a diagnostic or refused by name**; a `.brd`/`.sch` handed
+to the *library* reader is refused at the root (a `.sch` is signposted to `EagleSchematicReader`,
+below; a `.brd` board import stays filed).
+
+## Loading a whole Eagle schematic (`.sch`)
+
+`EagleSchematicReader.Read` imports a whole Eagle schematic, and it is the **structural opposite** of
+the KiCad one below: where a `.kicad_sch` only *draws* its netlist (connectivity reconstructed from
+wire geometry), an Eagle schematic **declares** it — every `<net>` lists its
+`<pinref part gate pin>` terminals — so the import is a *resolution*, not a reconstruction, and the
+wire geometry is never consulted. Parts resolve through the schematic's own embedded `<libraries>`
+(each the same content as a `.lbr`'s, read by the shared library machinery, definitions interned per
+device); a part whose device cannot be assembled — typically a *supply symbol*, whose deviceset has
+no connects — is reported and skipped, its nets surviving because an Eagle net carries its own name.
+A pinref names the **symbol pin**, resolved by *name* first (so `pin="VCC"` lands on pad 8, which a
+number-blind resolver cannot do); nets group by name across every sheet (Eagle nets are global to the
+schematic), a one-pin net becomes a stub, and unloadable parts / unknown pinrefs are reported, never
+thrown.
 
 ## Loading a whole schematic (`.kicad_sch`)
 
@@ -558,7 +574,8 @@ The reader maps the **common subset** and NAMES anything else rather than mis-re
   on demand.
 
 Malformed input — a file that is not a KiCad symbol library or footprint, an unbalanced
-parenthesis, an unterminated string; or an Eagle file that is not a library, or whose XML is
+parenthesis, an unterminated string; or an Eagle file handed to the wrong reader, or whose XML is
 malformed — is refused **by name** (the `StepReader`/`IgesReader` rule). IPC-7351 footprint
-*generation*, EDIF and whole `.brd`/`.sch` board/schematic import are later work; a VRML (`.wrl`)
+*generation*, EDIF and whole Eagle `.brd` *board* import are later work (Eagle `.sch` schematics
+import — see above); a VRML (`.wrl`)
 reader and IGES (`.igs`) 3D-model loading stay filed (both refused by name, the reference recorded).

@@ -164,13 +164,22 @@ public static class EagleLibraryReader
         {
             // A .brd carries <board>, a .sch carries <schematic>; neither is a component library.
             string kind = drawing.Element("board") is not null ? "a board (.brd)"
-                : drawing.Element("schematic") is not null ? "a schematic (.sch)"
-                : "not a component library";
+                : drawing.Element("schematic") is not null
+                    ? "a schematic (.sch) — use EagleSchematicReader for whole-schematic import"
+                    : "not a component library";
             throw new FormatException(
                 $"This Eagle file has no <library>: it is {kind}. Only Eagle component libraries "
-                + "(.lbr) are read; whole-board/schematic import is out of scope.");
+                + "(.lbr) are read here.");
         }
 
+        return ReadLibraryElement(library, "");
+    }
+
+    /// <summary>Parses one <c>&lt;library&gt;</c> ELEMENT into an <see cref="EagleLibrary"/> — the
+    /// shared core: a <c>.lbr</c>'s single library, or one of a schematic's embedded
+    /// <c>&lt;libraries&gt;</c> entries (which carry the SAME content under a <c>name</c>).</summary>
+    internal static EagleLibrary ReadLibraryElement(XElement library, string name)
+    {
         var diagnostics = new List<string>();
 
         var packages = new Dictionary<string, EaglePackage>(StringComparer.Ordinal);
@@ -202,10 +211,6 @@ public static class EagleLibraryReader
                 if (parsed is not null)
                     deviceSets.Add(parsed);
             }
-
-        // Eagle carries no library name on the element; use the description's first line if there
-        // is one, else the empty string — a name is not a property that round-trips here.
-        string name = "";
 
         return new EagleLibrary(name, symbols, packages, deviceSets, diagnostics);
     }

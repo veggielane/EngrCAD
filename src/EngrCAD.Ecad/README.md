@@ -523,8 +523,9 @@ body — and its `length` token gives its length). Covered: symbol `wire`/`recta
 `polygon`/`text` graphics and `pin`s; package `smd` pads and `pad` plated through-holes of the
 standard shapes (round/square/octagon/long). Ignored/refused BY NAME: a package `<hole>`/`<via>`
 (not a pad), a graphic kind outside the set, a **multi-gate deviceset** (a gate array, refused at
-`Load`), a symbol pin with no `<connect>` (an **unmapped pin**, refused), and whole `.brd`/`.sch`
-board/schematic import (refused at the root).
+`Load`), a symbol pin with no `<connect>` (an **unmapped pin**, refused), and a `.brd`/`.sch` handed
+to the LIBRARY reader (refused at the root — a `.sch` is signposted to `EagleSchematicReader`, which
+imports whole schematics; a `.brd` board import stays filed).
 
 **No additive change to `Symbol`/`Footprint`/`PartDefinition`/`PinIdentity` was needed** — the
 Eagle primitives all mapped onto the existing vocabulary, exactly as KiCad's did — so the KiCad
@@ -1236,8 +1237,13 @@ The richer
 interchange grows: **KiCad `.kicad_pcb` whole-board IMPORT has landed** (see Stage 2 above); what
 stays filed is EXPORT of our board to `.kicad_pcb` (a different, larger job), the KiCad `.kicad_sch`
 schematic, and STEP AP214 board assemblies. On the LIBRARY side, **KiCad `.kicad_sym`/`.kicad_mod`
-and Eagle `.lbr` both import**; what stays filed is **IPC-7351 footprint GENERATION** from a
-designation (a generator, not a file import), EDIF, whole Eagle `.brd`/`.sch` board/schematic import
+and Eagle `.lbr` both import**, and **whole Eagle `.sch` schematics import too**
+(`EagleSchematicReader` — an Eagle net DECLARES its `<pinref>` terminals, so the import is a
+resolution, not a geometric reconstruction; a pinref names the SYMBOL PIN, resolved by name first, so
+`pin="VCC"` lands on pad 8; parts resolve through the schematic's embedded libraries via the shared
+`ReadLibraryElement`, an unloadable part — typically a supply symbol — reported and skipped with its
+nets surviving on their own names); what stays filed is **IPC-7351 footprint GENERATION** from a
+designation (a generator, not a file import), EDIF, whole Eagle `.brd` BOARD import
 (a different, larger job), Eagle 3D package models, the newer Eagle/Fusion XML variants beyond the
 classic `.lbr`, and Eagle 3D package models (Eagle's `<packages3d>` reference a model by URN — materially more work than the classic `.lbr` carries). The **KiCad 3D model reference now imports** (the footprint's `(model …)` becomes the definition's `Model`); what stays filed on the model side is IGES (`.igs`/`.iges`) 3D-model loading (a face soup needing `ShapeHealing`) and a VRML (`.wrl`) reader — both refused by name, the reference recorded. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
 drilling the plate is a later refinement). The drawn schematic **sheet** (`SchematicSheet` →

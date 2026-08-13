@@ -7006,9 +7006,25 @@ symbol pin has only a name, so with no connect it has no number and cannot becom
 XML, a file whose root is not `<eagle>`, and a `.brd`/`.sch` rather than a `<library>`. **No additive
 change to `Symbol`/`Footprint`/`PartDefinition`/`PinIdentity` was needed** — the Eagle primitives all
 mapped onto the existing vocabulary (the same finding KiCad reported for `Footprint`/`Pad`) — so the
-KiCad path is BIT-IDENTICAL by construction, nothing shared having moved. Filed beside it: whole
-Eagle `.brd`/`.sch` import (a different, larger job), Eagle 3D package models, and the newer
-Eagle/Fusion XML variants beyond the classic `.lbr` schema. Docs `examples/ecad-library.md`.
+KiCad path is BIT-IDENTICAL by construction, nothing shared having moved. **Whole Eagle `.sch` import
+landed** (`EagleSchematicReader.Read`/`ReadFile` → `EagleSchematic`), and the structural finding is
+that it is the KiCad importer's OPPOSITE: where a `.kicad_sch` only DRAWS its netlist (connectivity
+reconstructed from wire geometry by union-find), an Eagle schematic DECLARES it — every `<net>` lists
+its `<pinref part gate pin>` terminals — so the import is a RESOLUTION, not a reconstruction, and the
+wire geometry is never consulted. Parts resolve through the schematic's own embedded `<libraries>`
+(each the same content as a `.lbr`'s, read by the shared `EagleLibraryReader.ReadLibraryElement` —
+the pin/pad/symbol unification verbatim, definitions interned per (library, deviceset, device)); a
+part whose device cannot be assembled (typically a SUPPLY symbol, whose deviceset has no connects) is
+reported and skipped, its nets surviving because an Eagle net carries its OWN name. **A pinref names
+the SYMBOL PIN, resolved by NAME first** — the discriminating case being `pin="VCC"` landing on pad
+"8" (the .lbr connect map made the pad our pin NUMBER and the symbol pin's name our pin NAME), which
+a number-blind resolver cannot do — falling back to the number for symbols whose names are the pads.
+Nets group by NAME across every sheet and segment (Eagle nets are global to the schematic); one
+resolvable pin is a `Stub`, a pin claimed twice keeps its first net with a report, and unloadable
+parts / unknown pinrefs / netless nets are all reported never thrown. Refused by name: malformed XML,
+a non-`<eagle>` root, and a `.lbr`/`.brd` handed here (with the `.lbr` reader signposting back — the
+two-way redirect pinned by test). Still filed: Eagle `.brd` BOARD import, Eagle 3D package models,
+and the newer Eagle/Fusion XML variants beyond the classic schema. Docs `examples/ecad-library.md`.
 
 ### Stage 2 — the board and its parts (`PcbBoard`, `PcbLayout`, IDF import)
 

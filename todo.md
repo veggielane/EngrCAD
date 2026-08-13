@@ -2949,8 +2949,14 @@ from what was already understood rather than from scratch.
     `AnchorOf`/`LeaveDirection` reading the pin anchor off the EFFECTIVE body (the alternate's pin anchors
     differ, so the wire follows the drawn body; a partial alternate lacking a pin falls back to the
     primary). Single-unit / primary-body drawing is byte-identical. So De Morgan is complete end to end
-    (carried, round-tripped, and drawable). Whole Eagle `.brd`/`.sch` import and IPC-7351 footprint
-    GENERATION remain.
+    (carried, round-tripped, and drawable). **Whole Eagle `.sch` import has LANDED**
+    (`EagleSchematicReader` — the KiCad importer's structural OPPOSITE: an Eagle net DECLARES its
+    `<pinref>` terminals, so the import is a resolution not a geometric reconstruction; parts resolve
+    through the schematic's embedded libraries via the shared `ReadLibraryElement`, a pinref resolves
+    by symbol-pin NAME first — `pin="VCC"` lands on pad 8, the discriminating case — an unloadable part
+    (typically a supply symbol) is reported and skipped with its nets surviving on their own names,
+    nets are global across sheets, and the `.lbr`/`.sch` readers signpost each other by name). Whole
+    Eagle `.brd` BOARD import and IPC-7351 footprint GENERATION remain.
     **3D-model residuals, filed by name** (each RECORDED as a reference but not
     loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
     needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import
