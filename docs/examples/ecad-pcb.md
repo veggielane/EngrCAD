@@ -690,9 +690,46 @@ if (!conn.Of("VCC").IsConnected || !conn.Of("GND").IsConnected || !drc.Ok || !(t
 The nets connect (VCC through the track, GND through the zone), the board is DRC-clean, and the
 copper round-trips to Gerber — an existing KiCad design ingested, verified and made manufacturable
 through one graph. **Not in v1** (filed by name): rule areas / keepout zones, differential-pair and
-length-tuning metadata, teardrops, custom pad primitives, the 3D-model references, and the KiCad
-`.kicad_sch` schematic (the component reader and this board reader cover the pieces; a whole
-schematic import is separate). Export of *our* board to `.kicad_pcb` is a different, larger job.
+length-tuning metadata, teardrops, custom pad primitives, and the 3D-model references (the whole
+`.kicad_sch` schematic imports separately — see the library page).
+
+### Exporting a board to KiCad
+
+`KiCadPcbWriter.Write` is the writer twin, and the reader is its **oracle**: it emits exactly the
+reader's covered subset (layers, nets, footprints with their pads on their nets, one `(segment)`
+per trace chord, vias, zones from pours, the `Edge.Cuts` outline), so the round trip through our
+own reader is a checkable claim — and `write → read → write` is a **byte fixed point**, earned by
+numbering nets in the reader's own pad-encounter order. A layout whose copper layers already carry
+KiCad names re-exports them verbatim; EngrCAD-native names map to `F.Cu`/`In…Cu`/`B.Cu`. Geometry
+the file cannot spell without lying — an embedded placement, a free mounting hole (KiCad's NPTH
+idiom would re-import as a *plated* pad) — refuses by name; what the format does not carry (a fab
+spec, mask/silk/paste settings, teardrops) is reported through the `diagnostics` overload, never
+silently dropped.
+
+```csharp run:ecad-kicad-export
+// A native EngrCAD board round-trips through its own KiCad export.
+var sch = new Schematic("export-demo");
+var r = sch.Add("R1", new PartDefinition("R", "R",
+    [new Pin("1", PinType.Passive), new Pin("2", PinType.Passive)],
+    new Footprint("R0805", [
+        Pad.Smd("1", new Vector2d(-1, 0), 1.2, 1.4),
+        Pad.Smd("2", new Vector2d(1, 0), 1.2, 1.4)])), "10k");
+var r2 = sch.Add("R2", r.Definition, "4k7");
+sch.Connect("SIG", r.Pin("2"), r2.Pin("1"));
+
+var board = new PcbBoard(
+    [new Vector2d(0, 0), new Vector2d(30, 0), new Vector2d(30, 20), new Vector2d(0, 20)], 1.6);
+var layout = new PcbLayout(sch, board);
+layout.Place("R1", 8, 10, 0);
+layout.Place("R2", 22, 10, 0);
+layout.AddTrace("SIG", "Top", 0.3, [new Vector2d(9, 10), new Vector2d(21, 10)]);
+
+string text = KiCadPcbWriter.Write(layout);
+var back = KiCadPcbReader.Read(text).Layout;
+Console.WriteLine($"round trip: {back.Placements.Count} placements, "
+    + $"SIG connected = {back.Connectivity().Of("SIG").IsConnected}");
+Console.WriteLine($"fixed point: {KiCadPcbWriter.Write(back) == text}");
+```
 
 ### Recovering the fabrication spec
 

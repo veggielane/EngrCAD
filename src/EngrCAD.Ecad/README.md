@@ -192,8 +192,22 @@ coordinates (including a 90°-rotated footprint); the imported copper **round-tr
 re-reads (the twin-decoder oracle); determinism; refusals by name; and the **component reader stays
 bit-identical** (a new reading path, nothing shared moved). Ignored/refused by name: keepout / rule
 areas, teardrops, dimension graphics, 3D-model references, a netless track/via/zone, an arc track
-(flattened, noted). Filed: the KiCad `.kicad_sch` schematic and EXPORT of our board to `.kicad_pcb`
-(a different, larger job). Docs: `examples/ecad-pcb.md`.
+(flattened, noted). Docs: `examples/ecad-pcb.md`.
+
+**EXPORT of our board to `.kicad_pcb` landed** (`KiCadPcbWriter.Write`/`WriteFile`), and **the
+reader is its oracle**: the writer emits exactly the reader's covered subset (layers, nets,
+footprints with their pads on their nets, one `(segment)` per trace chord, vias, zones from pours
+with their `(connect_pads (clearance))` and `(priority)`, the `Edge.Cuts` outline, the title
+block), so the round trip through our own reader is a checkable claim and `write → read → write`
+is a **byte fixed point** — earned by numbering nets in the reader's own PAD-ENCOUNTER order,
+since the reader reconstructs its schematic from the pads rather than from the net table. Layer
+names already ending `.Cu` re-export VERBATIM (import → export → import stability); EngrCAD-native
+names map positionally (F.Cu / In1.Cu… / B.Cu). It drove two ADDITIVE reader improvements: the
+footprint's **Value** property now imports, and a zone's `(connect_pads (clearance))` maps onto
+the pour's clearance. Refused BY NAME: an embedded / inner-seated placement, and free
+`PcbBoard.Holes` (the KiCad NPTH idiom would re-import as a PLATED pad — a silent copper change;
+filed). Reported, never dropped silently: a stated fab spec, mask/silk/paste settings, teardrops,
+NoConnect nets.
 
 ## Stage 3 — placement constraints
 
@@ -1260,9 +1274,10 @@ single surface has no drills / edges of its own. Docs: `examples/ecad-mid.md`.
 ## Not yet (later campaign stages)
 
 The richer
-interchange grows: **KiCad `.kicad_pcb` whole-board IMPORT has landed** (see Stage 2 above); what
-stays filed is EXPORT of our board to `.kicad_pcb` (a different, larger job), the KiCad `.kicad_sch`
-schematic, and STEP AP214 board assemblies. On the LIBRARY side, **KiCad `.kicad_sym`/`.kicad_mod`
+interchange grows: **KiCad `.kicad_pcb` whole-board IMPORT and EXPORT have both landed** (see
+Stage 2 above — the writer's oracle is the reader, `write → read → write` a byte fixed point), and
+the KiCad `.kicad_sch` schematic imports too (see the schematic sections); what stays filed is
+STEP AP214 board assemblies. On the LIBRARY side, **KiCad `.kicad_sym`/`.kicad_mod`
 and Eagle `.lbr` both import**, and **whole Eagle `.sch` schematics import too**
 (`EagleSchematicReader` — an Eagle net DECLARES its `<pinref>` terminals, so the import is a
 resolution, not a geometric reconstruction; a pinref names the SYMBOL PIN, resolved by name first, so

@@ -111,7 +111,7 @@ public static class KiCadPcbReader
         var schematic = new Schematic(boardName);
         foreach (var f in footprints)
             schematic.Add(f.RefDes, new PartDefinition(
-                f.DefName, f.Prefix, PinsOf(f.Footprint), f.Footprint, model: f.Model));
+                f.DefName, f.Prefix, PinsOf(f.Footprint), f.Footprint, model: f.Model), f.Value);
 
         // Resolve every numbered pad to a net (first assignment wins; a conflict is named).
         var pinNet = new Dictionary<(string Ref, string Number), string>();
@@ -526,7 +526,7 @@ public static class KiCadPcbReader
     private sealed record ImportedFootprint(
         string RefDes, string DefName, string Prefix, Footprint Footprint,
         CopperSide Side, double X, double Y, double Angle,
-        IReadOnlyList<(string Number, string Net)> PadNets, ComponentModel3D? Model);
+        IReadOnlyList<(string Number, string Net)> PadNets, ComponentModel3D? Model, string Value);
 
     private static ImportedFootprint ParseFootprint(
         SList fp, ref int index, HashSet<string> usedRefs, Dictionary<int, string> netTable, Action<string> note)
@@ -567,7 +567,8 @@ public static class KiCadPcbReader
         string prefix = PrefixOf(refDes);
         var model = KiCadFootprintReader.ReadModelReference(fp, refDes, note);
         return new ImportedFootprint(
-            refDes, defName, prefix, new Footprint(defName, pads), side, x, y, angle, padNets, model);
+            refDes, defName, prefix, new Footprint(defName, pads), side, x, y, angle, padNets, model,
+            ReadValue(fp));
     }
 
     private static string ReadReference(SList fp)
@@ -577,6 +578,19 @@ public static class KiCadPcbReader
                 return property.Arg(1) ?? "";
         foreach (var text in fp.Lists("fp_text"))
             if (string.Equals(text.Arg(0), "reference", StringComparison.Ordinal))
+                return text.Arg(1) ?? "";
+        return "";
+    }
+
+    /// <summary>The footprint's Value property (the component's stated value — "10k", "100n"),
+    /// read exactly as the reference is; empty when the file states none.</summary>
+    private static string ReadValue(SList fp)
+    {
+        foreach (var property in fp.Lists("property"))
+            if (string.Equals(property.Arg(0), "Value", StringComparison.Ordinal))
+                return property.Arg(1) ?? "";
+        foreach (var text in fp.Lists("fp_text"))
+            if (string.Equals(text.Arg(0), "value", StringComparison.Ordinal))
                 return text.Arg(1) ?? "";
         return "";
     }
@@ -786,9 +800,16 @@ public static class KiCadPcbReader
         if (zone.List("priority")?.Arg(0) is { } prio && int.TryParse(prio, out int p))
             priority = p;
 
+        // The zone's pad-connection clearance maps onto the pour's copper clearance (gated
+        // finite-and-positive, so a garbage value falls back to the pour default).
+        double clearance = 0.2;
+        if (zone.List("connect_pads")?.List("clearance")?.Numbers() is { Count: >= 1 } cl
+            && double.IsFinite(cl[0]) && cl[0] > 0)
+            clearance = cl[0];
+
         try
         {
-            layout.AddPour(new CopperPour(net, layer, outline, Priority: priority));
+            layout.AddPour(new CopperPour(net, layer, outline, Clearance: clearance, Priority: priority));
         }
         catch (ArgumentException ex)
         {

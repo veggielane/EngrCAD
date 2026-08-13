@@ -2881,9 +2881,12 @@ from what was already understood rather than from scratch.
     **KiCad `.kicad_pcb`** whole-board IMPORT (open, S-expression) has LANDED too
     (`KiCadPcbReader`/`KiCadPcb`, the board twin of the component reader: the pads' own `(net ...)`
     tags reconstruct the schematic, no additive board-type change needed, connectivity/DRC/Gerber
-    verified — see design.md §6d, docs `examples/ecad-pcb.md`), with EXPORT of our board to
-    `.kicad_pcb`, custom pad primitives, differential-pair/length-tuning metadata, and rule-area /
-    keepout zones still filed; then → **STEP
+    verified — see design.md §6d, docs `examples/ecad-pcb.md`); **EXPORT of our board to
+    `.kicad_pcb` has LANDED too** (`KiCadPcbWriter` — the reader IS the oracle: write→read→write
+    is a byte fixed point, earned by numbering nets in the reader's own pad-encounter order;
+    embedded/inner-seated placements and free mounting holes refused by name, un-carried state
+    reported), with custom pad primitives, differential-pair/length-tuning metadata, and
+    rule-area / keepout zones still filed; then → **STEP
     AP214 board assemblies** (the writer, reader and assemblies exist, so mostly a mapping)
     → IPC-2581 and ODB++ (richer, heavier; filed behind the first two). And for the
     connectivity side, a **KiCad schematic/netlist** import so a code-defined schematic can

@@ -7206,8 +7206,31 @@ from the file's mm coordinates including a 90°-rotated footprint; the imported 
 Gerber and re-reads (the twin-decoder oracle, by area and symmetric difference); determinism (two
 reads give byte-identical Gerber); the refusals by name; and the **component reader stays bit-identical
 by construction** (a new file, nothing shared moved), pinned by re-asserting a component-load fixture's
-exact geometry. Filed: EXPORT of our board to `.kicad_pcb` (a different, larger job), custom pad
+exact geometry. Filed: custom pad
 primitives and differential-pair / length-tuning metadata. Docs: `examples/ecad-pcb.md`.
+
+**EXPORT of our board to `.kicad_pcb` landed** (`KiCadPcbWriter.Write`/`WriteFile`), and the design
+is that the READER IS THE ORACLE: the writer emits exactly the reader's covered subset — the copper
+`(layers)` stack, the `(net)` table, each placement as a `(footprint)` with its pads on their nets,
+`(segment)` tracks one per trace chord, `(via)`s, `(zone)`s from pours (outline + net + priority +
+`(connect_pads (clearance))`; KiCad re-fills, exactly as EngrCAD re-derives a fill on import), the
+`Edge.Cuts` outline and the title block — so "the exported board is the same board" is asserted
+THROUGH the reader (net partition, poses, exact pad centres, copper counts, the DRC verdict) and
+**`write → read → write` is a BYTE fixed point**. Earning that fixed point forced the one
+non-obvious decision: the writer numbers nets in the reader's own PAD-ENCOUNTER order (placements
+in order, each footprint's pads in order, stragglers after), because the reader reconstructs its
+schematic from the pads rather than from the net table, so any other numbering breaks on the
+second write. It also drove two ADDITIVE reader improvements (a reader learning from its twin):
+the footprint's Value property now imports (a value would otherwise die on the first round trip),
+and a zone's `(connect_pads (clearance))` maps onto the pour's copper clearance. Layer names
+already ending `.Cu` export VERBATIM — import → export → import stability — while EngrCAD-native
+names map positionally (F.Cu / In1.Cu… / B.Cu); coordinates are written verbatim (the reader's
+no-Y-flip convention run the other way). Refused BY NAME (geometry the file cannot spell without
+lying): an embedded or inner-seated placement, and a board carrying free `PcbBoard.Holes` — the
+KiCad idiom for a mounting hole is an NPTH footprint pad, which this kernel would re-import as a
+PLATED pad, a silent copper change (filed). Reported, never silently dropped: a stated fabrication
+spec, mask/silk/paste settings, teardrops, and NoConnect nets (a KiCad pad with no net is what a
+no-connect pad means there).
 
 **The reader also populates the board's FABRICATION SPEC** (`PcbLayout.Fabrication`, a
 `PcbFabricationSpec`) from the `(setup (stackup ...))` block — BEST-EFFORT and WRITE-ONLY-WHEN-STATED,
