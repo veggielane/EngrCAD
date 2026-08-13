@@ -163,7 +163,8 @@ public static class EagleLibraryReader
         if (library is null)
         {
             // A .brd carries <board>, a .sch carries <schematic>; neither is a component library.
-            string kind = drawing.Element("board") is not null ? "a board (.brd)"
+            string kind = drawing.Element("board") is not null
+                ? "a board (.brd) — use EagleBoardReader for whole-board import"
                 : drawing.Element("schematic") is not null
                     ? "a schematic (.sch) — use EagleSchematicReader for whole-schematic import"
                     : "not a component library";

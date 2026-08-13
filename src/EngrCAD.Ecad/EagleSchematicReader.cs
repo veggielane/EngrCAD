@@ -72,7 +72,8 @@ public static class EagleSchematicReader
         var schematicElement = drawing.Element("schematic");
         if (schematicElement is null)
         {
-            string kind = drawing.Element("board") is not null ? "a board (.brd)"
+            string kind = drawing.Element("board") is not null
+                ? "a board (.brd) — use EagleBoardReader for whole-board import"
                 : drawing.Element("library") is not null
                     ? "a component library (.lbr) — use EagleLibraryReader for libraries"
                     : "not a schematic";

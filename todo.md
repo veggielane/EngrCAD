@@ -2955,8 +2955,15 @@ from what was already understood rather than from scratch.
     through the schematic's embedded libraries via the shared `ReadLibraryElement`, a pinref resolves
     by symbol-pin NAME first — `pin="VCC"` lands on pad 8, the discriminating case — an unloadable part
     (typically a supply symbol) is reported and skipped with its nets surviving on their own names,
-    nets are global across sheets, and the `.lbr`/`.sch` readers signpost each other by name). Whole
-    Eagle `.brd` BOARD import and IPC-7351 footprint GENERATION remain.
+    nets are global across sheets, and the `.lbr`/`.sch` readers signpost each other by name).
+    **Whole Eagle `.brd` import has LANDED too** (`EagleBoardReader` — the board twin: a signal
+    DECLARES its `<contactref>` terminals, so the synthesized schematic is the file's own intent
+    and the strong oracle is the CHECK against it, `PcbConnectivity` confirming the imported
+    traces/vias actually join the declared pads; outline chained from the layer-20 `<plain>` wires,
+    elements resolving packages through the shared `ReadLibraryElement`, `MR` rotations landing on
+    the bottom side, an absent via diameter taking Eagle's auto-restring rule, and airwires /
+    inner-layer wires / signal polygons reported and skipped by name — the covered copper subset is
+    the two-layer board). IPC-7351 footprint GENERATION remains.
     **3D-model residuals, filed by name** (each RECORDED as a reference but not
     loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
     needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import

@@ -168,8 +168,8 @@ graphics and `pin`s (a pin's `rot` gives its direction, `length` its length, `di
 (round/square/octagon/long) with their drill. A package `<hole>`/`<via>` (not a pad), a graphic
 kind outside the set, a multi-gate deviceset (a gate array), and a symbol pin with no `<connect>`
 (an unmapped pin) are each **ignored with a diagnostic or refused by name**; a `.brd`/`.sch` handed
-to the *library* reader is refused at the root (a `.sch` is signposted to `EagleSchematicReader`,
-below; a `.brd` board import stays filed).
+to the *library* reader is refused at the root, signposted to `EagleSchematicReader` /
+`EagleBoardReader` (both below) — a user holding any Eagle file is pointed at the right door.
 
 ## Loading a whole Eagle schematic (`.sch`)
 
@@ -185,6 +185,73 @@ A pinref names the **symbol pin**, resolved by *name* first (so `pin="VCC"` land
 number-blind resolver cannot do); nets group by name across every sheet (Eagle nets are global to the
 schematic), a one-pin net becomes a stub, and unloadable parts / unknown pinrefs are reported, never
 thrown.
+
+## Loading a whole Eagle board (`.brd`)
+
+`EagleBoardReader.Read` is the board twin. A `.brd`'s `<signal>`s **declare** their terminals too
+(`<contactref element pad>`), so the synthesized schematic is the file's own intent — and that is
+what makes the import *checkable* rather than hopeful: the imported copper (layer-1/16 wires as
+traces, `<via>`s as through-vias) must actually **join** the declared pads, which `Connectivity()`
+confirms. Elements reference *packages* directly (no deviceset in a board), resolved through the
+embedded `<libraries>` by the same shared machinery; the outline is the chained layer-20 `<plain>`
+wires; a rotation `MR…` is *mirrored*, landing the element on the **bottom** side; an absent via
+diameter takes Eagle's own auto-restring rule (pad = drill + 2·max(25% drill, 0.254 mm), a
+transcribed nominal). Airwires (layer 19 — the ratsnest, intent not copper), inner-layer wires,
+signal polygons and curved wires are reported and skipped or flattened **by name** — the covered
+copper subset is the two-layer board — and the thickness is assumed 1.6 mm with a note, since a
+`.brd` does not state it.
+
+```csharp run:ecad-eagle-board-import
+// A minimal Eagle board: two 0805 resistors (one rotated 90°) on a 30×20 outline, one declared
+// signal, and the top-layer wire that routes it. The import resolves the packages, chains the
+// outline, places the parts and carries the copper — then the connectivity CHECK proves the
+// routed wire really joins the declared pads (a wrong placement transform would break it).
+var brdText = """
+<?xml version="1.0"?>
+<eagle version="7.7.0">
+  <drawing>
+    <board>
+      <libraries>
+        <library name="passives">
+          <packages>
+            <package name="R0805">
+              <smd name="1" x="-0.9125" y="0" dx="1.025" dy="1.4" layer="1"/>
+              <smd name="2" x="0.9125" y="0" dx="1.025" dy="1.4" layer="1"/>
+            </package>
+          </packages>
+        </library>
+      </libraries>
+      <plain>
+        <wire x1="0" y1="0" x2="30" y2="0" width="0.1" layer="20"/>
+        <wire x1="30" y1="0" x2="30" y2="20" width="0.1" layer="20"/>
+        <wire x1="30" y1="20" x2="0" y2="20" width="0.1" layer="20"/>
+        <wire x1="0" y1="20" x2="0" y2="0" width="0.1" layer="20"/>
+      </plain>
+      <elements>
+        <element name="R1" library="passives" package="R0805" x="8" y="10"/>
+        <element name="R2" library="passives" package="R0805" x="22" y="10" rot="R90"/>
+      </elements>
+      <signals>
+        <signal name="SIG">
+          <contactref element="R1" pad="2"/>
+          <contactref element="R2" pad="1"/>
+          <wire x1="8.9125" y1="10" x2="22" y2="9.0875" width="0.3" layer="1"/>
+        </signal>
+      </signals>
+    </board>
+  </drawing>
+</eagle>
+""";
+
+var board = EagleBoardReader.Read(brdText);
+var layout = board.Layout;
+Console.WriteLine($"{layout.Placements.Count} placements, {layout.Traces.Count} trace, "
+    + $"{layout.Schematic.Nets.Count} net");
+// R2 is rotated 90°: its pad 1 lands at (22, 9.0875) — the file's own millimetres, exactly.
+var r2Pad1 = layout.PlacedPads().Single(p => p.Name == "R2.1");
+Console.WriteLine($"R2.1 at ({r2Pad1.World.X}, {r2Pad1.World.Y})");
+Console.WriteLine($"SIG joined by the imported copper: {layout.Connectivity().Of("SIG").IsConnected}");
+```
 
 ## Loading a whole schematic (`.kicad_sch`)
 
@@ -576,6 +643,6 @@ The reader maps the **common subset** and NAMES anything else rather than mis-re
 Malformed input — a file that is not a KiCad symbol library or footprint, an unbalanced
 parenthesis, an unterminated string; or an Eagle file handed to the wrong reader, or whose XML is
 malformed — is refused **by name** (the `StepReader`/`IgesReader` rule). IPC-7351 footprint
-*generation*, EDIF and whole Eagle `.brd` *board* import are later work (Eagle `.sch` schematics
+*generation* and EDIF are later work (Eagle `.sch` schematics and `.brd` boards both
 import — see above); a VRML (`.wrl`)
 reader and IGES (`.igs`) 3D-model loading stay filed (both refused by name, the reference recorded).

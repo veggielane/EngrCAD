@@ -7023,8 +7023,30 @@ Nets group by NAME across every sheet and segment (Eagle nets are global to the 
 resolvable pin is a `Stub`, a pin claimed twice keeps its first net with a report, and unloadable
 parts / unknown pinrefs / netless nets are all reported never thrown. Refused by name: malformed XML,
 a non-`<eagle>` root, and a `.lbr`/`.brd` handed here (with the `.lbr` reader signposting back — the
-two-way redirect pinned by test). Still filed: Eagle `.brd` BOARD import, Eagle 3D package models,
-and the newer Eagle/Fusion XML variants beyond the classic schema. Docs `examples/ecad-library.md`.
+two-way redirect pinned by test). **Whole Eagle `.brd` import landed too**
+(`EagleBoardReader.Read`/`ReadFile` → `EagleBoard`), the board twin of the same structural fact: a
+`<signal>` DECLARES its terminals (`<contactref element pad>`), so the synthesized schematic is the
+file's own intent — and that is what makes the import CHECKABLE rather than hopeful, the strong
+oracle being `PcbConnectivity` confirming that the imported copper (layer-1/16 wires as traces,
+`<via>`s as through-vias) actually JOINS the declared pads, which a wrong placement transform, a
+wrong side or a wrong via would each break. Elements reference PACKAGES directly (a board has no
+deviceset), resolved through the embedded `<libraries>` via the shared `ReadLibraryElement`, each
+(library, package) pair interned as one data-only `PartDefinition` whose pins are the pad names —
+the `KiCadPcbReader` pattern verbatim; the outline is the layer-20 `<plain>` wires CHAINED end to
+end (arriving in any order and either direction; an unclosed chain refuses by name, since a board
+needs a closed outline to build); a rotation `MR…` is MIRRORED and lands the element on the BOTTOM
+side with the angle carried as stated; an absent via diameter takes Eagle's own auto-restring rule
+(pad = drill + 2·max(25% drill, 0.254 mm), a ⚠ transcribed nominal). Airwires (layer 19 — the
+ratsnest, intent not copper, which the contactrefs already carry), inner-layer wires, signal
+polygons (pours) and curved wires are reported and skipped/flattened BY NAME — the covered copper
+subset is the two-layer board — the thickness is assumed 1.6 mm with a note (a `.brd` keeps it in
+the fab profile), and a signal with copper but no resolvable terminal has its copper skipped with a
+note rather than thrown three calls later by the layout's own unknown-net gate. The DRC on an
+imported board runs at the KiCad-import convention (acute floor 45°, since a thin trace entering a
+pad makes near-90° junctions). All three Eagle readers signpost each other at the root, so a user
+holding any Eagle file is pointed at the right door (pinned by test in every direction). Still
+filed: Eagle 3D package models and the newer Eagle/Fusion XML variants beyond the classic schema.
+Docs `examples/ecad-library.md`.
 
 ### Stage 2 — the board and its parts (`PcbBoard`, `PcbLayout`, IDF import)
 
