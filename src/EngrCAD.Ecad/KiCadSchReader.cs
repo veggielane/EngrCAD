@@ -80,10 +80,12 @@ public sealed record KiCadSchematic(
 /// subsumed by that equivalence. The bus model's job here is therefore (a) to declare the member
 /// NAMESPACE by expanding a <c>NAME[m..n]</c> vector or an anonymous <c>{A B …}</c> GROUP label into
 /// its members (so a bus label is NOT mistaken for a signal net), and (b) to validate that a ripped
-/// tap's label is a declared member. The bus's connecting role becomes load-bearing only ACROSS sheets
-/// (hierarchical
-/// bus pins), which stays out of scope. Buses are supported only in the single-sheet
-/// <see cref="Read"/>; the hierarchical entry points still refuse them by name.</para>
+/// tap's label is a declared member. ACROSS sheets the connecting role IS load-bearing, and it is
+/// supported: a BUS sheet pin (a sheet pin whose name is a bus) matched with the sub-sheet's
+/// hierarchical BUS label of the same name carries each MEMBER over the boundary — for each member M,
+/// the parent's local net named M joins the child's local net named M (only LOCAL labels need the
+/// stitch; global/power already span every sheet, and a member unused on one side stitches
+/// nothing).</para>
 ///
 /// <para><b>Hierarchical / multi-sheet designs</b> (a root that references sub-sheet FILES) are
 /// handled by <see cref="ReadProject(string)"/> / <see cref="ReadProjectFrom"/>, which flatten the
@@ -94,10 +96,9 @@ public sealed record KiCadSchematic(
 ///
 /// <para><b>Refused BY NAME</b>: a NESTED bus group (<c>{A {B C}}</c>) and a malformed bus range
 /// (<c>DATA[]</c>, a non-integer bound) — while bus VECTORS (<c>NAME[m..n]</c>), anonymous GROUPS
-/// (<c>{A B …}</c>) and named ALIASES (a <c>(bus_alias …)</c> definition) are all supported; buses in the
-/// HIERARCHICAL entry points
-/// (out of scope there); and, in <see cref="Read"/> only, hierarchical sheets (<c>sheet</c>
-/// subsheets, <c>hierarchical_label</c>). A netless wire, an instance referencing an unknown symbol,
+/// (<c>{A B …}</c>) and named ALIASES (a <c>(bus_alias …)</c> definition) are all supported, in the
+/// single-sheet AND the hierarchical entry points; and, in <see cref="Read"/> only, hierarchical
+/// sheets (<c>sheet</c> subsheets, <c>hierarchical_label</c>). A netless wire, an instance referencing an unknown symbol,
 /// a dangling pin, or a dangling / non-member bus entry is REPORTED (a diagnostic), not thrown
 /// (the readers-never-throw culture); a hierarchical project's missing/unreadable sub-sheet file is
 /// reported too, and a RECURSIVE sheet reference is refused by name. A non-<c>(kicad_sch …)</c> root
@@ -260,8 +261,9 @@ public static class KiCadSchReader
     /// <param name="rootPath">The root <c>.kicad_sch</c> file.</param>
     /// <returns>The flattened whole-project schematic; <see cref="KiCadSchematic.SheetName"/> is the
     /// ROOT sheet's title.</returns>
-    /// <exception cref="FormatException">The root is not a KiCad schematic, a sheet uses buses,
-    /// or the hierarchy is RECURSIVE (a sheet including itself) — refused by name. A missing or
+    /// <exception cref="FormatException">The root is not a KiCad schematic, or the hierarchy is
+    /// RECURSIVE (a sheet including itself) — refused by name. Buses are supported (a BUS sheet pin
+    /// carries its members across the boundary). A missing or
     /// unreadable sub-sheet file is REPORTED in <see cref="KiCadSchematic.Diagnostics"/>, not thrown
     /// (the readers-never-throw-on-dirty culture).</exception>
     public static KiCadSchematic ReadProject(string rootPath)
@@ -287,7 +289,7 @@ public static class KiCadSchReader
     /// <param name="rootSheetFile">The map key of the ROOT sheet.</param>
     /// <param name="sheetsByFile">Every sheet file's text keyed by its Sheetfile name.</param>
     /// <exception cref="FormatException">The root key is not in the map, the root is not a KiCad
-    /// schematic, a sheet uses buses, or the hierarchy is recursive — refused by name.</exception>
+    /// schematic, or the hierarchy is recursive — refused by name.</exception>
     public static KiCadSchematic ReadProjectFrom(
         string rootSheetFile, IReadOnlyDictionary<string, string> sheetsByFile)
     {
@@ -370,7 +372,7 @@ public static class KiCadSchReader
         // Buses: the signal union-find above already reconstructed every ripped member net from its
         // own local label (a member DATAi = its label DATAi, same-named labels one net). The bus
         // model only VALIDATES the taps and reports dangling / non-member bus entries.
-        ValidateBuses(graph, namesByRoot, wires, busSegments, busEntries, busLabels, note);
+        ValidateBuses(graph, 0, namesByRoot, wires, busSegments, busEntries, busLabels, note);
 
         var noConnectKeys = noConnects.Select(Graph.Key).ToHashSet();
 
@@ -506,12 +508,8 @@ public static class KiCadSchReader
     /// it declares (<c>DATA[0..7]</c> → DATA0..DATA7).</summary>
     private readonly record struct BusLabel(Vector2d At, string Raw, IReadOnlyList<string> Members);
 
-    /// <summary>Whether a label names a bus — a bus GROUP or a bus VECTOR. The hierarchical path uses
-    /// this to refuse buses by name (buses across sheets stay out of scope).</summary>
-    private static bool LooksLikeBus(string? name) => IsBusGroup(name) || IsBusVector(name);
-
     /// <summary>Whether a label is an ANONYMOUS bus GROUP — the <c>{A B …}</c> brace form (supported in
-    /// the single-sheet <see cref="Read"/> via <see cref="ExpandBusGroup"/>; still refused ACROSS sheets).
+    /// the single-sheet <see cref="Read"/> AND the hierarchical path via <see cref="ExpandBusGroup"/>).
     /// A named bus ALIAS is a BARE name, so it is not caught here — it is resolved by the
     /// <see cref="BuildAliasTable"/> table instead.</summary>
     private static bool IsBusGroup(string? name) =>
@@ -668,9 +666,12 @@ public static class KiCadSchReader
     /// <summary>Validates the buses against the reconstructed signal nets and reports what is wrong,
     /// never throwing (the readers-never-throw-on-dirty culture). The signal nets are already built
     /// — this only checks that each ripped tap's own local label is a declared member of the bus it
-    /// taps, and that no bus entry is dangling.</summary>
+    /// taps, and that no bus entry is dangling. <paramref name="instance"/> is the sheet instance the
+    /// geometry lives in (0 on the flat single-sheet path, which is what keeps it bit-identical —
+    /// the flat <see cref="Graph.Intern(Vector2d)"/> IS instance 0's).</summary>
     private static void ValidateBuses(
         Graph graph,
+        int instance,
         Dictionary<int, List<LabelPoint>> namesByRoot,
         List<(Vector2d A, Vector2d B)> wires,
         List<(Vector2d A, Vector2d B)> busSegments,
@@ -738,7 +739,7 @@ public static class KiCadSchReader
                 continue;
             }
 
-            int root = graph.Find(graph.Intern(wire.Value.A));
+            int root = graph.Find(graph.Intern(instance, wire.Value.A));
             var netLabels = namesByRoot.GetValueOrDefault(root)?
                 .Select(l => l.Name).Distinct(StringComparer.Ordinal).ToList() ?? [];
             if (netLabels.Count == 0)
@@ -795,6 +796,15 @@ public static class KiCadSchReader
         public List<Vector2d> Junctions { get; } = [];
         public List<Vector2d> NoConnects { get; } = [];
         public List<(Vector2d At, string Name)> HierLabels { get; } = [];
+
+        // ---- buses (the per-sheet bundle model, the flat path's) plus the hierarchical extras: a
+        // hier BUS label is a bundle PORT (not a signal port), and the sheet's own alias table is what
+        // resolves a bare alias name on a label or a sheet pin.
+        public List<(Vector2d A, Vector2d B)> BusSegments { get; } = [];
+        public List<(Vector2d A, Vector2d B)> BusEntries { get; } = [];
+        public List<BusLabel> BusLabels { get; } = [];
+        public List<(Vector2d At, string Raw)> HierBusLabels { get; } = [];
+        public required IReadOnlyDictionary<string, IReadOnlyList<string>> Aliases { get; init; }
     }
 
     /// <summary>Builds a flattened schematic from a root sheet plus a resolver for its sub-sheet
@@ -879,8 +889,9 @@ public static class KiCadSchReader
         return new KiCadSchematic(schematic, rootName, diagnostics);
     }
 
-    /// <summary>Parses one sheet file, validating its head is <c>kicad_sch</c> and refusing buses
-    /// (but NOT sheets/hierarchical_labels, which are the whole point here).</summary>
+    /// <summary>Parses one sheet file, validating its head is <c>kicad_sch</c>. Buses are supported
+    /// here too (per-sheet bundles + member stitching across sheet boundaries), so nothing else is
+    /// refused up front — a malformed bus range still refuses by name when its label is expanded.</summary>
     private static SList ParseSheet(string text, string sourceName)
     {
         var root = SExpr.Parse(text);
@@ -888,24 +899,7 @@ public static class KiCadSchReader
             throw new FormatException(
                 $"Not a KiCad schematic: the sheet '{sourceName}' has top S-expression "
                 + $"'{root.Head ?? "?"}', expected 'kicad_sch'.");
-        RefuseBuses(root, sourceName);
         return root;
-    }
-
-    /// <summary>Refuses buses in one sheet (the one out-of-scope construct that still applies to the
-    /// hierarchical path).</summary>
-    private static void RefuseBuses(SList sheet, string sourceName)
-    {
-        if (sheet.List("bus") is not null || sheet.List("bus_entry") is not null)
-            throw new FormatException(
-                $"The KiCad sheet '{sourceName}' uses buses ('bus' / 'bus_entry'), which are out of "
-                + "scope. Route the signals as individual wires, or file bus import as a follow-up.");
-        foreach (var label in sheet.Lists("label")
-            .Concat(sheet.Lists("global_label")).Concat(sheet.Lists("hierarchical_label")))
-            if (LooksLikeBus(label.Arg(0)))
-                throw new FormatException(
-                    $"The KiCad sheet '{sourceName}' uses a bus label ('{label.Arg(0)}'), which is "
-                    + "out of scope. Name the signals individually, or file bus import as a follow-up.");
     }
 
     /// <summary>The value of a <c>(property "key" "value" …)</c> on a <c>(sheet …)</c> node.</summary>
@@ -953,7 +947,7 @@ public static class KiCadSchReader
         Dictionary<string, PartDefinition> partDefs, Dictionary<string, Component> componentsByRef,
         Dictionary<string, HashSet<int>> placedUnits, int[] generated, Action<string> note)
     {
-        var data = new SheetData { Instance = instance };
+        var data = new SheetData { Instance = instance, Aliases = BuildAliasTable(content) };
         var libSymbols = ReadLibSymbols(content, note);
         string prefix = path.Length == 0 ? "" : path + "/";
 
@@ -1005,20 +999,72 @@ public static class KiCadSchReader
         foreach (var junction in content.Lists("junction"))
             if (TryAt(junction, out var at))
                 data.Junctions.Add(at);
+        // A label whose name is a BUS (a vector, an anonymous group, or a name in this sheet's alias
+        // table) declares a member namespace — it is NOT a signal-net point (the flat path's rule).
         foreach (var label in content.Lists("label"))
             if (TryLabel(label, out var at, out var name))
-                data.LabelPoints.Add(new LabelPoint(at, name, LabelPriority.Local));
+            {
+                if (TryExpandBus(name, data.Aliases, out var members))
+                    data.BusLabels.Add(new BusLabel(at, name, members));
+                else
+                    data.LabelPoints.Add(new LabelPoint(at, name, LabelPriority.Local));
+            }
         foreach (var label in content.Lists("global_label"))
             if (TryLabel(label, out var at, out var name))
-                data.LabelPoints.Add(new LabelPoint(at, name, LabelPriority.Global));
+            {
+                if (TryExpandBus(name, data.Aliases, out var members))
+                    data.BusLabels.Add(new BusLabel(at, name, members));
+                else
+                    data.LabelPoints.Add(new LabelPoint(at, name, LabelPriority.Global));
+            }
+        // A hierarchical label whose name is a BUS is a bundle PORT — matched with the parent's bus
+        // sheet pin by name and carrying MEMBERS across the boundary, never a signal port point.
         foreach (var hier in content.Lists("hierarchical_label"))
             if (TryLabel(hier, out var at, out var name))
-                data.HierLabels.Add((at, name));
+            {
+                if (TryExpandBus(name, data.Aliases, out _))
+                    data.HierBusLabels.Add((at, name));
+                else
+                    data.HierLabels.Add((at, name));
+            }
         foreach (var nc in content.Lists("no_connect"))
             if (TryAt(nc, out var at))
                 data.NoConnects.Add(at);
 
+        // The bus geometry (bundles + rips), for the per-sheet tap validation.
+        foreach (var bus in content.Lists("bus"))
+            ReadBusSegments(bus, data.BusSegments);
+        foreach (var entry in content.Lists("bus_entry"))
+            if (TryBusEntry(entry, out var ea, out var eb))
+                data.BusEntries.Add((ea, eb));
+
         return data;
+    }
+
+    /// <summary>Whether a label / sheet-pin name is a BUS, and its expanded members when it is — a
+    /// vector (<c>DATA[0..7]</c>), an anonymous group (<c>{A B …}</c>), or a bare name found in the
+    /// sheet's <paramref name="aliases"/> table.</summary>
+    private static bool TryExpandBus(
+        string name, IReadOnlyDictionary<string, IReadOnlyList<string>> aliases,
+        out IReadOnlyList<string> members)
+    {
+        if (IsBusGroup(name))
+        {
+            members = ExpandBusGroup(name);
+            return true;
+        }
+        if (IsBusVector(name))
+        {
+            members = ExpandBusVector(name);
+            return true;
+        }
+        if (aliases.TryGetValue(name, out var aliasMembers))
+        {
+            members = aliasMembers;
+            return true;
+        }
+        members = [];
+        return false;
     }
 
     /// <summary>The global union-find over every sheet instance's connection points, plus the
@@ -1033,6 +1079,32 @@ public static class KiCadSchReader
         var graph = new Graph();
         var byInstance = data.ToDictionary(d => d.Instance);
 
+        // Split each child's sheet-pins into SIGNAL ports and BUS ports. A bus port's name is a
+        // vector / group, or a bare name in the PARENT's alias table (the pin is drawn on the parent)
+        // falling back to the CHILD's (the hier label it matches lives there) — and it carries its
+        // MEMBERS across the boundary rather than being a connection point itself, so it must stay
+        // out of the signal machinery entirely (its position sits on the parent's BUS wire, which the
+        // signal graph never contains).
+        var signalPorts = new Dictionary<int, List<(string Name, Vector2d At)>>();
+        var busPorts = new Dictionary<int, List<(string Name, IReadOnlyList<string> Members)>>();
+        foreach (var inst in instances)
+        {
+            var signals = signalPorts[inst.Id] = [];
+            var buses = busPorts[inst.Id] = [];
+            if (inst.ParentId < 0)
+                continue;
+            var parentAliases = byInstance[inst.ParentId].Aliases;
+            var childAliases = byInstance[inst.Id].Aliases;
+            foreach (var port in inst.Ports)
+            {
+                if (TryExpandBus(port.Name, parentAliases, out var members)
+                    || TryExpandBus(port.Name, childAliases, out members))
+                    buses.Add((port.Name, members));
+                else
+                    signals.Add(port);
+            }
+        }
+
         // Phase 1: intern every connection point in its own instance space.
         foreach (var sd in data)
         {
@@ -1043,10 +1115,10 @@ public static class KiCadSchReader
             foreach (var (at, _) in sd.HierLabels) graph.Intern(sd.Instance, at);
             foreach (var nc in sd.NoConnects) graph.Intern(sd.Instance, nc);
         }
-        // A sheet-pin lives in its PARENT instance's geometry.
+        // A (signal) sheet-pin lives in its PARENT instance's geometry.
         foreach (var inst in instances)
             if (inst.ParentId >= 0)
-                foreach (var port in inst.Ports)
+                foreach (var port in signalPorts[inst.Id])
                     graph.Intern(inst.ParentId, port.At);
 
         // Phase 2a: a wire joins its endpoints.
@@ -1054,12 +1126,12 @@ public static class KiCadSchReader
             foreach (var (a, b) in sd.Wires)
                 graph.Union(graph.Intern(sd.Instance, a), graph.Intern(sd.Instance, b));
 
-        // Phase 2b: a junction / pin / label / hier-label / sheet-pin lying ON a wire joins it.
+        // Phase 2b: a junction / pin / label / hier-label / (signal) sheet-pin lying ON a wire joins it.
         foreach (var sd in data)
         {
             var childPorts = instances
                 .Where(i => i.ParentId == sd.Instance)
-                .SelectMany(i => i.Ports.Select(p => p.At));
+                .SelectMany(i => signalPorts[i.Id].Select(p => p.At));
             var attach = sd.Junctions
                 .Concat(sd.PinPoints.Select(p => p.Anchor))
                 .Concat(sd.LabelPoints.Select(l => l.At))
@@ -1097,14 +1169,14 @@ public static class KiCadSchReader
             foreach (var group in sd.HierLabels.GroupBy(h => h.Name, StringComparer.Ordinal))
                 UnionAll(graph, sd.Instance, group.Select(h => h.At));
 
-        // Phase 2f: STITCH — a parent sheet-pin joins the sub-sheet's hierarchical_label of the same
-        // name (name-matched, scoped to THIS child instance).
+        // Phase 2f: STITCH — a parent (signal) sheet-pin joins the sub-sheet's hierarchical_label of
+        // the same name (name-matched, scoped to THIS child instance).
         foreach (var child in instances)
         {
             if (child.ParentId < 0) continue;
             var childHier = byInstance[child.Id].HierLabels;
-            var portNames = child.Ports.Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
-            foreach (var port in child.Ports)
+            var portNames = signalPorts[child.Id].Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+            foreach (var port in signalPorts[child.Id])
             {
                 var matches = childHier
                     .Where(h => string.Equals(h.Name, port.Name, StringComparison.Ordinal)).ToList();
@@ -1125,7 +1197,68 @@ public static class KiCadSchReader
                         + "sheet pin on its parent (a dangling hierarchical port).");
         }
 
-        ResolveHierNets(schematic, instances, data, graph, note);
+        // Phase 2g: STITCH the BUSES — a parent BUS sheet-pin carries each of its MEMBERS across the
+        // boundary. The bundle itself is drawing sugar (the flat path's finding), so the stitch is
+        // member-by-member: for each member M, the parent's local net named M joins the child's local
+        // net named M. Only LOCAL labels need this (global/power already span every sheet), and a
+        // member neither side uses simply stitches nothing (a bus may carry more members than a sheet
+        // taps — normal, not a defect).
+        foreach (var child in instances)
+        {
+            if (child.ParentId < 0 || busPorts[child.Id].Count == 0) continue;
+            var parentData = byInstance[child.ParentId];
+            var childData = byInstance[child.Id];
+            var hierBusNames = childData.HierBusLabels
+                .Select(h => h.Raw).ToHashSet(StringComparer.Ordinal);
+
+            foreach (var (portName, members) in busPorts[child.Id])
+            {
+                if (!hierBusNames.Contains(portName))
+                {
+                    note($"Bus sheet pin '{portName}' on subsheet '{child.Path}' has no matching "
+                        + "hierarchical bus label inside it; the bundle connects nothing across the "
+                        + "sheet boundary.");
+                    continue;
+                }
+                foreach (var member in members)
+                {
+                    var parentPoints = parentData.LabelPoints
+                        .Where(l => l.Priority == LabelPriority.Local
+                            && string.Equals(l.Name, member, StringComparison.Ordinal))
+                        .Select(l => l.At).ToList();
+                    var childPoints = childData.LabelPoints
+                        .Where(l => l.Priority == LabelPriority.Local
+                            && string.Equals(l.Name, member, StringComparison.Ordinal))
+                        .Select(l => l.At).ToList();
+                    if (parentPoints.Count == 0 || childPoints.Count == 0)
+                        continue;   // the member is unused on one side — nothing to carry
+                    int parentNode = graph.Intern(child.ParentId, parentPoints[0]);
+                    foreach (var p in childPoints)
+                        graph.Union(parentNode, graph.Intern(child.Id, p));
+                }
+            }
+            var busPortNames = busPorts[child.Id].Select(b => b.Name).ToHashSet(StringComparer.Ordinal);
+            foreach (var (_, raw) in childData.HierBusLabels)
+                if (!busPortNames.Contains(raw))
+                    note($"Hierarchical bus label '{raw}' in subsheet '{child.Path}' has no matching "
+                        + "bus sheet pin on its parent (a dangling bus port).");
+        }
+
+        // Per-sheet bus validation (the flat path's rule, run in each instance's own space): every
+        // ripped tap's label must be a member of the bundle it taps, dangling entries reported.
+        var namesByRoot = new Dictionary<int, List<LabelPoint>>();
+        foreach (var sd in data)
+            foreach (var lp in sd.LabelPoints)
+            {
+                int root = graph.Find(graph.Intern(sd.Instance, lp.At));
+                (namesByRoot.TryGetValue(root, out var list) ? list : namesByRoot[root] = []).Add(lp);
+            }
+        foreach (var sd in data)
+            ValidateBuses(
+                graph, sd.Instance, namesByRoot, sd.Wires, sd.BusSegments, sd.BusEntries,
+                sd.BusLabels, note);
+
+        ResolveHierNets(schematic, instances, data, graph, signalPorts, note);
     }
 
     private static void UnionAll(Graph graph, int instance, IEnumerable<Vector2d> points)
@@ -1142,6 +1275,7 @@ public static class KiCadSchReader
     /// generalized to instance-tagged points.</summary>
     private static void ResolveHierNets(
         Schematic schematic, List<SheetInstance> instances, List<SheetData> data, Graph graph,
+        Dictionary<int, List<(string Name, Vector2d At)>> signalPorts,
         Action<string> note)
     {
         var pathOf = instances.ToDictionary(i => i.Id, i => i.Path);
@@ -1176,7 +1310,7 @@ public static class KiCadSchReader
         var portByRoot = new Dictionary<int, List<string>>();
         foreach (var inst in instances)
             if (inst.ParentId >= 0)
-                foreach (var port in inst.Ports)
+                foreach (var port in signalPorts[inst.Id])   // a BUS port names no single net
                 {
                     int root = graph.Find(graph.Intern(inst.ParentId, port.At));
                     (portByRoot.TryGetValue(root, out var l) ? l : portByRoot[root] = []).Add(port.Name);

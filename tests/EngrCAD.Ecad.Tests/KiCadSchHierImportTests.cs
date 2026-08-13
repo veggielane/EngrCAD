@@ -117,14 +117,51 @@ public sealed class KiCadSchHierImportTests
         Assert.Contains("self.kicad_sch", ex.Message);
     }
 
+    // ==== 5b. buses ACROSS sheets ============================================
+
     [Fact]
-    public void ABusInAHierarchicalProject_IsRefusedByName()
+    public void ABusSheetPin_CarriesEachMemberAcrossTheSheetBoundary()
     {
-        // The single-sheet Read supports buses, but buses ACROSS sheets (hierarchical bus pins) are
-        // out of scope, so the hierarchical entry points refuse a bus by name.
-        var ex = Assert.Throws<FormatException>(() => KiCadSchReader.ReadProjectFrom(
-            KiCadSchHierFixtures.RootWithBus.Root, KiCadSchHierFixtures.RootWithBus.Map));
-        Assert.Contains("bus", ex.Message);
+        var read = KiCadSchReader.ReadProjectFrom(
+            KiCadSchHierFixtures.BusStitch.Root, KiCadSchHierFixtures.BusStitch.Map);
+        var sch = read.Schematic;
+
+        // Member-by-member: DATA0 spans the boundary and DATA1 spans the boundary…
+        Assert.True(SameNet(sch, ("RA0", "1"), ("bus/RB0", "1")), "DATA0 must span the boundary");
+        Assert.True(SameNet(sch, ("RA1", "1"), ("bus/RB1", "1")), "DATA1 must span the boundary");
+        // …and the two members stay DISTINCT nets (the stitch is per member, never a bundle short).
+        Assert.False(SameNet(sch, ("RA0", "1"), ("RA1", "1")), "members must not short together");
+
+        Assert.Equal("DATA0", NetOf(sch, "RA0", "1")!.Name);
+        Assert.Equal("DATA1", NetOf(sch, "RA1", "1")!.Name);
+        Assert.DoesNotContain(read.Diagnostics, d => d.Contains("not a member"));
+        Assert.True(sch.Check().Ok, sch.Check().ToString());
+    }
+
+    [Fact]
+    public void RenamingTheChildBusPort_SplitsTheMembers_AndReportsBothWays()
+    {
+        // A bundle stitcher that ignored the port NAME would pass the test above and fail this.
+        var read = KiCadSchReader.ReadProjectFrom(
+            KiCadSchHierFixtures.BusStitchBroken.Root, KiCadSchHierFixtures.BusStitchBroken.Map);
+        var broken = read.Schematic;
+
+        Assert.False(SameNet(broken, ("RA0", "1"), ("bus/RB0", "1")), "renaming must split the members");
+        Assert.Contains(read.Diagnostics, d =>
+            d.Contains("Bus sheet pin 'DATA[0..1]'") && d.Contains("no matching hierarchical bus label"));
+        Assert.Contains(read.Diagnostics, d =>
+            d.Contains("ADDR[0..1]") && d.Contains("dangling bus port"));
+    }
+
+    [Fact]
+    public void AHierarchicalSheetWithABus_NowImports()
+    {
+        // A bus in a hierarchical project used to be refused by name; per-sheet buses now import.
+        // The fixture is just a bus + its vector label, so it flattens to an empty, clean schematic.
+        var read = KiCadSchReader.ReadProjectFrom(
+            KiCadSchHierFixtures.RootWithBus.Root, KiCadSchHierFixtures.RootWithBus.Map);
+        Assert.Empty(read.Schematic.Components);
+        Assert.True(read.Schematic.Check().Ok, read.Schematic.Check().ToString());
     }
 
     [Fact]

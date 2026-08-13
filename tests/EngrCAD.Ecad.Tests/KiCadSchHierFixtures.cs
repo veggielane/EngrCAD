@@ -190,9 +190,9 @@ internal static class KiCadSchHierFixtures
               """),
         });
 
-    // A hierarchical project whose sheet carries a BUS. Single-sheet Read supports buses, but buses
-    // ACROSS sheets (hierarchical bus pins) stay out of scope, so the hierarchical entry points
-    // refuse a bus by name.
+    // A hierarchical project whose sheet carries a BUS — used to be refused, now imports (per-sheet
+    // buses are supported in the hierarchical path too). Just a bus + its label, so it flattens to
+    // an empty, clean schematic.
     internal static readonly (string Root, IReadOnlyDictionary<string, string> Map) RootWithBus =
         ("root.kicad_sch", new Dictionary<string, string>
         {
@@ -200,5 +200,55 @@ internal static class KiCadSchHierFixtures
               (bus (pts (xy 90 40) (xy 160 40)))
               (label "DATA[0..3]" (at 95 40 0) (effects (font (size 1.27 1.27))))
               """),
+        });
+
+    // ==== 5. buses ACROSS sheets (a BUS sheet pin carries its members) =========
+    // Root: bus DATA[0..1] with taps RA0 → DATA0, RA1 → DATA1, and a BUS sheet pin "DATA[0..1]" on
+    // the subsheet node. Sub: hierarchical bus label "DATA[0..1]" on its own bus, taps RB0 → DATA0,
+    // RB1 → DATA1. Stitched member-by-member: DATA0 = { RA0.1, bus/RB0.1 }, DATA1 = { RA1.1,
+    // bus/RB1.1 } — and the two members stay DISTINCT (the stitch is per member, never a bundle
+    // short). Each tap: pin 1 at (x, 56.19) wired to (x, 42.54), a bus entry up to the bus at
+    // (x, 40), the member label on the ripped wire at (x, 49); pin 2 no_connect.
+    private static string BusTap(string refDes, int x, string member) => $"""
+      (symbol (lib_id "Device:R") (at {x} 60 0)
+        (property "Reference" "{refDes}" (at {x + 3} 60 0)) (property "Value" "R" (at {x + 3} 62 0)))
+      (wire (pts (xy {x} 56.19) (xy {x} 42.54)))
+      (bus_entry (at {x} 42.54) (size 0 -2.54))
+      (label "{member}" (at {x} 49 0) (effects (font (size 1.27 1.27))))
+      (no_connect (at {x} 63.81))
+      """;
+
+    private static string BusRootBody(string portName) => $"""
+      (bus (pts (xy 90 40) (xy 160 40)))
+      (label "DATA[0..1]" (at 95 40 0) (effects (font (size 1.27 1.27))))
+      {BusTap("RA0", 100, "DATA0")}
+      {BusTap("RA1", 110, "DATA1")}
+      (sheet (at 130 55) (size 30 20)
+        (property "Sheetname" "bus" (at 130 54 0))
+        (property "Sheetfile" "bus.kicad_sch" (at 130 76 0))
+        (pin "{portName}" input (at 150 40 0)))
+      """;
+
+    private static string BusSubBody(string hierName) => $"""
+      (bus (pts (xy 90 40) (xy 130 40)))
+      (hierarchical_label "{hierName}" (at 90 40 0) (shape input))
+      {BusTap("RB0", 100, "DATA0")}
+      {BusTap("RB1", 110, "DATA1")}
+      """;
+
+    internal static readonly (string Root, IReadOnlyDictionary<string, string> Map) BusStitch =
+        ("root.kicad_sch", new Dictionary<string, string>
+        {
+            ["root.kicad_sch"] = Sheet("busstitch", BusRootBody("DATA[0..1]")),
+            ["bus.kicad_sch"] = Sheet("bus", BusSubBody("DATA[0..1]")),
+        });
+
+    // The mutation that bites: the child's hierarchical bus label renamed off the parent's bus sheet
+    // pin — the bundle must NOT stitch, and both dangling directions are reported.
+    internal static readonly (string Root, IReadOnlyDictionary<string, string> Map) BusStitchBroken =
+        ("root.kicad_sch", new Dictionary<string, string>
+        {
+            ["root.kicad_sch"] = Sheet("busstitch", BusRootBody("DATA[0..1]")),
+            ["bus.kicad_sch"] = Sheet("bus", BusSubBody("ADDR[0..1]")),
         });
 }

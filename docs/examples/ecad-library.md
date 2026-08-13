@@ -235,7 +235,7 @@ if (!sch.Check().Ok) throw new Exception(sch.Check().ToString());
 `KiCadSchReader.Read` covers a **single sheet**: the embedded `lib_symbols` (mapped to
 `PartDefinition`s), placed `(symbol …)` instances, power symbols (their `Value` is the net name),
 `wire`, `junction`, local `label`, `global_label`, `no_connect`, and **buses** (see below). **Refused
-by name**: bus **GROUP** labels (`{…}` named groups / aliases) and a malformed bus range (`DATA[]`, a
+by name**: a NESTED bus group (`{A {B C}}`) and a malformed bus range (`DATA[]`, a
 non-integer bound); and — in the single-sheet `Read` only — **hierarchical sheets** (`sheet`
 subsheets, `hierarchical_label`), so a flat import cannot silently drop a whole subsheet. A netless
 wire, an instance referencing an unknown symbol, a dangling pin, or a dangling / non-member bus entry
@@ -250,11 +250,17 @@ a signal wire, and — this is KiCad's rule — that ripped wire is **labelled w
 (`DATA3`), so the member's net is reconstructed like any other labelled wire. The honest finding is
 that **a ripped tap's net is its own local label**, and same-named labels are already one net by
 local-label equivalence, so on a flat sheet the bus's *connecting* role is subsumed. Buses are
-therefore **sugar**: the reader expands a `NAME[m..n]` label into its members (so a bus-vector label is
+therefore **sugar**: the reader expands a bus label into its members (so a bus label is
 NOT mistaken for a signal net — `DATA[0..7]` is never a net) and validates that each tap is a declared
-member, reporting a stray tap by name. A reversed range `DATA[7..0]` is legal (the same eight
-members); a bus **group** `{…}` and buses **across sheets** (hierarchical bus pins, where the
-connecting role would become load-bearing) stay out of scope, refused by name.
+member, reporting a stray tap by name. All three KiCad bus forms are handled — a **vector**
+`NAME[m..n]` (a reversed range `DATA[7..0]` is legal, the same members), an anonymous **group**
+`{SDA SCL DATA[0..1]}` (its whitespace-separated tokens, each a bare signal or a vector expanded in
+turn), and a named **alias** (a `(bus_alias "PCI" (members …))` definition, a bare label matching an
+alias read as that bus). **Across sheets** the connecting role *is* load-bearing, and it is supported:
+a **bus sheet pin** (a sheet pin whose name is a bus) matched with the sub-sheet's hierarchical bus
+label of the same name carries each member over the boundary — for each member M, the parent's local
+net named M joins the child's — so a `DATA[0..1]` bundle into a subsheet gives DATA0 and DATA1 each
+spanning the boundary while staying two distinct nets. A nested group (`{A {B C}}`) is refused by name.
 
 ```csharp run:ecad-schematic-buses
 // A DATA[0..1] bus. The DATA[0..1] label declares the members DATA0, DATA1; each bus_entry rips a

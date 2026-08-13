@@ -7253,8 +7253,8 @@ is what stops a bus-vector label being mistaken for a signal net (`DATA[0..7]` i
 (b) it VALIDATES each tap against the members of the bus it rips off — a bundle being a connected
 component of bus wires, tracked by a separate union-find so a bus point is never a signal net, and a
 tap's member checked by reading the ripped wire's net label back off the signal graph. The connecting
-role becomes load-bearing only ACROSS sheets (hierarchical bus pins carrying a bundle over a sheet
-boundary), so **buses stay refused in the hierarchical entry points**; an anonymous bus GROUP
+role becomes load-bearing ACROSS sheets (hierarchical bus pins carrying a bundle over a sheet
+boundary), and that is **now supported too** (see the hierarchical-import entry); an anonymous bus GROUP
 (`{A B DATA[0..1]}`) is now SUPPORTED — its members are the whitespace-separated tokens, each a bare
 signal or itself a bus vector (expanded in turn), declaring the namespace exactly as a vector does, so
 the tap validation and the connectivity reconstruction are unchanged (a group is a bundle of member
@@ -7272,8 +7272,18 @@ plain-net non-contamination (a bus beside a plain net leaves it exactly what it 
 the signal union-find never sees a bus point), and the bad-range / non-member / dangling reports each
 pinned. **Anonymous groups AND named aliases since landed** with the same oracle — the member partition (bare
 signals AND a vector token expanded inside the group / alias), a non-member tap reported by name, and a
-nested group refused by name. Filed: buses across sheets (drawing buses on the schematic sheet has since
-landed — see `Drawing the schematic sheet`). Docs: `examples/ecad-library.md`.
+nested group refused by name. **Buses ACROSS sheets landed too**: a BUS sheet pin (a sheet pin whose name
+is a vector / group / alias, resolved through the PARENT's alias table falling back to the CHILD's — the
+pin is drawn on the parent, the hier label it matches lives in the child) is kept OUT of the signal
+machinery entirely (its position sits on the parent's BUS wire, which the signal graph never contains) and
+matched with the child's hierarchical BUS label of the same raw name; the stitch is then MEMBER-BY-MEMBER —
+for each member M, the parent's local net named M joins the child's local net named M (only LOCAL labels
+need it, global/power already span; a member unused on one side stitches nothing, which is normal, not a
+defect). Per-sheet tap validation reuses the flat `ValidateBuses` verbatim, generalized with an `instance`
+parameter whose flat value 0 IS the flat `Intern(p)` (bit-identical by construction). The oracle is the
+cross-sheet member partition (DATA0 spans, DATA1 spans, the two members stay DISTINCT — the stitch is per
+member, never a bundle short) plus the rename mutation (the child's hier bus label renamed off the port
+splits the members, with BOTH dangling directions reported by name). Docs: `examples/ecad-library.md`.
 
 **Hierarchical / multi-sheet import** (`KiCadSchReader.ReadProject(rootPath)` /
 `ReadProjectFrom(rootFile, sheetsByFile)`) flattens a real KiCad hierarchy — a root `.kicad_sch` plus
@@ -7307,9 +7317,10 @@ asserted exactly PLUS the mutation that proves the stitch is name-matched** — 
 hierarchical label off the parent sheet pin's name and the cross-sheet net SPLITS (a name-blind
 stitcher would pass the first assertion and fail this), with the local-vs-global scoping tested both
 ways (two local "CLK" = two nets, two global "CLK" = one) and a sub-sheet placed twice giving four
-distinct components and two distinct internal nets. Still filed: buses across sheets (multi-unit
-symbols merge in the hierarchical path too, keyed by the hierarchical refdes). Docs:
-`examples/ecad-library.md`.
+distinct components and two distinct internal nets. **Buses across sheets landed** — a BUS sheet pin
+carries its members over the boundary, stitched member-by-member (see the bus-import entry above for the
+mechanism and the oracle); multi-unit symbols merge in the hierarchical path too, keyed by the
+hierarchical refdes. Docs: `examples/ecad-library.md`.
 
 ### Stage 3 — placement constraints (`ConstrainedLayout`, `PcbConstraintSolver`)
 
@@ -7847,8 +7858,10 @@ the generic per-layer loop). **The bus line-work is kept OUT of the wire graph**
 `DrawnConnectivity`/`Verify()` never see it — a bus wire touching two member wires cannot merge
 their nets — and the same sheet drawn with a bus reconstructs EXACTLY the same nets as the
 plain-wire sheet (the member nets do the connecting; the bus is only how they are drawn as a
-bundle). Buses are OPT-IN, so a sheet declaring none is BYTE-IDENTICAL (asserted). Filed: bus
-GROUPS (`{…}` aliases) and buses ACROSS sheets. Docs: `examples/ecad-schematic-sheet.md`.
+bundle). Buses are OPT-IN, so a sheet declaring none is BYTE-IDENTICAL (asserted). Filed on the
+DRAWING side: bus GROUP labels (`{…}` / alias-named bundles as drawn text — the IMPORT side handles
+all three forms, single-sheet and across sheets; a `SchematicBus` draws a vector range only). Docs:
+`examples/ecad-schematic-sheet.md`.
 
 ### Stage 6 — Gerber (RS-274X) + Excellon fabrication export (`PcbGerberExport`)
 

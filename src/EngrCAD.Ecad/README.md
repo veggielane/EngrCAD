@@ -580,8 +580,11 @@ equivalence — so on a single flat sheet the bus's CONNECTING role is entirely 
 equivalence, and the bus model's job reduces to (a) declaring the member NAMESPACE (so a bus-vector
 label is not mistaken for a signal net — `DATA[0..7]` is never a net) and (b) VALIDATING each tap
 against it (a stray tap, a dangling entry, or a bad range is reported / refused by name). The
-connecting role becomes load-bearing only ACROSS sheets (hierarchical bus pins), so buses stay refused
-in the hierarchical entry points; an anonymous bus GROUP (`{A B DATA[0..1]}`) and a named bus ALIAS (a
+connecting role becomes load-bearing ACROSS sheets (hierarchical bus pins), and that is supported too:
+a BUS sheet pin (a sheet pin whose name is a bus) matched with the child's hierarchical bus label of the
+same name carries each MEMBER over the boundary — for each member M the parent's local net named M joins
+the child's (only local labels need the stitch; global/power already span). An anonymous bus GROUP
+(`{A B DATA[0..1]}`) and a named bus ALIAS (a
 `(bus_alias …)` table, a bare label matching an alias becoming a bus) are both supported now — members
 are bare signals or bus vectors expanded in turn — while a NESTED group stays out of scope. Verified
 higher than usual (a mis-expanded bus is a silent failure): the member PARTITION is
@@ -627,9 +630,10 @@ proves the reader reads geometry (move a wire endpoint off a pin → the net spl
 reported); the junction rule from both sides (a crossing needs a junction to join); label
 equivalence (same label = one net, different = two); no_connect (an isolated marked pin is on no
 signal net); the symbol == netlist pin identity (`PinIdentity`); determinism (two reads save
-byte-identically); and the refusals. **Anonymous bus GROUPS (`{A B …}`) and named bus ALIASES (a
-`(bus_alias …)` table) since landed** (member partition + non-member + nested-group refusal). Filed
-follow-up: buses across sheets (hierarchical bus pins). Docs: `examples/ecad-library.md`.
+byte-identically); and the refusals. **Anonymous bus GROUPS (`{A B …}`), named bus ALIASES (a
+`(bus_alias …)` table) and buses ACROSS sheets since landed** — the cross-sheet stitch is
+member-by-member (DATA0 spans, DATA1 spans, the members never short together), with the rename mutation
+splitting them and both dangling directions reported by name. Docs: `examples/ecad-library.md`.
 
 ## Drawing the schematic sheet
 
@@ -670,7 +674,8 @@ bus draws a bundle but **connects nothing** — its line-work is deliberately ke
 graph, so a bus wire crossing two member wires cannot merge their nets and `Verify()` is
 unaffected. The bus-wire pen is `SchematicSheetOptions.BusWireWidth` (default 0.8 mm, wider than
 a wire's 0.5). A sheet declaring **no** bus is byte-identical (buses are opt-in). Caller-declared,
-never auto-routed. Filed: bus GROUPS (`{…}` aliases) and buses ACROSS sheets.
+never auto-routed. Filed on the DRAWING side: bus GROUP labels as drawn text (`SchematicBus` draws a
+vector range only — the IMPORT side handles all three forms, single-sheet and across sheets).
 
 **The border and title block come from the shared `DrawingFrame`** (Modeling) — the SAME value
 type the mechanical [drawing sheet](../EngrCAD.Modeling/README.md) draws, so a schematic and a

@@ -2916,10 +2916,17 @@ from what was already understood rather than from scratch.
     non-member tap reported by name, and a nested group refused by name. **Named bus ALIASES have LANDED
     too** — a `(bus_alias "PCI" (members A B DATA[0..1]))` builds an alias TABLE, and a bare label
     matching an alias is read as a bus declaring those members (each a bare signal OR a vector expanded);
-    so the single-sheet bus import now handles VECTORS, anonymous GROUPS and named ALIASES. `.kicad_sch`
-    RESIDUAL still filed: **buses ACROSS sheets** (hierarchical bus PINS carrying a bundle over a sheet
-    boundary — the connecting role becomes load-bearing there; buses stay refused in the hierarchical
-    entry points).
+    so the single-sheet bus import now handles VECTORS, anonymous GROUPS and named ALIASES. **Buses
+    ACROSS sheets have LANDED too** — a BUS sheet pin (a sheet pin whose name is a bus, resolved through
+    the parent's alias table falling back to the child's) is kept OUT of the signal machinery and matched
+    with the child's hierarchical BUS label of the same name; the stitch is MEMBER-BY-MEMBER (for each
+    member M, the parent's local net named M joins the child's — only local labels need it, global/power
+    already span; a member unused on one side stitches nothing). Per-sheet tap validation reuses the flat
+    `ValidateBuses` generalized with an `instance` parameter whose flat value 0 IS the flat `Intern(p)`
+    (bit-identical). Verified by the cross-sheet member partition (DATA0 spans, DATA1 spans, the members
+    never short) + the rename mutation (the child's hier bus label renamed off the port splits the
+    members, both dangling directions reported by name). The bus import is COMPLETE. What remains on the
+    DRAWING side only: bus GROUP labels as drawn text (`SchematicBus` draws a vector range).
     **Multi-unit symbols merge** now (a `PartDefinition` gains `Units` — one `Symbol` per unit, `Pins`
     the union — and `KiCadSchReader` merges the same-refdes `(unit N)` instances into ONE component,
     placing each unit's pins at its own location; single-unit / symbol-less definitions are
