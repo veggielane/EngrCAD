@@ -532,6 +532,29 @@ Eagle primitives all mapped onto the existing vocabulary, exactly as KiCad's did
 path is BIT-IDENTICAL by construction (nothing shared moved), and an Eagle-loaded part round-trips
 through the schematic file as the same byte-identical fixed point.
 
+## Generating a footprint — IPC-7351 land patterns
+
+When no library carries the part, `Ipc7351` generates the land pattern from the component's **own
+datasheet dimensions** — the importers' complement (a generator, not a file import). One formula
+family serves every leaded shape: `Zmax = Lmin + 2·J_toe + √(C_L² + F² + P²)`, `Gmin = Smax −
+2·J_heel − √(C_S² + F² + P²)` (the heel span's range taken arithmetically — the conservative
+reading toward fillet, documented as a choice), `Xmax = Wmin + 2·J_side + rms`; the toe/heel/side
+**fillet goals** per `LandDensity` (`Most`/`Nominal`/`Least`) are the ⚠ transcribed IPC-7351B
+nominals (the `StandardHoles` convention). Z/G/X round to the 0.05 mm land quantum and the pads
+derive EXACTLY from the rounded values, so `Z = G + 2·(pad length)` is an identity — and with every
+tolerance zero the formulas reduce to the bare goals exactly, the test that catches a swapped
+min/max. Families: `Chip` (1608 metric / 0603 imperial and larger; the small-chip goal row is not
+transcribed and refuses by name), `DualGullwing` (SOIC/SSOP/TSSOP numbering), `QuadGullwing` (QFP,
+counter-clockwise from pin 1 at the top of the left side), `Sot23`, and `Bga` (JEDEC row letters
+skipping I/O/Q/S/X/Z then AA/AB/…; the land is the ball reduced by the ⚠ nominal collapsing-ball
+percentage). A land whose inner gap CLOSES (G ≤ 0 — the pads would merge) refuses naming the
+number; `DimRange` validates its min/max at construction (a swapped pair silently flips every
+formula's direction); `StandardBodies` carries common nominal bodies (0603/0805/1206 chips, the
+narrow SOIC, SOT-23, an 0.8 mm LQFP — ⚠ the real part's datasheet is always the better input).
+Courtyard and silkscreen are deliberately absent from a `Footprint` and derive downstream. Filed
+by name: the small-chip row, QFN/DFN and other no-lead families, MELF, chip arrays, thermal-pad
+paste divisions.
+
 ## Loading a whole schematic — the KiCad `.kicad_sch` interchange
 
 `KiCadSchReader.Read(text)` / `ReadFile(path)` imports a whole KiCad schematic (`.kicad_sch`) into a
@@ -1251,9 +1274,11 @@ lands on the BOTTOM side, an absent via diameter takes Eagle's auto-restring rul
 2·max(25% drill, 0.254 mm), a ⚠ transcribed nominal — and airwires (layer 19), inner-layer wires,
 signal polygons and curved wires are reported and skipped/flattened by name: the covered copper
 subset is the two-layer board, and the board thickness is assumed 1.6 mm with a note, since a
-`.brd` does not state it); what stays filed is **IPC-7351 footprint GENERATION** from a
-designation (a generator, not a file import), EDIF, the newer Eagle/Fusion XML variants beyond the
-classic `.lbr`, and Eagle 3D package models (Eagle's `<packages3d>` reference a model by URN — materially more work than the classic `.lbr` carries). The **KiCad 3D model reference now imports** (the footprint's `(model …)` becomes the definition's `Model`); what stays filed on the model side is IGES (`.igs`/`.iges`) 3D-model loading (a face soup needing `ShapeHealing`) and a VRML (`.wrl`) reader — both refused by name, the reference recorded. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
+`.brd` does not state it); and **IPC-7351 footprint GENERATION landed as the importers'
+complement** (`Ipc7351` + `StandardBodies` — a land pattern from the component's own datasheet
+dimensions rather than a library file; see the section above). What stays filed is EDIF, the newer
+Eagle/Fusion XML variants beyond the classic `.lbr`, and Eagle 3D package models (Eagle's
+`<packages3d>` reference a model by URN — materially more work than the classic `.lbr` carries). The **KiCad 3D model reference now imports** (the footprint's `(model …)` becomes the definition's `Model`); what stays filed on the model side is IGES (`.igs`/`.iges`) 3D-model loading (a face soup needing `ShapeHealing`) and a VRML (`.wrl`) reader — both refused by name, the reference recorded. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
 drilling the plate is a later refinement). The drawn schematic **sheet** (`SchematicSheet` →
 SVG/DXF/PDF) has landed as a VIEW of the graph (see above); what stays open there is a real
 **auto-placer** (a good layout, not the grid placeholder) and an **obstacle-avoiding** wire

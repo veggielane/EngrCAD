@@ -640,9 +640,49 @@ The reader maps the **common subset** and NAMES anything else rather than mis-re
   is NOT force-loaded (an empty library directory is normal); the reference is recorded and loaded
   on demand.
 
+## Generating a footprint from the datasheet (IPC-7351)
+
+When no library carries the part, the land pattern comes from the component's **own datasheet
+dimensions** — `Ipc7351` is a *generator*, the complement of the importers above. One formula
+family serves every leaded shape: the outer land extent `Z = Lmin + 2·J_toe + √(C² + F² + P²)`,
+the inner gap `G` from the heel span, the land width `X` from the lead width — with the
+toe/heel/side **fillet goals** per density level (`Most`/`Nominal`/`Least`, transcribed IPC-7351B
+nominals, ⚠ verify against the standard for a production part). Covered: two-terminal chips (0603
+imperial and larger), dual gullwing (SOIC/SSOP/TSSOP numbering), quad gullwing (QFP,
+counter-clockwise from pin 1), SOT-23, and BGA grids with JEDEC row lettering (A…Y skipping
+I/O/Q/S/X/Z, then AA…). A land whose inner gap *closes* — the pads would merge — is refused naming
+the number, and `StandardBodies` carries common nominal bodies (⚠ the real part's datasheet is
+always the better input):
+
+```csharp run:ecad-ipc7351
+// A SOIC-8 and an 0805 land pattern from body dimensions alone — no library file anywhere.
+var soic8 = Ipc7351.DualGullwing("SOIC-8", StandardBodies.SoicNarrow, 8);
+var r0805 = Ipc7351.Chip("R0805", StandardBodies.Chip0805);
+Console.WriteLine($"SOIC-8: {soic8.Pads.Count} pads; 0805: {r0805.Pads.Count} pads");
+
+// Density is a real trade: Most buys more solder fillet (a larger land), Least a denser board.
+foreach (var d in new[] { LandDensity.Least, LandDensity.Nominal, LandDensity.Most })
+{
+    var fp = Ipc7351.Chip("R0805", StandardBodies.Chip0805, new Ipc7351Options(Density: d));
+    var p2 = fp.Pads.Single(p => p.Number == "2");
+    Console.WriteLine($"0805 {d}: Z = {2 * (p2.Center.X + p2.Width / 2):0.00} mm");
+}
+
+// The output IS a Footprint — it feeds a PartDefinition (and thence a board) directly, and the
+// pin/pad identity holds by construction.
+var part = new PartDefinition("IC", "U",
+    soic8.Pads.Select(p => new Pin(p.Number, PinType.Passive)), soic8);
+Console.WriteLine($"identity: {PinIdentity.Check(part).Ok}");
+```
+
+Courtyard and silkscreen are not part of a `Footprint` here — they derive downstream (the
+silkscreen layer builds a courtyard from the pads). Filed by name: the small-chip goal row
+(below 1608 metric), QFN/DFN and the other no-lead families, MELF, chip arrays, and thermal-pad
+paste divisions.
+
 Malformed input — a file that is not a KiCad symbol library or footprint, an unbalanced
 parenthesis, an unterminated string; or an Eagle file handed to the wrong reader, or whose XML is
-malformed — is refused **by name** (the `StepReader`/`IgesReader` rule). IPC-7351 footprint
-*generation* and EDIF are later work (Eagle `.sch` schematics and `.brd` boards both
-import — see above); a VRML (`.wrl`)
+malformed — is refused **by name** (the `StepReader`/`IgesReader` rule). EDIF is later work (Eagle
+`.sch` schematics and `.brd` boards both import, and IPC-7351 footprint *generation* landed — see
+above); a VRML (`.wrl`)
 reader and IGES (`.igs`) 3D-model loading stay filed (both refused by name, the reference recorded).

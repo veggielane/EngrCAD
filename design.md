@@ -7046,7 +7046,32 @@ imported board runs at the KiCad-import convention (acute floor 45°, since a th
 pad makes near-90° junctions). All three Eagle readers signpost each other at the root, so a user
 holding any Eagle file is pointed at the right door (pinned by test in every direction). Still
 filed: Eagle 3D package models and the newer Eagle/Fusion XML variants beyond the classic schema.
-Docs `examples/ecad-library.md`.
+Docs `examples/ecad-library.md`. **IPC-7351 footprint GENERATION landed as the importers'
+complement** (`Ipc7351` + `StandardBodies`; docs `examples/ecad-library.md`): a land pattern from
+the component's OWN datasheet dimensions rather than a library file — one formula family for every
+leaded shape (`Zmax = Lmin + 2·J_toe + √(C_L² + F² + P²)`, `Gmin = Smax − 2·J_heel − √(C_S² + F² +
+P²)` over the arithmetic heel-span range — the conservative reading toward fillet, documented as a
+choice — and `Xmax = Wmin + 2·J_side + rms`), the toe/heel/side FILLET GOALS per `LandDensity`
+being the ⚠ verify-against-datasheet transcription (nominal IPC-7351B figures, the `StandardHoles`
+convention). **The verification is what a transcription cannot protect on its own**: with every
+tolerance zero the formulas reduce to the bare goals EXACTLY (the check that catches a swapped
+min/max), density and tolerance move Z/G in known monotone directions (a wider length band grows Z
+and shrinks G; a denser level grows Z and eats G through the heel — with the honest note that the
+0.02 mm side-goal step sits below half the 0.05 land quantum, so adjacent densities can
+legitimately round to ONE width and the width assertion is ≤ per step, < across the range), Z/G/X
+round to the quantum and the pads derive EXACTLY from the rounded values so `Z = G + 2·(pad
+length)` is an identity, and a generated SOIC-8 + 0805 placed on a real board pass the layout's own
+pin-covering `Check` and the default DRC end to end. Families: `Chip` (1608 metric and larger — the
+small-chip goal row is not transcribed, refused by name), `DualGullwing` (SOIC numbering, 1..n/2
+down the left then n/2+1..n up the right), `QuadGullwing` (QFP counter-clockwise from pin 1 at the
+top of the left side, the rotated rows swapping pad width/height), `Sot23` (pins 1–2 below at the
+stated pitch, 3 above on the centreline), and `Bga` (JEDEC row letters skipping I/O/Q/S/X/Z then
+AA/AB/…, the land the ball reduced by the ⚠ nominal collapsing-ball percentage per density). A land
+whose inner gap CLOSES (G ≤ 0 — the pads would merge) refuses naming the number, as do overlapping
+leads, inverted dimension ranges (`DimRange` validates at construction, since a swapped min/max
+silently flips every formula's direction), odd dual pin counts and bad pitches; courtyard and
+silkscreen are deliberately absent from a `Footprint` and derive downstream. Filed by name: the
+small-chip row, QFN/DFN, MELF, chip arrays, thermal-pad paste divisions.
 
 ### Stage 2 — the board and its parts (`PcbBoard`, `PcbLayout`, IDF import)
 

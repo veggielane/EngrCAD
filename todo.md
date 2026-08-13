@@ -2963,7 +2963,11 @@ from what was already understood rather than from scratch.
     elements resolving packages through the shared `ReadLibraryElement`, `MR` rotations landing on
     the bottom side, an absent via diameter taking Eagle's auto-restring rule, and airwires /
     inner-layer wires / signal polygons reported and skipped by name — the covered copper subset is
-    the two-layer board). IPC-7351 footprint GENERATION remains.
+    the two-layer board). **IPC-7351 footprint GENERATION landed** (`Ipc7351` + `StandardBodies` —
+    chips ≥ 1608 metric, dual/quad gullwing, SOT-23, BGA with JEDEC lettering; fillet-goal tables
+    ⚠ transcribed nominals; the zero-tolerance identity, monotonicity and the closed-gap refusal
+    are the tests with teeth; the small-chip goal row, QFN/DFN, MELF, chip arrays and paste
+    divisions stay filed by name).
     **3D-model residuals, filed by name** (each RECORDED as a reference but not
     loaded): a **VRML (`.wrl`) reader** (KiCad's default 3D model format, so it is hit often —
     needs a small VRML/X3D mesh reader), **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import
