@@ -7047,9 +7047,15 @@ the `KiCadPcbReader` pattern verbatim; the outline is the layer-20 `<plain>` wir
 end (arriving in any order and either direction; an unclosed chain refuses by name, since a board
 needs a closed outline to build); a rotation `MR…` is MIRRORED and lands the element on the BOTTOM
 side with the angle carried as stated; an absent via diameter takes Eagle's own auto-restring rule
-(pad = drill + 2·max(25% drill, 0.254 mm), a ⚠ transcribed nominal). Airwires (layer 19 — the
-ratsnest, intent not copper, which the contactrefs already carry), inner-layer wires, signal
-polygons (pours) and curved wires are reported and skipped/flattened BY NAME — the covered copper
+(pad = drill + 2·max(25% drill, 0.254 mm), a ⚠ transcribed nominal). **A signal `<polygon>` becomes
+a `CopperPour`** — `isolate` is the pour clearance, `orphans="on"` keeps dead copper,
+`thermals="off"` direct-connects pads, and Eagle's RANK (1 = highest priority) maps to
+`Priority = 6 − rank` (⚠ nominal) — with EngrCAD deriving the fill exactly as the KiCad zone import
+does, and the oracle is the plane's own purpose: a GND polygon whose net carries NO trace joins its
+pads through the pour alone, with the polygon-less twin the mutation that proves it (GND then reads
+as an unrouted ratsnest). Airwires (layer 19 — the
+ratsnest, intent not copper, which the contactrefs already carry), inner-layer wires and curved
+wires are reported and skipped/flattened BY NAME — the covered copper
 subset is the two-layer board — the thickness is assumed 1.6 mm with a note (a `.brd` keeps it in
 the fab profile), and a signal with copper but no resolvable terminal has its copper skipped with a
 note rather than thrown three calls later by the layout's own unknown-net gate. The DRC on an

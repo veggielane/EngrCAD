@@ -196,8 +196,11 @@ confirms. Elements reference *packages* directly (no deviceset in a board), reso
 embedded `<libraries>` by the same shared machinery; the outline is the chained layer-20 `<plain>`
 wires; a rotation `MR…` is *mirrored*, landing the element on the **bottom** side; an absent via
 diameter takes Eagle's own auto-restring rule (pad = drill + 2·max(25% drill, 0.254 mm), a
-transcribed nominal). Airwires (layer 19 — the ratsnest, intent not copper), inner-layer wires,
-signal polygons and curved wires are reported and skipped or flattened **by name** — the covered
+transcribed nominal). A signal `<polygon>` becomes a **copper pour** — `isolate` is the clearance,
+`orphans="on"` keeps dead copper, `thermals="off"` direct-connects pads, and Eagle's rank (1 =
+highest priority) maps to `Priority = 6 − rank` — so a GND plane joins its pads through the
+imported pour alone. Airwires (layer 19 — the ratsnest, intent not copper), inner-layer wires
+and curved wires are reported and skipped or flattened **by name** — the covered
 copper subset is the two-layer board — and the thickness is assumed 1.6 mm with a note, since a
 `.brd` does not state it.
 

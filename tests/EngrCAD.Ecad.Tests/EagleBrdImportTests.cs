@@ -153,6 +153,75 @@ public sealed class EagleBrdImportTests
     }
 
     [Fact]
+    public void ASignalPolygon_BecomesAPour_ThatJoinsThePlaneNet()
+    {
+        // A GND plane polygon covering R1.1 and U2.4, with every attribute the mapping carries:
+        // isolate → clearance, rank 2 → Priority 4 (6 − rank), thermals off → direct connect,
+        // orphans on → keep dead copper. GND has NO trace — the plane is its only copper.
+        const string Elements = """
+              <plain>
+                <wire x1="0" y1="0" x2="40" y2="0" width="0.1" layer="20"/>
+                <wire x1="40" y1="0" x2="40" y2="30" width="0.1" layer="20"/>
+                <wire x1="40" y1="30" x2="0" y2="30" width="0.1" layer="20"/>
+                <wire x1="0" y1="30" x2="0" y2="0" width="0.1" layer="20"/>
+              </plain>
+              <elements>
+                <element name="R1" library="test" package="R0805" x="10" y="10"/>
+                <element name="U2" library="test" package="DIL08" x="20" y="22"/>
+              </elements>
+            """;
+        var board = EagleBoardReader.Read(Brd(Elements + """
+              <signals>
+                <signal name="GND">
+                  <contactref element="R1" pad="1"/>
+                  <contactref element="U2" pad="4"/>
+                  <polygon width="0.2" layer="1" isolate="0.3" rank="2" thermals="off" orphans="on">
+                    <vertex x="5" y="5"/>
+                    <vertex x="20" y="5"/>
+                    <vertex x="20" y="20"/>
+                    <vertex x="5" y="20"/>
+                  </polygon>
+                </signal>
+                <signal name="SIG">
+                  <contactref element="R1" pad="2"/>
+                  <contactref element="U2" pad="1"/>
+                </signal>
+              </signals>
+            """));
+
+        var pour = Assert.Single(board.Layout.Pours);
+        Assert.Equal("GND", pour.Net);
+        Assert.Equal(board.Layout.Board.Stackup.Top.Name, pour.Layer);
+        Assert.Equal(0.3, pour.Clearance, 12);
+        Assert.Equal(4, pour.Priority);                      // Eagle rank 2 → 6 − 2
+        Assert.Equal(0, pour.ResolvedRelief.Spokes);         // thermals="off" → direct connect
+        Assert.Equal(DeadCopperPolicy.Keep, pour.DeadCopper);
+        Assert.Equal(4, pour.Outline!.Count);
+
+        // The oracle with teeth: the plane is GND's ONLY copper, so the pads are joined by the
+        // pour or not at all — and the same board WITHOUT the polygon is the mutation that
+        // proves it (GND then reads as an unrouted ratsnest).
+        Assert.True(board.Layout.Connectivity().Of("GND").IsConnected);
+        var without = EagleBoardReader.Read(Brd(Elements + """
+              <signals>
+                <signal name="GND">
+                  <contactref element="R1" pad="1"/>
+                  <contactref element="U2" pad="4"/>
+                </signal>
+                <signal name="SIG">
+                  <contactref element="R1" pad="2"/>
+                  <contactref element="U2" pad="1"/>
+                </signal>
+              </signals>
+            """));
+        Assert.False(without.Layout.Connectivity().Of("GND").IsConnected);
+
+        // And the poured board is manufacturable — the fill clears other-net copper by construction.
+        var drc = PcbDrc.Check(board.Layout, DrcRuleSet.Default with { MinAcuteAngleDegrees = 45 });
+        Assert.True(drc.Ok, string.Join("; ", drc.Violations.Select(v => v.Message)));
+    }
+
+    [Fact]
     public void TheImport_IsDeterministic_AndDirtIsReportedNotThrown()
     {
         Assert.Equal(EagleBoardReader.Read(Brd(Body)).Layout.Save(),

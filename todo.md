@@ -2964,8 +2964,10 @@ from what was already understood rather than from scratch.
     and the strong oracle is the CHECK against it, `PcbConnectivity` confirming the imported
     traces/vias actually join the declared pads; outline chained from the layer-20 `<plain>` wires,
     elements resolving packages through the shared `ReadLibraryElement`, `MR` rotations landing on
-    the bottom side, an absent via diameter taking Eagle's auto-restring rule, and airwires /
-    inner-layer wires / signal polygons reported and skipped by name — the covered copper subset is
+    the bottom side, an absent via diameter taking Eagle's auto-restring rule, a signal
+    `<polygon>` becoming a `CopperPour` (isolate/orphans/thermals/rank mapped, the pad-joining
+    GND plane the oracle), and airwires /
+    inner-layer wires reported and skipped by name — the covered copper subset is
     the two-layer board). **IPC-7351 footprint GENERATION landed** (`Ipc7351` + `StandardBodies` —
     chips ≥ 1608 metric, dual/quad gullwing, SOT-23, BGA with JEDEC lettering; fillet-goal tables
     ⚠ transcribed nominals; the zero-tolerance identity, monotonicity and the closed-gap refusal

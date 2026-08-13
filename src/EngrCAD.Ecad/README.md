@@ -1289,8 +1289,11 @@ is the file's own intent and the strong oracle is the CHECK against it, `PcbConn
 the imported traces and vias actually join the declared pads; the outline is the chained layer-20
 `<plain>` wires, elements resolve packages through the shared `ReadLibraryElement`, an `MR` rotation
 lands on the BOTTOM side, an absent via diameter takes Eagle's auto-restring rule — pad = drill +
-2·max(25% drill, 0.254 mm), a ⚠ transcribed nominal — and airwires (layer 19), inner-layer wires,
-signal polygons and curved wires are reported and skipped/flattened by name: the covered copper
+2·max(25% drill, 0.254 mm), a ⚠ transcribed nominal — a signal `<polygon>` becomes a `CopperPour`
+(`isolate` → clearance, `orphans` → dead-copper policy, `thermals="off"` → direct connect, rank
+1..6 → `Priority = 6 − rank` ⚠ nominal; a pad-joining GND plane is the oracle, its polygon-less
+twin the mutation), and airwires (layer 19), inner-layer wires
+and curved wires are reported and skipped/flattened by name: the covered copper
 subset is the two-layer board, and the board thickness is assumed 1.6 mm with a note, since a
 `.brd` does not state it); and **IPC-7351 footprint GENERATION landed as the importers'
 complement** (`Ipc7351` + `StandardBodies` — a land pattern from the component's own datasheet

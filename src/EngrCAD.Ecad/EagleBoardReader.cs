@@ -31,8 +31,12 @@ public sealed record EagleBoard(PcbLayout Layout, IReadOnlyList<string> Diagnost
 /// (Top) and 16 (Bottom) become traces, <c>&lt;via&gt;</c>s become through-vias (an absent via
 /// diameter takes Eagle's own auto-restring rule, pad = drill + 2·max(25% drill, 0.254 mm) — a
 /// ⚠ transcribed nominal), and the outline is the chained layer-20 (Dimension) wires of
-/// <c>&lt;plain&gt;</c>. Airwires (layer 19, the ratsnest), inner-layer wires, signal polygons
-/// (pours) and curved wires are reported and skipped/flattened by name. The board thickness is not
+/// <c>&lt;plain&gt;</c>. A signal <c>&lt;polygon&gt;</c> becomes a <see cref="CopperPour"/> —
+/// its <c>isolate</c> is the pour clearance, <c>orphans="on"</c> keeps dead copper,
+/// <c>thermals="off"</c> direct-connects pads, and Eagle's RANK (1 = highest priority) maps to
+/// <c>Priority = 6 − rank</c> (⚠ nominal) — with EngrCAD deriving the fill, exactly as the KiCad
+/// zone import does. Airwires (layer 19, the ratsnest), inner-layer wires and curved wires are
+/// reported and skipped/flattened by name. The board thickness is not
 /// stated in a <c>.brd</c> (it lives in the fab profile), so 1.6 mm is assumed with a note.</para>
 ///
 /// <para><b>Refused BY NAME</b>: malformed XML, a non-<c>&lt;eagle&gt;</c> root, a
@@ -163,6 +167,7 @@ public static class EagleBoardReader
         var netToPins = new Dictionary<string, List<PinRef>>(StringComparer.Ordinal);
         var tracks = new List<(string Net, string Layer, double Width, Vector2d A, Vector2d B)>();
         var vias = new List<(string Net, double X, double Y, double Drill, double Pad)>();
+        var pours = new List<(string Net, CopperPour Pour)>();
 
         var thickness = DefaultThickness;
         var stackup = PcbStackup.TwoLayer(thickness);
@@ -225,9 +230,45 @@ public static class EagleBoardReader
                     vias.Add((netName, Num(via, "x"), Num(via, "y"), drill, pad));
                 }
 
-                if (signal.Element("polygon") is not null)
-                    Note($"A signal polygon (copper pour) on net '{netName}' was skipped — pour "
-                        + "import from .brd is filed.");
+                foreach (var polygon in signal.Elements("polygon"))
+                {
+                    int layer = (int)Num(polygon, "layer");
+                    string? copper = layer switch { 1 => top, 16 => bottom, _ => null };
+                    if (copper is null)
+                    {
+                        Note($"A signal polygon on Eagle layer {layer} was skipped (the covered "
+                            + "copper subset is the two-layer board: layers 1 and 16).");
+                        continue;
+                    }
+                    var vertices = new List<Vector2d>();
+                    foreach (var vertex in polygon.Elements("vertex"))
+                    {
+                        if (vertex.Attribute("curve") is not null)
+                            Note($"A curved polygon edge on net '{netName}' was flattened to its "
+                                + "chord.");
+                        vertices.Add(new Vector2d(Num(vertex, "x"), Num(vertex, "y")));
+                    }
+                    if (vertices.Count < 3)
+                    {
+                        Note($"A signal polygon on net '{netName}' has fewer than 3 vertices and "
+                            + "was skipped.");
+                        continue;
+                    }
+                    // Eagle polygon attributes map onto the pour's own vocabulary: isolate (the
+                    // clearance to other copper), orphans "on" (keep dead copper), thermals "off"
+                    // (direct-connect pads), and RANK — Eagle's 1 = highest priority, so it maps
+                    // to Priority = 6 − rank (our higher-priority-wins, ⚠ nominal; absent rank
+                    // stays priority 0).
+                    double isolate = Num(polygon, "isolate");
+                    int rank = (int)Num(polygon, "rank");
+                    pours.Add((netName, new CopperPour(netName, copper, vertices,
+                        Clearance: isolate > 0 ? isolate : 0.2,
+                        Relief: polygon.Attribute("thermals")?.Value == "off"
+                            ? ThermalRelief.None : null,
+                        DeadCopper: polygon.Attribute("orphans")?.Value == "on"
+                            ? DeadCopperPolicy.Keep : DeadCopperPolicy.Remove,
+                        Priority: rank >= 1 && rank <= 6 ? 6 - rank : 0)));
+                }
             }
 
         foreach (var net in netOrder)
@@ -244,7 +285,8 @@ public static class EagleBoardReader
         // copper skipped, rather than thrown three calls later by the layout's own unknown-net gate.
         int orphanTracks = tracks.RemoveAll(t => !netToPins.ContainsKey(t.Net));
         int orphanVias = vias.RemoveAll(v => !netToPins.ContainsKey(v.Net));
-        if (orphanTracks + orphanVias > 0)
+        int orphanPours = pours.RemoveAll(p => !netToPins.ContainsKey(p.Net));
+        if (orphanTracks + orphanVias + orphanPours > 0)
             Note("A signal with copper but no resolvable contactref was skipped — its net has no "
                 + "terminals to carry.");
 
@@ -257,6 +299,15 @@ public static class EagleBoardReader
             layout.AddTrace(net, layer, width, [a, b]);
         foreach (var (net, x, y, drill, pad) in vias)
             layout.AddVia(net, x, y, top, bottom, drill, pad);
+        foreach (var (net, pour) in pours)
+            try
+            {
+                layout.AddPour(pour);
+            }
+            catch (ArgumentException ex)
+            {
+                Note($"A signal polygon on net '{net}' could not be imported: {ex.Message}");
+            }
 
         return new EagleBoard(layout, diagnostics);
     }
