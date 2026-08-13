@@ -169,6 +169,11 @@ the bus draws a bundle but **connects nothing** — its line-work is deliberatel
 wire graph, so a bus wire crossing two member wires can never merge their nets, and
 `Verify()` is unaffected.
 
+A **group / alias** bundle draws the same way: `SchematicBus.Group(label, members, path, …)` takes
+the drawn label as arbitrary text (`"{SDA SCL}"`, or a bus-alias name like `"PCI"`) with the member
+net names stated explicitly — the drawing does not parse the label; what the group means is your
+declaration, exactly as the KiCad import reads it.
+
 A bus is **caller-declared, never auto-routed** — you give the bus wire polyline and the entry
 stubs, exactly as a `SchematicPlacement` gives symbol poses. Pass a `SchematicBus` (or several)
 to the sheet with `buses:`:

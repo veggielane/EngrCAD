@@ -531,6 +531,40 @@ public class SchematicSheetTests
         Assert.Contains("at least two points", ex.Message);
     }
 
+    [Fact]
+    public void AGroupBus_DrawsItsDeclaredLabelWithExplicitMembers()
+    {
+        // The same member nets as the vector DataBus fixture, but bundled as a GROUP whose drawn
+        // label is arbitrary text and whose members are stated explicitly.
+        var (sch, placement, vector) = DataBus();
+        var group = SchematicBus.Group(
+            "{DATA0 DATA1 DATA2 DATA3}",
+            ["DATA0", "DATA1", "DATA2", "DATA3"],
+            vector.Path, vector.Entries,
+            labelPosition: vector.LabelPosition, labelAnchor: vector.LabelAnchor);
+
+        var drawing = new SchematicSheet(sch, placement, buses: [group]).Draw();
+        var drawn = Assert.Single(drawing.Buses);
+        Assert.Equal("{DATA0 DATA1 DATA2 DATA3}", drawn.Label.Text);
+        Assert.Equal(new[] { "DATA0", "DATA1", "DATA2", "DATA3" }, drawn.Members);
+        Assert.Contains("{DATA0 DATA1 DATA2 DATA3}", drawing.ToSvg());
+
+        // The group is drawing sugar exactly as a vector bus is: the reconstructed nets are the
+        // member wires' own, and Verify holds both ways.
+        var report = drawing.Verify();
+        Assert.True(report.Ok, report.ToString());
+    }
+
+    [Fact]
+    public void AGroupBus_WithNoMembersOrAnEmptyMemberName_IsRefusedByName()
+    {
+        var path = new List<Vector2d> { new(0, 0), new(0, 10) };
+        var none = Assert.Throws<ArgumentException>(() => SchematicBus.Group("{X}", [], path));
+        Assert.Contains("declares no members", none.Message);
+        var empty = Assert.Throws<ArgumentException>(() => SchematicBus.Group("{X}", ["A", ""], path));
+        Assert.Contains("empty member name", empty.Message);
+    }
+
     // ---- multi-unit parts draw as SEPARATE unit symbols -------------------------
 
     private static PartDefinition DualOpamp() => ComponentLibrary.Read(

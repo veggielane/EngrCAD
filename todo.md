@@ -2925,8 +2925,10 @@ from what was already understood rather than from scratch.
     `ValidateBuses` generalized with an `instance` parameter whose flat value 0 IS the flat `Intern(p)`
     (bit-identical). Verified by the cross-sheet member partition (DATA0 spans, DATA1 spans, the members
     never short) + the rename mutation (the child's hier bus label renamed off the port splits the
-    members, both dangling directions reported by name). The bus import is COMPLETE. What remains on the
-    DRAWING side only: bus GROUP labels as drawn text (`SchematicBus` draws a vector range).
+    members, both dangling directions reported by name). The bus import is COMPLETE, and the DRAWING side
+    is too — `SchematicBus.Group(label, members, path, …)` draws a group / alias bundle (arbitrary label
+    text, explicit member names) beside the vector form, riding the same thick-pen / entries /
+    Verify-exempt machinery (the vector constructor unchanged and byte-identical).
     **Multi-unit symbols merge** now (a `PartDefinition` gains `Units` — one `Symbol` per unit, `Pins`
     the union — and `KiCadSchReader` merges the same-refdes `(unit N)` instances into ONE component,
     placing each unit's pins at its own location; single-unit / symbol-less definitions are

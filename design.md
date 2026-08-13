@@ -7858,9 +7858,13 @@ the generic per-layer loop). **The bus line-work is kept OUT of the wire graph**
 `DrawnConnectivity`/`Verify()` never see it — a bus wire touching two member wires cannot merge
 their nets — and the same sheet drawn with a bus reconstructs EXACTLY the same nets as the
 plain-wire sheet (the member nets do the connecting; the bus is only how they are drawn as a
-bundle). Buses are OPT-IN, so a sheet declaring none is BYTE-IDENTICAL (asserted). Filed on the
-DRAWING side: bus GROUP labels (`{…}` / alias-named bundles as drawn text — the IMPORT side handles
-all three forms, single-sheet and across sheets; a `SchematicBus` draws a vector range only). Docs:
+bundle). Buses are OPT-IN, so a sheet declaring none is BYTE-IDENTICAL (asserted). **Group / alias
+bundles draw too**: `SchematicBus.Group(label, members, path, …)` takes the drawn label as arbitrary
+text (`"{SDA SCL}"`, an alias name) with the member names stated EXPLICITLY (the drawing does not parse
+the label — what the group means is the caller's declaration, the import side's rule mirrored), riding
+the same thick-pen/entries/Verify-exempt machinery as a vector bus; the vector constructor is unchanged
+and byte-identical. So buses are complete on BOTH sides — the import reads vectors/groups/aliases
+single-sheet and across sheets, and the sheet draws vector and group/alias bundles. Docs:
 `examples/ecad-schematic-sheet.md`.
 
 ### Stage 6 — Gerber (RS-274X) + Excellon fabrication export (`PcbGerberExport`)

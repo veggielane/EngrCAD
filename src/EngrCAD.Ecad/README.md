@@ -674,8 +674,10 @@ bus draws a bundle but **connects nothing** — its line-work is deliberately ke
 graph, so a bus wire crossing two member wires cannot merge their nets and `Verify()` is
 unaffected. The bus-wire pen is `SchematicSheetOptions.BusWireWidth` (default 0.8 mm, wider than
 a wire's 0.5). A sheet declaring **no** bus is byte-identical (buses are opt-in). Caller-declared,
-never auto-routed. Filed on the DRAWING side: bus GROUP labels as drawn text (`SchematicBus` draws a
-vector range only — the IMPORT side handles all three forms, single-sheet and across sheets).
+never auto-routed. **Group / alias bundles draw too**: `SchematicBus.Group(label, members, path, …)`
+takes arbitrary label text (`"{SDA SCL}"`, an alias name) with explicit member names — so buses are
+complete on both sides (the import reads vectors/groups/aliases, single-sheet and across sheets; the
+sheet draws vector and group/alias bundles).
 
 **The border and title block come from the shared `DrawingFrame`** (Modeling) — the SAME value
 type the mechanical [drawing sheet](../EngrCAD.Modeling/README.md) draws, so a schematic and a
