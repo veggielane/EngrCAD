@@ -2390,25 +2390,86 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     its recorded tolerance, the path is wrong, whatever the speedup); determinism
     stated honestly per path (same-device reproducibility is achievable, cross-device
     is not, and the docs must say which is promised).
-- [ ] **2.5D CAM — pocketing, profiling, drilling cycles and a G-code writer.** The
-  nearest-term of the domains here, because the hard part shipped without ever being
-  called CAM: `Region2dOffset` IS toolpath offsetting, successive inward offsets ARE
-  pocket clearing, `Stroke` is documented as toolpath footprints, and
-  `Shape.Section`/`Silhouette` produce the 2D input from any solid. What is missing is
-  the thin layer on top: pass linking (climb vs conventional ordering), lead-in/out
-  arcs, depth stepping, a drilling-cycle vocabulary that reads `HoleTable.For(part)`
-  (the holes already know their specs and depths), and a dependency-free G-code
-  writer — a text format plainer than four formats already hand-rolled here.
-  - **Verification bar, in the house style**: path-length and swept-area identities
-    against closed forms the 2D engine already answers; "no gouging" as an EXACT
-    claim — every path point at least the tool radius from the region boundary, which
-    the exact 2D signed distance can assert point by point; and machined-stock
-    simulation by successive 2D boolean subtraction, its residual against the target
-    region measured rather than eyeballed.
-  - **Honest sequencing**: pocket/profile passes over a `Region2d` → depth stepping
-    and linking → G-code out → drilling cycles from the hole table. 3D surfacing is a
-    DIFFERENT problem (scallop height over meshes) and should be assessed separately,
-    not assumed to follow.
+- [ ] **CNC / CAM campaign — 3D-printing (FDM) slicing, 2.5D CNC milling (the Kiri:Moto
+  shape), 3-axis surfacing, and HSM adaptive clearing.** One campaign because all four
+  stand on a substrate that already shipped without ever being called CAM: exact planar
+  sections (`Shape.Section`/`SectionExact` — a bore's rim arrives as ONE arc, so an
+  arc-capable G-code writer emits G2/G3 rather than chords), exact 2D offsetting
+  (`Region2dOffset`/`CurvedRegion2dOffset` — successive inward offsets ARE pocket
+  clearing and perimeter shells, round joins are exact sectors, and `Stroke` is already
+  documented as "toolpath footprints"), the space-filling infill family
+  (`SpaceFillingInfill`/`InfillPath`, whose docs call their consumer a toolpath, with
+  coverage MEASURED through `Stroke` and thin necks through `Region2dThickness`),
+  deterministic travel linking (`RunLinker` — the open-TSP heuristic all fill consumers
+  already share), the exact 2D signed distance (`SketchRegion.SignedDistance`), overhang
+  analysis (`Manufacturability` — the support-generation seed, thresholds compared on
+  the dot product), swept volumes (`Shape.SweptOver`, implicit-Native — a material-removal
+  simulation is a swept tool subtracted from stock, which the SDF engine does natively),
+  and `HoleTable.For(part)` (the drilling cycles' input — the holes already know their
+  specs and depths). What is missing everywhere is the same thin-but-decisive layer:
+  tool/machine models, pass linking with lead-in/out, Z stepping, and G-code.
+  - **Stage 1 — FDM slicing** (most of its machinery is already landed): per-layer
+    `Shape.Section` → perimeter shells by inward offset → infill clipped to the
+    innermost shell (the `SpaceFillingInfill` families are the standard patterns —
+    the plain serpentine is `blockOrder: 0`, gyroid infill is a plane-section of the
+    TPMS family the implicit engine already carries) → travel linking → G-code
+    (Marlin/RepRap flavour). The genuinely NEW pieces: the extrusion-volume model
+    (bead cross-section × path length → E-axis, with `FilamentDiameter`/nozzle in a
+    printer profile), retraction/seam placement (seam = a deterministic per-loop
+    anchor, never rounding luck), SUPPORTS from the measured overhang field (the
+    `Manufacturability` check is the detector; the support pattern is a sparse infill
+    of the projected overhang region), and brim/skirt/raft as outward offsets.
+    **Verification bar**: the MASS identity — total extruded volume vs the solid's own
+    volume with each deviation ATTRIBUTED (perimeter chord error, infill
+    `CoveredFraction`, both already measured quantities, never one fudge factor); a
+    per-layer area identity against `Shape.Section`'s closed forms; and a twin-decoder
+    G-code READER recovering every path (the house style — a structural validator
+    proves nothing about coordinates).
+  - **Stage 2 — 2.5D CNC milling** (the Kiri:Moto shape: pocket, profile, drill, tabs):
+    pocketing = the inward-offset ladder, profiling = one outline offset by tool radius
+    with tabs left standing, drilling cycles (G81/G83 peck) read `HoleTable.For(part)`,
+    climb-vs-conventional is an ORDERING of loops the exact tier already orients,
+    lead-in/out arcs from the arc vocabulary, depth stepping per pass. Feeds/speeds as
+    a ⚠ verify-against-datasheet `ToolLibrary` (the `StandardHoles` convention —
+    chip-load tables are transcriptions, never derivations). **Verification bar**: "no
+    gouging" as an EXACT claim — every path point at least the tool radius from the
+    region boundary, assertable point by point through the exact 2D signed distance;
+    swept-area identities against closed forms; machined-stock simulation by successive
+    2D boolean subtraction with the residual against the target region MEASURED. A
+    LASER/drag-knife mode is the near-free adjacent (a kerf-offset outline cut — the
+    2D machinery plus the DXF/SVG writers already cover it; Kiri:Moto ships it for the
+    same reason).
+  - **Stage 3 — 3-axis surfacing** (a DIFFERENT problem from 2.5D, assessed as such):
+    waterline passes are planar sections; raster passes need the DROP-CUTTER against
+    the mesh `Bvh` — and the implicit engine is the differentiator here, because a
+    ball-nose cutter-location surface IS the SDF offset (offset the part by the tool
+    radius, drop the centre by the radius: exact where the field is exact, no
+    triangle-by-triangle cusp bookkeeping), with flat and bull-nose ends as the
+    rounded-cone distance the SDF vocabulary already spells. **Verification bar**: the
+    cutter-location surface against sphere/plane closed forms; scallop height vs
+    stepover on a plane (h ≈ s²/8r) asserted as arithmetic; gouge freedom as an SDF
+    inequality (every cutter centre reads ≥ tool radius from the part), which is the
+    3D twin of stage 2's exact claim.
+  - **Stage 4 — HSM adaptive clearing** (the research-grade centrepiece, flagged as
+    such: Kiri:Moto does not attempt it; Fusion/HSMWorks is the reference): trochoidal
+    and constant-ENGAGEMENT pocketing, where the invariant that defines the feature is
+    directly assertable — the engagement ANGLE (the arc of tool circumference in
+    material at each step) computed from the evolving 2D stock region and BOUNDED by
+    the stated maximum, never inferred from "it looks smooth". The distance-field
+    machinery is the substrate (a medial-axis-guided spiral is a walk on the exact 2D
+    distance the region already answers; `Region2dThickness` finds the necks that force
+    trochoidal linking), and the honest sequencing is trochoidal SLOTTING first (a
+    closed-form cycloid family over a centre-line, engagement bounded by construction)
+    before general adaptive spirals (iterative, and the stock model updates per pass —
+    the 2D boolean is the inner loop, so its measured cost budget decides the
+    representation, region vs raster, the Packing lesson).
+  - **Cross-cutting, all stages**: ONE dependency-free G-code writer with per-dialect
+    flavours (Marlin vs GRBL/LinuxCNC differ in words, not structure — a fifth
+    hand-rolled text format, plainer than PDF was) plus its twin-decoder reader; a
+    `Machine`/`Tool`/`PrinterProfile` vocabulary with every transcribed table ⚠
+    flagged; toolpath preview in the viewer as ordinary line geometry (the isoline
+    overlay's machinery); and determinism throughout — two slices of one scene must be
+    byte-identical, because a toolpath diff is how a CAM regression is caught.
 
 Each of these is its own product-sized campaign rather than a backlog item, and each sits
 here because the honest assessment says so — not because nobody got to it. They are kept
