@@ -27,6 +27,15 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
 - **`PrinterProfile`** carries the process numbers (nozzle, filament, layer height, walls,
   density, speeds, retraction, temperatures with 0 = "not written") and refuses an unusable
   profile BY NAME — a layer taller than the bead degenerates the stadium cross-section.
+- **The print DIRECTION is a parameter, not a re-model**: `Slice(shape, profile,
+  printDirection)` rotates the part by the minimal rotation taking the chosen axis to bed +Z
+  and slices in bed coordinates (+Z is the byte-identical fast path; antiparallel turns π about
+  the one `ArbitraryPerpendicular` convention; zero refuses by name;
+  `SlicedPart.PrintDirection` records the choice).
+- **The print ANIMATES with no re-meshing**: the viewer's `SectionTracks.Reveal` (the animation
+  system's section track — a clip plane is shader state) sweeps a plane up the build direction
+  quantized to the slice's own layer count, so the reveal completes whole layers the way a
+  printer does. See `docs/examples/cam-slicing.md`'s committed APNG.
 
 ## G-code (`GcodeWriter`, `GcodeReader`)
 

@@ -8919,8 +8919,41 @@ perpendicularity of the raw directions; solid-infill coverage as a MEASURED rati
 deviations ATTRIBUTED (the stadium bead's ~10.7% corner deficit against a rectangular slab plus
 the scan's half-spacing edge margins — which is why the ratio sits below 1, never above);
 determinism byte-for-byte through the writer; and every refusal by name. Docs
-`examples/cam-slicing.md`; the campaign's remaining stages and the animation deliverable stay
-in todo.md.
+`examples/cam-slicing.md`; the campaign's remaining stages stay in todo.md.
+
+**The print DIRECTION is a parameter, not a re-model** — `Slice(shape, profile,
+printDirection)` rotates the part by the MINIMAL rotation taking the chosen axis to bed +Z and
+slices in bed coordinates. +Z is the identity fast path (no transform node at all, so the
+default slice is byte-identical to passing null — asserted through the writer); the antiparallel
+case has no unique minimal axis, so it turns π about the codebase's one
+`ArbitraryPerpendicular` convention, deterministic rather than a rounding accident; a zero
+direction refuses by name; `SlicedPart.PrintDirection` records the choice so a consumer can pose
+the result back into the part's own frame.
+
+**The print ANIMATES with no re-meshing, and landing that added the animation system's FOURTH
+track kind.** For planar slicing, the state of a print at any instant IS the material below a
+plane — and a clip plane is SHADER state, so the material-addition animation honours the
+"an animation must not touch geometry" rule by construction rather than by discipline.
+`SectionTrack` sits beside pose/camera/deformation with the same at-most-one rule (several
+plane sets on one clip state have no defined composition — a multi-plane cut is ONE track
+returning the whole set); `SectionTracks.Sweep(normal, from, to, steps)` sweeps one plane with
+optional STEP quantization (ceiling, so any t > 0 shows completed steps — set steps to the
+slice's layer count and the reveal finishes whole layers, the way a printer does), and
+`SectionTracks.Reveal(bounds, growDirection, steps)` is the print-progress law (t = 0 hides the
+body entirely, t = 1 shows it whole, the offsets read off the bounds' corners with a 1% pad so
+clip-shader rounding cannot leak a sliver at either end). The wiring touched every consumer of
+`Animation.At` and nothing else: `AnimationSample` gained `Sections` (null = whatever sections
+the render call or window carries stand — the same null-means-unchanged convention as the other
+three), `OffscreenRenderer.RenderSequence` gained a per-frame-sections overload (the incumbent
+3-tuple form delegates with null sections, so an untracked sequence is bit-identical; per-frame
+sections ride the one-context batch exactly as the deformation scalar does, because both are
+uniforms — they change what a frame LOOKS like without changing what is in it), the
+`RenderToImage(scene, animation, t, …)` still gives a section track's planes precedence over
+the call's own (the camera-precedence rule applied to the clip), and window playback drives
+`ViewportControl.SectionPlanes`/`SectionEnabled` from the sample with clamp semantics — a
+finished reveal stays revealed exactly as a finished explode stays exploded. One compile-time
+tax recorded: the new overload made a bare `[]` argument ambiguous, which is what an explicitly
+typed empty list in the one affected test is about.
 
 ## 7. Query layer
 

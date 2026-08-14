@@ -2416,7 +2416,14 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     printing the outer wall first), ±45° rectilinear infill by exact even-odd scanline
     anchored to the global grid, `RunLinker` travel, the stadium-bead extrusion
     identity asserted THROUGH the twin decoder, retraction as decoder-matchable pairs,
-    write-only-when-stated temperatures, byte-identical determinism. **Stage-1
+    write-only-when-stated temperatures, byte-identical determinism. **The print DIRECTION
+    is selectable** (`Slice(shape, profile, printDirection)` — minimal rotation onto the
+    bed, +Z the byte-identical fast path, antiparallel via the one ArbitraryPerpendicular
+    convention, zero refused) **and the print ANIMATES** (`SectionTrack`, the animation
+    system's fourth track kind: `SectionTracks.Reveal` sweeps a clip plane up the build
+    direction quantized to the slice's own layer count — shader state, no re-meshing, wired
+    through APNG export / stills / window playback; the `animate:cam-print` APNG is
+    committed). **Stage-1
     residuals, open**: SUPPORTS from the measured overhang field (the
     `Manufacturability` check is the detector; the support pattern is a sparse infill
     of the projected overhang region), brim/skirt/raft as outward offsets, seam

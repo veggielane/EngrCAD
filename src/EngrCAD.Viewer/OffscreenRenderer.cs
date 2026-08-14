@@ -140,6 +140,34 @@ public static class OffscreenRenderer
         AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
     {
         ArgumentNullException.ThrowIfNull(frames);
+        return RenderSequence(
+            [.. frames.Select(f =>
+                (f.Instances, f.Camera, f.DeformFactor, (IReadOnlyList<SectionPlane>?)null))],
+            width, height, furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
+            sectionPlanes, sectionCombine, fields, shading, annotationDepth);
+    }
+
+    /// <summary>
+    /// <see cref="RenderSequence(IReadOnlyList{ValueTuple{IReadOnlyList{PartInstance}, CameraState, double}}, int, int, bool, ViewStyle, SectionAxis, double?, bool, IReadOnlyList{SectionPlane}?, SectionCombine, bool, ShadingStyle, AnnotationDepth)"/>
+    /// with PER-FRAME section planes — a frame's own planes (a section track's output) win over
+    /// the call-level <paramref name="sectionPlanes"/>; null keeps the call-level ones, so a
+    /// sequence with no section track is bit-identical to before. A clip plane is shader state,
+    /// so per-frame sections ride the one-context batch exactly as the deformation scalar does:
+    /// they change what a frame LOOKS like without changing what is in it.
+    /// </summary>
+    public static IReadOnlyList<byte[]> RenderSequence(
+        IReadOnlyList<(IReadOnlyList<PartInstance> Instances, CameraState Camera, double DeformFactor,
+            IReadOnlyList<SectionPlane>? Sections)> frames,
+        int width, int height, bool furniture = true,
+        ViewStyle style = ViewStyle.ShadedWithEdges,
+        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
+        IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        SectionCombine sectionCombine = SectionCombine.Intersection,
+        bool fields = true, ShadingStyle shading = ShadingStyle.Lit,
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
         if (frames.Count == 0)
@@ -151,10 +179,11 @@ public static class OffscreenRenderer
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
         var cache = new PassCache(gl);
         var pixels = new List<byte[]>(frames.Count);
-        foreach (var (instances, camera, deformFactor) in frames)
+        foreach (var (instances, camera, deformFactor, sections) in frames)
         {
             var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera,
-                furniture, style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine,
+                furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
+                sections ?? sectionPlanes, sectionCombine,
                 supersample, preview: null, previewWorld: null, fields, deformFactor, shading, annotationDepth);
             pixels.Add(Downsample(oversized, width, height, supersample));
         }

@@ -236,12 +236,16 @@ public static class EngrCad
                 bounds = bounds.Union(instance.Bounds());
             resolved = CameraMath.DefaultCamera(bounds);
         }
+        var sample = animation.At(t);
         OffscreenRenderer.RenderToImage(instances, path, width, height, resolved,
             furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine, preview: null, previewWorld: null, fields,
+            // A section track's planes win over the call's own (the camera-precedence
+            // rule applied to the clip); with no such track the explicit planes stand.
+            sample.Sections ?? sectionPlanes, sectionCombine,
+            preview: null, previewWorld: null, fields,
             // A deformation track reaches the pass as one scalar; with no such track the
             // factor is 1, so a still of a pose-only animation is unchanged.
-            animation.At(t).DeformFactor, shading, annotationDepth);
+            sample.DeformFactor, shading, annotationDepth);
     }
 
     /// <summary>

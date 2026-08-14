@@ -750,6 +750,14 @@ internal sealed class SceneHost
         if (sample.Camera is { } camera)
             Viewport.Camera = camera;
         Viewport.DeformFactor = sample.DeformFactor;
+        if (sample.Sections is { } sections)
+        {
+            // A section track drives the window's own clip state (the toolbar's planes are
+            // replaced while the animation runs — clamp semantics, so a finished reveal
+            // stays revealed exactly as a finished explode stays exploded).
+            Viewport.SectionPlanes = sections;
+            Viewport.SectionEnabled = true;
+        }
     }
 
     /// <summary>

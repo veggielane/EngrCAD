@@ -42,11 +42,14 @@ public enum AnimationEasing
 
 /// <summary>One evaluated instant of an <see cref="Animation"/>: the posed instances
 /// (null when the animation has no pose track — the scene's own instances stand), the
-/// camera (null when it has no camera track — the viewer's current camera stands) and
-/// the deformation factor (null when it has no deformation track — every part draws at
-/// its own <c>FieldDisplay.DeformScale</c>, i.e. factor 1).</summary>
+/// camera (null when it has no camera track — the viewer's current camera stands), the
+/// deformation factor (null when it has no deformation track — every part draws at
+/// its own <c>FieldDisplay.DeformScale</c>, i.e. factor 1) and the section planes (null
+/// when it has no section track — whatever sections the render call or the window
+/// carries stand).</summary>
 public sealed record AnimationSample(
-    IReadOnlyList<PartInstance>? Instances, CameraState? Camera, double? DeformScale = null)
+    IReadOnlyList<PartInstance>? Instances, CameraState? Camera, double? DeformScale = null,
+    IReadOnlyList<SectionPlane>? Sections = null)
 {
     /// <summary>The deformation factor a renderer should apply — the track's value, or 1
     /// when nothing is animating it. One property so no front end has to spell the
@@ -125,6 +128,19 @@ public abstract class DeformationTrack : AnimationTrack
 }
 
 /// <summary>
+/// A track that drives the SECTION PLANES over the timeline — the material-addition /
+/// material-removal player. It obeys the file's load-bearing rule by construction: a
+/// clip plane is shader state (the same per-fragment discard the section toolbar
+/// drives), so a print-progress reveal or a machining cutaway animates with NO
+/// re-meshing at all — the geometry is uploaded once and the plane sweeps through it.
+/// </summary>
+public abstract class SectionTrack : AnimationTrack
+{
+    /// <summary>The section planes at track-local <paramref name="t"/> ∈ [0,1].</summary>
+    public abstract IReadOnlyList<SectionPlane> SectionsAt(double t);
+}
+
+/// <summary>
 /// A timeline over poses and the camera: a duration (seconds — playback and export
 /// timing), an easing, at most one <see cref="PoseTrack"/> and at most one
 /// <see cref="CameraTrack"/>. <see cref="At"/> is a PURE function of t, which is the
@@ -155,6 +171,9 @@ public sealed class Animation
     /// <summary>The deformation track, when the animation scales a displayed result's
     /// deformation.</summary>
     public DeformationTrack? DeformationTrack { get; private set; }
+
+    /// <summary>The section track, when the animation drives the clip planes.</summary>
+    public SectionTrack? SectionTrack { get; private set; }
 
     public Animation(double durationSeconds = 5, AnimationEasing easing = AnimationEasing.Linear)
     {
@@ -206,6 +225,20 @@ public sealed class Animation
         return this;
     }
 
+    /// <summary>Adds the section track (at most one — several plane sets on one clip
+    /// state have no defined composition; a multi-plane cut is ONE track returning the
+    /// whole set). Chainable.</summary>
+    public Animation With(SectionTrack track)
+    {
+        ArgumentNullException.ThrowIfNull(track);
+        if (SectionTrack is not null)
+            throw new InvalidOperationException(
+                "This animation already has a section track. Two plane sets on one clip state " +
+                "have no defined composition; return the whole set from one track instead.");
+        SectionTrack = track;
+        return this;
+    }
+
     /// <summary>
     /// The animation evaluated at timeline <paramref name="t"/> (clamped to [0,1]):
     /// eased, windowed, handed to the tracks. Pure — the same t always returns the same
@@ -218,7 +251,8 @@ public sealed class Animation
         var poses = PoseTrack is { } pose ? pose.PosesAt(pose.LocalT(eased)) : null;
         var camera = CameraTrack is { } view ? view.CameraAt(view.LocalT(eased)) : null;
         double? deform = DeformationTrack is { } flex ? flex.ScaleAt(flex.LocalT(eased)) : null;
-        return new AnimationSample(poses, camera, deform);
+        var sections = SectionTrack is { } clip ? clip.SectionsAt(clip.LocalT(eased)) : null;
+        return new AnimationSample(poses, camera, deform, sections);
     }
 
     /// <summary>The animation evaluated at <paramref name="seconds"/> into playback.</summary>

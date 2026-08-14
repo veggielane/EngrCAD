@@ -117,13 +117,15 @@ public static class AnimationExport
         }
 
         // Evaluate the whole timeline FIRST, then render it in one batch: an animation
-        // moves poses, the camera and one deformation scalar — never geometry — so every
-        // frame draws the same parts and OffscreenRenderer.RenderSequence can hold one
-        // EGL context, one set of linked programs and one set of uploaded buffers for all
-        // of them. A deformation track rides that batching for free precisely because it
-        // is a uniform: it changes what a frame LOOKS like without changing what is in it.
+        // moves poses, the camera, one deformation scalar and the clip planes — never
+        // geometry — so every frame draws the same parts and
+        // OffscreenRenderer.RenderSequence can hold one EGL context, one set of linked
+        // programs and one set of uploaded buffers for all of them. A deformation track
+        // and a section track ride that batching for free precisely because both are
+        // shader state: they change what a frame LOOKS like without changing what is in it.
         var timeline =
-            new List<(IReadOnlyList<PartInstance> Instances, CameraState Camera, double DeformFactor)>(frames);
+            new List<(IReadOnlyList<PartInstance> Instances, CameraState Camera, double DeformFactor,
+                IReadOnlyList<SectionPlane>? Sections)>(frames);
         CameraState used = fixedCamera ?? CameraMath.DefaultCamera(Aabb.Empty);
         for (int i = 0; i < frames; i++)
         {
@@ -132,7 +134,7 @@ public static class AnimationExport
             used = sample.Camera ?? fixedCamera
                 ?? throw new InvalidOperationException(
                     "No camera: the animation has no camera track and none was supplied.");
-            timeline.Add((sample.Instances ?? defaults, used, sample.DeformFactor));
+            timeline.Add((sample.Instances ?? defaults, used, sample.DeformFactor, sample.Sections));
         }
         var pixels = OffscreenRenderer.RenderSequence(
             timeline, width, height, furniture: true, style, ambientOcclusion: ambientOcclusion);

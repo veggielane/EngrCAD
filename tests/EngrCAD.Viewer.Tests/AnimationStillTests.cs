@@ -70,7 +70,10 @@ public class AnimationStillTests
     public void EmptySequenceRendersNothingRatherThanCreatingAContext()
     {
         Skip.If(SkipReason is not null, SkipReason);
-        Assert.Empty(OffscreenRenderer.RenderSequence([], 64, 64));
+        // Explicitly typed: the per-frame-sections overload makes a bare [] ambiguous.
+        IReadOnlyList<(IReadOnlyList<PartInstance> Instances, CameraState Camera, double DeformFactor)>
+            empty = [];
+        Assert.Empty(OffscreenRenderer.RenderSequence(empty, 64, 64));
     }
 
     [SkippableFact]

@@ -67,6 +67,12 @@
       "live": true
     },
     {
+      "id": "cam-print",
+      "page": "examples/cam-slicing.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'FdmSlicer' does not exist in the current context"
+    },
+    {
       "id": "chamfer-angle",
       "page": "examples/chamfer-fillet.md",
       "live": true

@@ -167,6 +167,34 @@ public sealed class FdmSlicerTests
     }
 
     [Fact]
+    public void PrintDirection_SelectsTheBuildOrientation()
+    {
+        // The same box printed on its side: +X up means the 20 mm axis builds vertically —
+        // 80 layers at 0.25 — and every section is the 8×10 face.
+        var box = Shape.Box(20, 10, 8);
+        var onSide = FdmSlicer.Slice(box, Profile(), new Vector3d(1, 0, 0));
+        Assert.Equal(80, onSide.Layers.Count);
+        Assert.All(onSide.Layers, l => Assert.Equal(80.0, l.Regions.Sum(r => r.Area), 6));
+        Assert.Equal(Vector3d.UnitX, onSide.PrintDirection);
+
+        // +Z is the identity fast path: byte-identical to passing no direction at all.
+        Assert.Equal(
+            GcodeWriter.Write(FdmSlicer.Slice(Shape.Box(12, 9, 3), Profile())),
+            GcodeWriter.Write(FdmSlicer.Slice(Shape.Box(12, 9, 3), Profile(), Vector3d.UnitZ)));
+
+        // Upside down (−Z): the antiparallel case has no unique minimal rotation, so it turns π
+        // about the one arbitrary-perpendicular convention — deterministic, and for a box the
+        // layer grid is unchanged.
+        var flipped = FdmSlicer.Slice(box, Profile(), new Vector3d(0, 0, -1));
+        Assert.Equal(32, flipped.Layers.Count);
+        Assert.All(flipped.Layers, l => Assert.Equal(200.0, l.Regions.Sum(r => r.Area), 6));
+
+        // A zero direction is refused by name.
+        Assert.Contains("direction", Assert.Throws<ArgumentException>(() =>
+            FdmSlicer.Slice(box, Profile(), Vector3d.Zero)).Message);
+    }
+
+    [Fact]
     public void TheSlice_IsDeterministic()
     {
         string once = GcodeWriter.Write(FdmSlicer.Slice(Shape.Box(12, 9, 3), Profile()));

@@ -55,8 +55,12 @@ public sealed record SliceLayer(
     public double DepositionLength => Paths.Sum(p => p.Length);
 }
 
-/// <summary>A sliced part: the profile it was sliced with and the layers bottom-up.</summary>
-public sealed record SlicedPart(PrinterProfile Profile, IReadOnlyList<SliceLayer> Layers)
+/// <summary>A sliced part: the profile it was sliced with, the layers bottom-up, and the PRINT
+/// DIRECTION that was chosen — the part axis that points up on the bed. Layers and G-code are
+/// always in BED coordinates (the part rotated so that direction is +Z); the direction is
+/// recorded so a consumer can pose the result back into the part's own frame.</summary>
+public sealed record SlicedPart(
+    PrinterProfile Profile, IReadOnlyList<SliceLayer> Layers, Vector3d PrintDirection)
 {
     /// <summary>Total deposition length over every layer (mm).</summary>
     public double DepositionLength => Layers.Sum(l => l.DepositionLength);
@@ -96,12 +100,30 @@ public static class FdmSlicer
 {
     private const double NudgeFraction = 0.05;
 
-    /// <summary>Slices a shape with the given profile (null = <see cref="PrinterProfile.Default"/>).</summary>
-    public static SlicedPart Slice(Shape shape, PrinterProfile? profile = null)
+    /// <summary>
+    /// Slices a shape with the given profile (null = <see cref="PrinterProfile.Default"/>).
+    /// <paramref name="printDirection"/> selects the BUILD ORIENTATION — the part axis that
+    /// should point up on the bed (null = the part's own +Z): the shape is rotated by the
+    /// MINIMAL rotation taking that direction to +Z and sliced in bed coordinates, so choosing
+    /// a direction never re-models anything, it re-orients it. A direction already equal to +Z
+    /// takes the identity fast path (bit-identical to passing null); the antiparallel case
+    /// (−Z) turns π about the codebase's one arbitrary-perpendicular convention
+    /// (<see cref="Vector3d.ArbitraryPerpendicular"/>), so it is deterministic rather than a
+    /// rounding accident; a zero direction is refused by name.
+    /// </summary>
+    public static SlicedPart Slice(
+        Shape shape, PrinterProfile? profile = null, Vector3d? printDirection = null)
     {
         ArgumentNullException.ThrowIfNull(shape);
         var p = profile ?? PrinterProfile.Default;
         p.Validate();
+
+        var direction = printDirection ?? Vector3d.UnitZ;
+        if (!(direction.Length > 0) || !double.IsFinite(direction.Length))
+            throw new ArgumentException(
+                "The print direction must be a nonzero finite vector.", nameof(printDirection));
+        var up = direction.Normalized();
+        shape = OrientForPrinting(shape, up);
 
         var bounds = shape.Bounds();
         double height = bounds.Max.Z - bounds.Min.Z;
@@ -169,7 +191,22 @@ public static class FdmSlicer
             layers.Add(new SliceLayer(i, bounds.Min.Z + (i + 1) * h, sectionZ, regions, paths));
         }
 
-        return new SlicedPart(p, layers);
+        return new SlicedPart(p, layers, up);
+    }
+
+    /// <summary>Rotates the shape so <paramref name="up"/> (unit) becomes bed +Z, by the
+    /// minimal rotation. +Z itself is the identity (no transform node at all, so the default
+    /// slice is bit-identical to the pre-orientation code); −Z has no unique minimal axis, so
+    /// it turns π about the one arbitrary-perpendicular convention.</summary>
+    private static Shape OrientForPrinting(Shape shape, in Vector3d up)
+    {
+        double cos = up.Dot(Vector3d.UnitZ);
+        if (cos > 1 - 1e-12)
+            return shape;
+        if (cos < -1 + 1e-12)
+            return shape.Rotate(up.ArbitraryPerpendicular(Tolerance.Default), Math.PI);
+        var axis = up.Cross(Vector3d.UnitZ).Normalized();
+        return shape.Rotate(axis, Math.Acos(Math.Clamp(cos, -1, 1)));
     }
 
     /// <summary>The section at z (the same routes <c>Shape.Section</c> takes, over the ONE
