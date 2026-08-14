@@ -240,6 +240,13 @@ document.addEventListener('click', function (event) {
             { label: 'MID / LDS — routing on a moulded surface', slug: 'examples/ecad-mid' },
           ],
         },
+        {
+          label: 'Manufacturing (CAM)',
+          collapsed: true,
+          items: [
+            { label: '3D-printing: FDM slicing & G-code', slug: 'examples/cam-slicing' },
+          ],
+        },
         { label: 'Writing examples', slug: 'writing-examples' },
         { label: 'Changelog', slug: 'changelog' },
         { label: 'API reference', link: 'api/' },

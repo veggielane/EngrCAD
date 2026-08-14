@@ -224,6 +224,7 @@ var options = ScriptOptions.Default
         typeof(EngrCAD.Query.SpatialCollection<>).Assembly,
         typeof(EngrCAD.Fea.TetMesh).Assembly,
         typeof(EngrCAD.Ecad.Schematic).Assembly,
+        typeof(EngrCAD.Cam.PrinterProfile).Assembly,
         typeof(Shape).Assembly,
         // The viewer, so a snippet can declare `sectionPlanes`/`camera` (see below) --
         // SectionPlane and CameraState live there.
@@ -234,7 +235,7 @@ var options = ScriptOptions.Default
         "System", "System.IO", "System.Linq", "System.Collections.Generic",
         "EngrCAD.Core", "EngrCAD.Core.Geometry2", "EngrCAD.Mesh", "EngrCAD.Implicit",
         "EngrCAD.BRep", "EngrCAD.Interop", "EngrCAD.Query", "EngrCAD.Modeling",
-        "EngrCAD.Fea", "EngrCAD.Ecad", "EngrCAD.Viewer");
+        "EngrCAD.Fea", "EngrCAD.Ecad", "EngrCAD.Cam", "EngrCAD.Viewer");
 
 var rendered = 0;
 var executed = 0;

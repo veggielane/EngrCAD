@@ -2408,23 +2408,25 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   and `HoleTable.For(part)` (the drilling cycles' input — the holes already know their
   specs and depths). What is missing everywhere is the same thin-but-decisive layer:
   tool/machine models, pass linking with lead-in/out, Z stepping, and G-code.
-  - **Stage 1 — FDM slicing** (most of its machinery is already landed): per-layer
-    `Shape.Section` → perimeter shells by inward offset → infill clipped to the
-    innermost shell (the `SpaceFillingInfill` families are the standard patterns —
-    the plain serpentine is `blockOrder: 0`, gyroid infill is a plane-section of the
-    TPMS family the implicit engine already carries) → travel linking → G-code
-    (Marlin/RepRap flavour). The genuinely NEW pieces: the extrusion-volume model
-    (bead cross-section × path length → E-axis, with `FilamentDiameter`/nozzle in a
-    printer profile), retraction/seam placement (seam = a deterministic per-loop
-    anchor, never rounding luck), SUPPORTS from the measured overhang field (the
+  - **Stage 1 — FDM slicing: the CORE HAS LANDED** (`EngrCAD.Cam`: `FdmSlicer` +
+    `PrinterProfile` + `GcodeWriter`/`GcodeReader`; design.md §6e, docs
+    `examples/cam-slicing.md`) — mid-layer exact sections over ONE lowering, wall
+    shells by inward offset (innermost-first kept as a print-quality ORDER the travel
+    linker is not allowed to change — the first test run caught the greedy linker
+    printing the outer wall first), ±45° rectilinear infill by exact even-odd scanline
+    anchored to the global grid, `RunLinker` travel, the stadium-bead extrusion
+    identity asserted THROUGH the twin decoder, retraction as decoder-matchable pairs,
+    write-only-when-stated temperatures, byte-identical determinism. **Stage-1
+    residuals, open**: SUPPORTS from the measured overhang field (the
     `Manufacturability` check is the detector; the support pattern is a sparse infill
-    of the projected overhang region), and brim/skirt/raft as outward offsets.
-    **Verification bar**: the MASS identity — total extruded volume vs the solid's own
-    volume with each deviation ATTRIBUTED (perimeter chord error, infill
-    `CoveredFraction`, both already measured quantities, never one fudge factor); a
-    per-layer area identity against `Shape.Section`'s closed forms; and a twin-decoder
-    G-code READER recovering every path (the house style — a structural validator
-    proves nothing about coordinates).
+    of the projected overhang region), brim/skirt/raft as outward offsets, seam
+    placement smarter than the deterministic first-vertex anchor, richer infill
+    patterns (the `SpaceFillingInfill` families — the plain serpentine is
+    `blockOrder: 0`, gyroid infill is a plane-section of the TPMS family the implicit
+    engine already carries), and the MASS identity strengthened to a solid-vs-extruded
+    comparison per shape family (the coverage ratio is measured today with its
+    deviations attributed; the per-layer area and extrusion-bookkeeping identities are
+    landed).
   - **Stage 2 — 2.5D CNC milling** (the Kiri:Moto shape: pocket, profile, drill, tabs):
     pocketing = the inward-offset ladder, profiling = one outline offset by tool radius
     with tabs left standing, drilling cycles (G81/G83 peck) read `HoleTable.For(part)`,
@@ -2463,13 +2465,74 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     before general adaptive spirals (iterative, and the stock model updates per pass —
     the 2D boolean is the inner loop, so its measured cost budget decides the
     representation, region vs raster, the Packing lesson).
+  - **Stage 5 — NON-PLANAR slicing** (deliberately last: it needs stages 1 and 3 landed
+    first): curved-layer FDM, where the top layers follow the part's own surface rather
+    than a stack of planes — the exp-map machinery is the substrate
+    (`MeshLocalParam`/`SurfaceDecoration` already lay flat curves on doubly-curved
+    surfaces WITH THE DISTORTION REPORTED, and that honesty is exactly what a
+    non-planar slicer must inherit: bead spacing on a curved layer is the decoration's
+    `MinScale`/`MaxScale` question verbatim). The v1 shape is planar-body +
+    non-planar TOP-SURFACE finishing (the practical form: the last N layers deform to
+    the surface, everything below stays planar), with the two constraints stated as
+    refusals rather than discovered on a printer — the nozzle CONE must clear the
+    already-printed surface (a swept-clearance query the SDF engine answers) and the
+    layer normal's tilt is bounded by the nozzle geometry. Non-planar 3/5-axis CNC
+    finishing shares the machinery and is assessed here, not assumed.
   - **Cross-cutting, all stages**: ONE dependency-free G-code writer with per-dialect
     flavours (Marlin vs GRBL/LinuxCNC differ in words, not structure — a fifth
     hand-rolled text format, plainer than PDF was) plus its twin-decoder reader; a
     `Machine`/`Tool`/`PrinterProfile` vocabulary with every transcribed table ⚠
-    flagged; toolpath preview in the viewer as ordinary line geometry (the isoline
-    overlay's machinery); and determinism throughout — two slices of one scene must be
+    flagged; **toolpath preview AND animation** — static preview as ordinary line
+    geometry (the isoline overlay's machinery), the TOOL animated along the path as a
+    matrices-only pose track (exactly `MechanismTrack`'s chordal interpolation, so
+    scrubbing/APNG/docs `animate:` fences all work with nothing new), and **material-
+    removal animation** as precomputed stock states — stock minus the tool swept over
+    the path PREFIX at N times (`Shape.SweptOver` is implicit-Native, so each state is
+    one SDF difference polygonized once), played as a recorded sequence, because the
+    "an animation must not touch geometry" rule forbids per-frame re-meshing in live
+    playback and the honest design is MotionStudy's: record frames, interpolate poses,
+    never re-solve; the same states animate an FDM print as material ADDED (the sliced
+    solid below z(t), which for planar slicing is one clip plane and needs no
+    re-meshing at all — the section-plane machinery is the player); and determinism
+    throughout — two slices of one scene must be
     byte-identical, because a toolpath diff is how a CAM regression is caught.
+- [ ] **Heatsink design tool (the natsink shape): correlation-sized fin arrays VERIFIED
+  against the repo's own thermal FEA.** Given a power, an allowable rise, an orientation
+  and an envelope, size a natural-convection fin array and generate the solid — the
+  geometry is trivial for this kernel (a base plate + a fin pattern is `Shape.Extrude` +
+  `PatternLinear`/`LocationSet`, parametric through a `Feature` so a study can drive it),
+  and the VALUE is the two-route verification no spreadsheet tool has: the sizing side is
+  closed form (fin efficiency `tanh(mL)/mL`, the Elenbaas optimum spacing for natural
+  convection, flat-plate Nusselt correlations — every one a ⚠ verify-against-datasheet
+  transcription asserted in datasheet form, the `MarinFactors` convention), and the check
+  side is the LANDED thermal solver (`ThermalSolver` with `Convection` film BCs — the
+  lumped `P/(hA)` fixture already agrees to 0.14%), so the tool's predicted thermal
+  resistance is measured against a real conduction solve of the very solid it generated,
+  fin-efficiency closed form vs FEA on one fin being the discriminating row. A design
+  study (`DesignStudy.Minimize`) over the generated feature's `[Param]`s closes the loop
+  (minimise mass subject to a thermal-resistance limit — the cantilever-study pattern
+  with the thermal solver as the measurement). Honest boundary: correlations are
+  ORIENTATION-specific (vertical vs horizontal plates differ) and only the transcribed
+  cases are offered, by name; forced-convection needs a stated film coefficient (no CFD).
+- [ ] **Topology-optimised HEAT SINK — thermal SIMP plus the docs example (sequenced
+  after the CNC campaign).** The structural optimiser's loop is nearly physics-blind:
+  thermal compliance `T'·q` over a density-scaled conductance is the same OC iteration
+  with `FeaAssembly.Conductance` learning the optional per-element scale
+  `FeaAssembly.Stiffness` already carries (null skips the multiply, the incumbent path
+  bit-identical — the same seam, same argument), the sensitivity is the element THERMAL
+  energy at the assembly's own quadrature (the "two constructions check each other"
+  identity again: `Σ ρᵖ·E_e` vs `f'·T`), and the filter/volume machinery carries over
+  verbatim. **The honest scope is conduction-dominated design** — the classic
+  volume-to-point problem (a generating region drained to a cold edge through a budget
+  of high-conductivity material, which optimises into the well-known dendrite) — because
+  design-dependent CONVECTION on evolving boundaries is refused BY NAME for exactly the
+  reason structural SIMP refuses self-weight: the load moves with the design and the
+  problem stops being self-adjoint. Verification in the landed optimiser's own style:
+  the uniform-field closed form at p = 1, the finite-difference sensitivity check
+  through the PRODUCTION evaluator, volume constraint at round-off, monotone descent —
+  and the docs example designs the heat sink end to end (optimise → `Release` →
+  `Shape.From` → the CNC campaign's own toolpaths over it, which is why it sequences
+  after CNC: the example should finish as a manufacturable part, not a picture).
 
 Each of these is its own product-sized campaign rather than a backlog item, and each sits
 here because the honest assessment says so — not because nobody got to it. They are kept

@@ -12,6 +12,7 @@
     <ProjectReference Include="..\..\src\EngrCAD.Query\EngrCAD.Query.csproj" />
     <ProjectReference Include="..\..\src\EngrCAD.Fea\EngrCAD.Fea.csproj" />
     <ProjectReference Include="..\..\src\EngrCAD.Ecad\EngrCAD.Ecad.csproj" />
+    <ProjectReference Include="..\..\src\EngrCAD.Cam\EngrCAD.Cam.csproj" />
   </ItemGroup>
 
   <ItemGroup>

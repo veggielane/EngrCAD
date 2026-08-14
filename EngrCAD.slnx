@@ -14,6 +14,7 @@
     <Project Path="src/EngrCAD.Web/EngrCAD.Web.csproj" />
     <Project Path="src/EngrCAD.Mcp/EngrCAD.Mcp.csproj" />
     <Project Path="src/EngrCAD.Ecad/EngrCAD.Ecad.csproj" />
+    <Project Path="src/EngrCAD.Cam/EngrCAD.Cam.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/EngrCAD.Demo/EngrCAD.Demo.csproj" />
@@ -39,5 +40,6 @@
     <Project Path="tests/EngrCAD.Mcp.TestModel/EngrCAD.Mcp.TestModel.csproj" />
     <Project Path="tests/EngrCAD.DocsGen.Tests/EngrCAD.DocsGen.Tests.csproj" />
     <Project Path="tests/EngrCAD.Ecad.Tests/EngrCAD.Ecad.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Cam.Tests/EngrCAD.Cam.Tests.csproj" />
   </Folder>
 </Solution>

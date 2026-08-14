@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>EngrCAD CAM: 3D-printing (FDM) slicing and G-code — per-layer exact sections, perimeter shells by inward offset, rectilinear infill, a Marlin-flavour G-code writer and its twin-decoder reader.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Kernel-tier: Core for the exact 2D region machinery, Modeling for Shape.Section
+         and RunLinker. Deliberately NO viewer/Avalonia dependency. -->
+    <ProjectReference Include="..\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="EngrCAD.Cam.Tests" />
+  </ItemGroup>
+</Project>

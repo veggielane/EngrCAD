@@ -8862,6 +8862,66 @@ router are the open follow-ons there, plus hierarchical sheets, buses, off-page 
 back-annotation. Cross-layer via/microvia stitching between board layers (so a net's pads on
 different layers are geometrically connected) is the next embedded-side stage.
 
+## 6e. CAM — manufacturing toolpaths (`EngrCAD.Cam`)
+
+The CNC/CAM campaign (todo.md carries the full staged plan: FDM slicing → 2.5D CNC milling →
+3-axis surfacing → HSM adaptive clearing → non-planar slicing, with toolpath/material-removal
+animation cross-cutting). `EngrCAD.Cam` is a kernel-tier leaf over Core + Modeling, the
+`EngrCAD.Ecad` pattern: no viewer dependency, `InternalsVisibleTo` its tests, packed like every
+`src/*` project.
+
+**Stage 1 — FDM slicing — landed, and it is deliberately a THIN layer over machinery that
+already existed.** The campaign's premise was that the hard parts shipped without ever being
+called CAM, and stage 1 is the measurement of that claim: the slicer's own code is layer
+bookkeeping, an even-odd scanline and a text writer — everything geometric is a call into
+landed machinery.
+
+- **Layers**: exact sections at each layer's MID-height (the standard slicer convention, so a
+  plane never lands flush on the part's own top/bottom face; the top plane is additionally
+  clamped below the part's top so an exactly-divisible height cannot go flush either, and a
+  flush INTERNAL horizontal face — which sectioning rightly refuses, an in-plane face making
+  the section an area — is retried once at a deterministic +5%-of-a-layer nudge). The shape is
+  lowered ONCE and sectioned N times through the same `PlanarSection` routes `Shape.Section`
+  takes (the `Part.TryGetSolid` lesson — a hundred layers must not mean a hundred lowerings),
+  which also means ANY representation slices: B-Rep exactly, mesh/SDF through the display mesh.
+- **Walls**: successive inward `Region2dOffset`s — wall k's centreline at `bead·(k + ½)`, holes
+  getting their own loops. Emitted innermost-first and NOT re-ordered by the travel linker,
+  which is a decision the first test run forced: the greedy linker happily prints the outer
+  wall first when its seam is nearer, and wall order is a print-QUALITY rule (the outer wall
+  lands on settled neighbours), not a travel optimisation — so walls keep their emission order
+  and only the infill is linked.
+- **Infill**: a rectilinear scan alternating ±45° per layer at spacing `bead/density`, clipped
+  to the region inside the innermost wall (inset `bead·(walls + ½)`, so the infill bead just
+  meets the wall bead) by an EXACT even-odd crossing count with the half-open vertex rule (the
+  `SheetHatch` lesson — a scan line through a vertex is counted by exactly one incident edge),
+  anchored to the GLOBAL grid so the pattern's phase is a function of the stated spacing and
+  never of where the part sits (the `SpaceFillingInfill` phase rule). Runs are linked by the
+  shared `RunLinker`.
+- **G-code**: the Marlin-flavour writer STATES its modes (G21/G90/M82 — a reader that cannot
+  see a mode cannot check it) and the extrusion bookkeeping is an IDENTITY, not a calibration:
+  every E is cumulative filament with `ΔE = segment length × BeadArea / FilamentArea`, the
+  bead modelled as the stadium cross-section `h·(w − h) + π·h²/4`. The twin-decoder
+  `GcodeReader` re-derives BOTH sides from the file alone (deposition length from coordinates,
+  filament from E deltas), so the tests assert the identity on DECODED values — the house
+  twin-decoder style, because a structural look at a G-code file proves nothing about its
+  coordinates. The decoder refuses BY NAME the modes it must not guess about: `G20` (inches —
+  the unit trap), `G91`/`M83` (relative modes whose absolute misreading is confidently wrong),
+  `G2`/`G3` (arcs join with the CNC stages). Retraction is a stationary negative-E move paired
+  with an equal unretract so the decoder can MATCH the pairs; temperatures are
+  write-only-when-stated (0 writes nothing — never a zero that would cool a live hotend).
+
+**Verification followed the campaign's own bar**: the layer grid as exact arithmetic; wall
+perimeters against closed forms (an inward offset of a rectangle keeps sharp corners whatever
+the join style, so wall 0's perimeter is exactly `2(a − w) + 2(b − w)` — a closed form, not an
+approximation); the wall's clearance from the section boundary as an exact point-by-point claim
+(the no-gouge analogue, `bead/2` to nine decimals); infill alternation asserted as
+perpendicularity of the raw directions; solid-infill coverage as a MEASURED ratio with its
+deviations ATTRIBUTED (the stadium bead's ~10.7% corner deficit against a rectangular slab plus
+the scan's half-spacing edge margins — which is why the ratio sits below 1, never above);
+determinism byte-for-byte through the writer; and every refusal by name. Docs
+`examples/cam-slicing.md`; the campaign's remaining stages and the animation deliverable stay
+in todo.md.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
