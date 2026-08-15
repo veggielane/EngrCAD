@@ -55,6 +55,29 @@ extrusion) each refuse, because decoding them as their absolute siblings would p
 confidently wrong geometry; `G2`/`G3` arcs refuse by name (they join with the CNC stages).
 Unknown M-codes and comments are dirt — noted, never thrown.
 
+## 2.5D CNC milling (`CncMill`, `MillTool`, `CncGcodeWriter`)
+
+Stage 2 — pocket, profile and drill over the same landed machinery:
+
+- **Pocket** is the inward-offset ring ladder (`Region2dOffset`, rings one `Stepover·D` apart,
+  an island's grown boundary ridden like any other loop), executed innermost-first per
+  `StepDown` level with the last level clamped to the exact depth. `Stepover ≤ 0.5` provably
+  covers the whole reachable area.
+- **Profile** is one outline offset by the tool radius (round joins — the path a tool centre
+  physically rolls around an outside corner), with holding TABS on the final pass only, evenly
+  spaced by arc length, each a vertical rise at the tab's own edge — never a diagonal ramp that
+  would leave the closing stretch part-cut.
+- **Drill** ships EXPANDED peck moves (plain G0/G1), so the same twin decoder reads a drill
+  cycle with nothing new; canned G81/G83 cycles are filed.
+- **`CncGcodeWriter`**: a move's meaning is its SHAPE — an XY move cuts at the feed rate, a
+  straight-down move plunges, a straight-up move retracts as a rapid — so one `MillPass`
+  vocabulary carries all three operations. The decoder gained a `Rapid` flag (G0 vs G1),
+  because feed state persists across both and cannot separate them on its own.
+- **The oracle is the morphological OPENING**: a radius-r tool reaches exactly
+  `grow_r(shrink_r(region))`, the passes' stroked-and-unioned footprints (the machined-stock
+  simulation) must equal it, and a rectangular pocket's unreachable corner residue is CLOSED
+  FORM, `(4 − π)·r²`. No-gouge is exact point-by-point. Docs: `docs/examples/cam-milling.md`.
+
 ## Verification (the campaign's own bar)
 
 Layer z's as exact arithmetic; wall perimeters against closed forms (an inward offset of a

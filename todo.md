@@ -2434,20 +2434,25 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     comparison per shape family (the coverage ratio is measured today with its
     deviations attributed; the per-layer area and extrusion-bookkeeping identities are
     landed).
-  - **Stage 2 — 2.5D CNC milling** (the Kiri:Moto shape: pocket, profile, drill, tabs):
-    pocketing = the inward-offset ladder, profiling = one outline offset by tool radius
-    with tabs left standing, drilling cycles (G81/G83 peck) read `HoleTable.For(part)`,
-    climb-vs-conventional is an ORDERING of loops the exact tier already orients,
-    lead-in/out arcs from the arc vocabulary, depth stepping per pass. Feeds/speeds as
-    a ⚠ verify-against-datasheet `ToolLibrary` (the `StandardHoles` convention —
-    chip-load tables are transcriptions, never derivations). **Verification bar**: "no
-    gouging" as an EXACT claim — every path point at least the tool radius from the
-    region boundary, assertable point by point through the exact 2D signed distance;
-    swept-area identities against closed forms; machined-stock simulation by successive
-    2D boolean subtraction with the residual against the target region MEASURED. A
-    LASER/drag-knife mode is the near-free adjacent (a kerf-offset outline cut — the
-    2D machinery plus the DXF/SVG writers already cover it; Kiri:Moto ships it for the
-    same reason).
+  - **Stage 2 — 2.5D CNC milling: the CORE HAS LANDED** (`MillTool`/`CncMill`/
+    `CncGcodeWriter`; design.md §6e, docs `examples/cam-milling.md`) — pocket = the
+    inward-offset ring ladder (innermost-first per StepDown level, island hole loops
+    ridden, stepover ≤ 0.5 provably covering), profile = one outline offset with
+    arc-length-spaced holding TABS on the final pass (vertical rises at the tab edge,
+    never a part-cut ramp), drill = EXPANDED peck moves the one twin decoder reads,
+    moves classified by SHAPE (XY = cut, down = plunge, up = rapid), the morphological-
+    OPENING coverage oracle with the (4−π)r² corner-residue closed form, exact
+    point-by-point no-gouge, and the decoder's new `Rapid` flag (feed state persists
+    across G0/G1 — the modal-state trap). **Stage-2 residuals, open**: G2/G3 arcs from
+    the exact curved-profile tier (`SectionExact`/`CurvedRegion2dOffset` — a bore rim
+    as ONE arc in the G-code), drilling cycles reading `HoleTable.For(part)` (the
+    feature graph knows the holes), climb-vs-conventional as a stated loop ORIENTATION,
+    lead-in/out arcs, helical/ramp entry, canned G81/G83 cycles, a ⚠
+    verify-against-datasheet feeds/speeds `ToolLibrary` (chip-load tables are
+    transcriptions, never derivations), rest machining, and the material-removal
+    animation over recorded stock states. A LASER/drag-knife mode is the near-free
+    adjacent (a kerf-offset outline cut — the 2D machinery plus the DXF/SVG writers
+    already cover it; Kiri:Moto ships it for the same reason).
   - **Stage 3 — 3-axis surfacing** (a DIFFERENT problem from 2.5D, assessed as such):
     waterline passes are planar sections; raster passes need the DROP-CUTTER against
     the mesh `Bvh` — and the implicit engine is the differentiator here, because a

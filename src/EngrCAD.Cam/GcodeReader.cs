@@ -20,9 +20,11 @@ public enum GcodeMoveKind
 }
 
 /// <summary>One decoded move: the endpoints, the filament pushed (signed), the feed rate
-/// (mm/min) in force, and the classification.</summary>
+/// (mm/min) in force, the classification, and whether it was a RAPID (G0) — the distinction a
+/// CNC program's verification turns on, since the feed state persists across rapids and cannot
+/// separate them on its own.</summary>
 public sealed record GcodeMove(
-    Vector3d From, Vector3d To, double DeltaE, double Feed, GcodeMoveKind Kind)
+    Vector3d From, Vector3d To, double DeltaE, double Feed, GcodeMoveKind Kind, bool Rapid = false)
 {
     /// <summary>The XY length of the move (mm).</summary>
     public double XyLength =>
@@ -135,7 +137,7 @@ public static class GcodeReader
                             : deltaE > 0 ? GcodeMoveKind.Unretract
                             : GcodeMoveKind.Travel;
                         if (from != to || deltaE != 0)
-                            moves.Add(new GcodeMove(from, to, deltaE, feed, kind));
+                            moves.Add(new GcodeMove(from, to, deltaE, feed, kind, Rapid: (int)code == 0));
                         (x, y, z, e) = (nx, ny, nz, ne);
                         break;
                     }

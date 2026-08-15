@@ -8955,6 +8955,41 @@ finished reveal stays revealed exactly as a finished explode stays exploded. One
 tax recorded: the new overload made a bare `[]` argument ambiguous, which is what an explicitly
 typed empty list in the one affected test is about.
 
+**Stage 2 — 2.5D CNC milling — landed** (`MillTool`/`CncMill`/`CncGcodeWriter`; docs
+`examples/cam-milling.md`): pocket, profile and drill, again a thin layer over landed machinery.
+**Pocket clearing IS the inward-offset ring ladder** — `Region2dOffset` rings one `Stepover·D`
+apart from the boundary pass inward until the region is exhausted, an island's grown boundary
+(the offset's hole loops) ridden like any other loop, executed innermost-first per `StepDown`
+level (the tool climbs outward, finishing at the wall) with the last level clamped to the exact
+stated depth (arithmetic, not accumulation); `Stepover ≤ 0.5` PROVABLY covers the whole
+reachable area (each ring clears ± a radius about its centreline and consecutive centrelines are
+stepover·D apart). **Profiling is one outline offset** by the tool radius — ROUND joins, a
+deliberate physical choice: that is the path a tool centre actually rolls around an outside
+corner keeping contact, where a miter would lift it off the part — with holding TABS on the
+FINAL pass only, evenly spaced by arc length (a stated convention, not rounding luck), each a
+VERTICAL rise at the tab's own edge; the first cut of the closing stretch finishes at depth
+before the rise, because a diagonal ramp would leave it part-cut (a bug caught in design, not on
+a machine). **Drilling ships EXPANDED peck moves** — plain G0/G1, feed-down/rapid-up — so the
+one twin decoder reads a drill cycle with nothing new (canned G81/G83 cycles are filed).
+**`CncGcodeWriter` classifies a move by its SHAPE** — an XY move cuts at the feed rate, a
+straight-down move plunges at the plunge rate, a straight-up move retracts as a rapid — which is
+what lets ONE `MillPass` vocabulary (a 3D polyline) carry pockets, tabbed profiles and pecked
+drills with no per-move annotations. Landing it forced one decoder addition with a general
+lesson: `GcodeMove` gained a `Rapid` flag, because FEED STATE PERSISTS across G0 and G1 alike,
+so "moves at the cut feed" silently included the rapids between loops and the round-trip length
+identity failed until the flag separated them — the modal-state trap, the same family as the
+G20/G91 refusals. **The verification oracle is the morphological OPENING**: a radius-r tool can
+reach exactly `grow_r(shrink_r(region))`, so the union of the passes' stroked footprints (the
+machined-stock simulation, `Stroke` + `UnionAll`) must equal it — asserted within 1% — and a
+rectangular pocket's unreachable corner residue is CLOSED FORM, `(4 − π)·r²`, asserted directly;
+the no-gouge claim is exact and point-by-point (every pass point ≥ r from the region boundary,
+including an island's), depth levels are arithmetic (`5 @ 2 → −2, −4, −5`), the tabbed pass
+lifts exactly `tabs` times to exactly `−depth + tabHeight`, the decoded cut length equals the
+operations' own within formatting precision, and the program is byte-deterministic. Filed with
+the campaign: G2/G3 arcs from the exact curved-profile tier, climb/conventional selection,
+helical/ramp entry, canned cycles, the ⚠ feeds/speeds catalogue, rest machining, and the
+material-removal animation over recorded stock states.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
