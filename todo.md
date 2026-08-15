@@ -2580,10 +2580,13 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     towers grown toward the bed avoiding the part — research-grade; the SDF answers the
     clearance query).
   - **Speeds, extrusion, cooling** (the writer grows a per-FEATURE table):
-    - [ ] Per-feature speeds/widths/accelerations (external/perimeter/infill/solid/top/
-      support/bridge/first-layer), a volumetric flow CAP (auto-speed), and a
-      PRINT-TIME ESTIMATOR (trapezoidal accel per move — closed-form per-segment
-      integration, exactly verifiable, and the prerequisite for the cooling model).
+    - Per-feature SPEEDS landed (Wall/Infill/SolidInfill/Support/FirstLayer through the
+      one `SpeedFor` rule, unset byte-identical, stated speeds changing only the F
+      words) and the PRINT-TIME ESTIMATOR landed as an honest [min, max] bracket over
+      the DECODED program (closed-form trapezoids; junction cornering filed as the
+      refinement that narrows the bracket without moving its ends). Still open:
+      per-feature WIDTHS and accelerations, external-vs-internal perimeter speeds,
+      the volumetric flow CAP (auto-speed).
     - [ ] Cooling: minimum-layer-time slowdown, per-feature fan, bridge fan, fan off
       for the first N layers.
     - [ ] Retraction extras: z-hop (+ types), wipe-on-retract, extra restart length,

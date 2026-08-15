@@ -56,6 +56,15 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   sparse one-direction breakaway lines at `SupportSpacing`. A facet resting on the bed excludes
   itself with no special case — nothing of it is above any layer, so no layer supports it.
 
+- **Per-feature speeds + the print-time bracket**: each role carries its own optional speed
+  (`FirstLayerSpeed` winning on layer 0 whatever the role), resolved by the profile's ONE
+  `SpeedFor` rule the writer reads — stating nothing is byte-identical, and stating speeds
+  changes ONLY the F words (asserted structurally). `PrintTime.Estimate` reads the DECODED
+  program and answers an honest [min, max] bracket: every move at its own feed against the
+  closed-form from-rest trapezoid (`d/v + v/a` full-speed, `2·√(d/a)` triangular), the
+  infinite-acceleration limit collapsing the bracket; junction-deviation cornering is the
+  filed refinement that narrows it without moving its ends.
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

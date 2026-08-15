@@ -9041,6 +9041,26 @@ shells whole layers or none passes a plain box and fails there, which is what ma
 box the wrong fixture. Filed beside it in the PrusaSlicer-parity entry: monotonic top-surface
 fill, ironing, bridges, and the skin-to-sparse anchor margin.
 
+**Per-feature speeds and the print-time estimator landed together** (the parity family that
+unlocks the cooling model; docs `cam-slicing.md`). The speeds are optional per-role values
+resolved by ONE rule (`PrinterProfile.SpeedFor` — a stated `FirstLayerSpeed` wins on layer 0
+whatever the role, a solid skin falls back through the infill family, everything unstated
+resolves to `PrintSpeed`), and the writer reads that rule per path — so a plain profile's
+G-code is byte-identical, pinned by the STRONGER structural claim that a profile stating
+speeds differs from the baseline ONLY in its F words (strip `F\d+` from both outputs and
+compare). **The estimator reads the DECODED program, deliberately**: the estimate is of what
+the file says, exactly as the printer will read it, so a wrong feed or a lost move shows in
+the time the way it would on the machine — the twin-decoder doctrine applied to a derived
+quantity. The answer is an honest BRACKET rather than a number: the lower bound runs every
+move at its own feed (a machine with infinite acceleration), the upper accelerates every move
+from rest and back by the closed-form trapezoid — `d/v + v/a` when the move reaches full
+speed (`d ≥ v²/a`), `2·√(d/a)` when it stays triangular, an E-only retract running the
+extruder axis at `|ΔE|` — asserted as direct arithmetic, with the infinite-acceleration
+limit collapsing the bracket onto the lower bound and the bracket monotone in the
+acceleration. Junction-deviation cornering, per-axis limits and jerk are filed as the
+refinement that NARROWS the bracket; they cannot move its ends, which is what makes the
+bracket the honest v1 rather than a placeholder.
+
 **Stage 3 — 3-axis surfacing — landed** (`CncSurfacing.Raster`/`Waterline`/`ScallopHeight`/
 `StepoverForScallop`; docs `examples/cam-surfacing.md`), and it is the stage where the implicit
 engine pays DIRECTLY rather than as a bridge: **the cutter-location surface of a ball-nose tool

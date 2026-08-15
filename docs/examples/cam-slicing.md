@@ -182,6 +182,33 @@ layer's top, so no layer ever finds material to support — which is why a plain
 supports *stated* still writes byte-identical G-code. The part's own bottom face is not an
 overhang; it is the print.
 
+## Per-feature speeds and the print-time bracket
+
+Each path role can carry its own speed (`WallSpeed`/`InfillSpeed`/`SolidInfillSpeed`/
+`SupportSpeed`, with `FirstLayerSpeed` winning on layer 0 whatever the role — adhesion wants
+slow), resolved by the profile's ONE `SpeedFor` rule the writer reads; stating nothing
+resolves everything to `PrintSpeed` byte-identically, and the tests pin the stronger form —
+a profile stating speeds differs from the baseline **only in its F words**.
+
+`PrintTime.Estimate` reads the **decoded** program (what the file says, exactly as the
+printer will) and answers with an honest bracket: the lower bound runs every move at its own
+feed (infinite acceleration), the upper accelerates every move from rest by the closed-form
+trapezoid — `d/v + v/a` when the move reaches full speed, `2·√(d/a)` when it stays
+triangular — with the real firmware between, depending on junction handling (the filed
+refinement narrows the bracket; it cannot move its ends):
+
+```csharp run:cam-time
+var slab = Shape.Box(8, 8, 3) | Shape.Box(20, 15, 3).Translate(0, 0, 3);
+var profile = new PrinterProfile(NozzleDiameter: 0.8, LayerHeight: 0.5,
+    InfillDensity: 0.2, TopSolidLayers: 2, BottomSolidLayers: 2, SupportOverhangAngle: 45,
+    WallSpeed: 30, InfillSpeed: 60, SolidInfillSpeed: 45, FirstLayerSpeed: 15);
+
+var decoded = GcodeReader.Read(GcodeWriter.Write(FdmSlicer.Slice(slab, profile)));
+var estimate = PrintTime.Estimate(decoded, acceleration: 500);
+Console.WriteLine($"print time between {estimate.MinSeconds / 60:0.0} and "
+    + $"{estimate.MaxSeconds / 60:0.0} minutes at 500 mm/s2");
+```
+
 **Not in stage 1** (each filed in the campaign):
 a raft, seam placement smarter than the deterministic anchor, a support Z-gap (one layer of
 air under the overhang for cleaner breakaway — v1 supports run to the underside exactly),

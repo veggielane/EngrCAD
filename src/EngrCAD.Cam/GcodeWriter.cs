@@ -46,7 +46,6 @@ public static class GcodeWriter
         double e = 0;
         double deToDistance = p.BeadArea / p.FilamentArea;
         int travelFeed = (int)Math.Round(p.TravelSpeed * 60);
-        int printFeed = (int)Math.Round(p.PrintSpeed * 60);
         int retractFeed = (int)Math.Round(p.RetractionSpeed * 60);
         bool retractionOn = p.RetractionLength > 0;
         Vector2d? pen = null;
@@ -68,6 +67,9 @@ public static class GcodeWriter
                 if (worthRetracting)
                     b.Append($"G1 E{NumE(e)} F{retractFeed}\n");
 
+                // The path's feed comes from the profile's ONE role/layer rule (a plain
+                // profile resolves every role to PrintSpeed, keeping the file byte-identical).
+                int printFeed = (int)Math.Round(p.SpeedFor(path.Role, layer.Index) * 60);
                 var previous = path.Start;
                 int count = path.Points.Count + (path.IsClosed ? 1 : 0);
                 for (int i = 1; i < count; i++)

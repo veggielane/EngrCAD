@@ -41,7 +41,12 @@ public sealed record PrinterProfile(
     double SupportSpacing = 2.5,
     double SupportGap = 0.8,
     int TopSolidLayers = 0,
-    int BottomSolidLayers = 0)
+    int BottomSolidLayers = 0,
+    double? WallSpeed = null,
+    double? InfillSpeed = null,
+    double? SolidInfillSpeed = null,
+    double? SupportSpeed = null,
+    double? FirstLayerSpeed = null)
 {
     /// <summary>The stock profile: 0.4 nozzle, 1.75 filament, 0.2 layers, two walls, 20% infill.</summary>
     public static PrinterProfile Default { get; } = new();
@@ -57,6 +62,26 @@ public sealed record PrinterProfile(
 
     /// <summary>The filament's cross-section area (mm²).</summary>
     public double FilamentArea => Math.PI * FilamentDiameter * FilamentDiameter / 4;
+
+    /// <summary>The ONE rule for a deposition path's speed (mm/s): a stated
+    /// <see cref="FirstLayerSpeed"/> wins on layer 0 (adhesion wants slow, whatever the
+    /// role); otherwise the role's own stated speed, a solid skin falling back through
+    /// the infill family, everything else to <see cref="PrintSpeed"/>. Stating nothing
+    /// resolves to <see cref="PrintSpeed"/> for every path — the write-only-when-stated
+    /// convention, so a plain profile's G-code is byte-identical.</summary>
+    public double SpeedFor(SlicePathRole role, int layerIndex)
+    {
+        if (layerIndex == 0 && FirstLayerSpeed is { } first)
+            return first;
+        return role switch
+        {
+            SlicePathRole.Wall => WallSpeed ?? PrintSpeed,
+            SlicePathRole.Infill => InfillSpeed ?? PrintSpeed,
+            SlicePathRole.SolidInfill => SolidInfillSpeed ?? InfillSpeed ?? PrintSpeed,
+            SlicePathRole.Support => SupportSpeed ?? PrintSpeed,
+            _ => PrintSpeed,
+        };
+    }
 
     /// <summary>Refuses an unusable profile BY NAME — a wrong number here prints plausibly and
     /// badly, so the refusal happens before any geometry is sliced.</summary>
@@ -111,6 +136,18 @@ public sealed record PrinterProfile(
         if (BottomSolidLayers < 0)
             throw new ArgumentException(
                 $"BottomSolidLayers must be non-negative (0 = no bottom skins); got {BottomSolidLayers}.");
+        RequireStated(WallSpeed, nameof(WallSpeed));
+        RequireStated(InfillSpeed, nameof(InfillSpeed));
+        RequireStated(SolidInfillSpeed, nameof(SolidInfillSpeed));
+        RequireStated(SupportSpeed, nameof(SupportSpeed));
+        RequireStated(FirstLayerSpeed, nameof(FirstLayerSpeed));
+
+        static void RequireStated(double? value, string name)
+        {
+            if (value is { } stated && (!(stated > 0) || !double.IsFinite(stated)))
+                throw new ArgumentException(
+                    $"{name} must be finite and positive when stated; got {stated:0.###}.");
+        }
 
         static void Require(double value, string name)
         {
