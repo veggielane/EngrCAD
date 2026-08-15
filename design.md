@@ -9096,6 +9096,21 @@ and supports read one geometry, hole compensation re-winding each hole loop CCW 
 growing it (the signed-area check, since a stored hole loop's winding is the region's own
 business).
 
+**The integration wave closed the slicer's outward seams**: custom G-code snippets pass
+through with `{layer}`/`{z}` substituted and NOTHING validated at write time — deliberately,
+because the twin decoder reads the finished file, so a snippet smuggling a relative-mode
+`G91` or an inch-mode `G20` refuses THERE by name, which is a stronger guard than any
+write-side allowlist (the decoder cannot be talked past). Fuzzy skin is the pattern-phase
+rule applied to NOISE — the displacement is a stateless hash of (layer, point index), so two
+slices are byte-identical and there is no RNG state to drift; it touches the outermost wall
+only, never layer 0 (adhesion wants a flat first layer), pinned bit-for-bit on both
+exemptions. `FilamentByRole` made `FilamentUsed`/`ExtrudedVolume` FLOW-AWARE (Σ length·flow —
+backward-identical since flow is 1 everywhere ironing is off), and the per-role split sums to
+the total exactly. `FdmPlating.Plate` is the plating story in one call: `Packing` arranges,
+each part rests on the bed plane, and the returned UNION slices whole — disjoint parts
+section into disjoint islands, so every per-island feature (walls, brims, skins, supports)
+works with nothing new, and the out-of-room refusal is the packer's own, naming the part.
+
 **Stage 3 — 3-axis surfacing — landed** (`CncSurfacing.Raster`/`Waterline`/`ScallopHeight`/
 `StepoverForScallop`; docs `examples/cam-surfacing.md`), and it is the stage where the implicit
 engine pays DIRECTLY rather than as a bridge: **the cutter-location surface of a ball-nose tool

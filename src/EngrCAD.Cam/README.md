@@ -83,6 +83,15 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   layer height, multi-material, and `RetractionExtraRestart` (unmatched extra filament breaks
   the matched retract-pair contract the twin decoder verifies).
 
+- **The integration wave**: custom `StartGcode`/`LayerChangeGcode`/`EndGcode` snippets with
+  `{layer}`/`{z}` substitution (the decoder still reads the file, so a smuggled `G91`/`G20`
+  refuses by name there); `FuzzySkinThickness` (deterministic hash jitter on the outermost
+  wall — the pattern-phase rule applied to noise; layer 0 and inner shells bit-identical);
+  `SlicedPart.FilamentByRole` (per-role split summing to `FilamentUsed` exactly, flow
+  included); and `FdmPlating.Plate` — multi-part plates over the landed `Packing` machinery,
+  one shape the slicer takes whole, disjoint islands getting walls/brims/skins/supports with
+  nothing new.
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

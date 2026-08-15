@@ -394,6 +394,36 @@ Console.WriteLine($"print time between {estimate.MinSeconds / 60:0.0} and "
     + $"{estimate.MaxSeconds / 60:0.0} minutes at 500 mm/s2");
 ```
 
+## Fuzzy skin, snippets, plates and the filament bill
+
+**Fuzzy skin** (`FuzzySkinThickness`/`FuzzySkinSpacing`) resamples the OUTERMOST wall and
+displaces it ± half the thickness along its local normal by a **deterministic hash** of
+(layer, point index) — the pattern-phase rule applied to noise: two slices of one shape are
+byte-identical, no clock or RNG state exists to drift, layer 0 and inner shells stay
+untouched bit-for-bit. **Custom G-code snippets** (`StartGcode`/`LayerChangeGcode`/`EndGcode`)
+pass through with `{layer}`/`{z}` substituted — and the twin decoder still reads the file, so
+a snippet smuggling `G91` or `G20` in refuses there by name rather than silently corrupting
+the geometry. **`SlicedPart.FilamentByRole`** splits the filament bill per role (walls vs
+infill vs supports vs skins vs ironing — they sum to `FilamentUsed` exactly, flow included).
+
+**Multi-part plates** ride the landed `Packing` machinery: `FdmPlating.Plate(parts, w, d,
+gap)` arranges the parts (shelf packing, or outline nesting via `PackOptions`), rests each on
+the bed plane, and returns ONE shape the slicer takes whole — disjoint parts section into
+disjoint islands, so walls, brims, skins and supports all work per island with nothing new,
+and the plate that runs out of room refuses loudly naming the part (the packer's own rule):
+
+```csharp run:cam-plating
+var plate = FdmPlating.Plate(
+    [Shape.Box(20, 15, 4), Shape.Box(15, 15, 6), Shape.Cylinder(8, 5)],
+    bedWidth: 120, bedDepth: 120, gap: 6);
+var sliced = FdmSlicer.Slice(plate, new PrinterProfile(NozzleDiameter: 0.8, LayerHeight: 0.5,
+    InfillDensity: 0.2, TopSolidLayers: 2, BottomSolidLayers: 2, BrimWidth: 2));
+Console.WriteLine($"{sliced.Layers[0].Regions.Count} parts on the plate, "
+    + $"{sliced.Layers.Count} layers, filament {sliced.FilamentUsed:0} mm");
+foreach (var (role, filament) in sliced.FilamentByRole.OrderByDescending(r => r.Value))
+    Console.WriteLine($"  {role,-12} {filament,8:0.0} mm");
+```
+
 ## Bridges, monotonic skins, ironing
 
 `DetectBridges` finds skin the layer *directly* below leaves in air (never the first layer —

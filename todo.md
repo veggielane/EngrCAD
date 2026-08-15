@@ -2544,8 +2544,8 @@ flattened; a loaded document is an overlay `reload` still discards) and the
       the wall's arc length, contradictions + multi-island layers refused by name);
       seam placement LANDED as Rear/Aligned (the concave-corner cost model still open).
     - [ ] Extra perimeters on overhangs / ensure-vertical-shell-thickness.
-    - [ ] Fuzzy skin (jitter the outer wall — DETERMINISTIC, seeded from the global grid
-      phase, never a clock; the pattern-phase rule applied to noise).
+    - Fuzzy skin LANDED (a stateless hash of (layer, point index) — byte-identical
+      slices, layer 0 and inner shells exempt bit-for-bit).
   - **Top/bottom & surfaces**:
     - Solid top/bottom shells LANDED (`TopSolidLayers`/`BottomSolidLayers`, the
       neighbour-window intersection subtracted from the infill core, skins at the
@@ -2595,19 +2595,18 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     - [ ] Tool-change G-code, a WIPE TOWER (a printed purge block — its own small
       slicing problem), layer colour change (M600), soluble support interfaces.
   - **Plating & sequence**:
-    - [ ] Multi-part plates with auto-arrange — the `Packing` machinery verbatim
-      (outline nesting already landed), clearance checks between objects.
+    - Multi-part plates LANDED (`FdmPlating.Plate` over `Packing` — one shape sliced
+      whole, disjoint islands, the packer's own out-of-room refusal).
     - [ ] Sequential printing (complete one object before the next; the gantry/nozzle
       clearance is a swept-cylinder query the SDF engine answers, refusing an
       unreachable plate by name).
   - **G-code & output**:
-    - [ ] Custom start/end/layer-change/tool-change snippets with a placeholder
-      vocabulary (write-only-when-stated), G-code FLAVOURS (Marlin landed; Klipper /
-      RepRapFirmware differ in words not structure), arc FITTING out of the exact
-      curved tier (shared with the CNC G2/G3 item), binary G-code (.bgcode) as a
-      twin-decoder format exercise, a post-processing hook.
-    - [ ] Filament use/cost split per feature role (the extrusion identity already
-      carries the total).
+    - Start/end/layer-change snippets LANDED ({layer}/{z} substitution; a smuggled
+      G91/G20 refuses at the DECODER by name — stronger than a write-side allowlist)
+      and filament-by-role LANDED (flow-aware, sums to the total exactly). Still open:
+      tool-change snippets (multi-material), G-code FLAVOURS (Klipper/RRF differ in
+      words not structure), arc FITTING out of the exact curved tier (shared with the
+      CNC G2/G3 item), binary G-code (.bgcode), a post-processing hook.
   - **Preview/analysis** (viewer-side): [ ] toolpath preview coloured by feature/speed/
     flow (the `FieldDisplay` colour machinery over path line geometry), travel moves
     shown, per-layer scrub (the print-reveal SectionTrack landed; a path-index scrub is

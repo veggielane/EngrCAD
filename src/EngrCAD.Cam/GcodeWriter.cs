@@ -42,6 +42,8 @@ public static class GcodeWriter
         if (p.HotendTemperature > 0)
             b.Append($"M109 S{p.HotendTemperature}\n");
         b.Append("G92 E0\n");
+        if (part.Layers.Count > 0 && p.StartGcode is { Length: > 0 })
+            b.Append(Snippet(p.StartGcode, 0, part.Layers[0].Z));
 
         double e = 0;
         double deToDistance = p.BeadArea / p.FilamentArea;
@@ -53,6 +55,8 @@ public static class GcodeWriter
         foreach (var layer in part.Layers)
         {
             b.Append($";LAYER:{layer.Index}\n");
+            if (p.LayerChangeGcode is { Length: > 0 })
+                b.Append(Snippet(p.LayerChangeGcode, layer.Index, layer.Z));
             // The fan turns on once the first FanOffLayers have adhered (write-only-when-
             // stated: FanSpeed 0 writes no fan command at all).
             if (p.FanSpeed > 0 && layer.Index == p.FanOffLayers)
@@ -136,6 +140,10 @@ public static class GcodeWriter
 
         if (retractionOn && e > 0)
             b.Append($"G1 E{NumE(e - p.RetractionLength)} F{retractFeed}\n");
+        if (p.EndGcode is { Length: > 0 })
+            b.Append(Snippet(p.EndGcode,
+                part.Layers.Count > 0 ? part.Layers[^1].Index : 0,
+                part.Layers.Count > 0 ? part.Layers[^1].Z : 0));
         if (p.FanSpeed > 0)
             b.Append("M107\n");
         if (p.HotendTemperature > 0)
@@ -152,6 +160,14 @@ public static class GcodeWriter
         ArgumentNullException.ThrowIfNull(path);
         File.WriteAllText(path, Write(part));
     }
+
+    /// <summary>A custom G-code snippet with its placeholders substituted: {layer} is
+    /// the layer index, {z} the layer's top height. The text passes through otherwise —
+    /// and the twin decoder still reads the file, so a snippet smuggling G91 or G20 in
+    /// refuses there BY NAME rather than silently corrupting the geometry.</summary>
+    private static string Snippet(string text, int layer, double z) =>
+        text.Replace("{layer}", layer.ToString(CultureInfo.InvariantCulture))
+            .Replace("{z}", Num(z)).TrimEnd('\n') + "\n";
 
     /// <summary>Coordinates at 3 decimals (a micron — below any printer's resolution).</summary>
     private static string Num(double value) =>

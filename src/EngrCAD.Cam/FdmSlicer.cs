@@ -87,9 +87,18 @@ public sealed record SlicedPart(
     /// <summary>Total deposition length over every layer (mm).</summary>
     public double DepositionLength => Layers.Sum(l => l.DepositionLength);
 
-    /// <summary>The deposited material volume (mm³): deposition length × the bead's stadium
-    /// cross-section — the number the G-code's E values are the filament-side spelling of.</summary>
-    public double ExtrudedVolume => DepositionLength * Profile.BeadArea;
+    /// <summary>The deposited material volume (mm³): flow-weighted deposition length × the
+    /// bead's stadium cross-section — the number the G-code's E values are the filament-side
+    /// spelling of (an ironing pass deposits at its own reduced flow).</summary>
+    public double ExtrudedVolume =>
+        Layers.SelectMany(l => l.Paths).Sum(p => p.Length * p.Flow) * Profile.BeadArea;
+
+    /// <summary>Filament per path role (mm) — walls vs infill vs supports vs skins, the
+    /// per-role split of <see cref="FilamentUsed"/> (they sum exactly).</summary>
+    public IReadOnlyDictionary<SlicePathRole, double> FilamentByRole =>
+        Layers.SelectMany(l => l.Paths).GroupBy(p => p.Role).ToDictionary(
+            g => g.Key,
+            g => g.Sum(p => p.Length * p.Flow) * Profile.BeadArea / Profile.FilamentArea);
 
     /// <summary>The filament length consumed (mm): the deposited volume through the filament's
     /// own cross-section.</summary>
@@ -431,10 +440,12 @@ public static class FdmSlicer
                     foreach (var shell in Region2dOffset.Offset(region, -inset))
                     {
                         walls.Add(new SlicePath(SlicePathRole.Wall,
-                            Seamed(shell.Outer, p.Seam, seamAnchor), IsClosed: true, k));
+                            Fuzz(Seamed(shell.Outer, p.Seam, seamAnchor), p, k, i, bead),
+                            IsClosed: true, k));
                         foreach (var hole in shell.Holes)
                             walls.Add(new SlicePath(SlicePathRole.Wall,
-                                Seamed(hole, p.Seam, seamAnchor), IsClosed: true, k));
+                                Fuzz(Seamed(hole, p.Seam, seamAnchor), p, k, i, bead),
+                                IsClosed: true, k));
                     }
                 }
             }
@@ -723,6 +734,56 @@ public static class FdmSlicer
         return paths;
 
         Vector2d Back(double x, double y) => new(x * c - y * s, x * s + y * c);
+    }
+
+    /// <summary>Fuzzy skin: the OUTERMOST wall (never layer 0 — adhesion wants a flat
+    /// first layer, and never an inner shell) resampled at the fuzz spacing and displaced
+    /// ± half the thickness along its local normal by a DETERMINISTIC hash of
+    /// (layer, point index) — the pattern-phase rule applied to noise: two slices of one
+    /// shape are byte-identical, and no clock or RNG state exists to drift.</summary>
+    private static IReadOnlyList<Vector2d> Fuzz(
+        IReadOnlyList<Vector2d> loop, PrinterProfile p, int wallIndex, int layerIndex,
+        double bead)
+    {
+        if (p.FuzzySkinThickness <= 0 || wallIndex != 0 || layerIndex == 0 || loop.Count < 3)
+            return loop;
+        double spacing = p.FuzzySkinSpacing > 0 ? p.FuzzySkinSpacing : 0.8 * bead;
+        var points = new List<Vector2d>();
+        int emitted = 0;
+        for (int s = 0; s < loop.Count; s++)
+        {
+            var a = loop[s];
+            var b = loop[(s + 1) % loop.Count];
+            double length = (b - a).Length;
+            if (length < 1e-12)
+                continue;
+            var direction = (b - a) / length;
+            var normal = new Vector2d(direction.Y, -direction.X);
+            int steps = Math.Max(1, (int)Math.Floor(length / spacing));
+            for (int j = 0; j < steps; j++)
+            {
+                var q = a + direction * (j * length / steps);
+                double amplitude = (Hash01(layerIndex, emitted) - 0.5) * p.FuzzySkinThickness;
+                points.Add(q + normal * amplitude);
+                emitted++;
+            }
+        }
+        return points.Count >= 3 ? points : loop;
+    }
+
+    /// <summary>A uniform [0, 1) hash of (layer, index) — splittable, stateless, exact.</summary>
+    private static double Hash01(int layer, int index)
+    {
+        unchecked
+        {
+            uint h = (uint)(layer * 73856093) ^ (uint)(index * 19349663) ^ 0x9E3779B9u;
+            h ^= h >> 16;
+            h *= 0x7FEB352Du;
+            h ^= h >> 15;
+            h *= 0x846CA68Bu;
+            h ^= h >> 16;
+            return h / 4294967296.0;
+        }
     }
 
     /// <summary>Dimensional compensations, applied to the stored sections so every

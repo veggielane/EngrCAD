@@ -107,7 +107,12 @@ public sealed record PrinterProfile(
     double? BridgeSpeed = null,
     double ElephantFootCompensation = 0,
     double XYCompensation = 0,
-    double HoleCompensation = 0)
+    double HoleCompensation = 0,
+    string? StartGcode = null,
+    string? EndGcode = null,
+    string? LayerChangeGcode = null,
+    double FuzzySkinThickness = 0,
+    double FuzzySkinSpacing = 0)
 {
     /// <summary>The stock profile: 0.4 nozzle, 1.75 filament, 0.2 layers, two walls, 20% infill.</summary>
     public static PrinterProfile Default { get; } = new();
@@ -251,6 +256,12 @@ public sealed record PrinterProfile(
         if (HoleCompensation < 0 || !double.IsFinite(HoleCompensation))
             throw new ArgumentException(
                 $"HoleCompensation must be non-negative; got {HoleCompensation:0.###}.");
+        if (FuzzySkinThickness < 0 || !double.IsFinite(FuzzySkinThickness))
+            throw new ArgumentException(
+                $"FuzzySkinThickness must be non-negative (0 = off); got {FuzzySkinThickness:0.###}.");
+        if (FuzzySkinSpacing < 0 || !double.IsFinite(FuzzySkinSpacing))
+            throw new ArgumentException(
+                $"FuzzySkinSpacing must be non-negative (0 = 0.8 of the bead); got {FuzzySkinSpacing:0.###}.");
         if (SpiralVase)
         {
             if (WallCount != 1)
