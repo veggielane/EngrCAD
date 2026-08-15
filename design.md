@@ -9241,6 +9241,27 @@ slope-amplified near the silhouette where dz/dd diverges. A stated ball cutter t
 exact route BYTE-identically; waterline refuses flat/bull by name (their waterline is the
 contour of the mesh dilated by the disc — a 2D arrangement, filed).
 
+**Model-fed drilling and the raster angle closed two more residuals with one structural
+move each.** `CncDrilling.FromShape/FromPart` is the one-declaration rule at the CAM
+boundary: a `Shape.Drill`/`ThreadedHole` call already states diameter, depth and positions
+— it is what `HoleTable` letters for the drawing — so the drill program reads the SAME rows
+rather than transcribing coordinates beside the model, and `HoleTableRow` gained the
+numeric drilling data (`DrillDiameter`/`Depth`/`Plane`) the callout text could not carry: a
+counterbore/countersink contributes its THROUGH bore (the larger feature is a milling
+operation, not a drill), a threaded hole its tap-drill pilot via `StandardHoles.Tapped`,
+and the M6-pilot-Ø5 beside a Ø5.5 clearance bore is the discriminating fixture (two calls,
+two diameters, grouped per tool with the counts conserved against the hole table's own).
+Depth travels VERBATIM because the conventions already agree — the model's depth is to the
+SHOULDER and so is a drill cycle's, so a real drill's tip reaches deeper exactly as
+`WithTipAngle` draws it; a tilted placement plane refuses naming the row's LETTER (a
+3-axis program runs straight down; which face goes up is the fixture's decision), as does
+a second plane height (v1 is one setup). The raster ANGLE rides the one `SerpentineRaster`
+rule both cutter routes share: the grid anchors in the ROTATED frame (the phase rule — a
+pattern is a function of the stated spacing and angle, never of where the part sits) and a
+quarter turn is EXACT (a sign swap, never a `cos`, the glTF-root lesson), pinned by the
+test that a 90° raster is the 0° raster's grid TRANSPOSED bit for bit — an assertion only
+the sign-swap spelling can pass, since `cos(π/2)` is 6.1e-17 and not 0.
+
 **Stage 4 opened with trochoidal slotting** (`CncHsm.TrochoidalSlot`; docs
 `examples/cam-milling.md` §HSM), and the finding that justifies the campaign's whole framing —
 "the engagement angle computed from the evolving stock and BOUNDED by the stated maximum,

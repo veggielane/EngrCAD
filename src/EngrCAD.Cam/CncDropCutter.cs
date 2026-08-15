@@ -96,7 +96,8 @@ internal static class DropCutter
     /// triangles (a 2D bucket grid at one tool radius). A sample over no triangle clamps to
     /// the part's own bottom.</summary>
     public static MillOperation Raster(
-        Shape shape, MillTool tool, MillCutter cutter, double? sampleStep, string name)
+        Shape shape, MillTool tool, MillCutter cutter, double? sampleStep, string name,
+        double angleDegrees = 0)
     {
         var mesh = shape.ToMesh().Triangulated();
         var (positions, faces) = mesh.ToIndexed();
@@ -155,7 +156,8 @@ internal static class DropCutter
             return best;
         }
 
-        return CncSurfacing.SerpentineRaster(tool, bounds, sampleStep, name, TipAt);
+        return CncSurfacing.SerpentineRaster(tool, bounds, sampleStep, name, TipAt,
+            angleDegrees);
     }
 
     /// <summary>The tip height at which the cutter, axis at (x, y), first touches this

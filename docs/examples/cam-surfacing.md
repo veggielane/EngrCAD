@@ -155,6 +155,11 @@ honestly slope-amplified near the silhouette (`dz/dd` diverges there). Waterline
 ball-only and refuses the others by name: a flat waterline is the contour of the mesh dilated
 by the disc, a 2D arrangement, filed.
 
-**Not in stage 3** (each filed in the campaign): a raster direction other than X, linking
-rows without a retract, adaptive stepover from local curvature, holder/shank collision
-checking, rest machining, the flat/bull waterline above, and HSM adaptive clearing (stage 4).
+Raster rows run along a stated `rasterAngleDegrees` (both cutter routes, one grid rule):
+the grid anchors in the **rotated frame** — the phase rule, a pattern being a function of
+the stated spacing and angle, never of where the part sits — and a quarter turn is **exact**
+(a sign swap, never a `cos`), so a 90° raster is the transposed grid to the last bit.
+
+**Not in stage 3** (each filed in the campaign): linking rows without a retract, adaptive
+stepover from local curvature, holder/shank collision checking, rest machining, the
+flat/bull waterline above, and HSM adaptive clearing (stage 4).

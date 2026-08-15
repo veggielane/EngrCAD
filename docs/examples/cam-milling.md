@@ -253,6 +253,32 @@ measured from one full loop after the spiral reaches the loop radius. The slot's
 footprint is the stadium `L·W + π(W/2)²` (asserted within 2%), and no path point ever leaves
 the slot corridor (no-overcut, point by point).
 
+## Drilling from the model
+
+`CncDrilling.FromShape`/`FromPart` derives the drill program from the model's **own hole
+declarations** — the one-declaration rule at the CAM boundary: a `Shape.Drill` or
+`Shape.ThreadedHole` call already states the diameter, the depth and the positions (it is
+what the drawing's `HoleTable` letters), so the CNC program reads the *same rows* rather
+than having coordinates transcribed beside the model. One operation per distinct drill
+diameter, ascending — a real setup is one tool per diameter — with a counterbore
+contributing its **through** bore (the larger feature is a milling operation, not a drill)
+and a threaded hole its **tap-drill pilot**. Depth is to the shoulder, which is the
+drill-cycle convention too, so a real drill's tip reaches deeper exactly as the model's own
+`WithTipAngle` draws it; a hole on a tilted plane refuses naming its row letter (which face
+goes up is the fixture's decision, never a silent re-pose).
+
+```csharp run:cam-drilling
+var plate = Shape.Box(60, 40, 8)
+    .Drill(StandardHoles.Clearance(5), [(-20, 10), (-20, -10), (20, 10), (20, -10)], depth: 10)
+    .ThreadedHole(StandardThreads.Metric(6), [(0, 10), (0, -10)], depth: 6);
+var ops = CncDrilling.FromShape(plate);
+foreach (var op in ops)
+    Console.WriteLine($"{op.Name}: {op.Passes.Count} holes");
+var gcode = CncGcodeWriter.Write(ops, cannedDrilling: true);
+Console.WriteLine($"{gcode.Split('\n').Count(l => l.StartsWith("G83"))} G83 cycles "
+    + "- the M6 rows drill their tap pilot, the clearance rows their bore");
+```
+
 ## Climb, conventional and canned cycles
 
 Every pocket and profile takes a `MillDirection` (climb is the default), and the rule is

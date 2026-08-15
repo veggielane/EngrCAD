@@ -46,7 +46,7 @@ public static class CncSurfacing
     /// </summary>
     public static MillOperation Raster(
         Shape shape, MillTool tool, double? sampleStep = null, string name = "raster",
-        MillCutter? cutter = null)
+        MillCutter? cutter = null, double rasterAngleDegrees = 0)
     {
         ArgumentNullException.ThrowIfNull(shape);
         ArgumentNullException.ThrowIfNull(tool);
@@ -62,7 +62,8 @@ public static class CncSurfacing
             // A flat or bull-nose rides the tessellation (see DropCutter's remarks for why
             // the field route does not survive the disc); a ball-nose IS the exact route.
             if (!cutter.IsBallNose)
-                return DropCutter.Raster(shape, tool, cutter, sampleStep, name);
+                return DropCutter.Raster(shape, tool, cutter, sampleStep, name,
+                    rasterAngleDegrees);
         }
 
         var sdf = shape.ToImplicit();
@@ -71,37 +72,75 @@ public static class CncSurfacing
         double top = bounds.Max.Z + r + 1;
         double floor = bounds.Min.Z + r;
         return SerpentineRaster(tool, bounds, sampleStep, name,
-            (x, y) => Drop(sdf, x, y, top, floor, r) - r);
+            (x, y) => Drop(sdf, x, y, top, floor, r) - r, rasterAngleDegrees);
     }
 
     /// <summary>The serpentine raster loop both routes share — grid-anchored rows one
     /// <c>Stepover·Diameter</c> apart, samples one <paramref name="sampleStep"/> apart
     /// (null = half the stepover), extended a tool radius past the part —
-    /// <paramref name="tipAt"/> answering the TIP height at each sample.</summary>
+    /// <paramref name="tipAt"/> answering the TIP height at each sample. Rows run along
+    /// <paramref name="angleDegrees"/> from +X, the grid anchored in the ROTATED frame (the
+    /// phase rule: a pattern is a function of the stated spacing and angle, never of where
+    /// the part sits); a quarter turn is EXACT — a sign swap, never a <c>cos</c> — so a 90°
+    /// raster is the transposed grid to the last bit and angle 0 is the incumbent
+    /// arithmetic verbatim.</summary>
     internal static MillOperation SerpentineRaster(
         MillTool tool, in Aabb bounds, double? sampleStep, string name,
-        Func<double, double, double> tipAt)
+        Func<double, double, double> tipAt, double angleDegrees = 0)
     {
         double stepover = tool.Stepover * tool.Diameter;
         double step = sampleStep ?? stepover / 2;
         if (!(step > 0) || !double.IsFinite(step))
             throw new ArgumentException(
                 $"sampleStep must be finite and positive; got {step:0.###}.", nameof(sampleStep));
+        if (!double.IsFinite(angleDegrees))
+            throw new ArgumentException(
+                $"rasterAngleDegrees must be finite; got {angleDegrees}.");
         double r = tool.Radius;
 
+        // The row direction û and stepover direction v̂ (its left normal), quarter turns as
+        // exact sign swaps. Row coordinate u, stepover coordinate v; at angle 0 the world
+        // map x = u·1 + v·0, y = u·0 + v·1 reproduces the axis-aligned arithmetic bit for bit.
+        double wrapped = ((angleDegrees % 360) + 360) % 360;
+        (double ux, double uy) = wrapped switch
+        {
+            0 => (1.0, 0.0),
+            90 => (0.0, 1.0),
+            180 => (-1.0, 0.0),
+            270 => (0.0, -1.0),
+            _ => (Math.Cos(angleDegrees * Math.PI / 180), Math.Sin(angleDegrees * Math.PI / 180)),
+        };
+        double vx = -uy, vy = ux;
+
+        // The part's extent in the rotated frame: project the XY bounds corners.
+        double uMin = double.PositiveInfinity, uMax = double.NegativeInfinity;
+        double vMin = double.PositiveInfinity, vMax = double.NegativeInfinity;
+        Span<double> xs = [bounds.Min.X, bounds.Max.X];
+        Span<double> ys = [bounds.Min.Y, bounds.Max.Y];
+        foreach (double cx in xs)
+            foreach (double cy in ys)
+            {
+                double u = cx * ux + cy * uy;
+                double v = cx * vx + cy * vy;
+                uMin = Math.Min(uMin, u); uMax = Math.Max(uMax, u);
+                vMin = Math.Min(vMin, v); vMax = Math.Max(vMax, v);
+            }
+
         var passes = new List<MillPass>();
-        int firstRow = (int)Math.Ceiling((bounds.Min.Y - r) / stepover - 1e-12);
-        int lastRow = (int)Math.Floor((bounds.Max.Y + r) / stepover + 1e-12);
-        int firstCol = (int)Math.Ceiling((bounds.Min.X - r) / step - 1e-12);
-        int lastCol = (int)Math.Floor((bounds.Max.X + r) / step + 1e-12);
+        int firstRow = (int)Math.Ceiling((vMin - r) / stepover - 1e-12);
+        int lastRow = (int)Math.Floor((vMax + r) / stepover + 1e-12);
+        int firstCol = (int)Math.Ceiling((uMin - r) / step - 1e-12);
+        int lastCol = (int)Math.Floor((uMax + r) / step + 1e-12);
         bool reverse = false;
         for (int k = firstRow; k <= lastRow; k++)
         {
-            double y = k * stepover;
+            double v = k * stepover;
             var points = new List<Vector3d>(lastCol - firstCol + 1);
             for (int j = firstCol; j <= lastCol; j++)
             {
-                double x = (reverse ? lastCol - (j - firstCol) : j) * step;
+                double u = (reverse ? lastCol - (j - firstCol) : j) * step;
+                double x = u * ux + v * vx;
+                double y = u * uy + v * vy;
                 points.Add(new Vector3d(x, y, tipAt(x, y)));
             }
             if (points.Count >= 2)

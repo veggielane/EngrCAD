@@ -17,8 +17,20 @@ namespace EngrCAD.Modeling;
 /// <param name="Letter">Row letter ("A", "B", ..., "AA" past 26).</param>
 /// <param name="Callout">The spec's callout text (may contain '\n' continuations).</param>
 /// <param name="Positions">Hole centres on the placement plane (part-local).</param>
+/// <param name="DrillDiameter">The diameter a twist drill CUTS for this row (mm): a
+/// simple hole's own diameter, a counterbore/countersink's THROUGH bore (the larger
+/// feature is a milling operation, not a drill), a threaded hole's tap-drill pilot —
+/// the numeric data a CAM consumer reads (the one-declaration rule: holes are stated
+/// once, in the model, and the drill program derives).</param>
+/// <param name="Depth">The stated hole depth, to the SHOULDER (mm) — the drill-cycle
+/// convention too, so a real drill's tip reaches deeper exactly as the model's own
+/// <c>WithTipAngle</c> draws it.</param>
+/// <param name="Plane">The placement plane's local-to-world matrix.</param>
+/// <param name="Threaded">True for a threaded-hole row (the diameter is the pilot).</param>
 public sealed record HoleTableRow(
-    string Letter, string Callout, IReadOnlyList<Vector3d> Positions);
+    string Letter, string Callout, IReadOnlyList<Vector3d> Positions,
+    double DrillDiameter = 0, double Depth = 0, Matrix4d Plane = default,
+    bool Threaded = false);
 
 /// <summary>
 /// A hole table generated from a part's <see cref="Shape"/> graph: one row per
@@ -59,13 +71,16 @@ public sealed class HoleTable
                     calls.Add(new HoleTableRow(
                         LetterFor(next++),
                         HoleCallout.Text(drill.Spec, drill.Depth),
-                        PlanePoints(drill.PlaneMatrix, drill.Points)));
+                        PlanePoints(drill.PlaneMatrix, drill.Points),
+                        drill.Spec.Diameter, drill.Depth, drill.PlaneMatrix));
                     break;
                 case ThreadedHoleShape threaded:
                     calls.Add(new HoleTableRow(
                         LetterFor(next++),
                         ThreadCallout.Text(threaded.Spec, threaded.Depth),
-                        PlanePoints(threaded.PlaneMatrix, threaded.Points)));
+                        PlanePoints(threaded.PlaneMatrix, threaded.Points),
+                        StandardHoles.Tapped(threaded.Spec).Diameter, threaded.Depth,
+                        threaded.PlaneMatrix, Threaded: true));
                     break;
             }
         }

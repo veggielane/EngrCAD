@@ -110,6 +110,14 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   keeps the exact implicit route byte-for-byte. Flat-spot and APT closed-form oracles; the
   ball's mesh-vs-field two-construction cross-check; waterline refuses non-ball by name.
 
+- **Model-fed drilling + raster angle**: `CncDrilling.FromShape/FromPart` derives the drill
+  program from the model's own `Drill`/`ThreadedHole` declarations (the `HoleTable` rows
+  gained the numeric drilling data) — one op per distinct diameter, a counterbore drilling
+  its THROUGH bore, a threaded hole its tap pilot, depth-to-shoulder verbatim, tilted planes
+  refused by row letter; and `Raster` takes `rasterAngleDegrees` (grid anchored in the
+  rotated frame, quarter turns exact sign swaps — a 90° raster is the transposed grid bit
+  for bit).
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

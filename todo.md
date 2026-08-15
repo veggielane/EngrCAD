@@ -2456,11 +2456,14 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     moves and irregular ladders falling back; decoder expands under Fanuc semantics
     with modal bare-X/Y, refusing a missing Z/R/Q by name), and the ⚠ feeds/speeds
     catalogue (`CncToolLibrary.Suggest` over `MillMaterials` — the cap preserves chip
-    load, not feed). **Stage-2 residuals, open**: G2/G3 arcs from the exact
-    curved-profile tier (`SectionExact`/`CurvedRegion2dOffset` — a bore rim as ONE arc
-    in the G-code), drilling cycles reading `HoleTable.For(part)` (the feature graph
-    knows the holes), lead-in/out arcs, helical/ramp entry, rest machining, and the
-    material-removal animation over recorded stock states. A LASER/drag-knife mode is the near-free
+    load, not feed). **Model-fed drilling LANDED**
+    (`CncDrilling.FromShape/FromPart` over `HoleTable`'s rows, which gained the numeric
+    drilling data — diameter/depth/plane; one op per distinct diameter, cbore = the
+    through bore, threaded = the tap pilot, tilted planes refused by row letter).
+    **Stage-2 residuals, open**: G2/G3 arcs from the exact curved-profile tier
+    (`SectionExact`/`CurvedRegion2dOffset` — a bore rim as ONE arc in the G-code),
+    lead-in/out arcs, helical/ramp entry, rest machining, and the material-removal
+    animation over recorded stock states. A LASER/drag-knife mode is the near-free
     adjacent (a kerf-offset outline cut — the 2D machinery plus the DXF/SVG writers
     already cover it; Kiri:Moto ships it for the same reason).
   - **Stage 3 — 3-axis surfacing: the CORE HAS LANDED** (`CncSurfacing.Raster`/
@@ -2483,8 +2486,10 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     bracketed 1D scan since torus-line tangency is a quartic, face closed form) with the
     flat-spot/APT oracles exact and the ball's mesh-vs-field cross-check; the ball is
     special because its disc is a point, and it keeps the exact field route
-    byte-for-byte. **Stage-3 residuals, open**: the flat/bull WATERLINE (the contour of
-    the mesh dilated by the disc — a 2D arrangement), a raster direction other than X,
+    byte-for-byte. The raster ANGLE landed (grid anchored in
+    the rotated frame, quarter turns exact sign swaps, one `SerpentineRaster` rule for
+    both cutter routes). **Stage-3 residuals, open**: the flat/bull WATERLINE (the
+    contour of the mesh dilated by the disc — a 2D arrangement),
     linking rows without a retract,
     adaptive stepover from local curvature, holder/shank collision checking, and
     rest machining (shared with stage 2's entry).
