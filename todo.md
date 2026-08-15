@@ -2519,6 +2519,105 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     re-meshing at all — the section-plane machinery is the player); and determinism
     throughout — two slices of one scene must be
     byte-identical, because a toolpath diff is how a CAM regression is caught.
+- [ ] **PrusaSlicer feature parity — the FDM stage grown into a full slicing stack**
+  (filed 2026-08-15 at Chris's direction: "all the features of PrusaSlicer". The landed
+  stage-1 core — mid-layer exact sections, walls, ±45° rectilinear infill, brim/skirt,
+  supports, print direction, retraction, temperatures, the extrusion identity — is the
+  substrate, and each family below names the landed machinery it rides. PrusaSlicer is
+  reference BEHAVIOUR, never source (it is GPL and this repo is not a derivative):
+  transcribe the conventions ⚠-flagged and verify against closed forms, the house rule.)
+  - **Perimeters**:
+    - [ ] Arachne variable-width perimeters (the headline algorithm: walls generated from
+      a medial-axis skeleton with per-segment width, so a thin region gets 1..N beads
+      with neither a gap nor an overlap — `Region2dThickness` + the exact offset family
+      are the substrate; research-grade, budget it like the autorouter).
+    - [ ] Classic gap fill (the sliver between two walls too narrow for a bead: detect
+      where the inward offset vanishes, fill with a centre-line stroke) and thin-wall
+      detection (a wall thinner than one bead becomes a single centre-line pass).
+    - [ ] External-perimeters-first as an option (the innermost-first EMISSION rule made
+      a stated choice: outer-first buys dimensional accuracy, inner-first overhangs).
+    - [ ] Extra perimeters on overhangs / ensure-vertical-shell-thickness.
+    - [ ] Spiral vase mode (ONE continuous helical outer wall, z a linear ramp within
+      each loop; refuses multi-island and holed layers by name).
+    - [ ] Fuzzy skin (jitter the outer wall — DETERMINISTIC, seeded from the global grid
+      phase, never a clock; the pattern-phase rule applied to noise).
+    - [ ] Seam placement: nearest / aligned / rear / a concave-corner cost model,
+      replacing the deterministic first-vertex anchor (already filed, subsumed here).
+  - **Top/bottom & surfaces**:
+    - [ ] Solid top/bottom shells by count or thickness — a region is TOP where the
+      layer above does not cover it (`Region2dBoolean.Difference` between neighbour
+      layers, the machinery already landed), bottom likewise; today every layer is
+      sparse interior, which is the biggest visible gap to a real print.
+    - [ ] Monotonic top-surface fill (all lines one direction in overlap order),
+      ironing (a low-flow smoothing pass over top solids).
+    - [ ] Bridge detection + direction (a solid region unsupported below spans between
+      anchored edges — the overhang field one level up), bridge flow/speed, internal
+      bridges over sparse infill, thick bridges.
+  - **Infill patterns**: grid / triangles / cubic / adaptive cubic / line / honeycomb /
+    3D honeycomb / gyroid (a TPMS plane section the implicit engine already carries) /
+    Hilbert (`SpaceFillingInfill` verbatim) / Archimedean chords / octagram /
+    [ ] LIGHTNING infill (the tree-like sparse fill that only supports top surfaces —
+    research-grade); combine-infill-every-N-layers; infill/perimeter overlap and anchor
+    runs; solid-infill-threshold area (a region too small to fill sparsely goes solid).
+  - **Layers**: [ ] variable layer height — adaptive from the surface slope (the
+    display-mesh normal field says where thin layers pay) plus a stated manual table;
+    the mid-layer section machinery already takes arbitrary z's, so this is scheduling,
+    not sectioning.
+  - **Supports** (stage-1 supports landed; the deltas): Z contact distance + interface
+    layers + on-model awareness (all filed above), [ ] XY separation as its own knob,
+    [ ] buildplate-only vs everywhere as a stated choice, [ ] snug vs grid style,
+    [ ] a RAFT (filed above), [ ] support ENFORCER/BLOCKER shapes — the code-first
+    equivalent of paint-on supports: a `Shape` whose footprint forces or masks support
+    generation (the modifier-shape idea below), [ ] organic/tree supports (branching
+    towers grown toward the bed avoiding the part — research-grade; the SDF answers the
+    clearance query).
+  - **Speeds, extrusion, cooling** (the writer grows a per-FEATURE table):
+    - [ ] Per-feature speeds/widths/accelerations (external/perimeter/infill/solid/top/
+      support/bridge/first-layer), a volumetric flow CAP (auto-speed), and a
+      PRINT-TIME ESTIMATOR (trapezoidal accel per move — closed-form per-segment
+      integration, exactly verifiable, and the prerequisite for the cooling model).
+    - [ ] Cooling: minimum-layer-time slowdown, per-feature fan, bridge fan, fan off
+      for the first N layers.
+    - [ ] Retraction extras: z-hop (+ types), wipe-on-retract, extra restart length,
+      firmware retraction (G10/G11), per-extruder tables; linear/pressure-advance K.
+    - [ ] Elephant-foot compensation (first-layer inward offset), XY size compensation,
+      hole compensation (per-loop signed offsets — exact with the curved offset tier).
+  - **Multi-material / multi-extruder**:
+    - [ ] Per-region extruder assignment via MODIFIER SHAPES (the code-first paint: a
+      `Shape` intersected with the part assigns settings/extruders per region — one
+      declaration, geometry and slice both derive), per-object setting overrides.
+    - [ ] Tool-change G-code, a WIPE TOWER (a printed purge block — its own small
+      slicing problem), layer colour change (M600), soluble support interfaces.
+  - **Plating & sequence**:
+    - [ ] Multi-part plates with auto-arrange — the `Packing` machinery verbatim
+      (outline nesting already landed), clearance checks between objects.
+    - [ ] Sequential printing (complete one object before the next; the gantry/nozzle
+      clearance is a swept-cylinder query the SDF engine answers, refusing an
+      unreachable plate by name).
+  - **G-code & output**:
+    - [ ] Custom start/end/layer-change/tool-change snippets with a placeholder
+      vocabulary (write-only-when-stated), G-code FLAVOURS (Marlin landed; Klipper /
+      RepRapFirmware differ in words not structure), arc FITTING out of the exact
+      curved tier (shared with the CNC G2/G3 item), binary G-code (.bgcode) as a
+      twin-decoder format exercise, a post-processing hook.
+    - [ ] Filament use/cost split per feature role (the extrusion identity already
+      carries the total).
+  - **Preview/analysis** (viewer-side): [ ] toolpath preview coloured by feature/speed/
+    flow (the `FieldDisplay` colour machinery over path line geometry), travel moves
+    shown, per-layer scrub (the print-reveal SectionTrack landed; a path-index scrub is
+    its within-layer analogue), estimated time per feature.
+  - **Geometry ops PrusaSlicer bundles — already landed here, listed for the mapping**:
+    cut with connectors (`MeshPlaneCut` + `Shape.Drill` dowels), text emboss
+    (`Shape.Text`), simplify (`MeshDecimator`), repair (`MeshRepair`), hollow + drain
+    (`Shape.Shell` + `Drill`), measure (the viewer's measure tool).
+  - **SLA family** (PrusaSlicer is an SLA slicer too; a separate campaign if wanted):
+    [ ] per-layer mask IMAGES rasterized from the field (the implicit engine's natural
+    fit — a layer is one batch `Sdf.Evaluate` over a pixel grid), pin/tree SLA supports,
+    hollowing with drainage holes, anti-aliased edges, exposure profiles.
+  - **Explicitly out of scope** (product surface, not kernel): network upload
+    (PrusaLink/OctoPrint/Connect), printer accounts, the config wizard's profile
+    bundles, paint-ON-mesh UI (the code-first equivalent is modifier shapes above),
+    third-party repair services.
 - [ ] **Heatsink design tool (the natsink shape): correlation-sized fin arrays VERIFIED
   against the repo's own thermal FEA.** Given a power, an allowable rise, an orientation
   and an envelope, size a natural-convection fin array and generate the solid — the
