@@ -225,7 +225,7 @@ public static class CncSurfacing
     /// from the same two samples with the same expression). A chain returning to its first
     /// point is a closed loop; one that cannot extend is emitted open (honest — a contour
     /// leaving the sampled grid is a margin bug the tests would catch as an open waterline).</summary>
-    private static List<(List<Vector3d> Points, bool IsClosed)> ChainSegments(
+    internal static List<(List<Vector3d> Points, bool IsClosed)> ChainSegments(
         IReadOnlyList<(Vector3d A, Vector3d B)> segments)
     {
         var chains = new List<(List<Vector3d>, bool)>();

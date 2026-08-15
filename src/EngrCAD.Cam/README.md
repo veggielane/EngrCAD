@@ -65,6 +65,24 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   infinite-acceleration limit collapsing the bracket; junction-deviation cornering is the
   filed refinement that narrows it without moving its ends.
 
+- **The FDM finish wave** completed the practical slicer feature set: `InfillPattern`
+  (rectilinear/grid/triangles/concentric/GYROID — the TPMS level set sectioned at each layer's
+  own z — /Hilbert over `SpaceFillingInfill`, every member holding the stated density by
+  scaling spacing to direction count); `SpiralVase` (one continuous helical wall, z ramped
+  along its own arc length, contradictions refused by name); `SeamPosition` (Rear/Aligned) and
+  `ExternalPerimetersFirst`; cooling (`MinLayerTime` slowdown floored at `MinPrintSpeed`,
+  `FanSpeed`/`FanOffLayers`), the `MaxVolumetricFlow` hard cap (applied LAST — the melt limit
+  outranks every stated speed) and `ZHop`; the support stack completed (`SupportZGap` air under
+  the overhang, `SupportInterfaceLayers` densified + perpendicular near the contact,
+  `RaftLayers`/`RaftMargin` lifting the part with adhesion moved to the raft, and
+  `FdmSupportModifiers` — blocker/enforcer shapes, the code-first paint-on support);
+  `DetectBridges` (skin over air filled along its long axis at `BridgeSpeed`),
+  `MonotonicSkins`, `IroningFlow` (per-path `Flow`, the identity generalising to
+  sum of length x flow); and the dimensional compensations (elephant foot / XY / hole). Filed
+  WITH REASONS: Arachne, gap fill, fuzzy skin, lightning infill, tree supports, variable
+  layer height, multi-material, and `RetractionExtraRestart` (unmatched extra filament breaks
+  the matched retract-pair contract the twin decoder verifies).
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

@@ -67,6 +67,12 @@
       "live": true
     },
     {
+      "id": "cam-infill-gyroid",
+      "page": "examples/cam-slicing.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'SlicePath' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
       "id": "cam-milling-paths",
       "page": "examples/cam-milling.md",
       "live": false,

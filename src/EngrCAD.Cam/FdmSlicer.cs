@@ -27,13 +27,23 @@ public enum SlicePathRole
 
     /// <summary>A solid (100%) infill run — a top or bottom skin.</summary>
     SolidInfill,
+
+    /// <summary>A bridge run — solid fill spanning air, laid along the span direction.</summary>
+    Bridge,
+
+    /// <summary>An ironing pass — a low-flow smoothing sweep over a finished top skin.</summary>
+    Ironing,
+
+    /// <summary>A raft run — the sacrificial base the part prints on.</summary>
+    Raft,
 }
 
 /// <summary>One deposition path on a layer: a 2D polyline in bed coordinates (world x/y),
 /// closed for a wall loop (the closing segment is implied, never repeated as a point),
 /// open for an infill run.</summary>
 public sealed record SlicePath(
-    SlicePathRole Role, IReadOnlyList<Vector2d> Points, bool IsClosed, int WallIndex = 0)
+    SlicePathRole Role, IReadOnlyList<Vector2d> Points, bool IsClosed, int WallIndex = 0,
+    double Flow = 1)
 {
     /// <summary>The deposition length (mm), the closing segment of a closed loop included.</summary>
     public double Length
@@ -86,6 +96,13 @@ public sealed record SlicedPart(
     public double FilamentUsed => ExtrudedVolume / Profile.FilamentArea;
 }
 
+/// <summary>Per-JOB support geometry: BLOCKER shapes mask support generation over their
+/// own volume (sectioned per layer like the part), ENFORCER shapes force support under
+/// any downward-facing facet inside them, threshold or no threshold — the code-first
+/// equivalent of paint-on supports.</summary>
+public sealed record FdmSupportModifiers(
+    IReadOnlyList<Shape>? Blockers = null, IReadOnlyList<Shape>? Enforcers = null);
+
 /// <summary>
 /// The FDM slicer — CAM stage 1's core, and deliberately a THIN layer over machinery that already
 /// existed: each layer is an exact <see cref="Shape.Section"/> at the layer's mid-height (the
@@ -127,7 +144,8 @@ public static class FdmSlicer
     /// rounding accident; a zero direction is refused by name.
     /// </summary>
     public static SlicedPart Slice(
-        Shape shape, PrinterProfile? profile = null, Vector3d? printDirection = null)
+        Shape shape, PrinterProfile? profile = null, Vector3d? printDirection = null,
+        FdmSupportModifiers? supportModifiers = null)
     {
         ArgumentNullException.ThrowIfNull(shape);
         var p = profile ?? PrinterProfile.Default;
@@ -160,10 +178,29 @@ public static class FdmSlicer
         // loops sorted by their highest point so the active set shrinks monotonically as the
         // layers ascend. The tessellation reuses the one lowering rather than re-lowering.
         List<(double MinZ, double MaxZ, Vector3d[] Loop)>? supportFacets = null;
-        if (p.SupportOverhangAngle > 0)
+        bool enforcersStated = supportModifiers?.Enforcers is { Count: > 0 };
+        if (p.SupportOverhangAngle > 0 || enforcersStated)
         {
             var overhangMesh = solid is not null ? BRepTessellator.Tessellate(solid) : mesh!;
-            supportFacets = OverhangFacets(overhangMesh, p.SupportOverhangAngle);
+            supportFacets = p.SupportOverhangAngle > 0
+                ? OverhangFacets(overhangMesh, p.SupportOverhangAngle)
+                : [];
+            if (enforcersStated)
+            {
+                // An ENFORCER forces support under ANY downward-facing facet inside its
+                // volume, threshold or no threshold — the code-first paint-on support.
+                var fields = supportModifiers!.Enforcers!
+                    .Select(s => OrientForPrinting(s, up).ToImplicit()).ToList();
+                foreach (var facet in OverhangFacets(overhangMesh, 0.01))
+                {
+                    var centroid = Vector3d.Zero;
+                    foreach (var v in facet.Loop)
+                        centroid += v;
+                    centroid /= facet.Loop.Length;
+                    if (fields.Any(f => f.Evaluate(centroid) <= 0))
+                        supportFacets.Add(facet);
+                }
+            }
             supportFacets.Sort((a, b) => a.MaxZ.CompareTo(b.MaxZ));
         }
         int supportStart = 0;
@@ -181,41 +218,118 @@ public static class FdmSlicer
             sectionZs[i] = Math.Min(
                 bounds.Min.Z + (i + 0.5) * h,
                 bounds.Max.Z - NudgeFraction * h);
-            sections[i] = SectionWithNudge(solid, mesh, sectionZs[i], h);
+            sections[i] = Compensate(
+                SectionWithNudge(solid, mesh, sectionZs[i], h),
+                i == 0 ? p.ElephantFootCompensation : 0, p.XYCompensation, p.HoleCompensation);
         }
+
+        // Support BLOCKER shapes are sectioned per layer like the part itself (oriented
+        // the same way), so a blocker masks supports exactly over its own volume.
+        IReadOnlyList<Region2d>[]? blockerSections = null;
+        if (supportModifiers?.Blockers is { Count: > 0 } blockers)
+        {
+            blockerSections = new IReadOnlyList<Region2d>[layerCount];
+            var lowered = blockers
+                .Select(s => OrientForPrinting(s, up))
+                .Select(s => s.CanConvertTo(TargetRep.Brep)
+                    ? ((BrepSolid?)s.ToBrep(), (HalfEdgeMesh?)null)
+                    : (null, s.ToMesh()))
+                .ToList();
+            for (int i = 0; i < layerCount; i++)
+            {
+                var cut = new List<Region2d>();
+                foreach (var (bSolid, bMesh) in lowered)
+                    cut.AddRange(SectionWithNudge(bSolid, bMesh, sectionZs[i], h));
+                blockerSections[i] = cut;
+            }
+        }
+
+        // A spiral vase is ONE continuous wall, so every layer above the base must be a
+        // single unholed island — refused by name here, before any path is built.
+        if (p.SpiralVase)
+        {
+            for (int i = Math.Max(p.BottomSolidLayers, 1); i < layerCount; i++)
+            {
+                if (sections[i].Count != 1 || sections[i][0].Holes.Count > 0)
+                    throw new ArgumentException(
+                        $"SpiralVase needs a single island with no holes on every layer above "
+                        + $"the base; layer {i} has {sections[i].Count} island(s) and "
+                        + $"{sections[i].Sum(r => r.Holes.Count)} hole(s).");
+            }
+        }
+
+        // The seam anchor for SeamPosition.Aligned: a fixed point per PART, so the seam
+        // lands on the same side of every layer and lines up vertically.
+        var seamAnchor = new Vector2d(bounds.Max.X, (bounds.Min.Y + bounds.Max.Y) / 2);
 
         var layers = new List<SliceLayer>(layerCount);
         var pen = new Vector2d(bounds.Min.X, bounds.Min.Y);
+
+        // First-layer adhesion, outermost-first so the nozzle primes on the skirt, lays the
+        // brim inward, and finishes AT the outline it rings. Both are outward offsets of
+        // the whole region SET (islands' brims merge where they meet), and both are
+        // write-only-when-stated: 0 loops / 0 width leaves every existing slice byte-identical.
+        void Adhesion(IReadOnlyList<Region2d> around, List<SlicePath> into)
+        {
+            for (int k = p.SkirtLoops - 1; k >= 0; k--)
+                foreach (var ring in Region2dOffset.Offset(
+                    around, p.SkirtGap + bead * (k + 0.5)))
+                    into.Add(new SlicePath(SlicePathRole.Skirt, ring.Outer, IsClosed: true));
+            int brimLoops = (int)Math.Ceiling(p.BrimWidth / bead - 1e-9);
+            for (int k = brimLoops - 1; k >= 0; k--)
+                foreach (var ring in Region2dOffset.Offset(around, bead * (k + 0.5)))
+                {
+                    into.Add(new SlicePath(SlicePathRole.Brim, ring.Outer, IsClosed: true));
+                    // A brim rings the INSIDE of a bore too (the outward offset's hole
+                    // loops are the bore shrunk inward — exactly the interior brim).
+                    foreach (var hole in ring.Holes)
+                        into.Add(new SlicePath(SlicePathRole.Brim, hole, IsClosed: true));
+                }
+            if (into.Count > 0)
+                pen = into[^1].End;
+        }
+
+        // The RAFT: sacrificial base layers under the part (and its supports), the whole
+        // footprint grown by the margin and solid-filled; the part LIFTS by the raft's
+        // height, so every part layer's Z shifts while its geometry stands still.
+        double zShift = p.RaftLayers * h;
+        if (p.RaftLayers > 0)
+        {
+            var seed = new List<Region2d>(sections[0]);
+            if (supportFacets is { Count: > 0 })
+            {
+                foreach (var facet in supportFacets)
+                    if (Footprint(facet.Loop) is { } footprint)
+                        seed.Add(footprint);
+            }
+            var raftRegions = seed.Count > 0
+                ? Region2dOffset.Offset(Region2dBoolean.UnionAll(seed), p.RaftMargin)
+                : [];
+            for (int r = 0; r < p.RaftLayers; r++)
+            {
+                var raftPaths = new List<SlicePath>();
+                if (r == 0)
+                    Adhesion(raftRegions, raftPaths);
+                var fill = new List<SlicePath>();
+                double raftAngle = r % 2 == 0 ? Math.PI / 4 : 3 * Math.PI / 4;
+                foreach (var region in raftRegions)
+                    fill.AddRange(RectilinearInfill(region, bead, raftAngle)
+                        .Select(path => path with { Role = SlicePathRole.Raft }));
+                raftPaths.AddRange(LinkGroup(fill, ref pen));
+                layers.Add(new SliceLayer(
+                    layers.Count, bounds.Min.Z + (layers.Count + 1) * h,
+                    bounds.Min.Z + (layers.Count + 0.5) * h, raftRegions, raftPaths));
+            }
+        }
+
         for (int i = 0; i < layerCount; i++)
         {
             double sectionZ = sectionZs[i];
             var regions = sections[i];
 
             var paths = new List<SlicePath>();
-
-            // First-layer adhesion, outermost-first so the nozzle primes on the skirt, lays the
-            // brim inward, and finishes AT the part's own outline. Both are outward offsets of
-            // the whole layer-0 region SET (islands' brims merge where they meet), and both are
-            // write-only-when-stated: 0 loops / 0 width leaves every existing slice byte-identical.
-            if (i == 0)
-            {
-                for (int k = p.SkirtLoops - 1; k >= 0; k--)
-                    foreach (var ring in Region2dOffset.Offset(
-                        regions, p.SkirtGap + bead * (k + 0.5)))
-                        paths.Add(new SlicePath(SlicePathRole.Skirt, ring.Outer, IsClosed: true));
-                int brimLoops = (int)Math.Ceiling(p.BrimWidth / bead - 1e-9);
-                for (int k = brimLoops - 1; k >= 0; k--)
-                    foreach (var ring in Region2dOffset.Offset(regions, bead * (k + 0.5)))
-                    {
-                        paths.Add(new SlicePath(SlicePathRole.Brim, ring.Outer, IsClosed: true));
-                        // A brim rings the INSIDE of a bore too (the outward offset's hole
-                        // loops are the bore shrunk inward — exactly the interior brim).
-                        foreach (var hole in ring.Holes)
-                            paths.Add(new SlicePath(SlicePathRole.Brim, hole, IsClosed: true));
-                    }
-                if (paths.Count > 0)
-                    pen = paths[^1].End;
-            }
+            if (i == 0 && p.RaftLayers == 0)
+                Adhesion(regions, paths);
 
             // Supports: columns under whatever overhang material is still ABOVE this layer's
             // top, minus the part's own section grown by the XY gap (so a column never fuses
@@ -228,22 +342,23 @@ public static class FdmSlicer
             {
                 double layerTop = bounds.Min.Z + (i + 1) * h;
                 while (supportStart < supportFacets.Count
-                    && supportFacets[supportStart].MaxZ < layerTop - 1e-9)
+                    && supportFacets[supportStart].MaxZ - p.SupportZGap < layerTop - 1e-9)
                 {
                     supportStart++;
                     supportDirty = true;
                 }
+                double clipPlane = layerTop + p.SupportZGap;
                 bool anyClipped = false;
                 for (int f = supportStart; f < supportFacets.Count && !anyClipped; f++)
-                    anyClipped = supportFacets[f].MinZ < layerTop - 1e-9;
+                    anyClipped = supportFacets[f].MinZ < clipPlane - 1e-9;
                 if (supportDirty || anyClipped)
                 {
                     var footprints = new List<Region2d>();
                     for (int f = supportStart; f < supportFacets.Count; f++)
                     {
                         var facet = supportFacets[f];
-                        IReadOnlyList<Vector3d> loop = facet.MinZ < layerTop - 1e-9
-                            ? ClipAbove(facet.Loop, layerTop)
+                        IReadOnlyList<Vector3d> loop = facet.MinZ < clipPlane - 1e-9
+                            ? ClipAbove(facet.Loop, clipPlane)
                             : facet.Loop;
                         if (Footprint(loop) is { } footprint)
                             footprints.Add(footprint);
@@ -257,9 +372,44 @@ public static class FdmSlicer
                         ? Region2dBoolean.Difference(
                             supportUnion, Region2dOffset.Offset(regions, p.SupportGap))
                         : supportUnion;
+                    if (blockerSections?[i] is { Count: > 0 } masked && supportRegions.Count > 0)
+                        supportRegions = Region2dBoolean.Difference(supportRegions, masked);
+
+                    // INTERFACE layers: near the overhang the support densifies and turns
+                    // perpendicular, so the part's first layer lands on a tighter grid.
+                    IReadOnlyList<Region2d> interfaceRegions = [];
+                    if (p.SupportInterfaceLayers > 0 && supportRegions.Count > 0)
+                    {
+                        var near = new List<Region2d>();
+                        for (int f = supportStart; f < supportFacets.Count; f++)
+                        {
+                            var facet = supportFacets[f];
+                            if (facet.MinZ - p.SupportZGap - layerTop
+                                > p.SupportInterfaceLayers * h + 1e-9)
+                                continue;
+                            IReadOnlyList<Vector3d> loop = facet.MinZ < clipPlane - 1e-9
+                                ? ClipAbove(facet.Loop, clipPlane)
+                                : facet.Loop;
+                            if (Footprint(loop) is { } footprint)
+                                near.Add(footprint);
+                        }
+                        if (near.Count > 0)
+                        {
+                            var nearUnion = Region2dBoolean.UnionAll(near);
+                            interfaceRegions =
+                                Region2dBoolean.Intersection(supportRegions, nearUnion);
+                            supportRegions =
+                                Region2dBoolean.Difference(supportRegions, nearUnion);
+                        }
+                    }
+
                     var supports = new List<SlicePath>();
                     foreach (var region in supportRegions)
                         supports.AddRange(RectilinearInfill(region, p.SupportSpacing, 0)
+                            .Select(path => path with { Role = SlicePathRole.Support }));
+                    foreach (var region in interfaceRegions)
+                        supports.AddRange(
+                            RectilinearInfill(region, p.SupportSpacing / 2, Math.PI / 2)
                             .Select(path => path with { Role = SlicePathRole.Support }));
                     paths.AddRange(LinkGroup(supports, ref pen));
                 }
@@ -269,15 +419,22 @@ public static class FdmSlicer
             var infill = new List<SlicePath>();
             foreach (var region in regions)
             {
-                // Walls, innermost first (the outer wall prints last, onto settled neighbours).
-                for (int k = p.WallCount - 1; k >= 0; k--)
+                // Walls, innermost first by default (the outer wall prints last, onto
+                // settled neighbours); ExternalPerimetersFirst inverts the order — the
+                // stated trade: outer-first buys dimensional accuracy, inner-first
+                // overhangs. The seam is the offset output's own first vertex unless the
+                // profile states a SeamPosition, which rotates each closed loop.
+                for (int step = 0; step < p.WallCount; step++)
                 {
+                    int k = p.ExternalPerimetersFirst ? step : p.WallCount - 1 - step;
                     double inset = bead * (k + 0.5);
                     foreach (var shell in Region2dOffset.Offset(region, -inset))
                     {
-                        walls.Add(new SlicePath(SlicePathRole.Wall, shell.Outer, IsClosed: true, k));
+                        walls.Add(new SlicePath(SlicePathRole.Wall,
+                            Seamed(shell.Outer, p.Seam, seamAnchor), IsClosed: true, k));
                         foreach (var hole in shell.Holes)
-                            walls.Add(new SlicePath(SlicePathRole.Wall, hole, IsClosed: true, k));
+                            walls.Add(new SlicePath(SlicePathRole.Wall,
+                                Seamed(hole, p.Seam, seamAnchor), IsClosed: true, k));
                     }
                 }
             }
@@ -289,6 +446,8 @@ public static class FdmSlicer
             // at the bead spacing, and SPARSE interior on the remainder; stating neither
             // keeps the incumbent per-region path byte-identically.
             bool shells = p.TopSolidLayers > 0 || p.BottomSolidLayers > 0;
+            var monotonic = new List<SlicePath>();
+            var ironing = new List<SlicePath>();
             if (p.InfillDensity > 0 || shells)
             {
                 double infillInset = bead * (p.WallCount + 0.5);
@@ -298,7 +457,8 @@ public static class FdmSlicer
                     double spacing = bead / p.InfillDensity;
                     foreach (var region in regions)
                         foreach (var core in Region2dOffset.Offset(region, -infillInset))
-                            infill.AddRange(RectilinearInfill(core, spacing, angle));
+                            infill.AddRange(FdmInfill.Sparse(
+                                core, spacing, i, sectionZ, p.InfillPattern));
                 }
                 else
                 {
@@ -319,14 +479,70 @@ public static class FdmSlicer
                         var solidSkin = covered!.Count == 0
                             ? cores
                             : Region2dBoolean.Difference(cores, covered);
+
+                        // BRIDGES: skin the layer DIRECTLY below leaves in air (never the
+                        // first layer — the bed is not air), filled solid along the
+                        // region's own long axis so the strands span anchor to anchor.
+                        if (p.DetectBridges && i > 0 && solidSkin.Count > 0)
+                        {
+                            var bridges = sections[i - 1].Count == 0
+                                ? solidSkin
+                                : Region2dBoolean.Difference(solidSkin, sections[i - 1]);
+                            if (bridges.Count > 0)
+                            {
+                                solidSkin = Region2dBoolean.Difference(solidSkin, bridges);
+                                foreach (var r in bridges)
+                                {
+                                    double spanX = r.Bounds.Max.X - r.Bounds.Min.X;
+                                    double spanY = r.Bounds.Max.Y - r.Bounds.Min.Y;
+                                    double bridgeAngle = spanX >= spanY ? 0 : Math.PI / 2;
+                                    infill.AddRange(RectilinearInfill(r, bead, bridgeAngle)
+                                        .Select(path => path with
+                                        {
+                                            Role = SlicePathRole.Bridge,
+                                        }));
+                                }
+                            }
+                        }
+
                         foreach (var r in solidSkin)
-                            infill.AddRange(RectilinearInfill(r, bead, angle)
-                                .Select(path => path with { Role = SlicePathRole.SolidInfill }));
+                        {
+                            var skin = RectilinearInfill(r, bead, angle)
+                                .Select(path => path with { Role = SlicePathRole.SolidInfill });
+                            // MONOTONIC skins keep their scanline order and one direction
+                            // (never linked or reversed), so overlaps always shingle the
+                            // same way and the top surface reads as one sheet.
+                            if (p.MonotonicSkins)
+                                monotonic.AddRange(skin);
+                            else
+                                infill.AddRange(skin);
+                        }
                         if (p.InfillDensity > 0 && covered.Count > 0)
                         {
                             foreach (var r in Region2dBoolean.Intersection(cores, covered))
-                                infill.AddRange(
-                                    RectilinearInfill(r, bead / p.InfillDensity, angle));
+                                infill.AddRange(FdmInfill.Sparse(
+                                    r, bead / p.InfillDensity, i, sectionZ, p.InfillPattern));
+                        }
+
+                        // IRONING: a low-flow smoothing sweep over the TOP-exposed skin
+                        // only (a bottom skin has nothing above to smooth for), one
+                        // direction, appended after everything else on the layer.
+                        if (p.IroningFlow > 0)
+                        {
+                            IReadOnlyList<Region2d>? above = null;
+                            for (int k = 1; k <= p.TopSolidLayers && above is not { Count: 0 }; k++)
+                                above = IntersectNeighbour(above, i + k);
+                            var exposed = above!.Count == 0
+                                ? cores
+                                : Region2dBoolean.Difference(cores, above);
+                            double spacing = p.IroningSpacing > 0 ? p.IroningSpacing : bead / 3;
+                            foreach (var r in exposed)
+                                ironing.AddRange(RectilinearInfill(r, spacing, 0)
+                                    .Select(path => path with
+                                    {
+                                        Role = SlicePathRole.Ironing,
+                                        Flow = p.IroningFlow,
+                                    }));
                         }
                     }
                 }
@@ -350,7 +566,19 @@ public static class FdmSlicer
             if (walls.Count > 0)
                 pen = walls[^1].End;
             paths.AddRange(LinkGroup(infill, ref pen));
-            layers.Add(new SliceLayer(i, bounds.Min.Z + (i + 1) * h, sectionZ, regions, paths));
+            if (monotonic.Count > 0)
+            {
+                paths.AddRange(monotonic);
+                pen = monotonic[^1].End;
+            }
+            if (ironing.Count > 0)
+            {
+                paths.AddRange(ironing);
+                pen = ironing[^1].End;
+            }
+            layers.Add(new SliceLayer(
+                i + p.RaftLayers, bounds.Min.Z + (i + 1) * h + zShift, sectionZ,
+                regions, paths));
         }
 
         return new SlicedPart(p, layers, up);
@@ -495,6 +723,90 @@ public static class FdmSlicer
         return paths;
 
         Vector2d Back(double x, double y) => new(x * c - y * s, x * s + y * c);
+    }
+
+    /// <summary>Dimensional compensations, applied to the stored sections so every
+    /// consumer (walls, shells, supports) reads one geometry: the layer-0 INSET for
+    /// elephant foot, the signed whole-section XY offset, and hole compensation — each
+    /// hole grown by the stated amount, because printed holes come out small. All three
+    /// zero returns the input by reference (the byte-identity path).</summary>
+    private static IReadOnlyList<Region2d> Compensate(
+        IReadOnlyList<Region2d> regions, double elephantInset, double xy, double hole)
+    {
+        double offset = xy - elephantInset;
+        if (offset == 0 && hole == 0)
+            return regions;
+        var result = regions;
+        if (offset != 0)
+        {
+            var moved = new List<Region2d>();
+            foreach (var region in result)
+                moved.AddRange(Region2dOffset.Offset(region, offset));
+            result = moved;
+        }
+        if (hole > 0)
+        {
+            var adjusted = new List<Region2d>();
+            foreach (var region in result)
+            {
+                if (region.Holes.Count == 0)
+                {
+                    adjusted.Add(region);
+                    continue;
+                }
+                var grown = new List<Region2d>();
+                foreach (var loop in region.Holes)
+                {
+                    var ccw = new List<Vector2d>(loop);
+                    if (SignedArea(ccw) < 0)
+                        ccw.Reverse();
+                    grown.AddRange(Region2dOffset.Offset(new Region2d(ccw), hole));
+                }
+                adjusted.AddRange(Region2dBoolean.Difference(
+                    new[] { new Region2d(region.Outer) }, grown));
+            }
+            result = adjusted;
+        }
+        return result;
+    }
+
+    private static double SignedArea(IReadOnlyList<Vector2d> loop)
+    {
+        double area2 = 0;
+        for (int i = 0; i < loop.Count; i++)
+        {
+            var a = loop[i];
+            var b = loop[(i + 1) % loop.Count];
+            area2 += a.X * b.Y - b.X * a.Y;
+        }
+        return area2 / 2;
+    }
+
+    /// <summary>Rotates a closed loop so its stated seam vertex comes first: the offset
+    /// output's own first vertex for <see cref="SeamPosition.Free"/> (the incumbent
+    /// convention, bit-identical), the rearmost vertex for Rear, the vertex nearest the
+    /// part's fixed anchor for Aligned (so seams line up vertically).</summary>
+    private static IReadOnlyList<Vector2d> Seamed(
+        IReadOnlyList<Vector2d> loop, SeamPosition seam, in Vector2d anchor)
+    {
+        if (seam == SeamPosition.Free || loop.Count < 2)
+            return loop;
+        int best = 0;
+        for (int i = 1; i < loop.Count; i++)
+        {
+            bool better = seam == SeamPosition.Rear
+                ? loop[i].Y > loop[best].Y
+                    || (loop[i].Y == loop[best].Y && loop[i].X > loop[best].X)
+                : (loop[i] - anchor).Length < (loop[best] - anchor).Length;
+            if (better)
+                best = i;
+        }
+        if (best == 0)
+            return loop;
+        var rotated = new List<Vector2d>(loop.Count);
+        for (int i = 0; i < loop.Count; i++)
+            rotated.Add(loop[(best + i) % loop.Count]);
+        return rotated;
     }
 
     /// <summary>Collects the facets that OVERHANG past the threshold: downward-facing facets

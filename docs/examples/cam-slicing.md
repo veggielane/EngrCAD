@@ -222,6 +222,75 @@ var camera = new CameraState(-Math.PI / 2, 1.15, 36, (0, 0, 0));
 
 ![The layer under the step's exposed plateau: brass solid skin on the exposed half, sage sparse fill under the tower — the split exactly at the tower wall](images/cam-shells-layer.png)
 
+## Infill patterns
+
+`InfillPattern` picks the sparse fill's family, and every member holds the stated density by
+scaling its spacing to its direction count (grid lays two directions at twice the spacing,
+triangles three at three times — a density means one thing across the family): rectilinear,
+grid, triangles, concentric loops, **gyroid** — the TPMS level set sectioned at each layer's
+own z, the implicit engine's surface, genuinely three-dimensional and self-supporting — and
+**Hilbert**, the landed `SpaceFillingInfill` machinery as a print pattern.
+
+```csharp render:cam-infill-gyroid
+// Gyroid infill on one layer, drawn as beads: the pattern changes with z because it IS
+// a 3D surface's section, not a per-layer recipe.
+var box = Shape.Box(24, 24, 4);
+var sliced = FdmSlicer.Slice(box, new PrinterProfile(NozzleDiameter: 0.8, LayerHeight: 0.5,
+    WallCount: 1, InfillDensity: 0.25, InfillPattern: InfillPattern.Gyroid));
+var layer = sliced.Layers[3];
+
+Shape Ribbons(IEnumerable<SlicePath> paths)
+{
+    var regions = new List<Region2d>();
+    foreach (var path in paths)
+        regions.AddRange(Region2dOffset.Stroke(path.Points, 0.5));
+    Shape? all = null;
+    foreach (var region in Region2dBoolean.UnionAll(regions))
+    {
+        var sketch = Sketch.Polygon(region.Outer);
+        foreach (var hole in region.Holes)
+            sketch = sketch.WithHole(Sketch.Polygon(hole));
+        var ribbon = Shape.Extrude(sketch, 0.4);
+        all = all is null ? ribbon : all | ribbon;
+    }
+    return all!;
+}
+
+var scene = new Scene();
+scene.Add(new Part("infill", Ribbons(layer.Paths.Where(p => p.Role == SlicePathRole.Infill)),
+    Palette.Teal));
+var camera = new CameraState(-Math.PI / 2, 1.15, 42, (0, 0, 0));
+```
+
+![Gyroid infill on one layer — the TPMS surface's own section, waving because the pattern is three-dimensional](images/cam-infill-gyroid.png)
+
+## Spiral vase, seams, wall order
+
+**Spiral vase** (`SpiralVase`) prints one continuous helical wall: above the base layers the
+single perimeter's z RAMPS along its own arc length, ending exactly at each layer's top, so
+the whole part is one unbroken extrusion. Its contradictions refuse by name (a second wall,
+infill, top skins, supports — each names what to state instead), as does any layer that is
+not a single unholed island. **`SeamPosition`** rotates each closed wall's start: `Rear`
+collects seams at the back, `Aligned` pins them to a fixed per-part anchor so they line up
+vertically. **`ExternalPerimetersFirst`** inverts the wall order — the stated trade: outer
+first buys dimensional accuracy, inner first overhangs.
+
+## Cooling, the volumetric cap, z-hop
+
+A layer quicker than `MinLayerTime` slows every deposition on it by one factor (floored at
+`MinPrintSpeed`) so the plastic below cools before the next layer lands — the time read from
+the same speeds the estimator uses. `FanSpeed`/`FanOffLayers` write `M106` once the first
+layers have adhered (0 writes nothing). `MaxVolumetricFlow` is a hard ceiling applied LAST
+(`speed ≤ cap / BeadArea` — the machine's melt limit outranks every stated speed).
+`ZHop` lifts retracted travels and drops back before the unretract.
+
+## Dimensional compensations
+
+`ElephantFootCompensation` insets layer 0 (the squashed first layer bulges out),
+`XYCompensation` offsets every section (signed), and `HoleCompensation` grows only the
+holes — printed holes come out small. Each is applied to the stored sections, so walls,
+skins and supports all read one geometry.
+
 ## Supports from the overhang field
 
 Supports follow the same opt-in convention: `SupportOverhangAngle` states the threshold
@@ -260,6 +329,17 @@ A facet resting on the bed excludes itself with no special case — nothing of i
 layer's top, so no layer ever finds material to support — which is why a plain box with
 supports *stated* still writes byte-identical G-code. The part's own bottom face is not an
 overhang; it is the print.
+
+**The support stack is complete now**: `SupportZGap` leaves a stated layer of air under the
+overhang so the support breaks away cleanly (the columns stop exactly `gap` short of the
+underside, pinned by test); `SupportInterfaceLayers` densify and turn perpendicular near the
+contact, so the part's first layer lands on a tighter grid; `RaftLayers`/`RaftMargin` print a
+sacrificial base under the part *and its supports* (the part lifts by the raft's height while
+its geometry stands still, and the skirt/brim move to the raft's own first layer); and
+`FdmSupportModifiers` is the code-first paint-on support — BLOCKER shapes mask support
+generation over their own sectioned volume, ENFORCER shapes force support under any
+downward-facing facet inside them, threshold or no threshold (the test's mutation: a 45°
+chamfer that a 50° threshold ignores gains supports exactly where the enforcer covers it).
 
 ```csharp render:cam-support-columns
 // The support pattern is grid-anchored, so every layer lays the same lines: stroking ONE
@@ -314,11 +394,22 @@ Console.WriteLine($"print time between {estimate.MinSeconds / 60:0.0} and "
     + $"{estimate.MaxSeconds / 60:0.0} minutes at 500 mm/s2");
 ```
 
-**Not in stage 1** (each filed in the campaign):
-a raft, seam placement smarter than the deterministic anchor, a support Z-gap (one layer of
-air under the overhang for cleaner breakaway — v1 supports run to the underside exactly),
-support interface layers, arc moves (`G2`/`G3` join
-with the CNC stages), the tool animated along its own path (a matrices-only pose track; the
-material-ADDITION animation above is landed), material-removal animation for the CNC stages
-(recorded stock states), and non-planar slicing (deliberately last — it inherits the exp-map
-machinery's reported distortion).
+## Bridges, monotonic skins, ironing
+
+`DetectBridges` finds skin the layer *directly* below leaves in air (never the first layer —
+the bed is not air) and fills it solid along the region's own long axis at `BridgeSpeed`, so
+the strands span anchor to anchor. `MonotonicSkins` keeps skin runs in scanline order, all
+one direction, never linked or reversed — overlaps always shingle the same way and the top
+reads as one sheet. `IroningFlow`/`IroningSpacing` add a low-flow smoothing sweep over the
+*top-exposed* skin only, appended after everything else on the layer; the decoder sees the
+reduced flow, and the extrusion identity generalises to `Σ length·flow` exactly.
+
+**What genuinely remains** (each filed in the PrusaSlicer-parity backlog with its reason):
+Arachne variable-width perimeters, gap fill and thin walls, fuzzy skin, lightning infill and
+tree supports (the research-grade trio), variable layer height, multi-material and the wipe
+tower, per-feature widths and accelerations, arc moves (`G2`/`G3` join with the CNC stages),
+custom G-code snippets and flavours, `.bgcode`, and non-planar slicing (deliberately last —
+it inherits the exp-map machinery's reported distortion). `RetractionExtraRestart` is filed
+WITH a reason rather than built: pushing unmatched extra filament breaks the matched
+retract-pair contract the twin decoder verifies, and the identity is worth more than the
+knob.

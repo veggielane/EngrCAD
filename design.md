@@ -9061,6 +9061,41 @@ acceleration. Junction-deviation cornering, per-axis limits and jerk are filed a
 refinement that NARROWS the bracket; they cannot move its ends, which is what makes the
 bracket the honest v1 rather than a placeholder.
 
+**The FDM FINISH wave landed the practical slicer feature set** (docs `cam-slicing.md`; the
+research-grade trio — Arachne variable-width perimeters, lightning infill, tree supports —
+stays filed as such). The design decisions worth keeping: **every infill pattern holds the
+stated DENSITY by scaling its spacing to its direction count** (grid two directions at twice
+the spacing, triangles three at three times), so a density means one thing across the family,
+and GYROID is the TPMS level set sectioned at each layer's own z — a private level-FUNCTION
+field (deliberately not `Sdf.Gyroid`, the thickened lattice SOLID) through
+`SdfContours.OnPlane` at level 0, chained by the surfacing code's own exact-equality chainer,
+clipped to the core at vertex granularity. **A spiral vase's z is ramped by the WRITER along
+the wall's own arc length** (the slicer stays 2D — the model unchanged), the layer-start Z
+move skipped above the base because the previous turn ended exactly one layer below; its
+contradictions (a second wall, infill, top skins, supports) refuse by name at validation, and
+a multi-island layer refuses before any path is built. **Cooling reads the same speeds the
+estimator does** (one slowdown factor per layer, floored), and the volumetric cap applies
+LAST because the melt limit is the machine's, not the profile's. **The raft is a PREPENDED
+layer set with the part lifted** — geometry stands still, only Z shifts — with the skirt/brim
+moved to the raft's own first layer by making adhesion a function of the first EMITTED layer
+rather than part-layer zero. **The support Z-gap moves the clip plane, not the facets**
+(`ClipAbove(loop, layerTop + gap)` with the drop condition shifted to match — gap 0 is
+bit-identical), interface layers densify AND turn perpendicular near the contact, and
+blocker/enforcer SHAPES are the code-first paint-on support (a blocker sectioned per layer
+like the part; an enforcer forcing support under any downward facet inside its volume — the
+mutation test: a 45-degree chamfer a 50-degree threshold ignores gains supports exactly where
+the enforcer covers it). **A bridge is skin the layer DIRECTLY below leaves in air** — never
+the first layer, because the bed is not air, which is the reasoning error the naive
+bottom-window rule makes — filled along the region's own long axis. **Ironing forced
+`SlicePath.Flow`**, and the extrusion identity GENERALISES rather than breaks: filament =
+sum of length x flow x ratio, asserted through the decoder. **`RetractionExtraRestart` is the
+one knob filed WITH a reason instead of built**: unmatched extra filament breaks the matched
+retract-pair contract the twin decoder verifies, and the identity is worth more than the
+knob. Compensations (elephant foot / XY / hole) apply to the STORED sections so walls, skins
+and supports read one geometry, hole compensation re-winding each hole loop CCW before
+growing it (the signed-area check, since a stored hole loop's winding is the region's own
+business).
+
 **Stage 3 — 3-axis surfacing — landed** (`CncSurfacing.Raster`/`Waterline`/`ScallopHeight`/
 `StepoverForScallop`; docs `examples/cam-surfacing.md`), and it is the stage where the implicit
 engine pays DIRECTLY rather than as a bridge: **the cutter-location surface of a ball-nose tool

@@ -53,7 +53,30 @@ public static class GcodeWriter
         foreach (var layer in part.Layers)
         {
             b.Append($";LAYER:{layer.Index}\n");
-            b.Append($"G0 Z{Num(layer.Z)} F{travelFeed}\n");
+            // The fan turns on once the first FanOffLayers have adhered (write-only-when-
+            // stated: FanSpeed 0 writes no fan command at all).
+            if (p.FanSpeed > 0 && layer.Index == p.FanOffLayers)
+                b.Append($"M106 S{(int)Math.Round(p.FanSpeed * 255)}\n");
+            // A vase layer's z is reached by the RAMP, not by a hop — the previous spiral
+            // turn ended exactly one layer below, so the nozzle is already there.
+            bool vaseLayer = p.SpiralVase
+                && layer.Index >= p.RaftLayers + Math.Max(p.BottomSolidLayers, 1);
+            if (!vaseLayer)
+                b.Append($"G0 Z{Num(layer.Z)} F{travelFeed}\n");
+
+            // Cooling: a layer quicker than MinLayerTime slows every deposition on it by
+            // the same factor (floored at MinPrintSpeed), so the layer takes the stated
+            // minimum and the plastic below has cooled before the next lands.
+            double coolingFactor = 1;
+            if (p.MinLayerTime > 0)
+            {
+                double layerTime = 0;
+                foreach (var path in layer.Paths)
+                    layerTime += path.Length / p.SpeedFor(path.Role, layer.Index);
+                if (layerTime > 0 && layerTime < p.MinLayerTime)
+                    coolingFactor = layerTime / p.MinLayerTime;
+            }
+
             foreach (var path in layer.Paths)
             {
                 // Travel to the path start, retracting when the hop is long enough to ooze.
@@ -61,22 +84,49 @@ public static class GcodeWriter
                 bool worthRetracting = retractionOn && e > 0
                     && travel >= p.MinTravelForRetraction;
                 if (worthRetracting)
+                {
                     b.Append($"G1 E{NumE(e - p.RetractionLength)} F{retractFeed}\n");
+                    if (p.ZHop > 0)
+                        b.Append($"G0 Z{Num(layer.Z + p.ZHop)} F{travelFeed}\n");
+                }
                 if (travel > 0)
                     b.Append($"G0 X{Num(path.Start.X)} Y{Num(path.Start.Y)} F{travelFeed}\n");
                 if (worthRetracting)
+                {
+                    if (p.ZHop > 0)
+                        b.Append($"G0 Z{Num(layer.Z)} F{travelFeed}\n");
                     b.Append($"G1 E{NumE(e)} F{retractFeed}\n");
+                }
 
-                // The path's feed comes from the profile's ONE role/layer rule (a plain
-                // profile resolves every role to PrintSpeed, keeping the file byte-identical).
-                int printFeed = (int)Math.Round(p.SpeedFor(path.Role, layer.Index) * 60);
+                // The path's feed: the profile's ONE role/layer rule, scaled by the layer's
+                // cooling factor (floored), then capped by the volumetric limit — a hard
+                // machine bound, so it applies LAST.
+                double speed = p.SpeedFor(path.Role, layer.Index) * coolingFactor;
+                if (p.MinLayerTime > 0)
+                    speed = Math.Max(speed, p.MinPrintSpeed);
+                if (p.MaxVolumetricFlow > 0)
+                    speed = Math.Min(speed, p.MaxVolumetricFlow / p.BeadArea);
+                int printFeed = (int)Math.Round(speed * 60);
+
+                // A vase wall RAMPS z along its own arc length, ending exactly at the
+                // layer's top — the continuous spiral that is the mode's whole point.
+                bool ramp = vaseLayer && path.Role == SlicePathRole.Wall;
+                double rampTotal = ramp ? path.Length : 0;
+                double rampDone = 0;
                 var previous = path.Start;
                 int count = path.Points.Count + (path.IsClosed ? 1 : 0);
                 for (int i = 1; i < count; i++)
                 {
                     var point = path.Points[i % path.Points.Count];
-                    e += (point - previous).Length * deToDistance;
-                    b.Append($"G1 X{Num(point.X)} Y{Num(point.Y)} E{NumE(e)}"
+                    e += (point - previous).Length * deToDistance * path.Flow;
+                    string z = "";
+                    if (ramp && rampTotal > 0)
+                    {
+                        rampDone += (point - previous).Length;
+                        double layerHeight = p.LayerHeight;
+                        z = $" Z{Num(layer.Z - layerHeight + layerHeight * rampDone / rampTotal)}";
+                    }
+                    b.Append($"G1 X{Num(point.X)} Y{Num(point.Y)}{z} E{NumE(e)}"
                         + (i == 1 ? $" F{printFeed}" : "") + "\n");
                     previous = point;
                 }
@@ -86,6 +136,8 @@ public static class GcodeWriter
 
         if (retractionOn && e > 0)
             b.Append($"G1 E{NumE(e - p.RetractionLength)} F{retractFeed}\n");
+        if (p.FanSpeed > 0)
+            b.Append("M107\n");
         if (p.HotendTemperature > 0)
             b.Append("M104 S0\n");
         if (p.BedTemperature > 0)

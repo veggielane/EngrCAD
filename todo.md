@@ -2540,15 +2540,12 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     - [ ] Classic gap fill (the sliver between two walls too narrow for a bead: detect
       where the inward offset vanishes, fill with a centre-line stroke) and thin-wall
       detection (a wall thinner than one bead becomes a single centre-line pass).
-    - [ ] External-perimeters-first as an option (the innermost-first EMISSION rule made
-      a stated choice: outer-first buys dimensional accuracy, inner-first overhangs).
+    - External-perimeters-first LANDED; spiral vase LANDED (writer-side z ramp along
+      the wall's arc length, contradictions + multi-island layers refused by name);
+      seam placement LANDED as Rear/Aligned (the concave-corner cost model still open).
     - [ ] Extra perimeters on overhangs / ensure-vertical-shell-thickness.
-    - [ ] Spiral vase mode (ONE continuous helical outer wall, z a linear ramp within
-      each loop; refuses multi-island and holed layers by name).
     - [ ] Fuzzy skin (jitter the outer wall — DETERMINISTIC, seeded from the global grid
       phase, never a clock; the pattern-phase rule applied to noise).
-    - [ ] Seam placement: nearest / aligned / rear / a concave-corner cost model,
-      replacing the deterministic first-vertex anchor (already filed, subsumed here).
   - **Top/bottom & surfaces**:
     - Solid top/bottom shells LANDED (`TopSolidLayers`/`BottomSolidLayers`, the
       neighbour-window intersection subtracted from the infill core, skins at the
@@ -2556,29 +2553,27 @@ flattened; a loaded document is an overlay `reload` still discards) and the
       byte-identically; the step fixture pins the split at the overhanging wall;
       design.md §6e). Still open here: shells by THICKNESS rather than count, and
       the skin-to-sparse anchor margin.
-    - [ ] Monotonic top-surface fill (all lines one direction in overlap order),
-      ironing (a low-flow smoothing pass over top solids).
-    - [ ] Bridge detection + direction (a solid region unsupported below spans between
-      anchored edges — the overhang field one level up), bridge flow/speed, internal
-      bridges over sparse infill, thick bridges.
-  - **Infill patterns**: grid / triangles / cubic / adaptive cubic / line / honeycomb /
-    3D honeycomb / gyroid (a TPMS plane section the implicit engine already carries) /
-    Hilbert (`SpaceFillingInfill` verbatim) / Archimedean chords / octagram /
-    [ ] LIGHTNING infill (the tree-like sparse fill that only supports top surfaces —
-    research-grade); combine-infill-every-N-layers; infill/perimeter overlap and anchor
-    runs; solid-infill-threshold area (a region too small to fill sparsely goes solid).
+    - Monotonic skins LANDED (scanline order, one direction, never linked) and ironing
+      LANDED (top-exposed skin only, per-path Flow — the extrusion identity generalises
+      to sum of length x flow). Bridges LANDED as immediate-below air detection filled
+      along the region's long axis at BridgeSpeed. Still open: internal bridges over
+      sparse infill, thick bridges, bridge fan.
+  - **Infill patterns**: grid / triangles / concentric / gyroid (the TPMS level set
+    sectioned per layer) / Hilbert (`SpaceFillingInfill`) LANDED, every member holding
+    the stated density by direction-count spacing. Still open: cubic/adaptive-cubic/
+    honeycomb members, [ ] LIGHTNING infill (research-grade),
+    combine-infill-every-N-layers, infill/perimeter anchor runs,
+    solid-infill-threshold area.
   - **Layers**: [ ] variable layer height — adaptive from the surface slope (the
     display-mesh normal field says where thin layers pay) plus a stated manual table;
     the mid-layer section machinery already takes arbitrary z's, so this is scheduling,
     not sectioning.
-  - **Supports** (stage-1 supports landed; the deltas): Z contact distance + interface
-    layers + on-model awareness (all filed above), [ ] XY separation as its own knob,
-    [ ] buildplate-only vs everywhere as a stated choice, [ ] snug vs grid style,
-    [ ] a RAFT (filed above), [ ] support ENFORCER/BLOCKER shapes — the code-first
-    equivalent of paint-on supports: a `Shape` whose footprint forces or masks support
-    generation (the modifier-shape idea below), [ ] organic/tree supports (branching
-    towers grown toward the bed avoiding the part — research-grade; the SDF answers the
-    clearance query).
+  - **Supports**: Z contact gap LANDED (the clip plane moved, gap 0 bit-identical),
+    interface layers LANDED (densified + perpendicular near contact), RAFT LANDED
+    (prepended layers, the part lifted, adhesion moved to the raft), ENFORCER/BLOCKER
+    shapes LANDED (`FdmSupportModifiers` — the code-first paint-on support). Still
+    open: on-model awareness, buildplate-only vs everywhere as a stated choice, snug
+    vs grid style, [ ] organic/tree supports (research-grade).
   - **Speeds, extrusion, cooling** (the writer grows a per-FEATURE table):
     - Per-feature SPEEDS landed (Wall/Infill/SolidInfill/Support/FirstLayer through the
       one `SpeedFor` rule, unset byte-identical, stated speeds changing only the F
