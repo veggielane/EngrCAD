@@ -136,6 +136,14 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   first (the one-global-link order was pen-dependent and measurably started a level at its
   boundary ring).
 
+- **Sequential printing** (`FdmSequential.Plan/Slice/WriteGcode` + `FdmPlating.Arrange`,
+  the plate without the union): ascending-height order, pairwise clearance checked
+  conservatively (bounds gap under-estimates the true gap — refuses legal, never accepts
+  illegal), at most one over-gantry part and it prints last (a second refused naming both);
+  the combined program strips middle headers/tails, hops above everything completed and
+  moves XY BEFORE descending at each handover, resets E with G92 E0 — the decoder reads the
+  whole file and the filament total is the sum of the parts' own.
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

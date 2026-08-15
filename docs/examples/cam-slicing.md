@@ -452,6 +452,39 @@ foreach (var (role, filament) in sliced.FilamentByRole.OrderByDescending(r => r.
     Console.WriteLine($"  {role,-12} {filament,8:0.0} mm");
 ```
 
+## Sequential printing
+
+`FdmSequential` prints each part **whole** before the next starts — the failure-isolation
+mode, where a mid-print failure costs one part rather than the plate. What makes it legal is
+clearance, *checked* rather than hoped: every pair must stand at least the extruder's
+clearance radius apart (measured on the XY bounds — an under-estimate of the true gap, so
+the check refuses some legal plates and never accepts an illegal one), parts print in
+**ascending height order** so the gantry always passes over shorter completed work, and at
+most one part may exceed the gantry height — it prints last, and a second has nowhere legal
+to go (refused naming both). `FdmPlating.Arrange` is the plate without the union — the
+per-part identity a print order is a statement about.
+
+```csharp run:cam-sequential
+var placed = FdmPlating.Arrange(
+    [Shape.Box(12, 12, 4), Shape.Cylinder(6, 8), Shape.Box(10, 10, 30)],
+    bedWidth: 200, bedDepth: 200, gap: 30);
+var print = FdmSequential.Slice(placed, new PrinterProfile(
+    NozzleDiameter: 0.8, LayerHeight: 0.4, WallCount: 1, InfillDensity: 0.15));
+Console.WriteLine($"order: {string.Join(" -> ", print.Plan.Order)} "
+    + $"(heights {string.Join(", ", print.Plan.Heights.Select(h => h.ToString("0.#")))})");
+Console.WriteLine($"clearance accepted at {print.Plan.MinPairClearance:0.#} mm");
+var decoded = GcodeReader.Read(FdmSequential.WriteGcode(print));
+Console.WriteLine($"combined program: {decoded.FilamentUsed:0} mm filament "
+    + $"= {print.Parts.Sum(p => p.FilamentUsed):0} summed per part");
+```
+
+The combined program is the per-part programs with the middle headers and tails stripped:
+each handover hops **above everything completed**, moves in XY to the next part's own start
+*before* descending (descending first would drop the nozzle to first-layer height over the
+completed neighbour), and resets absolute E with `G92 E0` — which the twin decoder already
+understands, so the combined filament total is the sum of the parts' own, and the layer-Z
+sequence drops exactly once per handover.
+
 ## Bridges, monotonic skins, ironing
 
 `DetectBridges` finds skin the layer *directly* below leaves in air (never the first layer —

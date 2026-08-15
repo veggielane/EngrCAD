@@ -22,6 +22,20 @@ public static class FdmPlating
         IReadOnlyList<Shape> parts, double bedWidth, double bedDepth, double gap = 5,
         PackOptions? options = null)
     {
+        Shape? plate = null;
+        foreach (var placed in Arrange(parts, bedWidth, bedDepth, gap, options))
+            plate = plate is null ? placed : plate | placed;
+        return plate!;
+    }
+
+    /// <summary>The plate WITHOUT the union: each part packed, rotated and rested on the
+    /// bed plane, returned individually in INPUT order — what sequential printing needs,
+    /// since a union loses the per-part identity a print order is a statement about.
+    /// <see cref="Plate"/> is exactly the union of this list.</summary>
+    public static IReadOnlyList<Shape> Arrange(
+        IReadOnlyList<Shape> parts, double bedWidth, double bedDepth, double gap = 5,
+        PackOptions? options = null)
+    {
         ArgumentNullException.ThrowIfNull(parts);
         if (parts.Count == 0)
             throw new ArgumentException("A plate needs at least one part.", nameof(parts));
@@ -30,7 +44,7 @@ public static class FdmPlating
             ? Packing.Pack(parts, bedWidth, bedDepth, gap)
             : Packing.Pack(parts, bedWidth, bedDepth, options);
 
-        Shape? plate = null;
+        var arranged = new Shape[parts.Count];
         foreach (var placement in layout.Placements)
         {
             var placed = parts[placement.Index];
@@ -40,8 +54,8 @@ public static class FdmPlating
             // Rest every part on the bed plane, whatever frame it was modeled in.
             placed = placed.Translate(
                 placement.Offset.X, placement.Offset.Y, -placed.Bounds().Min.Z);
-            plate = plate is null ? placed : plate | placed;
+            arranged[placement.Index] = placed;
         }
-        return plate!;
+        return arranged;
     }
 }

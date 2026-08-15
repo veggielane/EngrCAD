@@ -9147,6 +9147,25 @@ identities once (`rpm = 1000·Vc/(π·D)`, `feed = rpm·flutes·chipload`) over 
 reflection), and the spindle cap preserves the CHIP LOAD rather than the feed — holding the
 feed at a capped rpm would thicken every chip past what the flute clears.
 
+**Sequential printing is a clearance theorem plus string discipline, and the filed
+prediction dissolved again**: the backlog reserved a swept-cylinder SDF query for the
+gantry/nozzle check, and the honest model is simpler — a printer's sequential capability IS
+two numbers (the extruder clearance radius and the gantry height, ⚠ per machine), so the
+check is a pairwise XY bounds gap (an UNDER-estimate of the true footprint gap: refuses
+some legal plates, never accepts an illegal one — the sound direction) plus the height
+rule: ascending print order makes the gantry always pass over shorter completed work, and
+at most ONE part may exceed the gantry height, printed last (a second has nowhere legal to
+go and is refused naming both). `FdmPlating.Arrange` is `Plate` minus the union — the
+per-part identity a print order is a statement about, extracted rather than re-derived so
+`Plate` is exactly its union. The combined G-code is the per-part programs with middle
+headers/tails stripped (the writer gained an internal sectioned overload whose both-true
+form is `Write` byte for byte), each handover a hop above everything completed + the XY
+move to the next part's own start BEFORE descending — descend-first would put the nozzle
+at first-layer height over the completed neighbour, the crash the mode exists to avoid —
+plus `G92 E0`, which the twin decoder already understands: the combined program's filament
+total equals the sum of the parts' own (asserted at 1e-6 relative) and the layer-Z
+sequence drops exactly once per handover.
+
 **Stage 3 — 3-axis surfacing — landed** (`CncSurfacing.Raster`/`Waterline`/`ScallopHeight`/
 `StepoverForScallop`; docs `examples/cam-surfacing.md`), and it is the stage where the implicit
 engine pays DIRECTLY rather than as a bridge: **the cutter-location surface of a ball-nose tool

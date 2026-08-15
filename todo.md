@@ -2630,9 +2630,12 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   - **Plating & sequence**:
     - Multi-part plates LANDED (`FdmPlating.Plate` over `Packing` — one shape sliced
       whole, disjoint islands, the packer's own out-of-room refusal).
-    - [ ] Sequential printing (complete one object before the next; the gantry/nozzle
-      clearance is a swept-cylinder query the SDF engine answers, refusing an
-      unreachable plate by name).
+    - Sequential printing LANDED (`FdmSequential` — ascending-height order, pairwise
+      bounds-gap clearance refusing conservatively, one over-gantry part max printed
+      last, handover hops + XY-before-descend + G92 E0, decoder-conserved filament;
+      the filed swept-cylinder SDF query was NOT needed — the clearance radius and
+      gantry height ARE the printer's own two numbers, and a bounds gap under-estimates
+      so the refusal direction is sound).
   - **G-code & output**:
     - Start/end/layer-change snippets LANDED ({layer}/{z} substitution; a smuggled
       G91/G20 refuses at the DECODER by name — stronger than a write-side allowlist)

@@ -22,28 +22,38 @@ namespace EngrCAD.Cam;
 public static class GcodeWriter
 {
     /// <summary>Writes the sliced part as Marlin-flavour G-code text.</summary>
-    public static string Write(SlicedPart part)
+    public static string Write(SlicedPart part) => Write(part, header: true, tail: true);
+
+    /// <summary>The sectioned form the SEQUENTIAL composer reads: <paramref name="header"/>
+    /// covers the modes/temperatures/start-gcode preamble and <paramref name="tail"/> the
+    /// cool-down postamble — both true is <see cref="Write(SlicedPart)"/> byte for byte, and
+    /// a middle part of a sequential print takes neither (its handover supplies the
+    /// <c>G92 E0</c> and the clearance hop).</summary>
+    internal static string Write(SlicedPart part, bool header, bool tail)
     {
         ArgumentNullException.ThrowIfNull(part);
         var p = part.Profile;
         var b = new StringBuilder();
-        b.Append("; EngrCAD FDM slice\n");
-        b.Append($"; layers: {part.Layers.Count}, layer height: {Num(p.LayerHeight)}, "
-            + $"bead: {Num(p.ResolvedBeadWidth)}\n");
-        b.Append("M82 ; absolute extrusion\n");
-        b.Append("G21 ; millimetres\n");
-        b.Append("G90 ; absolute coordinates\n");
-        if (p.BedTemperature > 0)
-            b.Append($"M140 S{p.BedTemperature}\n");
-        if (p.HotendTemperature > 0)
-            b.Append($"M104 S{p.HotendTemperature}\n");
-        if (p.BedTemperature > 0)
-            b.Append($"M190 S{p.BedTemperature}\n");
-        if (p.HotendTemperature > 0)
-            b.Append($"M109 S{p.HotendTemperature}\n");
-        b.Append("G92 E0\n");
-        if (part.Layers.Count > 0 && p.StartGcode is { Length: > 0 })
-            b.Append(Snippet(p.StartGcode, 0, part.Layers[0].Z));
+        if (header)
+        {
+            b.Append("; EngrCAD FDM slice\n");
+            b.Append($"; layers: {part.Layers.Count}, layer height: {Num(p.LayerHeight)}, "
+                + $"bead: {Num(p.ResolvedBeadWidth)}\n");
+            b.Append("M82 ; absolute extrusion\n");
+            b.Append("G21 ; millimetres\n");
+            b.Append("G90 ; absolute coordinates\n");
+            if (p.BedTemperature > 0)
+                b.Append($"M140 S{p.BedTemperature}\n");
+            if (p.HotendTemperature > 0)
+                b.Append($"M104 S{p.HotendTemperature}\n");
+            if (p.BedTemperature > 0)
+                b.Append($"M190 S{p.BedTemperature}\n");
+            if (p.HotendTemperature > 0)
+                b.Append($"M109 S{p.HotendTemperature}\n");
+            b.Append("G92 E0\n");
+            if (part.Layers.Count > 0 && p.StartGcode is { Length: > 0 })
+                b.Append(Snippet(p.StartGcode, 0, part.Layers[0].Z));
+        }
 
         double e = 0;
         int travelFeed = (int)Math.Round(p.TravelSpeed * 60);
@@ -141,19 +151,22 @@ public static class GcodeWriter
             }
         }
 
-        if (retractionOn && e > 0)
-            b.Append($"G1 E{NumE(e - p.RetractionLength)} F{retractFeed}\n");
-        if (p.EndGcode is { Length: > 0 })
-            b.Append(Snippet(p.EndGcode,
-                part.Layers.Count > 0 ? part.Layers[^1].Index : 0,
-                part.Layers.Count > 0 ? part.Layers[^1].Z : 0));
-        if (p.FanSpeed > 0)
-            b.Append("M107\n");
-        if (p.HotendTemperature > 0)
-            b.Append("M104 S0\n");
-        if (p.BedTemperature > 0)
-            b.Append("M140 S0\n");
-        b.Append("M84 ; motors off\n");
+        if (tail)
+        {
+            if (retractionOn && e > 0)
+                b.Append($"G1 E{NumE(e - p.RetractionLength)} F{retractFeed}\n");
+            if (p.EndGcode is { Length: > 0 })
+                b.Append(Snippet(p.EndGcode,
+                    part.Layers.Count > 0 ? part.Layers[^1].Index : 0,
+                    part.Layers.Count > 0 ? part.Layers[^1].Z : 0));
+            if (p.FanSpeed > 0)
+                b.Append("M107\n");
+            if (p.HotendTemperature > 0)
+                b.Append("M104 S0\n");
+            if (p.BedTemperature > 0)
+                b.Append("M140 S0\n");
+            b.Append("M84 ; motors off\n");
+        }
         return b.ToString();
     }
 
