@@ -67,6 +67,12 @@
       "live": true
     },
     {
+      "id": "cam-milling-paths",
+      "page": "examples/cam-milling.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'MillPass' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
       "id": "cam-milling-tool",
       "page": "examples/cam-milling.md",
       "live": false,
@@ -77,6 +83,48 @@
       "page": "examples/cam-slicing.md",
       "live": false,
       "reason": "does not compile against the browser's assemblies: The name 'FdmSlicer' does not exist in the current context"
+    },
+    {
+      "id": "cam-shells-layer",
+      "page": "examples/cam-slicing.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'SlicePath' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
+      "id": "cam-slice-layer",
+      "page": "examples/cam-slicing.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'SlicePath' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
+      "id": "cam-stock-mid",
+      "page": "examples/cam-milling.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'CncMill' does not exist in the current context"
+    },
+    {
+      "id": "cam-support-columns",
+      "page": "examples/cam-slicing.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'FdmSlicer' does not exist in the current context"
+    },
+    {
+      "id": "cam-surfacing-tool",
+      "page": "examples/cam-surfacing.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'MillTool' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
+      "id": "cam-trochoid",
+      "page": "examples/cam-milling.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'MillTool' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
+      "id": "cam-waterline-rings",
+      "page": "examples/cam-surfacing.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'MillTool' could not be found (are you missing a using directive or an assembly reference?)"
     },
     {
       "id": "chamfer-angle",

@@ -19,6 +19,45 @@ bead cross-section — the standard model of a bead squashed under the nozzle). 
 re-derives *both* sides from the file alone — deposition length from the coordinates, filament
 from the E deltas — so a unit slip, a lost segment or an E-mode bug is caught by arithmetic:
 
+```csharp render:cam-slice-layer
+// One layer of a drilled plate, drawn as the beads it will print: two wall shells
+// (the bore gets its own), ±45° sparse infill inside them — each path stroked a hair
+// under the bead width so the individual beads read.
+var plate = Shape.Box(20, 15, 4) - Shape.Cylinder(3, 10);
+var sliced = FdmSlicer.Slice(plate,
+    new PrinterProfile(LayerHeight: 0.25, WallCount: 2, InfillDensity: 0.3));
+var layer = sliced.Layers[8];
+
+Shape Ribbons(IEnumerable<SlicePath> paths)
+{
+    var regions = new List<Region2d>();
+    foreach (var path in paths)
+    {
+        var pts = path.IsClosed ? path.Points.Append(path.Points[0]).ToList() : path.Points;
+        regions.AddRange(Region2dOffset.Stroke(pts, 0.35));
+    }
+    Shape? all = null;
+    foreach (var region in Region2dBoolean.UnionAll(regions))
+    {
+        var sketch = Sketch.Polygon(region.Outer);
+        foreach (var hole in region.Holes)
+            sketch = sketch.WithHole(Sketch.Polygon(hole));
+        var ribbon = Shape.Extrude(sketch, 0.25);
+        all = all is null ? ribbon : all | ribbon;
+    }
+    return all!;
+}
+
+var scene = new Scene();
+scene.Add(new Part("walls", Ribbons(layer.Paths.Where(p => p.Role == SlicePathRole.Wall)),
+    Palette.Steel));
+scene.Add(new Part("infill", Ribbons(layer.Paths.Where(p => p.Role == SlicePathRole.Infill)),
+    Palette.Coral));
+var camera = new CameraState(-Math.PI / 2, 1.15, 34, (0, 0, 0));
+```
+
+![One slice layer as printed beads: two wall shells around the bore, ±45° sparse infill between them](images/cam-slice-layer.png)
+
 ```csharp run:cam-slicing
 // A drilled plate, sliced and written to G-code.
 var plate = Shape.Box(20, 15, 4) - Shape.Cylinder(3, 10);
@@ -143,6 +182,46 @@ foreach (var layer in new[] { sliced.Layers[0], sliced.Layers[^1] })
         + $"{layer.Paths.Count(p => p.Role == SlicePathRole.Infill)} sparse runs");
 ```
 
+```csharp render:cam-shells-layer
+// The same step's layer 7 as beads: solid skin (brass, at the bead spacing) on the
+// exposed half, sparse fill under the tower, the split exactly at the tower wall.
+var step = Shape.Box(20, 20, 4).Translate(0, 0, 2) | Shape.Box(10, 20, 8).Translate(-5, 0, 4);
+var sliced = FdmSlicer.Slice(step, new PrinterProfile(NozzleDiameter: 0.8, LayerHeight: 0.5,
+    WallCount: 1, InfillDensity: 0.2, TopSolidLayers: 2, BottomSolidLayers: 2));
+var layer = sliced.Layers[7];
+
+Shape Ribbons(IEnumerable<SlicePath> paths)
+{
+    var regions = new List<Region2d>();
+    foreach (var path in paths)
+    {
+        var pts = path.IsClosed ? path.Points.Append(path.Points[0]).ToList() : path.Points;
+        regions.AddRange(Region2dOffset.Stroke(pts, 0.7));
+    }
+    Shape? all = null;
+    foreach (var region in Region2dBoolean.UnionAll(regions))
+    {
+        var sketch = Sketch.Polygon(region.Outer);
+        foreach (var hole in region.Holes)
+            sketch = sketch.WithHole(Sketch.Polygon(hole));
+        var ribbon = Shape.Extrude(sketch, 0.5);
+        all = all is null ? ribbon : all | ribbon;
+    }
+    return all!;
+}
+
+var scene = new Scene();
+scene.Add(new Part("walls", Ribbons(layer.Paths.Where(p => p.Role == SlicePathRole.Wall)),
+    Palette.Steel));
+scene.Add(new Part("skin", Ribbons(layer.Paths.Where(p => p.Role == SlicePathRole.SolidInfill)),
+    Palette.Brass));
+scene.Add(new Part("sparse", Ribbons(layer.Paths.Where(p => p.Role == SlicePathRole.Infill)),
+    Palette.Sage));
+var camera = new CameraState(-Math.PI / 2, 1.15, 36, (0, 0, 0));
+```
+
+![The layer under the step's exposed plateau: brass solid skin on the exposed half, sage sparse fill under the tower — the split exactly at the tower wall](images/cam-shells-layer.png)
+
 ## Supports from the overhang field
 
 Supports follow the same opt-in convention: `SupportOverhangAngle` states the threshold
@@ -181,6 +260,32 @@ A facet resting on the bed excludes itself with no special case — nothing of i
 layer's top, so no layer ever finds material to support — which is why a plain box with
 supports *stated* still writes byte-identical G-code. The part's own bottom face is not an
 overhang; it is the print.
+
+```csharp render:cam-support-columns
+// The support pattern is grid-anchored, so every layer lays the same lines: stroking ONE
+// layer's support runs and extruding them bed-to-underside shows the printed support
+// walls, standing the XY gap clear of the column.
+var table = Shape.Box(4, 10, 8).Translate(0, 0, 4) | Shape.Box(20, 10, 2).Translate(0, 0, 9);
+var sliced = FdmSlicer.Slice(table, new PrinterProfile(NozzleDiameter: 0.8, LayerHeight: 0.5,
+    InfillDensity: 0, SupportOverhangAngle: 45));
+
+var regions = new List<Region2d>();
+foreach (var path in sliced.Layers[4].Paths.Where(p => p.Role == SlicePathRole.Support))
+    regions.AddRange(Region2dOffset.Stroke(path.Points, 0.6));
+Shape? walls = null;
+foreach (var region in Region2dBoolean.UnionAll(regions))
+{
+    var sheet = Shape.Extrude(Sketch.Polygon(region.Outer), 8);
+    walls = walls is null ? sheet : walls | sheet;
+}
+
+var scene = new Scene();
+scene.Add(new Part("table", table, Palette.Steel) { DisplayMode = DisplayMode.Translucent });
+scene.Add(new Part("supports", walls!, Palette.Coral));
+var camera = new CameraState(-Math.PI / 2 + 0.6, 0.5, 42, (0, 0, 5));
+```
+
+![Breakaway support walls under the table's slab, standing the stated gap clear of the column](images/cam-support-columns.png)
 
 ## Per-feature speeds and the print-time bracket
 

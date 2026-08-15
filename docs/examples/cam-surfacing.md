@@ -47,6 +47,62 @@ string gcode = CncGcodeWriter.Write([raster, waterline], safeZ: 15);
 Console.WriteLine($"{gcode.Split('\n').Length} lines of G-code");
 ```
 
+```csharp render:cam-waterline-rings
+// The waterline contours in place: one CL loop per StepDown level, each an exact
+// r-isolevel of the part's own field, drawn at its tip height over the translucent part.
+var part = Shape.Box(24, 24, 6) | Shape.Sphere(6).Translate(0, 0, 3);
+var ball = new MillTool(Diameter: 4, StepDown: 2);
+var waterline = CncSurfacing.Waterline(part, ball);
+
+Shape? rings = null;
+foreach (var pass in waterline.Passes.Where(p => p.IsClosed))
+{
+    var pts = pass.Points.Select(p => new Vector2d(p.X, p.Y)).ToList();
+    pts.Add(pts[0]);
+    foreach (var r in Region2dBoolean.UnionAll([.. Region2dOffset.Stroke(pts, 0.4)]))
+    {
+        var sketch = Sketch.Polygon(r.Outer);
+        foreach (var hole in r.Holes)
+            sketch = sketch.WithHole(Sketch.Polygon(hole));
+        var ring = Shape.Extrude(sketch, 0.3, SketchPlane.At(
+            new Vector3d(0, 0, pass.Points[0].Z), Vector3d.UnitX, Vector3d.UnitY));
+        rings = rings is null ? ring : rings | ring;
+    }
+}
+
+var scene = new Scene();
+scene.Add(new Part("part", part, Palette.Steel) { DisplayMode = DisplayMode.Translucent });
+scene.Add(new Part("waterlines", rings!, Palette.Coral));
+var camera = new CameraState(-Math.PI / 2 + 0.5, 0.55, 52, (0, 0, 1));
+```
+
+![Waterline CL contours stacked down the dome and the plate's walls — each ring the field's own r-isolevel at its level](images/cam-waterline-rings.png)
+
+```csharp animate:cam-surfacing-tool frames:36
+// The ball-nose riding its raster rows over the dome — the tool part's tip is at its
+// origin, so following the pass points puts the tip on the cutter-location surface.
+var part = Shape.Box(24, 24, 6) | Shape.Sphere(6).Translate(0, 0, 3);
+var ball = new MillTool(Diameter: 4);
+var raster = CncSurfacing.Raster(part, ball, sampleStep: 1);
+
+var scene = new Scene();
+scene.Add(new Part("part", part, Palette.Steel));
+// The shank is slimmer than the ball on purpose: an equal-radius coaxial shank is
+// tangent to the sphere along its equator, exactly the coincident curved input the
+// B-Rep boolean refuses by name.
+scene.Add(new Part("ball",
+    Shape.Sphere(2).Translate(0, 0, 2) | Shape.Cylinder(1.4, 9).Translate(0, 0, 6.5),
+    Palette.Coral));
+
+// A handful of rows across the dome keeps the motion legible at 36 frames.
+var rows = raster.Passes.Skip(raster.Passes.Count / 2 - 3).Take(6);
+var waypoints = rows.SelectMany(p => p.Points).ToList();
+var animation = new Animation(durationSeconds: 6)
+    .With(PathTracks.Follow(scene, "ball", waypoints));
+```
+
+![A ball-nose cutter sweeping serpentine raster rows over the dome, its tip riding the field's own r-offset](images/cam-surfacing-tool.png)
+
 The accuracy split is stated rather than averaged: a raster tip is exact to the trace
 tolerance everywhere (a flat top reads the face's own height to 1e-6; the dome apex is touched
 at its own height, because the global grid anchors a sample at exactly (0, 0)); a waterline

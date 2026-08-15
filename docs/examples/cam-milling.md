@@ -49,6 +49,53 @@ Console.WriteLine($"decoded cut length {cut:0} mm vs stated "
     + $"{pocket.CutLength + profile.CutLength:0} mm");
 ```
 
+```csharp render:cam-milling-paths
+// The pocket's ring ladder (one depth level), the outside profile pass and the drill
+// points, drawn over the translucent plate.
+var plate = Shape.Box(40, 20, 6);
+var region = plate.Section(SketchPlane.At(new Vector3d(0, 0, 0), Vector3d.UnitX, Vector3d.UnitY))
+    .Single();
+var tool = new MillTool(Diameter: 6, StepDown: 2);
+var pocket = CncMill.Pocket(region, tool, depth: 4);
+var profile = CncMill.Profile(region, tool, depth: 6, ProfileSide.Outside);
+
+Shape Ribbons(IEnumerable<MillPass> passes)
+{
+    var regions = new List<Region2d>();
+    foreach (var pass in passes)
+    {
+        var pts = pass.Points.Select(p => new Vector2d(p.X, p.Y)).ToList();
+        if (pass.IsClosed)
+            pts.Add(pts[0]);
+        regions.AddRange(Region2dOffset.Stroke(pts, 0.8));
+    }
+    Shape? all = null;
+    foreach (var r in Region2dBoolean.UnionAll(regions))
+    {
+        var sketch = Sketch.Polygon(r.Outer);
+        foreach (var hole in r.Holes)
+            sketch = sketch.WithHole(Sketch.Polygon(hole));
+        var ribbon = Shape.Extrude(sketch, 0.5, SketchPlane.At(
+            new Vector3d(0, 0, 3.2), Vector3d.UnitX, Vector3d.UnitY));
+        all = all is null ? ribbon : all | ribbon;
+    }
+    return all!;
+}
+
+double topZ = pocket.Passes[0].Points[0].Z; // the first depth level's rings
+var scene = new Scene();
+scene.Add(new Part("plate", plate, Palette.Steel) { DisplayMode = DisplayMode.Translucent });
+scene.Add(new Part("pocket rings",
+    Ribbons(pocket.Passes.Where(p => p.Points[0].Z == topZ)), Palette.Coral));
+scene.Add(new Part("profile", Ribbons(profile.Passes.Take(1)), Palette.Sky));
+scene.Add(new Part("drills",
+    Shape.Cylinder(1.5, 0.5).Translate(-15, 0, 3.2) | Shape.Cylinder(1.5, 0.5).Translate(15, 0, 3.2),
+    Palette.Brass));
+var camera = new CameraState(-Math.PI / 2 + 0.4, 0.9, 62, (0, 0, 0));
+```
+
+![The pocket's inward-offset ring ladder (coral), the outside profile pass (blue) and the drill points over the plate](images/cam-milling-paths.png)
+
 **Moves mean what their shape says.** Within a pass, an XY move cuts at the feed rate, a
 straight-down move plunges at the plunge rate, a straight-up move retracts as a rapid — one
 `MillPass` vocabulary carries pockets, tabbed profiles and pecked drills with no per-move
@@ -91,6 +138,25 @@ double r = 1.5;
 double bore = 32 / 2.0 * r * r * Math.Sin(2 * Math.PI / 32) * 6;
 Console.WriteLine($"each bore removes exactly {bore:0.000000} mm3");
 ```
+
+```csharp render:cam-stock-mid
+// The stock mid-cut: the pocket part-cleared, one bore drilled, the second still to come.
+var stock = Shape.Box(30, 22, 8).Translate(0, 0, -4);
+var region = new Region2d(
+    [new Vector2d(-9, -6), new Vector2d(9, -6), new Vector2d(9, 6), new Vector2d(-9, 6)]);
+var ops = new[]
+{
+    CncMill.Pocket(region, new MillTool(Diameter: 4, StepDown: 2), depth: 3),
+    CncMill.Drill([new Vector2d(-12, 8), new Vector2d(12, 8)], new MillTool(3), depth: 6),
+};
+var states = CncStock.Simulate(stock, ops, states: 5);
+
+var scene = new Scene();
+scene.Add(new Part("stock", states[3].Shape, Palette.Steel));
+var camera = new CameraState(-Math.PI / 2 + 0.5, 0.6, 55, (0, 0, -3));
+```
+
+![The machined-stock record mid-cut: the pocket part-cleared and one of the two bores drilled](images/cam-stock-mid.png)
 
 A state is a still or an export, deliberately not a live clip: a changing-geometry animation
 has no matrices-only form (the pose-track contract is that only matrices move), so the states
@@ -150,6 +216,35 @@ Console.WriteLine($"{slot.Passes.Count} depth levels, "
 Console.WriteLine($"a straight slot is 20 mm of cut — the trochoid spends "
     + $"{slot.Passes[0].CutLength / 20:0.0}x of path for a bounded tool load");
 ```
+
+```csharp render:cam-trochoid
+// The trochoid itself: an Archimedean spiral-out, then loops advancing the solved step
+// per revolution, one finishing loop at the far end. The figure opens the engagement
+// bound so the loops read — at a production 60° they pack too tightly to tell apart.
+var tool = new MillTool(Diameter: 4);
+var slot = CncHsm.TrochoidalSlot(new Vector2d(-5, 0), new Vector2d(5, 0),
+    slotWidth: 9, tool, depth: 2, maxEngagementDegrees: 110, samplesPerLoop: 36);
+var path = slot.Passes[0].Points.Select(p => new Vector2d(p.X, p.Y)).ToList();
+
+Shape? ribbon = null;
+foreach (var r in Region2dBoolean.UnionAll([.. Region2dOffset.Stroke(path, 0.18)]))
+{
+    var sketch = Sketch.Polygon(r.Outer);
+    foreach (var hole in r.Holes)
+        sketch = sketch.WithHole(Sketch.Polygon(hole));
+    var piece = Shape.Extrude(sketch, 0.4, SketchPlane.At(
+        new Vector3d(0, 0, 0.3), Vector3d.UnitX, Vector3d.UnitY));
+    ribbon = ribbon is null ? piece : ribbon | piece;
+}
+
+var scene = new Scene();
+scene.Add(new Part("stock", Shape.Box(20, 14, 4).Translate(0, 0, -2), Palette.Steel)
+    { DisplayMode = DisplayMode.Translucent });
+scene.Add(new Part("trochoid", ribbon!, Palette.Coral));
+var camera = new CameraState(-Math.PI / 2, 1.1, 26, (0, 0, 0));
+```
+
+![The trochoidal slot path: spiral-out entry, advancing loops at the solved engagement-bounded step, a finishing loop at the far end](images/cam-trochoid.png)
 
 The entry spiral's honesty is stated rather than hidden: a spiral-out's contact **arc** is
 wide but *shallow* — its bounded quantity is the radial step per turn (the chip load), which
