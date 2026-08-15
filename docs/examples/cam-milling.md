@@ -279,6 +279,25 @@ Console.WriteLine($"{gcode.Split('\n').Count(l => l.StartsWith("G83"))} G83 cycl
     + "- the M6 rows drill their tap pilot, the clearance rows their bore");
 ```
 
+## Helical ramp entry
+
+`Pocket(..., rampAngleDegrees: 3)` replaces every straight plunge into material with a
+**helix** descending from the previous — already cleared — level about the level's own first
+point: radius under the tool radius (no core post is left), inside the *measured* room, pitch
+`2π·r·tan(angle)`, one flat closing turn at the level so the ramp's floor is cleared. The
+level's rings then run as **one pass linked at depth** (a link cut through one stepover of
+web) wherever the straight link stays a tool radius clear of the boundary — exact
+segment-to-segment distance, so a link across a concave pocket's gap is refused rather than
+gouged — and a pocket too tight to helix falls back to the plunge, honestly. The oracle is
+that every stationary-XY descending move ends at a level **top** (cleared air), where the
+plunge-only program's end at the level bottoms, in material; ramp 0 is byte-identical.
+
+Landing it fixed a pre-existing ordering defect: the ring ladder linked all of a level's
+loops in ONE nearest-endpoint pass, which is pen-dependent and measurably started a level at
+its *boundary* ring — contradicting the module's own innermost-first contract and the climb
+rule's "inward is already cleared" premise. Loops now link **within each ring level**,
+innermost first, in both the plunged and the ramped emission.
+
 ## Rest machining
 
 `CncMill.PocketRest(region, roughTool, finishTool, depth)` clears what the rough pocket

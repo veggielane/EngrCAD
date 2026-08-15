@@ -127,6 +127,15 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   (default r₂/4) skipped as flattening noise. Oracle: combined rough+rest footprint = the
   finish tool's opening, the (4−π)(R₁²→r₂²) closed-form ladder.
 
+- **Helical ramp entry** (`Pocket(rampAngleDegrees:)`): each level entered on a helix from
+  the previous cleared level (radius under the tool radius so no core post, inside the
+  MEASURED room, pitch 2π·r·tan(angle), one flat closing turn), the level's rings run as one
+  pass linked AT DEPTH where the exact segment-to-boundary distance allows, plunge fallback
+  where too tight; plunges end only at level TOPS (asserted through the decoder), ramp 0
+  byte-identical. Fixed en route: ring loops now link within each ring level, innermost
+  first (the one-global-link order was pen-dependent and measurably started a level at its
+  boundary ring).
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

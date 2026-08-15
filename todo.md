@@ -2465,10 +2465,19 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     2·r₂), region) with the 2·r₂ a DERIVED sufficiency; tangential cusp contact made
     transversal by an ε-grow; sub-thickness residues skipped as flattening noise;
     combined-footprint-equals-finish-opening oracle + the (4−π) ladder closed form).
+    **Helical ramp entry LANDED**
+    (`Pocket(rampAngleDegrees:)` — a helix from the previous cleared level, radius
+    under the tool's with measured room and a plunge fallback, the level's rings ONE
+    pass linked at depth behind an exact segment-clearance test; plunges end only at
+    level TOPS, asserted through the decoder; fixed en route: ring loops link per
+    RING level, innermost first — the one-global-link order was pen-dependent and
+    started a level at its boundary ring). NOTE for the stock-sim composition: a
+    helix retraces one polygon per turn, so its footprint has EXACTLY-coincident
+    repeated segments — dedupe before stroking (the ramp coverage test does).
     **Stage-2 residuals, open**: G2/G3 arcs from the exact curved-profile tier
     (`SectionExact`/`CurvedRegion2dOffset` — a bore rim as ONE arc in the G-code),
-    lead-in/out arcs, helical/ramp entry, and the material-removal animation over
-    recorded stock states. A LASER/drag-knife mode is the near-free
+    lead-in/out arcs, and the material-removal animation over recorded stock
+    states. A LASER/drag-knife mode is the near-free
     adjacent (a kerf-offset outline cut — the 2D machinery plus the DXF/SVG writers
     already cover it; Kiri:Moto ships it for the same reason).
   - **Stage 3 — 3-axis surfacing: the CORE HAS LANDED** (`CncSurfacing.Raster`/

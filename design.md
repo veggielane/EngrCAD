@@ -9284,6 +9284,28 @@ claim holds point-by-point against the ORIGINAL boundary even though the tool ce
 legitimately stands in cleared space (asserted from both sides: at least one centre IS
 outside the residue, or the feature did nothing).
 
+**Helical ramp entry replaced the plunge, and the diagnostic mattered more than the
+helix.** `Pocket(rampAngleDegrees:)` enters each depth level on a helix descending from the
+previous — already cleared — level about the level's own first point (radius under the tool
+radius so no core post is left, capped by the MEASURED point-to-boundary room with a plunge
+fallback when too tight, pitch 2π·r·tan(angle) so the stated angle IS the descent slope
+along the arc, one flat closing turn so the ramp floor is cleared), and the level's rings
+then run as ONE pass linked AT DEPTH — a link cut through one stepover of web — wherever
+the exact segment-to-segment distance to the boundary clears the tool radius, with a
+blocked link (a concave pocket's gap) flushing the pass and re-entering the incumbent way.
+The oracle reads the decoder: every stationary-XY descending move ends at a level TOP
+(cleared air) where the plunge program's end at level BOTTOMS, in material. **Building it
+exposed a pre-existing ordering defect**: the ring ladder linked ALL of a level's loops in
+one nearest-endpoint pass, which is pen-dependent — measured, level −4 of an ordinary
+rectangle pocket started at its BOUNDARY ring, contradicting the method's own
+innermost-first contract and the climb rule's "inward is already cleared" premise (and
+incidentally stranding the helix at a point with exactly zero room). Loops now link WITHIN
+each ring level, innermost first, in both emissions — the fix the doc comment's claim
+always described. And one composition note worth recording: a helix's XY retraces one
+polygon per turn, so its footprint contains EXACTLY-coincident repeated segments — the 2D
+arrangement's hostile case — and a repeated segment adds no footprint, so any stroke-union
+consumer (the coverage oracle, a future stock-sim composition) dedupes segments first.
+
 **Stage 4 opened with trochoidal slotting** (`CncHsm.TrochoidalSlot`; docs
 `examples/cam-milling.md` §HSM), and the finding that justifies the campaign's whole framing —
 "the engagement angle computed from the evolving stock and BOUNDED by the stated maximum,

@@ -137,12 +137,16 @@ public static class CncMill
     /// </summary>
     public static MillOperation Pocket(
         Region2d region, MillTool tool, double depth, string name = "pocket",
-        MillDirection direction = MillDirection.Climb)
+        MillDirection direction = MillDirection.Climb, double rampAngleDegrees = 0)
     {
         ArgumentNullException.ThrowIfNull(region);
         ArgumentNullException.ThrowIfNull(tool);
         tool.Validate();
         RequireDepth(depth);
+        if (!(rampAngleDegrees >= 0) || rampAngleDegrees > 45)
+            throw new ArgumentException(
+                $"'{name}': rampAngleDegrees must lie in [0, 45] (0 = straight plunge); "
+                + $"got {rampAngleDegrees:0.###}.");
 
         // The ring ladder, outermost (boundary pass) first as generated. Cutting INSIDE the
         // outline, the remaining stock sits beyond each outer-derived ring (toward the wall —
@@ -171,15 +175,122 @@ public static class CncMill
 
         var passes = new List<MillPass>();
         var pen = new Vector2d(region.Bounds.Min.X, region.Bounds.Min.Y);
+        double previousLevel = 0;
         foreach (double z in DepthLevels(depth, tool.StepDown))
         {
-            // Innermost ring first, climbing outward; loops within the level greedily linked.
-            var loops = new List<Vector2d[]>();
-            for (int k = rings.Count - 1; k >= 0; k--)
-                loops.AddRange(rings[k]);
-            AppendLinkedLoops(passes, loops, z, ref pen);
+            // Innermost RING first, climbing outward, loops linked WITHIN each ring level —
+            // per ring rather than one global link, because a global nearest-endpoint link
+            // is pen-dependent and measurably started a level at its BOUNDARY ring, which
+            // both contradicts this method's own contract and undermines the direction
+            // rule's premise that inward is already cleared when a ring runs.
+            if (rampAngleDegrees <= 0)
+            {
+                for (int k = rings.Count - 1; k >= 0; k--)
+                    AppendLinkedLoops(passes, rings[k], z, ref pen);
+            }
+            else
+            {
+                // Helical entry + depth linking: descend from the previous (already cleared)
+                // level on a helix about the level's own first point — radius UNDER the tool
+                // radius so no core post is left, inside the measured room, one flat closing
+                // turn at the level — then run the level's rings as ONE pass, linked at depth
+                // (a link cut through one stepover of web) wherever the straight link stays a
+                // tool radius clear of the boundary; a link that would pass a concave gap too
+                // closely, or a pocket too tight to helix, falls back to the plunge entry.
+                var ordered = new List<Vector2d[]>();
+                for (int k = rings.Count - 1; k >= 0; k--)
+                    ordered.AddRange(LinkLoops(rings[k], ref pen));
+                if (ordered.Count == 0)
+                {
+                    previousLevel = z;
+                    continue;
+                }
+                var centre = ordered[0][0];
+                double room = DistanceToBoundary(region, centre) - tool.Radius;
+                double rh = Math.Min(tool.Radius / 2, room);
+                List<Vector3d>? current = null;
+                if (rh >= tool.Radius / 10)
+                    current = [.. HelixEntry(centre, previousLevel, z, rh, rampAngleDegrees).Points];
+                foreach (var loop in ordered)
+                {
+                    if (current is not null && current.Count > 0
+                        && !SegmentClearOfBoundary(region,
+                            new Vector2d(current[^1].X, current[^1].Y), loop[0], tool.Radius))
+                    {
+                        passes.Add(new MillPass(current, IsClosed: false));
+                        current = null;
+                    }
+                    // A blocked link (or no helix room) starts a fresh run whose entry is
+                    // the incumbent plunge; clear links downstream still merge at depth.
+                    current ??= [];
+                    foreach (var q in loop)
+                        current.Add(new Vector3d(q.X, q.Y, z));
+                    current.Add(new Vector3d(loop[0].X, loop[0].Y, z));
+                }
+                if (current is { Count: > 0 })
+                    passes.Add(new MillPass(current, IsClosed: false));
+            }
+            previousLevel = z;
         }
         return new MillOperation(name, tool, passes);
+    }
+
+    /// <summary>The helical entry pass: full turns from <paramref name="zFrom"/> down to
+    /// <paramref name="zTo"/> at pitch <c>2π·r·tan(angle)</c> (the ramp angle is the descent
+    /// slope along the helix's own arc), then ONE flat closing turn at the level so the ramp's
+    /// floor is cleared before the ring ladder starts.</summary>
+    private static MillPass HelixEntry(
+        in Vector2d centre, double zFrom, double zTo, double radius, double angleDegrees)
+    {
+        const int segmentsPerTurn = 16;
+        double pitch = 2 * Math.PI * radius * Math.Tan(angleDegrees * Math.PI / 180);
+        double drop = zFrom - zTo;
+        int turns = Math.Max(1, (int)Math.Ceiling(drop / pitch - 1e-12));
+        int descentSteps = turns * segmentsPerTurn;
+        var points = new List<Vector3d>(descentSteps + segmentsPerTurn + 2);
+        for (int i = 0; i <= descentSteps; i++)
+        {
+            double theta = 2 * Math.PI * i / segmentsPerTurn;
+            double z = zFrom - drop * i / descentSteps;
+            points.Add(new Vector3d(
+                centre.X + radius * Math.Cos(theta),
+                centre.Y + radius * Math.Sin(theta), z));
+        }
+        for (int i = 1; i <= segmentsPerTurn; i++)
+        {
+            double theta = 2 * Math.PI * i / segmentsPerTurn;
+            points.Add(new Vector3d(
+                centre.X + radius * Math.Cos(theta),
+                centre.Y + radius * Math.Sin(theta), zTo));
+        }
+        // No handover point: the merged pass appends the level's first ring point next,
+        // and a duplicated consecutive point is a zero-length segment the stroke
+        // machinery cannot carry.
+        return new MillPass(points, IsClosed: false);
+    }
+
+    /// <summary>The exact distance from a point to the region's boundary (outer and hole
+    /// loops, point-to-segment) — what sizes a helical entry's room.</summary>
+    internal static double DistanceToBoundary(Region2d region, Vector2d p)
+    {
+        double best = double.PositiveInfinity;
+        Visit(region.Outer);
+        foreach (var hole in region.Holes)
+            Visit(hole);
+        return best;
+
+        void Visit(IReadOnlyList<Vector2d> loop)
+        {
+            for (int i = 0; i < loop.Count; i++)
+            {
+                var a = loop[i];
+                var b = loop[(i + 1) % loop.Count];
+                var e = b - a;
+                double len2 = e.LengthSquared;
+                double t = len2 > 0 ? Math.Clamp((p - a).Dot(e) / len2, 0, 1) : 0;
+                best = Math.Min(best, (p - (a + e * t)).Length);
+            }
+        }
     }
 
     /// <summary>
@@ -420,8 +531,22 @@ public static class CncMill
     private static void AppendLinkedLoops(
         List<MillPass> passes, List<Vector2d[]> loops, double z, ref Vector2d pen)
     {
+        foreach (var loop in LinkLoops(loops, ref pen))
+        {
+            var points = new Vector3d[loop.Length];
+            for (int i = 0; i < loop.Length; i++)
+                points[i] = new Vector3d(loop[i].X, loop[i].Y, z);
+            passes.Add(new MillPass(points, IsClosed: true));
+        }
+    }
+
+    /// <summary>The level's loops in the shared <see cref="RunLinker"/>'s travel order,
+    /// updating the pen to the last loop's start — ONE ordering rule for the plunged and
+    /// the ramped emission.</summary>
+    private static List<Vector2d[]> LinkLoops(List<Vector2d[]> loops, ref Vector2d pen)
+    {
         if (loops.Count == 0)
-            return;
+            return [];
         var ends = new (Vector3d Start, Vector3d End)[loops.Count];
         for (int i = 0; i < loops.Count; i++)
         {
@@ -429,16 +554,58 @@ public static class CncMill
             ends[i] = (start, start);                        // a closed loop starts where it ends
         }
         var linkage = RunLinker.Link(ends, new Vector3d(pen.X, pen.Y, 0));
+        var ordered = new List<Vector2d[]>(loops.Count);
         foreach (var run in linkage.Order)
+            ordered.Add(loops[run.Index]);
+        pen = ordered[^1][0];
+        return ordered;
+    }
+
+    /// <summary>True when the straight segment a-b stays at least <paramref name="clearance"/>
+    /// from every boundary segment — what decides whether two rings may be LINKED at depth
+    /// (a link cut through one stepover of web) rather than by retract and re-plunge. The
+    /// distance is exact segment-to-segment, so a link across a concave pocket's gap is
+    /// refused rather than gouged.</summary>
+    private static bool SegmentClearOfBoundary(
+        Region2d region, Vector2d a, Vector2d b, double clearance)
+    {
+        double limit2 = clearance * clearance;
+        return Visit(region.Outer) && region.Holes.All(Visit);
+
+        bool Visit(IReadOnlyList<Vector2d> loop)
         {
-            var loop = loops[run.Index];
-            var points = new Vector3d[loop.Length];
-            for (int i = 0; i < loop.Length; i++)
-                points[i] = new Vector3d(loop[i].X, loop[i].Y, z);
-            passes.Add(new MillPass(points, IsClosed: true));
+            for (int i = 0; i < loop.Count; i++)
+            {
+                var c = loop[i];
+                var d = loop[(i + 1) % loop.Count];
+                if (SegmentDistanceSquared(a, b, c, d) < limit2)
+                    return false;
+            }
+            return true;
         }
-        var last = loops[linkage.Order[^1].Index][0];
-        pen = last;
+    }
+
+    private static double SegmentDistanceSquared(Vector2d a, Vector2d b, Vector2d c, Vector2d d)
+    {
+        double o1 = Cross(a, b, c), o2 = Cross(a, b, d);
+        double o3 = Cross(c, d, a), o4 = Cross(c, d, b);
+        if (((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0))
+            && ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0)))
+            return 0;                                        // proper crossing
+        return Math.Min(
+            Math.Min(PointSegment2(c, a, b), PointSegment2(d, a, b)),
+            Math.Min(PointSegment2(a, c, d), PointSegment2(b, c, d)));
+
+        static double Cross(Vector2d p, Vector2d q, Vector2d r) =>
+            (q.X - p.X) * (r.Y - p.Y) - (q.Y - p.Y) * (r.X - p.X);
+
+        static double PointSegment2(Vector2d p, Vector2d s0, Vector2d s1)
+        {
+            var e = s1 - s0;
+            double len2 = e.LengthSquared;
+            double t = len2 > 0 ? Math.Clamp((p - s0).Dot(e) / len2, 0, 1) : 0;
+            return (p - (s0 + e * t)).LengthSquared;
+        }
     }
 
     /// <summary>The final profile pass with holding tabs: the loop is split at
