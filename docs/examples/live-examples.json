@@ -67,6 +67,12 @@
       "live": true
     },
     {
+      "id": "cam-milling-tool",
+      "page": "examples/cam-milling.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'CncMill' does not exist in the current context"
+    },
+    {
       "id": "cam-print",
       "page": "examples/cam-slicing.md",
       "live": false,

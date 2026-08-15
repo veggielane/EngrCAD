@@ -90,6 +90,21 @@ Stage 2 — pocket, profile and drill over the same landed machinery:
   simulation) must equal it, and a rectangular pocket's unreachable corner residue is CLOSED
   FORM, `(4 − π)·r²`. No-gouge is exact point-by-point. Docs: `docs/examples/cam-milling.md`.
 
+## The machined-stock simulation (`CncStock`)
+
+`CncStock.Simulate(stock, operations, states)` records the stock at N fractions of the total
+cut length — each state an ordinary `Shape`. The swept volume of a 2.5D pass is CLOSED FORM (a
+constant-z run occupies its stroked footprint from its level up through the stock; a vertical
+descent bores an inscribed-32-gon disc, so a drilled state's volume is an EXACT prism), every
+pass is entered by a plunge (a single-point drill pass bores its disc through the pass-entry
+rule, no special case), and the removal subtracts as z BANDS through the MESH imprint boolean —
+one level to the next, so successive levels repeating one footprint never hand the boolean two
+coincident side walls. A surfacing pass (XY and Z moving at once) is refused BY NAME — the
+3-axis swept volume is not a prism; filed. A state is a still or an export, deliberately not a
+live clip (a changing-geometry animation has no matrices-only form — the transient-thermal
+precedent); the TOOL animates along its path as an ordinary pose track, `PathTracks.Follow` in
+the viewer (arc-length parameterized, matrices only).
+
 ## 3-axis surfacing (`CncSurfacing`)
 
 Stage 3 — ball-nose finishing, and the place the implicit engine pays directly: **the

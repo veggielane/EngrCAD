@@ -2505,20 +2505,19 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     flavours (Marlin vs GRBL/LinuxCNC differ in words, not structure — a fifth
     hand-rolled text format, plainer than PDF was) plus its twin-decoder reader; a
     `Machine`/`Tool`/`PrinterProfile` vocabulary with every transcribed table ⚠
-    flagged; **toolpath preview AND animation** — static preview as ordinary line
-    geometry (the isoline overlay's machinery), the TOOL animated along the path as a
-    matrices-only pose track (exactly `MechanismTrack`'s chordal interpolation, so
-    scrubbing/APNG/docs `animate:` fences all work with nothing new), and **material-
-    removal animation** as precomputed stock states — stock minus the tool swept over
-    the path PREFIX at N times (`Shape.SweptOver` is implicit-Native, so each state is
-    one SDF difference polygonized once), played as a recorded sequence, because the
-    "an animation must not touch geometry" rule forbids per-frame re-meshing in live
-    playback and the honest design is MotionStudy's: record frames, interpolate poses,
-    never re-solve; the same states animate an FDM print as material ADDED (the sliced
-    solid below z(t), which for planar slicing is one clip plane and needs no
-    re-meshing at all — the section-plane machinery is the player); and determinism
-    throughout — two slices of one scene must be
-    byte-identical, because a toolpath diff is how a CAM regression is caught.
+    flagged. **The toolpath/material-removal pair HAS LANDED** (`PathTracks.Follow` +
+    `CncStock.Simulate`; design.md §6e): the TOOL along its path is a matrices-only
+    pose track (arc-length parameterized, bystanders bit-identical), and the CHANGING
+    STOCK is recorded DATA — 2.5D swept volumes are closed-form prisms subtracted as
+    z bands through the mesh imprint boolean, the drill state an exact 32-gon-prism
+    identity — never a live clip, because a changing-geometry animation has no
+    matrices-only form (the transient-thermal precedent); the FDM material-ADDED clip
+    landed earlier as the SectionTrack. **Still open here**: a static toolpath line
+    PREVIEW in the viewport (the isoline overlay's machinery, coloured by feature —
+    the PrusaSlicer-parity preview item), the 3-axis (surfacing) stock simulation
+    (a raster row's swept volume is not a prism — `Simulate` refuses it by name),
+    and determinism throughout — two slices of one scene must stay byte-identical,
+    because a toolpath diff is how a CAM regression is caught.
 - [ ] **PrusaSlicer feature parity — the FDM stage grown into a full slicing stack**
   (filed 2026-08-15 at Chris's direction: "all the features of PrusaSlicer". The landed
   stage-1 core — mid-layer exact sections, walls, ±45° rectilinear infill, brim/skirt,

@@ -58,7 +58,74 @@ diagonal ramp that would leave the closing stretch part-cut.
 
 `MillTool` carries the process numbers (feeds in mm/min — G-code's `F` verbatim), and its
 `Stepover ≤ 0.5` is the value that **provably** covers the whole reachable area (each ring clears
-± a radius about its centreline). Feeds and speeds are engineering inputs with stated defaults —
-a transcribed chip-load catalogue is filed with the campaign, alongside `G2`/`G3` arcs from the
-exact curved-profile tier, climb/conventional selection, helical entry, canned drilling cycles,
-rest machining, and the material-removal animation (recorded stock states).
+± a radius about its centreline).
+
+## The machined-stock simulation
+
+`CncStock.Simulate` records the stock at N fractions of the total cut length — each state an
+ordinary `Shape` a scene can show, export or measure. **The swept volume of a 2.5D pass is
+closed form**: a tool at constant z occupies its stroked footprint from the cut level up
+through the stock, and a vertical descent bores a disc (an inscribed 32-gon, so a drilled
+state's volume is an *exact* prism — polyhedral mesh booleans are exact, which is what makes
+the drill check an identity rather than a tolerance). The removal is subtracted as z **bands**
+(one level to the next), so successive levels repeating one footprint never hand the boolean
+two coincident side walls:
+
+```csharp run:cam-stock
+var stock = Shape.Box(30, 22, 8).Translate(0, 0, -4); // stock top at z = 0
+var region = new Region2d(
+    [new Vector2d(-9, -6), new Vector2d(9, -6), new Vector2d(9, 6), new Vector2d(-9, 6)]);
+var tool = new MillTool(Diameter: 4, StepDown: 2);
+var ops = new[]
+{
+    CncMill.Pocket(region, tool, depth: 3),
+    CncMill.Drill([new Vector2d(-12, 8), new Vector2d(12, 8)], new MillTool(3), depth: 6),
+};
+
+foreach (var state in CncStock.Simulate(stock, ops, states: 5))
+    Console.WriteLine($"fraction {state.Fraction:0.00}: cut {state.CutLength,6:0.0} mm, "
+        + $"stock {state.Shape.ToMesh().Volume():0.0} mm3");
+
+// The drilled bore is EXACT: an inscribed 32-gon prism, closed form to round-off.
+double r = 1.5;
+double bore = 32 / 2.0 * r * r * Math.Sin(2 * Math.PI / 32) * 6;
+Console.WriteLine($"each bore removes exactly {bore:0.000000} mm3");
+```
+
+A state is a still or an export, deliberately not a live clip: a changing-geometry animation
+has no matrices-only form (the pose-track contract is that only matrices move), so the states
+are recorded data — the same reasoning that kept transient thermal playback off the
+deformation uniform. **The TOOL, though, animates as an ordinary pose track**: matrices only,
+riding the animation system with nothing new —
+
+```csharp animate:cam-milling-tool frames:36
+// The tool riding its own toolpath over the machined stock — matrices only.
+var stock = Shape.Box(30, 22, 8).Translate(0, 0, -4);
+var region = new Region2d(
+    [new Vector2d(-9, -6), new Vector2d(9, -6), new Vector2d(9, 6), new Vector2d(-9, 6)]);
+var pocket = CncMill.Pocket(region, new MillTool(Diameter: 4, StepDown: 2), depth: 3);
+var machined = CncStock.Simulate(stock, [pocket], states: 2)[^1].Shape;
+
+var scene = new Scene();
+scene.Add(new Part("stock", machined));
+scene.Add(new Part("tool", Shape.Cylinder(2, 14).Translate(0, 0, 7), Palette.Coral));
+
+// The tool part is modeled with its TIP at the origin, so following the pass points
+// puts the tip on the cut; a closed ring appends its own first point to complete.
+var waypoints = pocket.Passes
+    .SelectMany(p => p.IsClosed ? p.Points.Append(p.Points[0]) : p.Points).ToList();
+var animation = new Animation(durationSeconds: 6)
+    .With(PathTracks.Follow(scene, "tool", waypoints));
+```
+
+![A cutter tracing the pocket's ring ladder over the machined plate](images/cam-milling-tool.png)
+
+`PathTracks.Follow` maps t to **arc length** (the explode-path rule — constant speed through
+every corner, however unevenly the waypoints are spaced), hits each waypoint exactly at its own
+parameter, and leaves every other instance's matrix untouched bit-for-bit.
+
+Feeds and speeds are engineering inputs with stated defaults — a transcribed chip-load
+catalogue is filed with the campaign, alongside `G2`/`G3` arcs from the exact curved-profile
+tier, climb/conventional selection, helical entry, canned drilling cycles, rest machining,
+and the 3-axis (surfacing) stock simulation — a raster row's swept volume is not a prism, so
+`Simulate` refuses it by name today.

@@ -9060,6 +9060,36 @@ them. Filed by name: flat/bull-nose cutter-location surfaces (v1 assumes a ball 
 radius), a raster direction other than X, no-retract row linking, adaptive stepover from local
 curvature, holder/shank collision, rest machining.
 
+**The material-removal record and the toolpath animation landed as the PAIR the animation
+system's own rule splits them into** (`CncStock.Simulate` in Cam; `PathTracks.Follow` in
+Viewer.Core; docs `examples/cam-milling.md`). The rule — a pose track's answer is matrices,
+never a re-meshed part — cuts this feature cleanly in two: the TOOL along its path is
+matrices-only and rides the animation system as an ordinary pose track (`FollowPathTrack`:
+arc-length parameterization so the tool crosses corners at constant speed, the explode-path
+rule; endpoints exact; every bystander instance bit-identical; a wrong instance path fails at
+CONSTRUCTION naming what exists — the MechanismTrack graft rule), while the CHANGING STOCK has
+no matrices-only form at all, so it is recorded DATA — `CncStockState` values at N cut-length
+fractions, stills and exports rather than a live clip, the transient-thermal precedent
+(a per-step colour animation was likewise scoped separately rather than squeezed through the
+deformation uniform). **The 2.5D swept volume is CLOSED FORM and that is what makes the record
+exact**: a constant-z run occupies its stroked footprint (`Region2dOffset.Stroke`, the same
+region the stage-2 opening oracle measures) from its level up through the stock, a vertical
+descent bores an inscribed-32-gon disc — so a drilled state's volume is an exact polyhedral
+prism, asserted to 1e-9 relative — and a pass moving in XY and Z at once (a surfacing raster
+row) is refused BY NAME, its swept volume being no prism. **Two build findings.** A
+single-point drill pass removes material through the PASS-ENTRY rule, not a special case:
+every pass is entered by a plunge from above (the G-code writer's own convention), so a first
+point below the stock top bores its disc — which for a stroked pass is contained in the run's
+own round start cap and for a peck-0 drill IS the hole. And the subtraction had to be cut into
+z BANDS (one level to the next, each band's cross-section the union of every level at or below
+it) through the MESH imprint boolean: the first spelling — one prism per level running to the
+top — hands the boolean the ENTIRE side wall twice wherever successive levels repeat a
+footprint (which is every pocket), and the B-Rep route the Shape compiler prefers for
+B-Rep-able operands refuses the chorded stroke profiles outright ("arrangement tracing did not
+close") while taking minutes on the ones it accepts; banding leaves only the horizontal
+stacked-plates coincidence the imprint boolean's coplanar tier is built for, and the suite runs
+in seconds.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
