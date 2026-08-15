@@ -129,6 +129,13 @@ public sealed record PrinterProfile(
     /// <summary>The filament's cross-section area (mm²).</summary>
     public double FilamentArea => Math.PI * FilamentDiameter * FilamentDiameter / 4;
 
+    /// <summary>The stadium bead area for a stated layer height (variable layer heights
+    /// change the cross-section per layer; <see cref="BeadArea"/> is this at the
+    /// profile's own <see cref="LayerHeight"/>).</summary>
+    public double BeadAreaFor(double layerHeight) =>
+        layerHeight * (ResolvedBeadWidth - layerHeight)
+        + Math.PI * layerHeight * layerHeight / 4;
+
     /// <summary>The ONE rule for a deposition path's speed (mm/s): a stated
     /// <see cref="FirstLayerSpeed"/> wins on layer 0 (adhesion wants slow, whatever the
     /// role); otherwise the role's own stated speed, a solid skin falling back through

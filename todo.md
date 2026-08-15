@@ -2564,10 +2564,11 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     honeycomb members, [ ] LIGHTNING infill (research-grade),
     combine-infill-every-N-layers, infill/perimeter anchor runs,
     solid-infill-threshold area.
-  - **Layers**: [ ] variable layer height — adaptive from the surface slope (the
-    display-mesh normal field says where thin layers pay) plus a stated manual table;
-    the mid-layer section machinery already takes arbitrary z's, so this is scheduling,
-    not sectioning.
+  - **Layers**: variable layer height LANDED — an explicit bottom-up table (validated:
+    printable per layer, covering the part) plus `AdaptiveLayerHeights` from the
+    stair-step cusp criterion `h <= cusp/|n_z|` (the cusp height a REQUIRED input);
+    the extrusion arithmetic went per-layer (each E reads its own stadium), with the
+    mixed-height print asserted to BREAK the naive single-ratio identity.
   - **Supports**: Z contact gap LANDED (the clip plane moved, gap 0 bit-identical),
     interface layers LANDED (densified + perpendicular near contact), RAFT LANDED
     (prepended layers, the part lifted, adhesion moved to the raft), ENFORCER/BLOCKER

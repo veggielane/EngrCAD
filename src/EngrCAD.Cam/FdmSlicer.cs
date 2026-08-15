@@ -71,10 +71,16 @@ public sealed record SlicePath(
 /// section regions, and the deposition paths in print order.</summary>
 public sealed record SliceLayer(
     int Index, double Z, double SectionZ,
-    IReadOnlyList<Region2d> Regions, IReadOnlyList<SlicePath> Paths)
+    IReadOnlyList<Region2d> Regions, IReadOnlyList<SlicePath> Paths, double Height = 0)
 {
     /// <summary>The layer's total deposition length (mm).</summary>
     public double DepositionLength => Paths.Sum(p => p.Length);
+
+    /// <summary>The layer's own height (mm): its stated value, or the profile's
+    /// <c>LayerHeight</c> when none was stated (a uniform slice states none, keeping the
+    /// record byte-compatible).</summary>
+    public double HeightOr(PrinterProfile profile) =>
+        Height > 0 ? Height : profile.LayerHeight;
 }
 
 /// <summary>A sliced part: the profile it was sliced with, the layers bottom-up, and the PRINT
@@ -87,18 +93,21 @@ public sealed record SlicedPart(
     /// <summary>Total deposition length over every layer (mm).</summary>
     public double DepositionLength => Layers.Sum(l => l.DepositionLength);
 
-    /// <summary>The deposited material volume (mm³): flow-weighted deposition length × the
-    /// bead's stadium cross-section — the number the G-code's E values are the filament-side
-    /// spelling of (an ironing pass deposits at its own reduced flow).</summary>
+    /// <summary>The deposited material volume (mm³): flow-weighted deposition length × each
+    /// LAYER's own bead cross-section (variable layer heights change the stadium per layer)
+    /// — the number the G-code's E values are the filament-side spelling of.</summary>
     public double ExtrudedVolume =>
-        Layers.SelectMany(l => l.Paths).Sum(p => p.Length * p.Flow) * Profile.BeadArea;
+        Layers.Sum(l => l.Paths.Sum(p => p.Length * p.Flow)
+            * Profile.BeadAreaFor(l.HeightOr(Profile)));
 
     /// <summary>Filament per path role (mm) — walls vs infill vs supports vs skins, the
     /// per-role split of <see cref="FilamentUsed"/> (they sum exactly).</summary>
     public IReadOnlyDictionary<SlicePathRole, double> FilamentByRole =>
-        Layers.SelectMany(l => l.Paths).GroupBy(p => p.Role).ToDictionary(
-            g => g.Key,
-            g => g.Sum(p => p.Length * p.Flow) * Profile.BeadArea / Profile.FilamentArea);
+        Layers.SelectMany(l => l.Paths.Select(path => (l, path)))
+            .GroupBy(x => x.path.Role).ToDictionary(
+                g => g.Key,
+                g => g.Sum(x => x.path.Length * x.path.Flow
+                    * Profile.BeadAreaFor(x.l.HeightOr(Profile))) / Profile.FilamentArea);
 
     /// <summary>The filament length consumed (mm): the deposited volume through the filament's
     /// own cross-section.</summary>
@@ -154,7 +163,8 @@ public static class FdmSlicer
     /// </summary>
     public static SlicedPart Slice(
         Shape shape, PrinterProfile? profile = null, Vector3d? printDirection = null,
-        FdmSupportModifiers? supportModifiers = null)
+        FdmSupportModifiers? supportModifiers = null,
+        IReadOnlyList<double>? layerHeights = null)
     {
         ArgumentNullException.ThrowIfNull(shape);
         var p = profile ?? PrinterProfile.Default;
@@ -174,8 +184,57 @@ public static class FdmSlicer
                 $"The shape has no height to slice (z extent {height:0.###}).");
 
         double h = p.LayerHeight;
-        int layerCount = Math.Max(1, (int)Math.Ceiling(height / h - 1e-9));
         double bead = p.ResolvedBeadWidth;
+
+        // The per-layer height table: uniform from the profile, or the stated VARIABLE
+        // table (bottom-up), which must be printable per layer and COVER the part.
+        double[] heights;
+        if (layerHeights is null)
+        {
+            heights = new double[Math.Max(1, (int)Math.Ceiling(height / h - 1e-9))];
+            Array.Fill(heights, h);
+        }
+        else
+        {
+            if (layerHeights.Count == 0)
+                throw new ArgumentException(
+                    "The layer-height table is empty.", nameof(layerHeights));
+            double covered = 0;
+            for (int i = 0; i < layerHeights.Count; i++)
+            {
+                double stated = layerHeights[i];
+                if (!(stated > 0) || !double.IsFinite(stated))
+                    throw new ArgumentException(
+                        $"Layer height [{i}] must be finite and positive; got {stated:0.###}.",
+                        nameof(layerHeights));
+                if (stated > bead)
+                    throw new ArgumentException(
+                        $"Layer height [{i}] ({stated:0.###}) exceeds the bead width "
+                        + $"({bead:0.###}) — the stadium cross-section degenerates.",
+                        nameof(layerHeights));
+                covered += stated;
+            }
+            if (covered < height - 1e-9)
+                throw new ArgumentException(
+                    $"The layer-height table covers {covered:0.###} of the part's "
+                    + $"{height:0.###} — {height - covered:0.###} short. State enough "
+                    + "layers to reach the top.", nameof(layerHeights));
+            // Keep only the layers that carry material (the table may overshoot).
+            int used = 0;
+            double reach = 0;
+            while (reach < height - 1e-9)
+                reach += layerHeights[used++];
+            heights = [.. layerHeights.Take(used)];
+        }
+        int layerCount = heights.Length;
+        // Cumulative layer TOPS (bed frame): tops[i] is where layer i's deposition ends.
+        var tops = new double[layerCount];
+        double accumulate = bounds.Min.Z;
+        for (int i = 0; i < layerCount; i++)
+        {
+            accumulate += heights[i];
+            tops[i] = accumulate;
+        }
 
         // Lower ONCE, section N times (the `Part.TryGetSolid` lesson — a hundred layers must
         // not mean a hundred B-Rep lowerings of the same shape).
@@ -225,8 +284,8 @@ public static class FdmSlicer
         for (int i = 0; i < layerCount; i++)
         {
             sectionZs[i] = Math.Min(
-                bounds.Min.Z + (i + 0.5) * h,
-                bounds.Max.Z - NudgeFraction * h);
+                tops[i] - heights[i] / 2,
+                bounds.Max.Z - NudgeFraction * heights[i]);
             sections[i] = Compensate(
                 SectionWithNudge(solid, mesh, sectionZs[i], h),
                 i == 0 ? p.ElephantFootCompensation : 0, p.XYCompensation, p.HoleCompensation);
@@ -349,7 +408,7 @@ public static class FdmSlicer
             // when the profile states no supports — the write-only-when-stated path.
             if (supportFacets is not null)
             {
-                double layerTop = bounds.Min.Z + (i + 1) * h;
+                double layerTop = tops[i];
                 while (supportStart < supportFacets.Count
                     && supportFacets[supportStart].MaxZ - p.SupportZGap < layerTop - 1e-9)
                 {
@@ -588,11 +647,79 @@ public static class FdmSlicer
                 pen = ironing[^1].End;
             }
             layers.Add(new SliceLayer(
-                i + p.RaftLayers, bounds.Min.Z + (i + 1) * h + zShift, sectionZ,
-                regions, paths));
+                i + p.RaftLayers, tops[i] + zShift, sectionZ,
+                regions, paths, layerHeights is null ? 0 : heights[i]));
         }
 
         return new SlicedPart(p, layers, up);
+    }
+
+    /// <summary>
+    /// Per-layer heights from the STAIR-STEP CUSP criterion: a surface facet of unit
+    /// normal n stepped by a layer of height h leaves a cusp of <c>h·|n_z|</c>, so
+    /// bounding the cusp at the stated height gives <c>h ≤ cusp/|n_z|</c> — a
+    /// near-horizontal surface takes thin layers, a vertical wall takes the maximum.
+    /// The CUSP HEIGHT is a required engineering input (it IS the stated surface
+    /// quality — a default would be a print-quality decision made by a library, the
+    /// minimum-member-size rule). Facets resting on the bed exclude themselves (the
+    /// bottom face is not a stair-step; it is the print). Feed the result to
+    /// <see cref="Slice"/>'s <c>layerHeights</c>.
+    /// </summary>
+    public static IReadOnlyList<double> AdaptiveLayerHeights(
+        Shape shape, double minHeight, double maxHeight, double cuspHeight,
+        Vector3d? printDirection = null)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        if (!(minHeight > 0) || !(maxHeight >= minHeight) || !double.IsFinite(maxHeight))
+            throw new ArgumentException(
+                $"Need 0 < minHeight <= maxHeight; got [{minHeight:0.###}, {maxHeight:0.###}].");
+        if (!(cuspHeight > 0) || !double.IsFinite(cuspHeight))
+            throw new ArgumentException(
+                $"cuspHeight must be finite and positive; got {cuspHeight:0.###}.");
+
+        var up = (printDirection ?? Vector3d.UnitZ).Normalized();
+        var oriented = OrientForPrinting(shape, up);
+        var mesh = oriented.ToMesh();
+        var bounds = oriented.Bounds();
+        double bedZ = bounds.Min.Z;
+
+        var facets = new List<(double MinZ, double MaxZ, double AbsNz)>();
+        foreach (var face in mesh.Faces)
+        {
+            double lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+            foreach (var v in face.Vertices())
+            {
+                lo = Math.Min(lo, v.Position.Z);
+                hi = Math.Max(hi, v.Position.Z);
+            }
+            if (hi <= bedZ + 1e-9)
+                continue; // bed-resting: the bottom face is not a stair-step
+            facets.Add((lo, hi, Math.Abs(face.Normal().Z)));
+        }
+
+        var heights = new List<double>();
+        double z = bedZ;
+        while (z < bounds.Max.Z - 1e-9)
+        {
+            // Two passes: bound over the widest candidate band, then re-bound over the
+            // band the first answer actually spans (the standard adaptive refinement).
+            double h = maxHeight;
+            for (int pass = 0; pass < 2; pass++)
+            {
+                double maxNz = 0;
+                foreach (var facet in facets)
+                {
+                    if (facet.MaxZ > z + 1e-12 && facet.MinZ < z + h - 1e-12)
+                        maxNz = Math.Max(maxNz, facet.AbsNz);
+                }
+                h = maxNz > 1e-9
+                    ? Math.Clamp(cuspHeight / maxNz, minHeight, maxHeight)
+                    : maxHeight;
+            }
+            heights.Add(h);
+            z += h;
+        }
+        return heights;
     }
 
     /// <summary>Rotates the shape so <paramref name="up"/> (unit) becomes bed +Z, by the

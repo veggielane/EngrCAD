@@ -46,7 +46,6 @@ public static class GcodeWriter
             b.Append(Snippet(p.StartGcode, 0, part.Layers[0].Z));
 
         double e = 0;
-        double deToDistance = p.BeadArea / p.FilamentArea;
         int travelFeed = (int)Math.Round(p.TravelSpeed * 60);
         int retractFeed = (int)Math.Round(p.RetractionSpeed * 60);
         bool retractionOn = p.RetractionLength > 0;
@@ -68,6 +67,10 @@ public static class GcodeWriter
             if (!vaseLayer)
                 b.Append($"G0 Z{Num(layer.Z)} F{travelFeed}\n");
 
+            // Variable layer heights change the bead's stadium per layer, so the
+            // E arithmetic reads each layer's own cross-section.
+            double deToDistance = p.BeadAreaFor(layer.HeightOr(p)) / p.FilamentArea
+                ;
             // Cooling: a layer quicker than MinLayerTime slows every deposition on it by
             // the same factor (floored at MinPrintSpeed), so the layer takes the stated
             // minimum and the plastic below has cooled before the next lands.
@@ -127,7 +130,7 @@ public static class GcodeWriter
                     if (ramp && rampTotal > 0)
                     {
                         rampDone += (point - previous).Length;
-                        double layerHeight = p.LayerHeight;
+                        double layerHeight = layer.HeightOr(p);
                         z = $" Z{Num(layer.Z - layerHeight + layerHeight * rampDone / rampTotal)}";
                     }
                     b.Append($"G1 X{Num(point.X)} Y{Num(point.Y)}{z} E{NumE(e)}"

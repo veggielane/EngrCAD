@@ -9111,6 +9111,18 @@ each part rests on the bed plane, and the returned UNION slices whole — disjoi
 section into disjoint islands, so every per-island feature (walls, brims, skins, supports)
 works with nothing new, and the out-of-room refusal is the packer's own, naming the part.
 
+**Variable layer height closed the last practical parity box**, and the honest part is what
+it did to the extrusion identity: each layer's E arithmetic now reads its OWN stadium
+cross-section (`PrinterProfile.BeadAreaFor`), the flow-aware totals go per-layer, and the
+test asserts BOTH directions — the slicer's height-aware filament total matches the decoder,
+AND the naive single-ratio identity measurably FAILS on a mixed-height print (2%+), because
+an identity that survives the feature it should reflect is a tautology. The adaptive schedule
+is the stair-step cusp criterion (`h ≤ cusp/|n_z|`, two-pass band refinement, bed-resting
+facets excluding themselves — the supports rule again), with the cusp height a REQUIRED
+engineering input (the minimum-member-size rule: it IS the stated surface quality). A table
+is validated as PRINTABLE per layer (≤ the bead) and as COVERING the part, both refused by
+name with the deficit stated.
+
 **Stage 3 — 3-axis surfacing — landed** (`CncSurfacing.Raster`/`Waterline`/`ScallopHeight`/
 `StepoverForScallop`; docs `examples/cam-surfacing.md`), and it is the stage where the implicit
 engine pays DIRECTLY rather than as a bridge: **the cutter-location surface of a ball-nose tool

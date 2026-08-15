@@ -394,6 +394,34 @@ Console.WriteLine($"print time between {estimate.MinSeconds / 60:0.0} and "
     + $"{estimate.MaxSeconds / 60:0.0} minutes at 500 mm/s2");
 ```
 
+## Variable layer height
+
+`Slice` takes an explicit bottom-up `layerHeights` table (each height printable, the table
+covering the part — both refused by name), and `FdmSlicer.AdaptiveLayerHeights` derives one
+from the **stair-step cusp criterion**: a facet of unit normal n stepped by a layer of height
+h leaves a cusp of `h·|n_z|`, so bounding the cusp gives `h ≤ cusp/|n_z|` — near-horizontal
+surfaces take thin layers, vertical walls the maximum, and the cusp height is a **required
+engineering input** (it *is* the stated surface quality; a default would be a print-quality
+decision made by a library). The extrusion arithmetic goes per-layer — each layer's E reads
+its own stadium cross-section — and the test with teeth asserts both directions: the slicer's
+height-aware filament total matches the decoder, and the naive single-ratio identity
+*fails* on a mixed-height print, or the table did nothing.
+
+```csharp run:cam-adaptive-layers
+// A sphere: vertical at the equator, flattening toward the poles.
+var heights = FdmSlicer.AdaptiveLayerHeights(
+    Shape.Sphere(8), minHeight: 0.1, maxHeight: 0.4, cuspHeight: 0.1);
+Console.WriteLine($"{heights.Count} layers from {heights.Min():0.###} to "
+    + $"{heights.Max():0.###} mm (uniform at 0.4 would take {Math.Ceiling(16 / 0.4)})");
+Console.WriteLine($"equator {heights[heights.Count / 2]:0.###}, "
+    + $"top {heights[^1]:0.###} — thin where the surface flattens");
+
+var sliced = FdmSlicer.Slice(Shape.Sphere(8),
+    new PrinterProfile(NozzleDiameter: 0.8, LayerHeight: 0.4, WallCount: 1),
+    layerHeights: heights);
+Console.WriteLine($"sliced: {sliced.Layers.Count} layers, filament {sliced.FilamentUsed:0} mm");
+```
+
 ## Fuzzy skin, snippets, plates and the filament bill
 
 **Fuzzy skin** (`FuzzySkinThickness`/`FuzzySkinSpacing`) resamples the OUTERMOST wall and
@@ -435,11 +463,11 @@ reads as one sheet. `IroningFlow`/`IroningSpacing` add a low-flow smoothing swee
 reduced flow, and the extrusion identity generalises to `Σ length·flow` exactly.
 
 **What genuinely remains** (each filed in the PrusaSlicer-parity backlog with its reason):
-Arachne variable-width perimeters, gap fill and thin walls, fuzzy skin, lightning infill and
-tree supports (the research-grade trio), variable layer height, multi-material and the wipe
-tower, per-feature widths and accelerations, arc moves (`G2`/`G3` join with the CNC stages),
-custom G-code snippets and flavours, `.bgcode`, and non-planar slicing (deliberately last —
-it inherits the exp-map machinery's reported distortion). `RetractionExtraRestart` is filed
+Arachne variable-width perimeters, gap fill and thin walls, lightning infill and tree
+supports (the research-grade trio), multi-material and the wipe tower, per-feature widths
+and accelerations, arc moves (`G2`/`G3` join with the CNC stages), G-code flavours and
+`.bgcode`, and non-planar slicing (deliberately last — it inherits the exp-map machinery's
+reported distortion). `RetractionExtraRestart` is filed
 WITH a reason rather than built: pushing unmatched extra filament breaks the matched
 retract-pair contract the twin decoder verifies, and the identity is worth more than the
 knob.
