@@ -9123,6 +9123,30 @@ engineering input (the minimum-member-size rule: it IS the stated surface qualit
 is validated as PRINTABLE per layer (≤ the bead) and as COVERING the part, both refused by
 name with the deficit stated.
 
+**The stage-2 completion pack** (climb/conventional, canned cycles, the feeds catalogue)
+closed three filed boxes with one derivation, one reconstruction and one transcription.
+Climb-vs-conventional is DERIVED, not transcribed — an M3 right-hand cutter's tooth at the
+contact point moves WITH the feed exactly when the material is on the LEFT of travel (the
+ω×offset cross product), so climb = material-left, which resolves per loop as "CCW iff the
+material is inside it": an outside profile keeps CCW, a pocket ring goes CW, and an island
+pocket orients its outer-derived and island-derived rings OPPOSITELY — applied by measured
+shoelace sign (never the offset machinery's emission order) with the reversal about the
+loop's own start point, so linking and cut length are untouched and the test asserts the
+conventional multiset of signed areas is the climb one negated (to round-off — the reversal
+reorders the shoelace summation, the non-associativity lesson in a one-line costume). Canned
+G81/G83 cycles are a WRITER RE-SPELLING with the parameters RECONSTRUCTED from the pass's
+own moves and verified against the peck arithmetic — a ladder that skipped bites falls back
+to expanded emission (sound in the accept direction; the first draft's last-bite override
+accepted exactly such a ladder and the fallback test caught it) — while the DECODER expands
+cycles under the real Fanuc semantics (bites from R, not from the stock top: the canned
+bites sit R above the expanded twin's, conservative, with sites and final depths identical),
+modal bare-X/Y re-execution included, refusing a cycle missing Z/R/Q by name since a guessed
+drill depth is confidently wrong geometry. `CncToolLibrary.Suggest` spells the two chart
+identities once (`rpm = 1000·Vc/(π·D)`, `feed = rpm·flutes·chipload`) over the ⚠
+`MillMaterials` transcription (asserted in the chart's own units, coverage held by
+reflection), and the spindle cap preserves the CHIP LOAD rather than the feed — holding the
+feed at a capped rpm would thicken every chip past what the flute clears.
+
 **Stage 3 — 3-axis surfacing — landed** (`CncSurfacing.Raster`/`Waterline`/`ScallopHeight`/
 `StepoverForScallop`; docs `examples/cam-surfacing.md`), and it is the stage where the implicit
 engine pays DIRECTLY rather than as a bridge: **the cutter-location surface of a ball-nose tool

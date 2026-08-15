@@ -78,6 +78,14 @@ public sealed record GcodeProgram(IReadOnlyList<GcodeMove> Moves, IReadOnlyList<
 /// produce confidently wrong geometry; <c>G2</c>/<c>G3</c> arcs refuse by name (the FDM writer
 /// emits line moves; arcs join with the CNC stages). Unknown M-codes and comments are dirt,
 /// noted or skipped, never thrown.</para>
+///
+/// <para><b>Canned drilling cycles decode</b> (<c>G81</c> plunge, <c>G83</c> peck) with the
+/// Fanuc semantics: rapid to the site, rapid to the R plane, feed to Z (G83 in Q-deep bites
+/// from R with a full retract between), return to the initial level under <c>G98</c> or the R
+/// plane under <c>G99</c>, cancelled by <c>G80</c> or a plain motion word. The cycle is MODAL —
+/// a bare X/Y line while one is active re-executes it at the new site — and a cycle missing its
+/// Z, its R, or (G83) a positive Q refuses by name, because a guessed drill depth is confidently
+/// wrong geometry.</para>
 /// </summary>
 public static class GcodeReader
 {
@@ -93,6 +101,58 @@ public static class GcodeReader
 
         var moves = new List<GcodeMove>();
         double x = 0, y = 0, z = 0, e = 0, feed = 0;
+
+        // Canned drilling state (G81/G83): the modal Z/R/Q, re-executed by a bare X/Y line
+        // while active, cancelled by G80 or a plain motion.
+        int cannedCode = 0;
+        double cannedZ = 0, cannedR = 0, cannedQ = 0;
+        bool hasZ = false, hasR = false, hasQ = false, cannedActive = false;
+        bool returnToInitial = true;                         // G98, the writer's own mode
+
+        void ExecuteCanned(double nx, double ny)
+        {
+            double initial = z;
+            if (nx != x || ny != y)
+            {
+                moves.Add(new GcodeMove(new Vector3d(x, y, z), new Vector3d(nx, ny, z),
+                    0, feed, GcodeMoveKind.Travel, Rapid: true));
+                (x, y) = (nx, ny);
+            }
+            if (z != cannedR)
+            {
+                moves.Add(new GcodeMove(new Vector3d(x, y, z), new Vector3d(x, y, cannedR),
+                    0, feed, GcodeMoveKind.Travel, Rapid: true));
+                z = cannedR;
+            }
+            if (cannedCode == 81)
+            {
+                moves.Add(new GcodeMove(new Vector3d(x, y, z), new Vector3d(x, y, cannedZ),
+                    0, feed, GcodeMoveKind.Travel));
+                z = cannedZ;
+            }
+            else
+            {
+                for (int k = 1; ; k++)
+                {
+                    double bottom = Math.Max(cannedZ, cannedR - k * cannedQ);
+                    moves.Add(new GcodeMove(new Vector3d(x, y, z), new Vector3d(x, y, bottom),
+                        0, feed, GcodeMoveKind.Travel));
+                    z = bottom;
+                    if (bottom <= cannedZ + 1e-12)
+                        break;
+                    moves.Add(new GcodeMove(new Vector3d(x, y, z), new Vector3d(x, y, cannedR),
+                        0, feed, GcodeMoveKind.Travel, Rapid: true));
+                    z = cannedR;
+                }
+            }
+            double home = returnToInitial ? initial : cannedR;
+            if (z != home)
+            {
+                moves.Add(new GcodeMove(new Vector3d(x, y, z), new Vector3d(x, y, home),
+                    0, feed, GcodeMoveKind.Travel, Rapid: true));
+                z = home;
+            }
+        }
 
         foreach (var raw in text.Split('\n'))
         {
@@ -115,6 +175,7 @@ public static class GcodeReader
                 {
                     case 0 or 1:
                     {
+                        cannedActive = false;                // a plain motion cancels the cycle
                         double nx = x, ny = y, nz = z, ne = e;
                         foreach (var (w, v) in words.Skip(1))
                             switch (w)
@@ -153,6 +214,49 @@ public static class GcodeReader
                         throw new FormatException(
                             "G91 declares RELATIVE coordinates; decoding it as absolute would be "
                             + "confidently wrong. Only G90 programs are read.");
+                    case 81 or 83:
+                    {
+                        double nx = x, ny = y;
+                        foreach (var (w, v) in words.Skip(1))
+                            switch (w)
+                            {
+                                case 'X': nx = v; break;
+                                case 'Y': ny = v; break;
+                                case 'Z': cannedZ = v; hasZ = true; break;
+                                case 'R': cannedR = v; hasR = true; break;
+                                case 'Q': cannedQ = v; hasQ = true; break;
+                                case 'F': feed = v; break;
+                                default:
+                                    Note($"Word '{w}' on a G{(int)code} cycle was ignored.");
+                                    break;
+                            }
+                        cannedCode = (int)code;
+                        if (!hasZ)
+                            throw new FormatException(
+                                $"G{(int)code} canned cycle without a Z depth — a guessed drill "
+                                + "depth is confidently wrong geometry. Refused by name.");
+                        if (!hasR)
+                            throw new FormatException(
+                                $"G{(int)code} canned cycle without an R retract plane. "
+                                + "Refused by name.");
+                        if (cannedCode == 83 && (!hasQ || !(cannedQ > 0)))
+                            throw new FormatException(
+                                "G83 pecking needs a positive Q bite depth — without one the "
+                                + "cycle cannot terminate. Refused by name.");
+                        cannedActive = true;
+                        ExecuteCanned(nx, ny);
+                        break;
+                    }
+                    case 80:
+                        cannedActive = false;
+                        hasZ = hasR = hasQ = false;
+                        break;
+                    case 98:
+                        returnToInitial = true;
+                        break;
+                    case 99:
+                        returnToInitial = false;
+                        break;
                     case 21 or 90 or 28:
                         break;                               // millimetres / absolute / home
                     case 92:
@@ -172,6 +276,25 @@ public static class GcodeReader
                         "M83 declares RELATIVE extrusion; the E bookkeeping identity needs "
                         + "absolute E (M82). Refused by name.");
                 // M82 / temperatures / fans / motors-off are modes and hardware, not geometry.
+            }
+            else if ((letter == 'X' || letter == 'Y') && cannedActive)
+            {
+                // The cycle is modal: a bare X/Y line re-executes it at the new site.
+                double nx = x, ny = y;
+                foreach (var (w, v) in words)
+                    switch (w)
+                    {
+                        case 'X': nx = v; break;
+                        case 'Y': ny = v; break;
+                        case 'Z': cannedZ = v; break;
+                        case 'R': cannedR = v; break;
+                        case 'Q': cannedQ = v; break;
+                        case 'F': feed = v; break;
+                        default:
+                            Note($"Word '{w}' on a modal cycle line was ignored.");
+                            break;
+                    }
+                ExecuteCanned(nx, ny);
             }
             else
             {

@@ -12,7 +12,8 @@ namespace EngrCAD.Cam;
 /// clears ± a radius about its centreline, and consecutive centrelines are stepover·D apart, so
 /// coverage needs stepover·D ≤ r); a larger stepover is legal and the coverage oracle is what
 /// reports what it leaves. Feeds and speeds are ENGINEERING INPUTS with stated defaults, not a
-/// chip-load derivation — a transcribed feeds/speeds catalogue is filed with the campaign.
+/// chip-load derivation — <see cref="CncToolLibrary.Suggest"/> derives a starting set from the
+/// transcribed <see cref="MillMaterials"/> catalogue when the caller wants one.
 /// </summary>
 public sealed record MillTool(
     double Diameter,
@@ -55,6 +56,27 @@ public enum ProfileSide
     Inside,
 }
 
+/// <summary>
+/// Climb or conventional milling — which way a closed pass traverses its loop, DERIVED rather
+/// than transcribed: an M3 right-hand cutter viewed from +Z spins clockwise (ω = −ẑ|ω|), so a
+/// tooth at the contact point with material on the LEFT of travel (offset r·(ẑ×d̂)) moves at
+/// ω×offset = +|ω|r·d̂ — the same direction as the feed, the chip starting thick, which IS
+/// climb milling. Hence <b>climb = material on the left of travel</b>: walking a loop with the
+/// material inside it counter-clockwise, or with the material beyond it clockwise. The
+/// orientation is MEASURED per loop (shoelace sign) and set by that requirement, never assumed
+/// from the offset machinery's emission order.
+/// </summary>
+public enum MillDirection
+{
+    /// <summary>Material on the left of travel — the chip starts thick and thins to zero, the
+    /// finish and tool-life default on any machine with backlash-free drives.</summary>
+    Climb,
+
+    /// <summary>Material on the right of travel — the chip starts at zero and thickens, the
+    /// choice for machines with backlash (the cutter cannot pull itself into the work).</summary>
+    Conventional,
+}
+
 /// <summary>One tool pass: a 3D polyline in bed coordinates (the stock top is z = 0, cuts run
 /// negative). Within a pass the WRITER classifies each move by shape — an XY move is a CUT at
 /// the feed rate, a straight-down move a PLUNGE at the plunge rate, a straight-up move a RAPID
@@ -93,7 +115,8 @@ public sealed record MillOperation(string Name, MillTool Tool, IReadOnlyList<Mil
 /// radius (round joins — the path a tool centre PHYSICALLY rolls around an outside corner,
 /// keeping contact, where a miter would lift it off the part), depth comes in `StepDown` slices
 /// with the last clamped to the stated depth, drilling is EXPANDED peck moves (plain G0/G1, so
-/// the twin decoder reads a drill cycle with nothing new — canned G81/G83 cycles are filed),
+/// the twin decoder reads a drill cycle with nothing new — the writer's opt-in <c>cannedDrilling</c>
+/// re-spells a drill pass as G81/G83 cycles),
 /// and travel ordering per level is the shared `RunLinker`.
 ///
 /// <para><b>The verification oracle is the morphological OPENING</b>: a pocket cut with a
@@ -113,14 +136,18 @@ public static class CncMill
     /// wall), levels at StepDown with the last clamped to the exact depth.
     /// </summary>
     public static MillOperation Pocket(
-        Region2d region, MillTool tool, double depth, string name = "pocket")
+        Region2d region, MillTool tool, double depth, string name = "pocket",
+        MillDirection direction = MillDirection.Climb)
     {
         ArgumentNullException.ThrowIfNull(region);
         ArgumentNullException.ThrowIfNull(tool);
         tool.Validate();
         RequireDepth(depth);
 
-        // The ring ladder, outermost (boundary pass) first as generated.
+        // The ring ladder, outermost (boundary pass) first as generated. Cutting INSIDE the
+        // outline, the remaining stock sits beyond each outer-derived ring (toward the wall —
+        // rings run innermost-first, so inward is already cleared) and inside each
+        // island-derived ring, which is what the direction rule reads.
         double step = tool.Stepover * tool.Diameter;
         var rings = new List<List<Vector2d[]>>();
         for (int k = 0; ; k++)
@@ -131,9 +158,9 @@ public static class CncMill
             var loops = new List<Vector2d[]>();
             foreach (var shell in offsets)
             {
-                loops.Add([.. shell.Outer]);
+                loops.Add(Orient([.. shell.Outer], direction, materialInside: false));
                 foreach (var hole in shell.Holes)
-                    loops.Add([.. hole]);
+                    loops.Add(Orient([.. hole], direction, materialInside: true));
             }
             rings.Add(loops);
         }
@@ -163,7 +190,8 @@ public static class CncMill
     /// </summary>
     public static MillOperation Profile(
         Region2d region, MillTool tool, double depth, ProfileSide side,
-        int tabs = 0, double tabHeight = 0, double tabWidth = 0, string name = "profile")
+        int tabs = 0, double tabHeight = 0, double tabWidth = 0, string name = "profile",
+        MillDirection direction = MillDirection.Climb)
     {
         ArgumentNullException.ThrowIfNull(region);
         ArgumentNullException.ThrowIfNull(tool);
@@ -188,12 +216,15 @@ public static class CncMill
             throw new ArgumentException(
                 $"'{name}': the {side} profile at one tool radius (Ø{tool.Diameter:0.###}) "
                 + "leaves no outline — the tool does not fit.");
+        // Cutting OUTSIDE the outline the material (the part) lies within each outer-derived
+        // loop and beyond each hole-derived one; cutting INSIDE it is the pocket relationship.
+        bool outside = side == ProfileSide.Outside;
         var loops = new List<Vector2d[]>();
         foreach (var shell in offsets)
         {
-            loops.Add([.. shell.Outer]);
+            loops.Add(Orient([.. shell.Outer], direction, materialInside: outside));
             foreach (var hole in shell.Holes)
-                loops.Add([.. hole]);
+                loops.Add(Orient([.. hole], direction, materialInside: !outside));
         }
 
         var levels = DepthLevels(depth, tool.StepDown);
@@ -221,7 +252,8 @@ public static class CncMill
     /// Drills each point to <paramref name="depth"/>, pecking in <paramref name="peck"/>-deep
     /// bites with a retract between (0 = one plunge). The moves are EXPANDED plain G0/G1 —
     /// down at the plunge rate, up as a rapid — so the twin decoder reads a drill cycle with
-    /// nothing new; canned G81/G83 cycles are filed with the campaign.
+    /// nothing new; <see cref="CncGcodeWriter"/>'s opt-in <c>cannedDrilling</c> re-spells the
+    /// same passes as canned G81/G83 cycles.
     /// </summary>
     public static MillOperation Drill(
         IReadOnlyList<Vector2d> points, MillTool tool, double depth, double peck = 0,
@@ -236,7 +268,7 @@ public static class CncMill
         if (points.Count == 0)
             throw new ArgumentException($"'{name}': at least one drill point is needed.");
 
-        const double retract = 0.5;                          // chip-clear height above the stock
+        double retract = DrillRetract;                       // chip-clear height above the stock
         var passes = new List<MillPass>(points.Count);
         foreach (var p in points)
         {
@@ -261,6 +293,34 @@ public static class CncMill
             passes.Add(new MillPass(moves, IsClosed: false));
         }
         return new MillOperation(name, tool, passes);
+    }
+
+    /// <summary>The drill cycles' chip-clear retract height above the stock top (mm) — ONE rule
+    /// shared by the expanded peck moves and the canned-cycle writer's R plane, so the two
+    /// spellings of a drill cannot disagree about where the tool clears chips.</summary>
+    internal const double DrillRetract = 0.5;
+
+    /// <summary>Walks the loop with the material on the LEFT for climb (counter-clockwise iff
+    /// the material is inside the loop) and on the RIGHT for conventional — the orientation
+    /// MEASURED by shoelace sign and reversed about its own start point when it disagrees, so
+    /// the pass's start (and the travel linking) stays put and only the traversal flips.</summary>
+    private static Vector2d[] Orient(Vector2d[] loop, MillDirection direction, bool materialInside)
+    {
+        bool wantCcw = (direction == MillDirection.Climb) == materialInside;
+        double doubleArea = 0;
+        for (int i = 0; i < loop.Length; i++)
+        {
+            var a = loop[i];
+            var b = loop[(i + 1) % loop.Length];
+            doubleArea += a.X * b.Y - b.X * a.Y;
+        }
+        if (doubleArea > 0 == wantCcw)
+            return loop;
+        var reversed = new Vector2d[loop.Length];
+        reversed[0] = loop[0];
+        for (int i = 1; i < loop.Length; i++)
+            reversed[i] = loop[loop.Length - i];
+        return reversed;
     }
 
     /// <summary>The cut depths: StepDown increments with the LAST clamped to the exact stated

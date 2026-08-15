@@ -253,11 +253,52 @@ measured from one full loop after the spiral reaches the loop radius. The slot's
 footprint is the stadium `L·W + π(W/2)²` (asserted within 2%), and no path point ever leaves
 the slot corridor (no-overcut, point by point).
 
-Feeds and speeds are engineering inputs with stated defaults — a transcribed chip-load
-catalogue is filed with the campaign, alongside `G2`/`G3` arcs from the exact curved-profile
-tier, climb/conventional selection, helical entry, canned drilling cycles, rest machining,
-the 3-axis (surfacing) stock simulation — a raster row's swept volume is not a prism, so
-`Simulate` refuses it by name today — and the trochoid × stock-record composition (the swept
-union's scallop cusps are near-tangent crossings, the mesh imprint boolean's hostile family),
-plus general adaptive (constant-engagement) pocket clearing, of which this closed-form
-cycloid family is the honest first step.
+## Climb, conventional and canned cycles
+
+Every pocket and profile takes a `MillDirection` (climb is the default), and the rule is
+**derived rather than transcribed**: an M3 right-hand cutter viewed from +Z spins clockwise,
+so a tooth at the contact point with material on the LEFT of travel moves *with* the feed —
+the chip starts thick, which is climb milling. Hence climb walks a loop counter-clockwise
+when the material is inside it (an outside profile around the part) and clockwise when the
+material is beyond it (a pocket ring, an inside profile) — with an island pocket orienting
+its outer-derived and island-derived rings *oppositely*, both read off the measured shoelace
+sign, never assumed from the offset machinery's emission order. The direction changes
+traversal only: same passes, same starts, same cut length.
+
+`CncGcodeWriter.Write(ops, cannedDrilling: true)` re-spells drill passes as canned cycles —
+`G81` for a single plunge, `G83 Q` for pecks, under `G98`, closed by `G80` — with Z/R/Q
+**reconstructed from the pass's own moves** and verified against the peck arithmetic (an
+irregular ladder falls back to expanded emission, which is always correct). The decoder
+expands cycles under the Fanuc semantics, modal bare-X/Y re-execution included, and refuses
+a cycle missing its Z, R or Q by name — a guessed drill depth is confidently wrong geometry.
+The canned spelling pecks from the R plane, so its bites sit R above the expanded twin's:
+conservative, never a deeper bite, with the sites and final depths identical through the
+decoder.
+
+## Feeds and speeds
+
+`CncToolLibrary.Suggest` derives a starting `MillTool` from the ⚠ verify-against-datasheet
+`MillMaterials` catalogue (nominal carbide figures, asserted in the chart's own units) — the
+two identities a feeds chart is built on: `rpm = 1000·Vc/(π·D)` and
+`feed = rpm × flutes × chip load`, the chip load a stated fraction of the diameter. The
+spindle cap preserves the **chip load**, not the feed — a capped rpm drops the feed in
+proportion, because holding the feed would thicken every chip past what the flute clears:
+
+```csharp run:cam-toollibrary
+foreach (var material in MillMaterials.All)
+{
+    var tool = CncToolLibrary.Suggest(material, diameter: 6);
+    Console.WriteLine($"{material.Name,-16} Ø6 2-flute: "
+        + $"{tool.SpindleRpm,6:0} rpm, feed {tool.FeedRate,5:0} mm/min");
+}
+var small = CncToolLibrary.Suggest(MillMaterials.Aluminum6061, 2, maxRpm: 24000);
+Console.WriteLine($"Ø2 in aluminium wants ~40k rpm; capped at 24k the feed follows: "
+    + $"{small.FeedRate:0} mm/min (chip load preserved)");
+```
+
+Still filed with the campaign: `G2`/`G3` arcs from the exact curved-profile tier, helical
+entry, rest machining, the 3-axis (surfacing) stock simulation — a raster row's swept volume
+is not a prism, so `Simulate` refuses it by name today — and the trochoid × stock-record
+composition (the swept union's scallop cusps are near-tangent crossings, the mesh imprint
+boolean's hostile family), plus general adaptive (constant-engagement) pocket clearing, of
+which the closed-form cycloid family above is the honest first step.

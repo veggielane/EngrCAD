@@ -2449,14 +2449,18 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     moves classified by SHAPE (XY = cut, down = plunge, up = rapid), the morphological-
     OPENING coverage oracle with the (4−π)r² corner-residue closed form, exact
     point-by-point no-gouge, and the decoder's new `Rapid` flag (feed state persists
-    across G0/G1 — the modal-state trap). **Stage-2 residuals, open**: G2/G3 arcs from
-    the exact curved-profile tier (`SectionExact`/`CurvedRegion2dOffset` — a bore rim
-    as ONE arc in the G-code), drilling cycles reading `HoleTable.For(part)` (the
-    feature graph knows the holes), climb-vs-conventional as a stated loop ORIENTATION,
-    lead-in/out arcs, helical/ramp entry, canned G81/G83 cycles, a ⚠
-    verify-against-datasheet feeds/speeds `ToolLibrary` (chip-load tables are
-    transcriptions, never derivations), rest machining, and the material-removal
-    animation over recorded stock states. A LASER/drag-knife mode is the near-free
+    across G0/G1 — the modal-state trap). **The completion pack landed** climb-vs-
+    conventional (`MillDirection`, DERIVED — material-left-of-travel is climb for an
+    M3 cutter — applied by measured shoelace sign, island rings orienting oppositely),
+    canned G81/G83 cycles (writer opt-in with Z/R/Q reconstructed from the pass's own
+    moves and irregular ladders falling back; decoder expands under Fanuc semantics
+    with modal bare-X/Y, refusing a missing Z/R/Q by name), and the ⚠ feeds/speeds
+    catalogue (`CncToolLibrary.Suggest` over `MillMaterials` — the cap preserves chip
+    load, not feed). **Stage-2 residuals, open**: G2/G3 arcs from the exact
+    curved-profile tier (`SectionExact`/`CurvedRegion2dOffset` — a bore rim as ONE arc
+    in the G-code), drilling cycles reading `HoleTable.For(part)` (the feature graph
+    knows the holes), lead-in/out arcs, helical/ramp entry, rest machining, and the
+    material-removal animation over recorded stock states. A LASER/drag-knife mode is the near-free
     adjacent (a kerf-offset outline cut — the 2D machinery plus the DXF/SVG writers
     already cover it; Kiri:Moto ships it for the same reason).
   - **Stage 3 — 3-axis surfacing: the CORE HAS LANDED** (`CncSurfacing.Raster`/

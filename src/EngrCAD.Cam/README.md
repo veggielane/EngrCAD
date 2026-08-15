@@ -92,6 +92,16 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   one shape the slicer takes whole, disjoint islands getting walls/brims/skins/supports with
   nothing new.
 
+- **The stage-2 completion pack**: `MillDirection` climb/conventional on pockets and
+  profiles (DERIVED — material on the left of travel is climb for an M3 right-hand cutter —
+  and applied by measured shoelace sign, an island pocket orienting outer and island rings
+  oppositely); opt-in canned `G81`/`G83` drilling in `CncGcodeWriter` (Z/R/Q reconstructed
+  from the pass's own moves, irregular ladders falling back to expanded emission; the decoder
+  expands cycles under Fanuc semantics with modal bare-X/Y re-execution, refusing a missing
+  Z/R/Q by name); and `CncToolLibrary.Suggest` over the ⚠ `MillMaterials` chip-load catalogue
+  (`rpm = 1000·Vc/(π·D)`, `feed = rpm·flutes·chipload`, the spindle cap preserving the chip
+  load rather than the feed).
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that
