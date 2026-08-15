@@ -2476,18 +2476,25 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     adaptive stepover from local curvature, holder/shank collision checking, and
     rest machining (shared with stage 2's entry).
   - **Stage 4 — HSM adaptive clearing** (the research-grade centrepiece, flagged as
-    such: Kiri:Moto does not attempt it; Fusion/HSMWorks is the reference): trochoidal
-    and constant-ENGAGEMENT pocketing, where the invariant that defines the feature is
-    directly assertable — the engagement ANGLE (the arc of tool circumference in
-    material at each step) computed from the evolving 2D stock region and BOUNDED by
-    the stated maximum, never inferred from "it looks smooth". The distance-field
-    machinery is the substrate (a medial-axis-guided spiral is a walk on the exact 2D
-    distance the region already answers; `Region2dThickness` finds the necks that force
-    trochoidal linking), and the honest sequencing is trochoidal SLOTTING first (a
-    closed-form cycloid family over a centre-line, engagement bounded by construction)
-    before general adaptive spirals (iterative, and the stock model updates per pass —
-    the 2D boolean is the inner loop, so its measured cost budget decides the
-    representation, region vs raster, the Packing lesson).
+    such: Kiri:Moto does not attempt it; Fusion/HSMWorks is the reference).
+    **Trochoidal SLOTTING has LANDED** (`CncHsm.TrochoidalSlot`; design.md §6e, docs
+    `cam-milling.md` §HSM) with the campaign's own bar met the strong way: the
+    engagement angle MEASURED from the evolving stock and bounded by the stated
+    maximum, the straight-slot ~180° control proving the instrument — and the finding
+    that the straight-cut relation `a = r·(1 − cos φ)` is measurably WRONG for a
+    trochoid (60° ask read 90°: the previous loop's swept boundary is CONVEX), so the
+    advance is SOLVED by bisection against a steady-state model of the same rule.
+    Spiral-out entry at the same pitch, its wide-but-shallow contact arc stated
+    honestly (the entry's bounded quantity is the radial step, the chip load).
+    **Still open in stage 4**: general adaptive constant-engagement POCKETING over the
+    evolving stock region (the 2D boolean is the inner loop, so its measured cost
+    budget decides the representation, region vs raster, the Packing lesson;
+    `Region2dThickness` finds the necks that force trochoidal linking), helical z
+    entry, and the trochoid × stock-record composition — the swept union's scallop
+    cusps are near-tangent crossings, the mesh imprint boolean's hostile family, and a
+    footprint-smoothing tolerance tried against it broke honest fixtures while fixing
+    nothing (a real robustness item for the imprint's near-tangency handling, not a
+    CAM-side workaround).
   - **Stage 5 — NON-PLANAR slicing** (deliberately last: it needs stages 1 and 3 landed
     first): curved-layer FDM, where the top layers follow the part's own surface rather
     than a stack of planes — the exp-map machinery is the substrate

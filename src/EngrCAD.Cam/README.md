@@ -127,6 +127,22 @@ the shape's own SDF instead of approximating an offset mesh.
   raster angle, no-retract row linking, holder collision and rest machining are filed.
   Docs: `docs/examples/cam-surfacing.md`.
 
+## HSM: trochoidal slotting (`CncHsm`)
+
+Stage 4's first step. The defining invariant is the ENGAGEMENT ANGLE (the arc of tool
+circumference in material): `TrochoidalSlot` rides circular loops that advance a small step
+per revolution behind an Archimedean spiral-out entry, and **the advance is solved by
+bisection against a steady-state model of the measured quantity** — the straight-cut relation
+`a = r·(1 − cos φ)` is measurably wrong here (a 60° ask measured 90°, because a trochoid cuts
+against the previous loop's CONVEX swept boundary) — with the tests re-measuring the real
+path's engagement from the evolving stock independently, a straight slot cut as the ~180°
+control that proves the instrument. The spiral entry's honesty is stated: its contact ARC is
+wide but shallow (the bounded quantity there is the radial step, the chip load). Swept
+footprint = the slot stadium within 2%; no-overcut point-by-point; refusals by name. Filed:
+general adaptive (constant-engagement) pocketing, helical z entry, trochoidal linking of
+`Region2dThickness` necks, and the trochoid × stock-record composition (scallop cusps are
+near-tangent crossings, the imprint boolean's hostile family).
+
 ## Verification (the campaign's own bar)
 
 Layer z's as exact arithmetic; wall perimeters against closed forms (an inward offset of a

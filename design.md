@@ -9090,6 +9090,38 @@ close") while taking minutes on the ones it accepts; banding leaves only the hor
 stacked-plates coincidence the imprint boolean's coplanar tier is built for, and the suite runs
 in seconds.
 
+**Stage 4 opened with trochoidal slotting** (`CncHsm.TrochoidalSlot`; docs
+`examples/cam-milling.md` §HSM), and the finding that justifies the campaign's whole framing —
+"the engagement angle computed from the evolving stock and BOUNDED by the stated maximum,
+never inferred" — arrived in the first fixture: **the textbook straight-cut engagement
+relation `a = r·(1 − cos φ)` is measurably WRONG for a trochoid**. Seeding the advance from it
+at a 60° bound measured **90°** from the evolving stock, because a trochoid cuts against the
+previous loop's CONVEX swept boundary and a convex opposing surface engages more circumference
+than a straight wall at the same radial width (and the naive circle-against-circle bound
+overshoots the other way at 143°, since it ignores what the current loop's own sweep already
+removed). So the advance is SOLVED — bisection against a steady-state model built from the
+same evolving-stock rule the tests measure with (six loops at the candidate advance, the last
+loop's tool-circle arc not covered by the swept prefix) — and the verification re-measures the
+REAL path independently (spiral hand-off and slot ends included), with a straight-line slot
+cut as the ~180° control that proves the instrument reads burial at all. **The entry is an
+Archimedean spiral-out at the same pitch, and its honesty is stated rather than hidden**: a
+spiral-out's contact ARC is fundamentally wide (~180°, however small the pitch — the tool
+orbits inside the hole it is opening) while SHALLOW, so its bounded quantity is the radial
+step per turn (the chip load — why entry feed reduction exists), and the arc bound is a claim
+about the trochoidal phase, measured from one loop after the spiral reaches full radius. Two
+smaller findings: the loop is sampled by INDEX, never by accumulating theta (the total angle
+is an exact multiple of the step for round fixtures, and an accumulated loop emits a final
+segment a few ulps long — too short for the stroke's normalize, too long for exact-duplicate
+compaction: the epsilon-guard-Ceiling lesson); and the trochoid × stock-record composition is
+FILED rather than papered over — the swept union's boundary carries a near-tangent scallop
+cusp per loop (circles of radius R + r whose centres sit one advance apart cross at a few
+degrees), the mesh imprint boolean's hostile family, and a footprint-smoothing tolerance tried
+against it measurably broke honest fixtures while fixing nothing. Swept footprint = the slot
+stadium `L·W + π(W/2)²` within 2%, no-overcut point-by-point, depth levels arithmetic,
+byte determinism. Filed: general adaptive (constant-engagement) pocketing over the evolving
+stock region — of which this closed-form cycloid family is the honest first step — helical z
+entry, and trochoidal linking of `Region2dThickness` necks.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

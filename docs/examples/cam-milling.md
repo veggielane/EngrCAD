@@ -124,8 +124,45 @@ var animation = new Animation(durationSeconds: 6)
 every corner, however unevenly the waypoints are spaced), hits each waypoint exactly at its own
 parameter, and leaves every other instance's matrix untouched bit-for-bit.
 
+## HSM: trochoidal slotting
+
+Stage 4's defining invariant is the **engagement angle** — the arc of tool circumference in
+material. A conventional slot cut buries the tool's whole leading half (~180°), which is why
+slotting is where cutters die; `CncHsm.TrochoidalSlot` keeps it bounded: an Archimedean
+spiral-out entry, then circular loops advancing a small step per revolution, so each loop
+shaves a thin crescent off material the previous loops already opened.
+
+**The advance is solved against the measured quantity, because the textbook formula is
+measurably wrong here.** A straight cut of radial width *a* engages `acos((r − a)/r)` — but a
+trochoid cuts against the previous loop's *convex* swept boundary, which engages more of the
+circumference at the same radial width: seeding the advance from the straight-cut relation at
+a 60° bound *measured* **90°** from the evolving stock. So the constructor bisects the advance
+against a steady-state model of the same rule the tests measure with (several loops, the last
+loop's tool-circle arc not yet covered by the swept prefix), and the verification re-measures
+the real path independently — two constructions checking each other:
+
+```csharp run:cam-trochoidal
+var tool = new MillTool(Diameter: 4);
+var slot = CncHsm.TrochoidalSlot(new Vector2d(0, 0), new Vector2d(20, 0),
+    slotWidth: 10, tool, depth: 4, maxEngagementDegrees: 60);
+Console.WriteLine($"{slot.Passes.Count} depth levels, "
+    + $"{slot.Passes[0].Points.Count} points per level, cut {slot.CutLength:0} mm");
+Console.WriteLine($"a straight slot is 20 mm of cut — the trochoid spends "
+    + $"{slot.Passes[0].CutLength / 20:0.0}x of path for a bounded tool load");
+```
+
+The entry spiral's honesty is stated rather than hidden: a spiral-out's contact **arc** is
+wide but *shallow* — its bounded quantity is the radial step per turn (the chip load), which
+is why entry feed reduction exists — so the arc bound is a claim about the trochoidal phase,
+measured from one full loop after the spiral reaches the loop radius. The slot's swept
+footprint is the stadium `L·W + π(W/2)²` (asserted within 2%), and no path point ever leaves
+the slot corridor (no-overcut, point by point).
+
 Feeds and speeds are engineering inputs with stated defaults — a transcribed chip-load
 catalogue is filed with the campaign, alongside `G2`/`G3` arcs from the exact curved-profile
 tier, climb/conventional selection, helical entry, canned drilling cycles, rest machining,
-and the 3-axis (surfacing) stock simulation — a raster row's swept volume is not a prism, so
-`Simulate` refuses it by name today.
+the 3-axis (surfacing) stock simulation — a raster row's swept volume is not a prism, so
+`Simulate` refuses it by name today — and the trochoid × stock-record composition (the swept
+union's scallop cusps are near-tangent crossings, the mesh imprint boolean's hostile family),
+plus general adaptive (constant-engagement) pocket clearing, of which this closed-form
+cycloid family is the honest first step.
