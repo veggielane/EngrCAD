@@ -2459,17 +2459,22 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     animation over recorded stock states. A LASER/drag-knife mode is the near-free
     adjacent (a kerf-offset outline cut — the 2D machinery plus the DXF/SVG writers
     already cover it; Kiri:Moto ships it for the same reason).
-  - **Stage 3 — 3-axis surfacing** (a DIFFERENT problem from 2.5D, assessed as such):
-    waterline passes are planar sections; raster passes need the DROP-CUTTER against
-    the mesh `Bvh` — and the implicit engine is the differentiator here, because a
-    ball-nose cutter-location surface IS the SDF offset (offset the part by the tool
-    radius, drop the centre by the radius: exact where the field is exact, no
-    triangle-by-triangle cusp bookkeeping), with flat and bull-nose ends as the
-    rounded-cone distance the SDF vocabulary already spells. **Verification bar**: the
-    cutter-location surface against sphere/plane closed forms; scallop height vs
-    stepover on a plane (h ≈ s²/8r) asserted as arithmetic; gouge freedom as an SDF
-    inequality (every cutter centre reads ≥ tool radius from the part), which is the
-    3D twin of stage 2's exact claim.
+  - **Stage 3 — 3-axis surfacing: the CORE HAS LANDED** (`CncSurfacing.Raster`/
+    `Waterline` + the `ScallopHeight`/`StepoverForScallop` chord identity; design.md
+    §6e, docs `examples/cam-surfacing.md`) — the implicit-engine differentiator built
+    as predicted: the ball-nose cutter-location surface IS the SDF's r-offset, raster
+    a gouge-free-by-construction sphere trace (Lipschitz — a stall leaves the centre
+    HIGH, stock never gouge), waterline the r-isolevel on the centre plane via
+    `SdfContours.OnPlane` + an IN-PLANE Newton polish (exact on the steep walls the
+    strategy exists for, crossing-error-honest on flats), the gouge inequality
+    asserted point-by-point on both strategies, a vertical cylinder's waterline at
+    `R + r` to 1e-6, the flat-top raster exact, the dome apex touched at its own
+    height (grid anchoring), and `s²/8r` MEASURED as the chord identity's expansion
+    rather than shipped as the formula. **Stage-3 residuals, open**: flat and
+    bull-nose cutter-location surfaces (the rounded-cone distance the SDF vocabulary
+    already spells), a raster direction other than X, linking rows without a retract,
+    adaptive stepover from local curvature, holder/shank collision checking, and
+    rest machining (shared with stage 2's entry).
   - **Stage 4 — HSM adaptive clearing** (the research-grade centrepiece, flagged as
     such: Kiri:Moto does not attempt it; Fusion/HSMWorks is the reference): trochoidal
     and constant-ENGAGEMENT pocketing, where the invariant that defines the feature is

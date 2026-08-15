@@ -9022,6 +9022,44 @@ overhang for cleaner breakaway — v1 supports run to the underside exactly, whi
 pins as `lastSupport.Z == undersideZ`), interface layers, and supports-on-model awareness
 (v1 columns run bed-to-overhang, printing around any part material in between).
 
+**Stage 3 — 3-axis surfacing — landed** (`CncSurfacing.Raster`/`Waterline`/`ScallopHeight`/
+`StepoverForScallop`; docs `examples/cam-surfacing.md`), and it is the stage where the implicit
+engine pays DIRECTLY rather than as a bridge: **the cutter-location surface of a ball-nose tool
+IS the field's r-offset** — a ball of radius r touches the part exactly when its centre is at
+distance r from the surface — so both strategies read `Shape.ToImplicit()` instead of
+approximating an offset mesh, and the no-gouge claim is the field's own inequality
+(`sdf(centre) ≥ r`, asserted point-by-point on a dome-on-plate union for both strategies).
+**Raster is a SPHERE TRACE and the Lipschitz bound is the gouge-freedom proof**: descending the
+vertical ray by `sdf − r` per step can never cross the r-offset (the `SurfaceCull` argument run
+downward), so the trace is exact at convergence and CONSERVATIVE at its two failure modes — a
+stall (the classic sphere-tracing graze along a vertical wall's offset) and the iteration cap
+both leave the centre HIGH, stock left rather than a gouge, and a ray that never meets the
+offset clamps to the part's own bottom. A flat top is machined EXACTLY (a box field is exact,
+every interior tip on the face to the trace tolerance) and the dome apex is touched at its own
+height because the rows and samples are GRID-ANCHORED (the slicer's phase rule — (0, 0) is
+always a sample). **Waterline is the r-isolevel read where it lives**: the CL contour at a
+centre plane is exactly the field's r-contour there, so `SdfContours.OnPlane` (the section
+overlay's own marching squares) extracts it, the segments chain into loops by that contract's
+exact endpoint equality, and each point is polished onto the isolevel by an IN-PLANE Newton
+step — in-plane because a full-gradient correction would move the point off the waterline's z,
+and skipped where the in-plane gradient is weak (a near-horizontal crossing has no in-plane
+direction that changes the field, and the honest accuracy there is the marching-squares
+crossing error, stated rather than averaged into a blended tolerance). On a vertical cylinder
+every waterline point lands at `R + r` to 1e-6 with exactly one closed loop per level; the
+grid spans the part plus the radius plus two cells, or a loop exits the boundary and comes back
+open (emitted open, honestly — the tests would read it as a failure). **The scallop is a chord
+identity, not a rule of thumb**: `h = r − √(r² − (s/2)²)`, `StepoverForScallop` its exact
+algebraic inverse (round-trips to 1e-12), and the classic `s²/8r` is MEASURED as its
+small-stepover expansion (within 1% at s = r/3) rather than shipped as the formula. Where the
+field is a correct-sign LOWER BOUND (a CSG difference near its tool's fictitious faces) the
+r-isolevel lies FARTHER out than the true offset — stock left, never a gouge, the conservative
+direction inherited from the field contract. The stage-2 `CncGcodeWriter` carries surfacing
+passes UNCHANGED — a move's meaning is its shape, so an XYZ-combined raster move cuts at the
+feed rate with nothing new — which is the payoff of classifying moves rather than annotating
+them. Filed by name: flat/bull-nose cutter-location surfaces (v1 assumes a ball of the tool's
+radius), a raster direction other than X, no-retract row linking, adaptive stepover from local
+curvature, holder/shank collision, rest machining.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

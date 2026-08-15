@@ -90,6 +90,28 @@ Stage 2 — pocket, profile and drill over the same landed machinery:
   simulation) must equal it, and a rectangular pocket's unreachable corner residue is CLOSED
   FORM, `(4 − π)·r²`. No-gouge is exact point-by-point. Docs: `docs/examples/cam-milling.md`.
 
+## 3-axis surfacing (`CncSurfacing`)
+
+Stage 3 — ball-nose finishing, and the place the implicit engine pays directly: **the
+cutter-location surface of a ball-nose tool IS the field's r-offset**, so both strategies read
+the shape's own SDF instead of approximating an offset mesh.
+
+- **Raster** (parallel finishing): serpentine grid-anchored rows, each sample's tip height a
+  SPHERE TRACE down the vertical ray to the r-isolevel — gouge-free BY CONSTRUCTION, because a
+  1-Lipschitz field's `sdf − r` step can never cross the offset surface (a stalled trace stops
+  HIGH: stock left, never a gouge).
+- **Waterline** (constant-z contouring): the CL contour at a centre plane IS the SDF's
+  r-isolevel there — `SdfContours.OnPlane` marching squares chained by exact endpoint
+  equality, polished onto the isolevel by an IN-PLANE Newton step (the correction must not
+  leave the plane, or the pass stops being a waterline) — exact to round-off on the steep
+  walls waterline exists for.
+- **Scallop arithmetic is a chord identity**: `h = r − √(r² − (s/2)²)` with
+  `StepoverForScallop` its exact inverse; the classic `s²/8r` is its measured small-stepover
+  expansion. Passes are in the shape's own coordinates (G-code z = the TIP) and the stage-2
+  `CncGcodeWriter` carries them unchanged. Ball-nose assumed; flat/bull-nose CL surfaces,
+  raster angle, no-retract row linking, holder collision and rest machining are filed.
+  Docs: `docs/examples/cam-surfacing.md`.
+
 ## Verification (the campaign's own bar)
 
 Layer z's as exact arithmetic; wall perimeters against closed forms (an inward offset of a

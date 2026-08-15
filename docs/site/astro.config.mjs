@@ -246,6 +246,7 @@ document.addEventListener('click', function (event) {
           items: [
             { label: '3D-printing: FDM slicing & G-code', slug: 'examples/cam-slicing' },
             { label: 'CNC milling (2.5D)', slug: 'examples/cam-milling' },
+            { label: 'CNC surfacing (3-axis)', slug: 'examples/cam-surfacing' },
           ],
         },
         { label: 'Writing examples', slug: 'writing-examples' },
