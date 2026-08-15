@@ -183,6 +183,81 @@ public static class CncMill
     }
 
     /// <summary>
+    /// REST machining: clears what a rough pocket with <paramref name="roughTool"/> could not
+    /// reach — the corner residues of the morphological opening — with the smaller
+    /// <paramref name="finishTool"/>. The rest region is <c>region − opening(region, R₁)</c>,
+    /// and each residue piece is pocketed over <c>intersect(grow(piece, r₂), region)</c>: the
+    /// GROW is what lets the small tool's centre stand in already-cleared space (the whole
+    /// point of rest machining — the residue itself is often too small to hold a tool), while
+    /// the INTERSECT keeps the wall inviolate, so the no-gouge claim against the ORIGINAL
+    /// boundary survives point by point. The opening is grown by an ε before the difference,
+    /// because it touches the wall TANGENTIALLY at every residue cusp and a tangential contact
+    /// is the arrangement's hostile case — the ε makes it transversal and costs an ε-band of
+    /// residue the grow immediately wins back. A region the rough tool leaves no residue in
+    /// returns an operation with NO passes (an honest no-op, not a refusal).
+    /// </summary>
+    public static MillOperation PocketRest(
+        Region2d region, MillTool roughTool, MillTool finishTool, double depth,
+        string name = "rest", MillDirection direction = MillDirection.Climb,
+        double minRestThickness = -1)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        ArgumentNullException.ThrowIfNull(roughTool);
+        ArgumentNullException.ThrowIfNull(finishTool);
+        roughTool.Validate();
+        finishTool.Validate();
+        RequireDepth(depth);
+        if (finishTool.Radius >= roughTool.Radius)
+            throw new ArgumentException(
+                $"'{name}': the finish tool (Ø{finishTool.Diameter:0.###}) must be smaller than "
+                + $"the rough tool (Ø{roughTool.Diameter:0.###}) — a rest pass with an equal or "
+                + "larger tool reaches nothing the rough pass did not.");
+        if (minRestThickness < 0)
+            minRestThickness = finishTool.Radius / 4;
+
+        // The rough tool's reachable area is the opening; grown by ε so its tangential
+        // contact with the wall at each residue cusp becomes transversal.
+        double extent = (region.Bounds.Max - region.Bounds.Min).Length;
+        double epsilon = 1e-6 * extent;
+        var opening = Region2dBoolean.UnionAll([.. Region2dOffset
+            .Offset(region, -roughTool.Radius)
+            .SelectMany(s => Region2dOffset.Offset(s, roughTool.Radius + epsilon))]);
+        var rest = Region2dBoolean.Difference([region], opening);
+
+        var passes = new List<MillPass>();
+        foreach (var piece in rest)
+        {
+            // A residue that cannot hold a disc of the stated minimum thickness anywhere
+            // is flattening noise, not a feature: a chorded arc's junction corners leave
+            // sagitta-scale crumbs the opening genuinely cannot reach, and pocketing them
+            // would emit micro-passes for material no drawing ever asked about. The
+            // threshold is a stated engineering input (default a quarter of the finish
+            // radius; 0 keeps everything).
+            if (minRestThickness > 0
+                && Region2dOffset.Offset(piece, -minRestThickness).Count == 0)
+                continue;
+
+            // The grow is 2·r₂ and that is a DERIVED sufficiency, not a margin: for any
+            // residue point p the finish tool can legally reach, there is a disc B(c, r₂)
+            // with |c − p| ≤ r₂ and c at least r₂ from the region boundary — and every
+            // point of that disc is within 2·r₂ of p and inside the region, so the disc
+            // lies in intersect(grow(residue, 2r₂), region) and its centre in that
+            // region's own r₂-inset, which is exactly where the ring ladder puts the tool.
+            foreach (var milled in Region2dBoolean.Intersection(
+                Region2dOffset.Offset(piece, 2 * finishTool.Radius), [region]))
+            {
+                // A piece the finish tool STILL cannot reach (inset empty) is skipped —
+                // it is the finish tool's own residue, which the coverage oracle reports.
+                if (Region2dOffset.Offset(milled, -finishTool.Radius).Count == 0)
+                    continue;
+                var op = Pocket(milled, finishTool, depth, name, direction);
+                passes.AddRange(op.Passes);
+            }
+        }
+        return new MillOperation(name, finishTool, passes);
+    }
+
+    /// <summary>
     /// Cuts along the outline at one tool radius to the chosen side, in depth steps, optionally
     /// leaving <paramref name="tabs"/> holding tabs on the FINAL pass (evenly spaced by arc
     /// length — a stated convention, not rounding luck — each <paramref name="tabWidth"/> long

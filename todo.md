@@ -2460,10 +2460,15 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     (`CncDrilling.FromShape/FromPart` over `HoleTable`'s rows, which gained the numeric
     drilling data — diameter/depth/plane; one op per distinct diameter, cbore = the
     through bore, threaded = the tap pilot, tilted planes refused by row letter).
+    **Rest machining LANDED** (`PocketRest`
+    — rest = region − opening(R₁), each residue pocketed over intersect(grow(piece,
+    2·r₂), region) with the 2·r₂ a DERIVED sufficiency; tangential cusp contact made
+    transversal by an ε-grow; sub-thickness residues skipped as flattening noise;
+    combined-footprint-equals-finish-opening oracle + the (4−π) ladder closed form).
     **Stage-2 residuals, open**: G2/G3 arcs from the exact curved-profile tier
     (`SectionExact`/`CurvedRegion2dOffset` — a bore rim as ONE arc in the G-code),
-    lead-in/out arcs, helical/ramp entry, rest machining, and the material-removal
-    animation over recorded stock states. A LASER/drag-knife mode is the near-free
+    lead-in/out arcs, helical/ramp entry, and the material-removal animation over
+    recorded stock states. A LASER/drag-knife mode is the near-free
     adjacent (a kerf-offset outline cut — the 2D machinery plus the DXF/SVG writers
     already cover it; Kiri:Moto ships it for the same reason).
   - **Stage 3 — 3-axis surfacing: the CORE HAS LANDED** (`CncSurfacing.Raster`/

@@ -118,6 +118,15 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   rotated frame, quarter turns exact sign swaps — a 90° raster is the transposed grid bit
   for bit).
 
+- **Rest machining** (`CncMill.PocketRest`): the corner residues of the rough opening
+  pocketed by a smaller tool over `intersect(grow(residue, 2·r₂), region)` — the 2·r₂ a
+  DERIVED sufficiency (any reachable residue point has a legal tool disc whose centre lands
+  in the ring ladder's own inset), the tool centre free to stand in cleared space while the
+  wall stays inviolate point-by-point; the opening ε-grown before the difference (tangential
+  cusp contact is the arrangement's hostile case); residues thinner than a stated minimum
+  (default r₂/4) skipped as flattening noise. Oracle: combined rough+rest footprint = the
+  finish tool's opening, the (4−π)(R₁²→r₂²) closed-form ladder.
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

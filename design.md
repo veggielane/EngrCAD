@@ -9262,6 +9262,28 @@ quarter turn is EXACT (a sign swap, never a `cos`, the glTF-root lesson), pinned
 test that a 90° raster is the 0° raster's grid TRANSPOSED bit for bit — an assertion only
 the sign-swap spelling can pass, since `cos(π/2)` is 6.1e-17 and not 0.
 
+**Rest machining is the opening identity used twice.** `PocketRest` computes the rest
+region as `region − opening(region, R₁)` and pockets each residue piece over
+`intersect(grow(piece, 2·r₂), region)` — and both constants carry proofs rather than
+margins. The grow is 2·r₂ by a two-line sufficiency: any residue point p the finish tool
+can legally reach admits a disc B(c, r₂) with |c − p| ≤ r₂ and c at least r₂ off the
+region boundary; every point of that disc is within 2·r₂ of p and inside the region, so
+the disc lies in the milled region and its centre in the r₂-inset — exactly where the
+ring ladder walks (the first draft grew by r₂ and measurably under-covered, 8.56 mm²
+uncovered against the 1.93 closed form). And the opening is grown by ε before the
+difference because it touches the wall TANGENTIALLY at every residue cusp — the 2D
+arrangement's recorded hostile case — which makes the contact transversal at the cost of
+an ε-band the 2·r₂ grow wins back. Residues that cannot hold a disc of a stated minimum
+thickness anywhere (default r₂/4, 0 keeps all) are skipped as flattening noise: a chorded
+arc's junction corners leave sagitta-scale crumbs the opening genuinely cannot reach, and
+the first honest-empty fixture — a rounded rectangle whose corner radius exceeds the rough
+tool's — duly emitted micro-passes for them until the filter said what a feature IS. The
+oracle extends the module's own: the COMBINED rough+rest footprint equals the finish
+tool's opening within 1%, the uncovered remainder is exactly (4−π)r₂², and the no-gouge
+claim holds point-by-point against the ORIGINAL boundary even though the tool centre
+legitimately stands in cleared space (asserted from both sides: at least one centre IS
+outside the residue, or the feature did nothing).
+
 **Stage 4 opened with trochoidal slotting** (`CncHsm.TrochoidalSlot`; docs
 `examples/cam-milling.md` §HSM), and the finding that justifies the campaign's whole framing —
 "the engagement angle computed from the evolving stock and BOUNDED by the stated maximum,

@@ -279,6 +279,41 @@ Console.WriteLine($"{gcode.Split('\n').Count(l => l.StartsWith("G83"))} G83 cycl
     + "- the M6 rows drill their tap pilot, the clearance rows their bore");
 ```
 
+## Rest machining
+
+`CncMill.PocketRest(region, roughTool, finishTool, depth)` clears what the rough pocket
+could not reach — the corner residues of the morphological opening — with the smaller tool.
+The rest region is `region − opening(region, R₁)`, and each residue piece is pocketed over
+`intersect(grow(piece, 2·r₂), region)`: the grow is a **derived sufficiency, not a margin**
+(for any reachable residue point there is a tool disc within 2·r₂ of it and inside the
+region, so its centre lands in exactly the inset the ring ladder walks), letting the tool
+centre stand in already-cleared space — the whole point of rest machining, since the residue
+is usually smaller than the tool — while the intersect keeps the wall inviolate, so the
+no-gouge claim against the *original* boundary survives point by point. Residues thinner
+everywhere than a stated minimum (default r₂/4) are flattening noise, skipped rather than
+chased with micro-passes.
+
+```csharp run:cam-rest
+var region = new Region2d(new List<Vector2d>
+    { new(0, 0), new(40, 0), new(40, 24), new(0, 24) });
+var rough = new MillTool(12, StepDown: 3);
+var finish = new MillTool(3, StepDown: 3);
+var restOp = CncMill.PocketRest(region, rough, finish, depth: 3);
+// The residue ladder in closed form: (4−π)R² per tool — roughing leaves 30.9 mm²,
+// the rest pass takes it to the finish tool's own 1.93 mm², a 16× improvement.
+Console.WriteLine($"rough residue {(4 - Math.PI) * 36:0.0} mm² -> "
+    + $"finish residue {(4 - Math.PI) * 2.25:0.00} mm²");
+Console.WriteLine($"rest pass: {restOp.Passes.Count} passes, "
+    + $"cut length {restOp.CutLength:0.0} mm");
+```
+
+The oracle is the module's own opening identity, extended: the **combined** rough+rest
+footprint equals the finish tool's opening of the region (asserted within 1%), and what
+remains uncovered is exactly `(4−π)r₂²` — the closed-form ladder. One arrangement lesson
+paid for: the opening touches the wall **tangentially** at every residue cusp, the 2D
+arrangement's hostile case, so it is grown by an ε before the difference — transversal
+contact, at the cost of an ε-band of residue the 2·r₂ grow immediately wins back.
+
 ## Climb, conventional and canned cycles
 
 Every pocket and profile takes a `MillDirection` (climb is the default), and the rule is
