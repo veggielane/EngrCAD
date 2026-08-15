@@ -13,6 +13,12 @@ namespace EngrCAD.Cam;
 /// extrusion arithmetic lives: every E value in the G-code is
 /// <c>path length × BeadArea / FilamentArea</c>, so the extrusion bookkeeping is an identity a
 /// decoder can re-check rather than a calibration factor.</para>
+///
+/// <para><b>Supports follow the same 0-means-off convention</b>:
+/// <c>SupportOverhangAngle</c> is the overhang threshold in degrees (0 = no supports —
+/// the write-only-when-stated default, so a profile stating nothing slices byte-identically),
+/// <c>SupportSpacing</c> the distance between support lines, and <c>SupportGap</c> the XY
+/// clearance a support path's centreline keeps from the part's own section boundary.</para>
 /// </summary>
 public sealed record PrinterProfile(
     double NozzleDiameter = 0.4,
@@ -30,7 +36,10 @@ public sealed record PrinterProfile(
     int BedTemperature = 60,
     double BrimWidth = 0,
     int SkirtLoops = 0,
-    double SkirtGap = 5)
+    double SkirtGap = 5,
+    double SupportOverhangAngle = 0,
+    double SupportSpacing = 2.5,
+    double SupportGap = 0.8)
 {
     /// <summary>The stock profile: 0.4 nozzle, 1.75 filament, 0.2 layers, two walls, 20% infill.</summary>
     public static PrinterProfile Default { get; } = new();
@@ -83,6 +92,17 @@ public sealed record PrinterProfile(
                 $"SkirtLoops must be non-negative (0 = no skirt); got {SkirtLoops}.");
         if (SkirtLoops > 0)
             Require(SkirtGap, nameof(SkirtGap));
+        if (SupportOverhangAngle < 0 || SupportOverhangAngle > 90 || !double.IsFinite(SupportOverhangAngle))
+            throw new ArgumentException(
+                "SupportOverhangAngle must lie in [0, 90] degrees (0 = no supports, 90 = only "
+                + $"true ceilings); got {SupportOverhangAngle:0.###}.");
+        if (SupportOverhangAngle > 0)
+        {
+            Require(SupportSpacing, nameof(SupportSpacing));
+            if (SupportGap < 0 || !double.IsFinite(SupportGap))
+                throw new ArgumentException(
+                    $"SupportGap must be non-negative; got {SupportGap:0.###}.");
+        }
 
         static void Require(double value, string name)
         {

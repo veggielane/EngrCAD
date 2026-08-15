@@ -21,6 +21,9 @@ public enum SlicePathRole
 
     /// <summary>A first-layer skirt loop (a purge line standing clear of the part).</summary>
     Skirt,
+
+    /// <summary>A support run — sparse breakaway material under an overhang.</summary>
+    Support,
 }
 
 /// <summary>One deposition path on a layer: a 2D polyline in bed coordinates (world x/y),
@@ -88,7 +91,10 @@ public sealed record SlicedPart(
 /// <c>bead·(k + ½)</c> — successive inward offsets ARE the walls), infill is a rectilinear scan
 /// clipped by an exact even-odd crossing rule (half-open at vertices, the <c>SheetHatch</c>
 /// lesson) alternating ±45° per layer, and travel ordering is <see cref="RunLinker"/> — the same
-/// deterministic greedy tour every fill consumer in the repo already uses.
+/// deterministic greedy tour every fill consumer in the repo already uses. SUPPORTS (opt-in via
+/// <see cref="PrinterProfile.SupportOverhangAngle"/>) are columns under the shape's own overhang
+/// facets — detected by the <c>Manufacturability</c> dot-product rule, projected and unioned,
+/// clipped per layer to what is still above and kept an XY gap clear of the part's section.
 ///
 /// <para><b>Determinism is the regression mechanism</b>: the slice is a pure function of
 /// (shape, profile) — the infill scan is anchored to the global grid (phase is a function of
@@ -146,6 +152,21 @@ public static class FdmSlicer
         BrepSolid? solid = shape.CanConvertTo(TargetRep.Brep) ? shape.ToBrep() : null;
         HalfEdgeMesh? mesh = solid is null ? shape.ToMesh() : null;
 
+        // Support plan: the ORIENTED shape's overhang facets (the Manufacturability rule —
+        // the threshold compared on the dot product, never on a derived angle), kept as 3D
+        // loops sorted by their highest point so the active set shrinks monotonically as the
+        // layers ascend. The tessellation reuses the one lowering rather than re-lowering.
+        List<(double MinZ, double MaxZ, Vector3d[] Loop)>? supportFacets = null;
+        if (p.SupportOverhangAngle > 0)
+        {
+            var overhangMesh = solid is not null ? BRepTessellator.Tessellate(solid) : mesh!;
+            supportFacets = OverhangFacets(overhangMesh, p.SupportOverhangAngle);
+            supportFacets.Sort((a, b) => a.MaxZ.CompareTo(b.MaxZ));
+        }
+        int supportStart = 0;
+        IReadOnlyList<Region2d> supportUnion = [];
+        bool supportDirty = supportFacets is { Count: > 0 };
+
         var layers = new List<SliceLayer>(layerCount);
         var pen = new Vector2d(bounds.Min.X, bounds.Min.Y);
         for (int i = 0; i < layerCount; i++)
@@ -181,6 +202,54 @@ public static class FdmSlicer
                     }
                 if (paths.Count > 0)
                     pen = paths[^1].End;
+            }
+
+            // Supports: columns under whatever overhang material is still ABOVE this layer's
+            // top, minus the part's own section grown by the XY gap (so a column never fuses
+            // to a wall), patterned as sparse one-direction lines (breakaway). A facet only
+            // PARTLY above the plane contributes the projection of its clipped upper part, so
+            // a slanted overhang's supports track its own height instead of stopping at the
+            // facet's lowest point. Printed before the walls, and the whole block is skipped
+            // when the profile states no supports — the write-only-when-stated path.
+            if (supportFacets is not null)
+            {
+                double layerTop = bounds.Min.Z + (i + 1) * h;
+                while (supportStart < supportFacets.Count
+                    && supportFacets[supportStart].MaxZ < layerTop - 1e-9)
+                {
+                    supportStart++;
+                    supportDirty = true;
+                }
+                bool anyClipped = false;
+                for (int f = supportStart; f < supportFacets.Count && !anyClipped; f++)
+                    anyClipped = supportFacets[f].MinZ < layerTop - 1e-9;
+                if (supportDirty || anyClipped)
+                {
+                    var footprints = new List<Region2d>();
+                    for (int f = supportStart; f < supportFacets.Count; f++)
+                    {
+                        var facet = supportFacets[f];
+                        IReadOnlyList<Vector3d> loop = facet.MinZ < layerTop - 1e-9
+                            ? ClipAbove(facet.Loop, layerTop)
+                            : facet.Loop;
+                        if (Footprint(loop) is { } footprint)
+                            footprints.Add(footprint);
+                    }
+                    supportUnion = Region2dBoolean.UnionAll(footprints);
+                    supportDirty = anyClipped;
+                }
+                if (supportUnion.Count > 0)
+                {
+                    var supportRegions = regions.Count > 0
+                        ? Region2dBoolean.Difference(
+                            supportUnion, Region2dOffset.Offset(regions, p.SupportGap))
+                        : supportUnion;
+                    var supports = new List<SlicePath>();
+                    foreach (var region in supportRegions)
+                        supports.AddRange(RectilinearInfill(region, p.SupportSpacing, 0)
+                            .Select(path => path with { Role = SlicePathRole.Support }));
+                    paths.AddRange(LinkGroup(supports, ref pen));
+                }
             }
 
             var walls = new List<SlicePath>();
@@ -364,5 +433,87 @@ public static class FdmSlicer
         return paths;
 
         Vector2d Back(double x, double y) => new(x * c - y * s, x * s + y * c);
+    }
+
+    /// <summary>Collects the facets that OVERHANG past the threshold: downward-facing facets
+    /// with <c>−n·Z &gt; sin(threshold)</c> — the <c>Manufacturability</c> rule, compared on
+    /// the DOT PRODUCT and never on a derived angle (asin round-trips 1/√2 an ulp high, so a
+    /// wall built at exactly 45° would read as an overhang — the recorded lesson). A facet
+    /// resting on the bed excludes itself with no special case: nothing of it is above any
+    /// layer top, so no layer ever finds material to support.</summary>
+    private static List<(double MinZ, double MaxZ, Vector3d[] Loop)> OverhangFacets(
+        HalfEdgeMesh mesh, double thresholdDegrees)
+    {
+        double sinThreshold = Math.Sin(thresholdDegrees * Math.PI / 180);
+        var facets = new List<(double, double, Vector3d[])>();
+        foreach (var face in mesh.Faces)
+        {
+            if (!(-face.Normal().Z > sinThreshold))
+                continue;
+            var loop = face.Vertices().Select(v => v.Position).ToArray();
+            if (loop.Length < 3)
+                continue;
+            double lo = loop[0].Z, hi = loop[0].Z;
+            for (int i = 1; i < loop.Length; i++)
+            {
+                lo = Math.Min(lo, loop[i].Z);
+                hi = Math.Max(hi, loop[i].Z);
+            }
+            facets.Add((lo, hi, loop));
+        }
+        return facets;
+    }
+
+    /// <summary>Sutherland–Hodgman clip of a facet loop to the half-space <c>z ≥ zc</c> —
+    /// the part of the overhang still above a layer's top, whose projection is what that
+    /// layer must hold up.</summary>
+    private static List<Vector3d> ClipAbove(IReadOnlyList<Vector3d> loop, double zc)
+    {
+        var result = new List<Vector3d>(loop.Count + 2);
+        for (int i = 0; i < loop.Count; i++)
+        {
+            var a = loop[i];
+            var b = loop[(i + 1) % loop.Count];
+            bool aIn = a.Z >= zc, bIn = b.Z >= zc;
+            if (aIn)
+                result.Add(a);
+            if (aIn != bIn)
+                result.Add(a + (b - a) * ((zc - a.Z) / (b.Z - a.Z)));
+        }
+        return result;
+    }
+
+    /// <summary>The loop's bed projection as a CCW region, or null when degenerate. The facet
+    /// faces DOWN, so seen from above its loop winds clockwise and is reversed; the degeneracy
+    /// guard is relative to the loop's own extent (an absolute epsilon on an AREA is the
+    /// recorded trap — it fails quadratically with scale).</summary>
+    private static Region2d? Footprint(IReadOnlyList<Vector3d> loop)
+    {
+        if (loop.Count < 3)
+            return null;
+        var flat = new List<Vector2d>(loop.Count);
+        double minX = double.PositiveInfinity, maxX = double.NegativeInfinity;
+        double minY = double.PositiveInfinity, maxY = double.NegativeInfinity;
+        foreach (var v in loop)
+        {
+            flat.Add(new Vector2d(v.X, v.Y));
+            minX = Math.Min(minX, v.X);
+            maxX = Math.Max(maxX, v.X);
+            minY = Math.Min(minY, v.Y);
+            maxY = Math.Max(maxY, v.Y);
+        }
+        double area2 = 0;
+        for (int i = 0; i < flat.Count; i++)
+        {
+            var a = flat[i];
+            var b = flat[(i + 1) % flat.Count];
+            area2 += a.X * b.Y - b.X * a.Y;
+        }
+        double extent = Math.Max(maxX - minX, maxY - minY);
+        if (Math.Abs(area2) < 1e-13 * extent * extent)
+            return null;
+        if (area2 < 0)
+            flat.Reverse();
+        return new Region2d(flat);
     }
 }

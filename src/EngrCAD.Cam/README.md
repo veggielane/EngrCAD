@@ -40,6 +40,14 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   the part's outline (a bore gets interior rings from the outward offset's own hole loops),
   `SkirtLoops`/`SkirtGap` add a priming skirt standing clear — printed skirt-first, brim
   outermost-in so the nozzle finishes at the part; stating neither slices byte-identically.
+- **Supports follow the same convention** (`SupportOverhangAngle`, 0 = off): overhang facets of
+  the ORIENTED part's own mesh — the `Manufacturability` rule, the threshold compared on the
+  dot product and never on a derived angle — are projected to the bed and unioned; each layer
+  holds columns under whatever overhang is still ABOVE it (a facet partly below the plane
+  contributes its clipped upper part, so a slanted overhang's supports track its own height),
+  minus the part's section grown by `SupportGap` (a column never fuses to a wall), patterned as
+  sparse one-direction breakaway lines at `SupportSpacing`. A facet resting on the bed excludes
+  itself with no special case — nothing of it is above any layer, so no layer supports it.
 
 ## G-code (`GcodeWriter`, `GcodeReader`)
 

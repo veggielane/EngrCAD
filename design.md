@@ -8990,6 +8990,38 @@ the campaign: G2/G3 arcs from the exact curved-profile tier, climb/conventional 
 helical/ramp entry, canned cycles, the ⚠ feeds/speeds catalogue, rest machining, and the
 material-removal animation over recorded stock states.
 
+**FDM supports — columns under the measured overhang field** (`PrinterProfile.SupportOverhangAngle`,
+0 = off — the write-only-when-stated path, so a profile stating nothing slices byte-identically).
+The detector is the `Manufacturability` rule applied to the ORIENTED shape's own mesh — the
+threshold converted to a sine ONCE and compared on the DOT PRODUCT (`−n·Z > sin θ`), never on a
+derived angle, because `asin` round-trips `1/√2` an ulp high and a wall built at exactly 45°
+would read as an overhang (the recorded lesson, inherited rather than re-learned) — and the
+tessellation reuses the slice's ONE lowering rather than lowering again. Three decisions carry
+it. **(a) The per-layer region is the projection of what is still ABOVE the layer, not a
+per-facet bounding box**: a facet partly below the layer plane contributes its Sutherland–Hodgman
+clipped upper part, so a slanted overhang's supports track its own height — per-facet MinZ
+bounding would stop every column at its facet's lowest point and leave the high side hanging,
+which on a coarsely-tessellated planar ramp is most of the overhang; the wedge test asserts the
+clip DIRECTLY (`support x ≤ 10 − layerTop` on the 45° slant, the slant's own equation). The
+active facet set shrinks monotonically as layers ascend (sorted by MaxZ, dropped from the front)
+and the union is recomputed only when the set changed or a facet is being clipped, so a flat
+underside — the common case — reuses its cached union at every layer below it. **(b) A facet
+resting on the bed excludes itself with NO special case** — nothing of it is above any layer's
+top, so no layer ever finds material to support — which is what makes "a plain box with supports
+stated writes byte-identical G-code" a theorem rather than a filtered edge case (the part's own
+bottom face is not an overhang; it is the print). **(c) The XY gap is a subtraction, not a
+distance test**: the part's section grown by `SupportGap` (`Region2dOffset`) is subtracted from
+the support union per layer, so a support pattern point on the region boundary stands exactly
+the gap from the wall — asserted point-by-point with the grown region's inscribed-arc tolerance
+(1e-3) allowed for, the no-gouge assertion shape. The pattern is sparse ONE-direction lines
+(`SupportSpacing`, the breakaway convention — no alternation, so the stack shears apart), linked
+by the shared `RunLinker` and printed before the walls. The footprint's degeneracy guard is
+RELATIVE to the loop's own extent (an absolute epsilon on an area is the recorded trap). Filed
+rather than shipped, each named in the docs: a support Z-gap (one layer of air under the
+overhang for cleaner breakaway — v1 supports run to the underside exactly, which the table test
+pins as `lastSupport.Z == undersideZ`), interface layers, and supports-on-model awareness
+(v1 columns run bed-to-overhang, printing around any part material in between).
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

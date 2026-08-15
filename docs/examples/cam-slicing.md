@@ -112,8 +112,49 @@ the part's own outline (a bore gets interior rings too), `SkirtLoops`/`SkirtGap`
 skirt standing clear — printed skirt-first, brim outermost-in so the nozzle finishes at the
 part; a profile stating neither slices byte-identically.
 
-**Not in stage 1** (each filed in the campaign): supports from the measured overhang field,
-a raft, seam placement smarter than the deterministic anchor, arc moves (`G2`/`G3` join
+## Supports from the overhang field
+
+Supports follow the same opt-in convention: `SupportOverhangAngle` states the threshold
+(0 = off — a profile stating nothing slices byte-identically). Overhang facets are detected
+on the **oriented** part's own mesh by the `Manufacturability` rule — the threshold compared
+on the *dot product*, never on a derived angle, so a wall built at exactly 45° is not an
+overhang at a 45° threshold — projected to the bed and unioned. Each layer then holds columns
+under whatever overhang material is still **above** it (a facet partly below the layer plane
+contributes only its clipped upper part, so a slanted overhang's supports track its own
+height), minus the part's section grown by `SupportGap` so a column never fuses to a wall,
+patterned as sparse one-direction breakaway lines at `SupportSpacing`:
+
+```csharp run:cam-supports
+// A table: a slab on a column — the underside overhangs everywhere but the column contact.
+var table = Shape.Box(4, 10, 8).Translate(0, 0, 4) | Shape.Box(20, 10, 2).Translate(0, 0, 9);
+var profile = new PrinterProfile(NozzleDiameter: 0.8, LayerHeight: 0.5,
+    SupportOverhangAngle: 45);
+
+var sliced = FdmSlicer.Slice(table, profile);
+var supported = sliced.Layers.Where(
+    l => l.Paths.Any(p => p.Role == SlicePathRole.Support)).ToList();
+Console.WriteLine($"{supported.Count} of {sliced.Layers.Count} layers carry supports, "
+    + $"from the bed up to z={supported[^1].Z} (the slab's underside is at z=8)");
+
+// A support column stands clear of the part: the nearest support point to the column's
+// wall keeps the stated XY gap, so the breakaway material breaks away.
+double nearest = supported.SelectMany(l => l.Paths)
+    .Where(p => p.Role == SlicePathRole.Support)
+    .SelectMany(p => p.Points)
+    .Min(p => Math.Max(Math.Abs(p.X) - 2, 0));
+Console.WriteLine($"nearest support to the column wall: {nearest:0.00} mm "
+    + $"(SupportGap = {profile.SupportGap})");
+```
+
+A facet resting on the bed excludes itself with no special case — nothing of it is above any
+layer's top, so no layer ever finds material to support — which is why a plain box with
+supports *stated* still writes byte-identical G-code. The part's own bottom face is not an
+overhang; it is the print.
+
+**Not in stage 1** (each filed in the campaign):
+a raft, seam placement smarter than the deterministic anchor, a support Z-gap (one layer of
+air under the overhang for cleaner breakaway — v1 supports run to the underside exactly),
+support interface layers, arc moves (`G2`/`G3` join
 with the CNC stages), the tool animated along its own path (a matrices-only pose track; the
 material-ADDITION animation above is landed), material-removal animation for the CNC stages
 (recorded stock states), and non-planar slicing (deliberately last — it inherits the exp-map

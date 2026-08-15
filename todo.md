@@ -2423,12 +2423,18 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     system's fourth track kind: `SectionTracks.Reveal` sweeps a clip plane up the build
     direction quantized to the slice's own layer count — shader state, no re-meshing, wired
     through APNG export / stills / window playback; the `animate:cam-print` APNG is
-    committed). **Stage-1
-    residuals, open**: SUPPORTS from the measured overhang field (brim/skirt LANDED — write-only-when-stated first-layer rings, a bore ringed inside too; a raft stays open; the
-    `Manufacturability` check is the detector; the support pattern is a sparse infill
-    of the projected overhang region), brim/skirt/raft as outward offsets, seam
-    placement smarter than the deterministic first-vertex anchor, richer infill
-    patterns (the `SpaceFillingInfill` families — the plain serpentine is
+    committed). **SUPPORTS LANDED** (`SupportOverhangAngle`/`SupportSpacing`/`SupportGap`,
+    0 = off byte-identically; the `Manufacturability` dot-product rule on the oriented
+    shape's own mesh, per-layer Sutherland–Hodgman clip so a slanted overhang's supports
+    track its own height, the XY gap as a grown-section subtraction asserted point-by-point,
+    bed-resting facets excluding themselves with no special case; design.md §6e). Brim/skirt
+    LANDED earlier (write-only-when-stated first-layer rings, a bore ringed inside too).
+    **Stage-1 residuals, open**: a raft (outward-offset base layers under everything, supports
+    included), a support Z-GAP (one layer of air under the overhang for cleaner breakaway —
+    v1 runs supports to the underside exactly, pinned by test) + interface layers +
+    supports-on-model awareness (v1 columns run bed-to-overhang, printing around part
+    material in between), seam placement smarter than the deterministic first-vertex anchor,
+    richer infill patterns (the `SpaceFillingInfill` families — the plain serpentine is
     `blockOrder: 0`, gyroid infill is a plane-section of the TPMS family the implicit
     engine already carries), and the MASS identity strengthened to a solid-vs-extruded
     comparison per shape family (the coverage ratio is measured today with its
