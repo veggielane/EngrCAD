@@ -2424,7 +2424,7 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     direction quantized to the slice's own layer count — shader state, no re-meshing, wired
     through APNG export / stills / window playback; the `animate:cam-print` APNG is
     committed). **Stage-1
-    residuals, open**: SUPPORTS from the measured overhang field (the
+    residuals, open**: SUPPORTS from the measured overhang field (brim/skirt LANDED — write-only-when-stated first-layer rings, a bore ringed inside too; a raft stays open; the
     `Manufacturability` check is the detector; the support pattern is a sparse infill
     of the projected overhang region), brim/skirt/raft as outward offsets, seam
     placement smarter than the deterministic first-vertex anchor, richer infill

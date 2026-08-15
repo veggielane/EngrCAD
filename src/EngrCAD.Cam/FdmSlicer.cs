@@ -15,6 +15,12 @@ public enum SlicePathRole
 
     /// <summary>An open infill run.</summary>
     Infill,
+
+    /// <summary>A first-layer adhesion brim loop (attached to the part's outline).</summary>
+    Brim,
+
+    /// <summary>A first-layer skirt loop (a purge line standing clear of the part).</summary>
+    Skirt,
 }
 
 /// <summary>One deposition path on a layer: a 2D polyline in bed coordinates (world x/y),
@@ -152,6 +158,31 @@ public static class FdmSlicer
             var regions = SectionWithNudge(solid, mesh, sectionZ, h);
 
             var paths = new List<SlicePath>();
+
+            // First-layer adhesion, outermost-first so the nozzle primes on the skirt, lays the
+            // brim inward, and finishes AT the part's own outline. Both are outward offsets of
+            // the whole layer-0 region SET (islands' brims merge where they meet), and both are
+            // write-only-when-stated: 0 loops / 0 width leaves every existing slice byte-identical.
+            if (i == 0)
+            {
+                for (int k = p.SkirtLoops - 1; k >= 0; k--)
+                    foreach (var ring in Region2dOffset.Offset(
+                        regions, p.SkirtGap + bead * (k + 0.5)))
+                        paths.Add(new SlicePath(SlicePathRole.Skirt, ring.Outer, IsClosed: true));
+                int brimLoops = (int)Math.Ceiling(p.BrimWidth / bead - 1e-9);
+                for (int k = brimLoops - 1; k >= 0; k--)
+                    foreach (var ring in Region2dOffset.Offset(regions, bead * (k + 0.5)))
+                    {
+                        paths.Add(new SlicePath(SlicePathRole.Brim, ring.Outer, IsClosed: true));
+                        // A brim rings the INSIDE of a bore too (the outward offset's hole
+                        // loops are the bore shrunk inward — exactly the interior brim).
+                        foreach (var hole in ring.Holes)
+                            paths.Add(new SlicePath(SlicePathRole.Brim, hole, IsClosed: true));
+                    }
+                if (paths.Count > 0)
+                    pen = paths[^1].End;
+            }
+
             var walls = new List<SlicePath>();
             var infill = new List<SlicePath>();
             foreach (var region in regions)

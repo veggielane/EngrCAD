@@ -36,6 +36,10 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   system's section track — a clip plane is shader state) sweeps a plane up the build direction
   quantized to the slice's own layer count, so the reveal completes whole layers the way a
   printer does. See `docs/examples/cam-slicing.md`'s committed APNG.
+- **First-layer adhesion is write-only-when-stated**: `BrimWidth` lays brim rings outward from
+  the part's outline (a bore gets interior rings from the outward offset's own hole loops),
+  `SkirtLoops`/`SkirtGap` add a priming skirt standing clear — printed skirt-first, brim
+  outermost-in so the nozzle finishes at the part; stating neither slices byte-identically.
 
 ## G-code (`GcodeWriter`, `GcodeReader`)
 

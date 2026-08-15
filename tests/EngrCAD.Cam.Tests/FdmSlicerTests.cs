@@ -203,6 +203,40 @@ public sealed class FdmSlicerTests
     }
 
     [Fact]
+    public void BrimAndSkirt_LiveOnTheFirstLayerOnly_AndAreWriteOnlyWhenStated()
+    {
+        // Off by default: no adhesion paths anywhere.
+        var plain = FdmSlicer.Slice(Shape.Box(12, 9, 3), Profile(density: 0));
+        Assert.DoesNotContain(plain.Layers.SelectMany(l => l.Paths),
+            p => p.Role is SlicePathRole.Brim or SlicePathRole.Skirt);
+
+        // BrimWidth 2 at bead 0.4 = 5 rings; 2 skirt loops standing SkirtGap clear. Both on
+        // layer 0 only, skirt first (the nozzle primes clear of the part), brim outermost-in
+        // (it finishes AT the part's outline).
+        var part = FdmSlicer.Slice(Shape.Box(12, 9, 3),
+            Profile(density: 0) with { BrimWidth = 2.0, SkirtLoops = 2, SkirtGap = 5 });
+        var first = part.Layers[0].Paths;
+        Assert.Equal(5, first.Count(p => p.Role == SlicePathRole.Brim));
+        Assert.Equal(2, first.Count(p => p.Role == SlicePathRole.Skirt));
+        Assert.DoesNotContain(part.Layers.Skip(1).SelectMany(l => l.Paths),
+            p => p.Role is SlicePathRole.Brim or SlicePathRole.Skirt);
+        Assert.Equal(SlicePathRole.Skirt, first[0].Role);
+        int lastBrim = first.ToList().FindLastIndex(p => p.Role == SlicePathRole.Brim);
+        int firstWall = first.ToList().FindIndex(p => p.Role == SlicePathRole.Wall);
+        Assert.True(lastBrim < firstWall);
+
+        // The innermost brim ring's perimeter is the outline grown by bead/2 — round-join
+        // corner arcs, so the length sits within the inscribed band of 2(a+b) + 2π·inset.
+        var innermost = first.Where(p => p.Role == SlicePathRole.Brim).Last();
+        double exact = 2 * (12 + 9) + 2 * Math.PI * 0.2;
+        Assert.InRange(innermost.Length, exact * 0.99, exact + 1e-9);
+
+        // And the extrusion bookkeeping identity still holds with adhesion paths in the file.
+        var decoded = GcodeReader.Read(GcodeWriter.Write(part));
+        Assert.Equal(part.FilamentUsed, decoded.FilamentUsed, part.FilamentUsed * 1e-3);
+    }
+
+    [Fact]
     public void TheRefusals_NameTheirNumbers()
     {
         // A layer taller than the bead: the stadium cross-section degenerates.

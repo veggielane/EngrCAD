@@ -107,8 +107,13 @@ unretract so the decoder can *match* the pairs. Temperatures follow write-only-w
 profile stating `0` produces a file with no temperature commands, never a zero that would cool a
 live hotend.
 
+**First-layer adhesion is write-only-when-stated**: `BrimWidth` lays brim rings outward from
+the part's own outline (a bore gets interior rings too), `SkirtLoops`/`SkirtGap` add a priming
+skirt standing clear — printed skirt-first, brim outermost-in so the nozzle finishes at the
+part; a profile stating neither slices byte-identically.
+
 **Not in stage 1** (each filed in the campaign): supports from the measured overhang field,
-brim/skirt/raft, seam placement smarter than the deterministic anchor, arc moves (`G2`/`G3` join
+a raft, seam placement smarter than the deterministic anchor, arc moves (`G2`/`G3` join
 with the CNC stages), the tool animated along its own path (a matrices-only pose track; the
 material-ADDITION animation above is landed), material-removal animation for the CNC stages
 (recorded stock states), and non-planar slicing (deliberately last — it inherits the exp-map

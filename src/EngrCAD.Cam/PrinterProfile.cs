@@ -27,7 +27,10 @@ public sealed record PrinterProfile(
     double RetractionSpeed = 35,
     double MinTravelForRetraction = 2.0,
     int HotendTemperature = 205,
-    int BedTemperature = 60)
+    int BedTemperature = 60,
+    double BrimWidth = 0,
+    int SkirtLoops = 0,
+    double SkirtGap = 5)
 {
     /// <summary>The stock profile: 0.4 nozzle, 1.75 filament, 0.2 layers, two walls, 20% infill.</summary>
     public static PrinterProfile Default { get; } = new();
@@ -72,6 +75,14 @@ public sealed record PrinterProfile(
         if (MinTravelForRetraction < 0)
             throw new ArgumentException(
                 $"MinTravelForRetraction must be non-negative; got {MinTravelForRetraction:0.###}.");
+        if (BrimWidth < 0)
+            throw new ArgumentException(
+                $"BrimWidth must be non-negative (0 = no brim); got {BrimWidth:0.###}.");
+        if (SkirtLoops < 0)
+            throw new ArgumentException(
+                $"SkirtLoops must be non-negative (0 = no skirt); got {SkirtLoops}.");
+        if (SkirtLoops > 0)
+            Require(SkirtGap, nameof(SkirtGap));
 
         static void Require(double value, string name)
         {
