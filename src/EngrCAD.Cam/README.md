@@ -40,6 +40,13 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   the part's outline (a bore gets interior rings from the outward offset's own hole loops),
   `SkirtLoops`/`SkirtGap` add a priming skirt standing clear — printed skirt-first, brim
   outermost-in so the nozzle finishes at the part; stating neither slices byte-identically.
+- **Solid top/bottom shells** (`TopSolidLayers`/`BottomSolidLayers`, 0 = off
+  byte-identically): a spot of the infill core is SOLID skin exactly where the neighbouring
+  N layers above / M below do not cover it — the exact `Region2dBoolean` intersection of the
+  neighbour window's sections, subtracted from the core; skins fill at the bead spacing, a
+  window past the stack meets air (so the part's own top/bottom layers are wholly solid with
+  no special case), zero sparse density still lays the skins. The step fixture pins the
+  solid/sparse split landing exactly at an overhanging wall.
 - **Supports follow the same convention** (`SupportOverhangAngle`, 0 = off): overhang facets of
   the ORIENTED part's own mesh — the `Manufacturability` rule, the threshold compared on the
   dot product and never on a derived angle — are projected to the bed and unioned; each layer

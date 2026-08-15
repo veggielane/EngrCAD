@@ -39,7 +39,9 @@ public sealed record PrinterProfile(
     double SkirtGap = 5,
     double SupportOverhangAngle = 0,
     double SupportSpacing = 2.5,
-    double SupportGap = 0.8)
+    double SupportGap = 0.8,
+    int TopSolidLayers = 0,
+    int BottomSolidLayers = 0)
 {
     /// <summary>The stock profile: 0.4 nozzle, 1.75 filament, 0.2 layers, two walls, 20% infill.</summary>
     public static PrinterProfile Default { get; } = new();
@@ -103,6 +105,12 @@ public sealed record PrinterProfile(
                 throw new ArgumentException(
                     $"SupportGap must be non-negative; got {SupportGap:0.###}.");
         }
+        if (TopSolidLayers < 0)
+            throw new ArgumentException(
+                $"TopSolidLayers must be non-negative (0 = no top skins); got {TopSolidLayers}.");
+        if (BottomSolidLayers < 0)
+            throw new ArgumentException(
+                $"BottomSolidLayers must be non-negative (0 = no bottom skins); got {BottomSolidLayers}.");
 
         static void Require(double value, string name)
         {

@@ -24,6 +24,9 @@ public enum SlicePathRole
 
     /// <summary>A support run — sparse breakaway material under an overhang.</summary>
     Support,
+
+    /// <summary>A solid (100%) infill run — a top or bottom skin.</summary>
+    SolidInfill,
 }
 
 /// <summary>One deposition path on a layer: a 2D polyline in bed coordinates (world x/y),
@@ -167,16 +170,26 @@ public static class FdmSlicer
         IReadOnlyList<Region2d> supportUnion = [];
         bool supportDirty = supportFacets is { Count: > 0 };
 
+        // Section EVERY layer up front (mid-layer planes; the top layer's plane clamped
+        // below the part's own top face so an exactly-divisible height cannot section
+        // flush with it): the solid-shell split reads the NEIGHBOUR layers' regions, so
+        // sections must exist before any layer's paths are built.
+        var sectionZs = new double[layerCount];
+        var sections = new IReadOnlyList<Region2d>[layerCount];
+        for (int i = 0; i < layerCount; i++)
+        {
+            sectionZs[i] = Math.Min(
+                bounds.Min.Z + (i + 0.5) * h,
+                bounds.Max.Z - NudgeFraction * h);
+            sections[i] = SectionWithNudge(solid, mesh, sectionZs[i], h);
+        }
+
         var layers = new List<SliceLayer>(layerCount);
         var pen = new Vector2d(bounds.Min.X, bounds.Min.Y);
         for (int i = 0; i < layerCount; i++)
         {
-            // Mid-layer sectioning; the top layer's plane is clamped below the part's own top
-            // face so an exactly-divisible height cannot section flush with it.
-            double sectionZ = Math.Min(
-                bounds.Min.Z + (i + 0.5) * h,
-                bounds.Max.Z - NudgeFraction * h);
-            var regions = SectionWithNudge(solid, mesh, sectionZ, h);
+            double sectionZ = sectionZs[i];
+            var regions = sections[i];
 
             var paths = new List<SlicePath>();
 
@@ -267,17 +280,66 @@ public static class FdmSlicer
                             walls.Add(new SlicePath(SlicePathRole.Wall, hole, IsClosed: true, k));
                     }
                 }
+            }
 
-                // Infill: the region inside the innermost wall's inner face, less half a bead so
-                // the infill bead just meets the wall bead.
-                if (p.InfillDensity > 0)
+            // Infill: the region inside the innermost wall's inner face, less half a bead so
+            // the infill bead just meets the wall bead. With solid shells stated, the core
+            // splits into SOLID skin (where the neighbouring TopSolidLayers above or
+            // BottomSolidLayers below do not cover it — a spot within N layers of air) filled
+            // at the bead spacing, and SPARSE interior on the remainder; stating neither
+            // keeps the incumbent per-region path byte-identically.
+            bool shells = p.TopSolidLayers > 0 || p.BottomSolidLayers > 0;
+            if (p.InfillDensity > 0 || shells)
+            {
+                double infillInset = bead * (p.WallCount + 0.5);
+                double angle = i % 2 == 0 ? Math.PI / 4 : 3 * Math.PI / 4;
+                if (!shells)
                 {
-                    double infillInset = bead * (p.WallCount + 0.5);
                     double spacing = bead / p.InfillDensity;
-                    double angle = i % 2 == 0 ? Math.PI / 4 : 3 * Math.PI / 4;
-                    foreach (var core in Region2dOffset.Offset(region, -infillInset))
-                        infill.AddRange(RectilinearInfill(core, spacing, angle));
+                    foreach (var region in regions)
+                        foreach (var core in Region2dOffset.Offset(region, -infillInset))
+                            infill.AddRange(RectilinearInfill(core, spacing, angle));
                 }
+                else
+                {
+                    var cores = new List<Region2d>();
+                    foreach (var region in regions)
+                        cores.AddRange(Region2dOffset.Offset(region, -infillInset));
+                    if (cores.Count > 0)
+                    {
+                        // Covered = the intersection of the neighbour window's sections;
+                        // a window reaching past the stack meets air, so those layers are
+                        // wholly solid (the part's own top and bottom skins).
+                        IReadOnlyList<Region2d>? covered = null;
+                        for (int k = 1; k <= p.TopSolidLayers && covered is not { Count: 0 }; k++)
+                            covered = IntersectNeighbour(covered, i + k);
+                        for (int k = 1; k <= p.BottomSolidLayers && covered is not { Count: 0 }; k++)
+                            covered = IntersectNeighbour(covered, i - k);
+
+                        var solidSkin = covered!.Count == 0
+                            ? cores
+                            : Region2dBoolean.Difference(cores, covered);
+                        foreach (var r in solidSkin)
+                            infill.AddRange(RectilinearInfill(r, bead, angle)
+                                .Select(path => path with { Role = SlicePathRole.SolidInfill }));
+                        if (p.InfillDensity > 0 && covered.Count > 0)
+                        {
+                            foreach (var r in Region2dBoolean.Intersection(cores, covered))
+                                infill.AddRange(
+                                    RectilinearInfill(r, bead / p.InfillDensity, angle));
+                        }
+                    }
+                }
+            }
+
+            IReadOnlyList<Region2d>? IntersectNeighbour(
+                IReadOnlyList<Region2d>? covered, int index)
+            {
+                IReadOnlyList<Region2d> neighbour =
+                    index >= 0 && index < layerCount ? sections[index] : [];
+                return covered is null
+                    ? neighbour
+                    : Region2dBoolean.Intersection(covered, neighbour);
             }
 
             // Walls keep their EMISSION order — innermost-out per region is a print-quality

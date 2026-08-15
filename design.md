@@ -9022,6 +9022,25 @@ overhang for cleaner breakaway — v1 supports run to the underside exactly, whi
 pins as `lastSupport.Z == undersideZ`), interface layers, and supports-on-model awareness
 (v1 columns run bed-to-overhang, printing around any part material in between).
 
+**Solid top/bottom shells landed** (`TopSolidLayers`/`BottomSolidLayers` on the profile,
+0 = off byte-identically — the write-only-when-stated path, pinned by a same-G-code
+assertion; docs `cam-slicing.md`), closing the biggest visible gap between the stage-1 slicer
+and a real print: every layer used to be sparse interior all the way to the skin. The rule is
+the neighbour-window one: a spot of a layer's infill core is SOLID exactly where the
+intersection of the next N layers' sections above (or M below) does not cover it — a spot
+within N layers of air — with the intersection folded through `Region2dBoolean` and
+subtracted from the core, skins filled at the bead spacing and the sparse pattern keeping the
+remainder, both linked as one travel group. A window reaching past the stack meets air, so
+the part's own top and bottom layers come out wholly solid with NO special case, and zero
+sparse density still lays the skins (a hollow part keeps its lids). Landing it moved the
+sectioning to an upfront pass over all layers (the neighbour lookup needs every section
+before any layer's paths are built) — a pure reordering, byte-identical with shells off. The
+fixture with teeth is the STEP: a plateau exposed on one half and carrying a tower on the
+other, where the solid/sparse split must land exactly AT the tower's wall — a slicer that
+shells whole layers or none passes a plain box and fails there, which is what makes the plain
+box the wrong fixture. Filed beside it in the PrusaSlicer-parity entry: monotonic top-surface
+fill, ironing, bridges, and the skin-to-sparse anchor margin.
+
 **Stage 3 — 3-axis surfacing — landed** (`CncSurfacing.Raster`/`Waterline`/`ScallopHeight`/
 `StepoverForScallop`; docs `examples/cam-surfacing.md`), and it is the stage where the implicit
 engine pays DIRECTLY rather than as a bridge: **the cutter-location surface of a ball-nose tool

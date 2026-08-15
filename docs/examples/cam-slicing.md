@@ -112,6 +112,37 @@ the part's own outline (a bore gets interior rings too), `SkirtLoops`/`SkirtGap`
 skirt standing clear — printed skirt-first, brim outermost-in so the nozzle finishes at the
 part; a profile stating neither slices byte-identically.
 
+## Solid top and bottom shells
+
+`TopSolidLayers`/`BottomSolidLayers` close the biggest visible gap to a real print: a spot of
+a layer's infill core is SOLID skin exactly where the neighbouring N layers above (or M
+below) do not cover it — a spot within N layers of air — computed as the exact
+`Region2dBoolean` intersection of the neighbour window's own sections, subtracted from the
+core. Skins fill at the bead spacing (100%), the sparse pattern keeps the remainder, and a
+window reaching past the stack meets air, which is why the part's own top and bottom layers
+come out wholly solid with no special case. Zero sparse density still lays the skins (a
+hollow part keeps its lids), and a profile stating neither slices byte-identically:
+
+```csharp run:cam-shells
+// A step: the plateau's top is exposed on the right half only, so the solid/sparse
+// split must land exactly at the tower's wall.
+var step = Shape.Box(20, 20, 4).Translate(0, 0, 2) | Shape.Box(10, 20, 8).Translate(-5, 0, 4);
+var sliced = FdmSlicer.Slice(step, new PrinterProfile(NozzleDiameter: 0.8, LayerHeight: 0.5,
+    WallCount: 1, InfillDensity: 0.2, TopSolidLayers: 2, BottomSolidLayers: 2));
+
+var under = sliced.Layers[7]; // just below the exposed plateau top
+double solidX = under.Paths.Where(p => p.Role == SlicePathRole.SolidInfill)
+    .SelectMany(p => p.Points).Min(p => p.X);
+double sparseX = under.Paths.Where(p => p.Role == SlicePathRole.Infill)
+    .SelectMany(p => p.Points).Max(p => p.X);
+Console.WriteLine($"skin covers x >= {solidX:0.###}, sparse stays x <= {sparseX:0.###} "
+    + "(the tower wall is at x = 0)");
+foreach (var layer in new[] { sliced.Layers[0], sliced.Layers[^1] })
+    Console.WriteLine($"layer {layer.Index}: "
+        + $"{layer.Paths.Count(p => p.Role == SlicePathRole.SolidInfill)} skin runs, "
+        + $"{layer.Paths.Count(p => p.Role == SlicePathRole.Infill)} sparse runs");
+```
+
 ## Supports from the overhang field
 
 Supports follow the same opt-in convention: `SupportOverhangAngle` states the threshold

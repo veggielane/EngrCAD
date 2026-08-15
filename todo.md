@@ -2550,10 +2550,12 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     - [ ] Seam placement: nearest / aligned / rear / a concave-corner cost model,
       replacing the deterministic first-vertex anchor (already filed, subsumed here).
   - **Top/bottom & surfaces**:
-    - [ ] Solid top/bottom shells by count or thickness — a region is TOP where the
-      layer above does not cover it (`Region2dBoolean.Difference` between neighbour
-      layers, the machinery already landed), bottom likewise; today every layer is
-      sparse interior, which is the biggest visible gap to a real print.
+    - Solid top/bottom shells LANDED (`TopSolidLayers`/`BottomSolidLayers`, the
+      neighbour-window intersection subtracted from the infill core, skins at the
+      bead spacing, top/bottom-of-stack solid with no special case, 0 = off
+      byte-identically; the step fixture pins the split at the overhanging wall;
+      design.md §6e). Still open here: shells by THICKNESS rather than count, and
+      the skin-to-sparse anchor margin.
     - [ ] Monotonic top-surface fill (all lines one direction in overlap order),
       ironing (a low-flow smoothing pass over top solids).
     - [ ] Bridge detection + direction (a solid region unsupported below spans between
