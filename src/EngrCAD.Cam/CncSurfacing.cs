@@ -22,9 +22,11 @@ namespace EngrCAD.Cam;
 /// correction must not leave the plane, or the pass stops being a waterline).</para>
 ///
 /// <para>Passes are in the SHAPE's own coordinates (tip z = the surface's own z; the G-code
-/// z word is the TIP, the machining convention). The tool is assumed a BALL-NOSE of the stated
-/// radius — flat and bull-nose cutter-location surfaces are filed with the campaign, as are a
-/// raster direction other than X, holder/shank collision checking and rest machining. Where the
+/// z word is the TIP, the machining convention). The default cutter is a BALL-NOSE of the
+/// tool's own radius; a <see cref="MillCutter"/> selects flat or bull-nose, which RASTER
+/// carries over the tessellation (see <see cref="DropCutter"/> for why the field route does
+/// not survive a flat bottom) while waterline refuses them by name. Still filed: a raster
+/// direction other than X, holder/shank collision checking and rest machining. Where the
 /// field is a correct-sign LOWER BOUND (a CSG difference near its tool's fictitious faces), the
 /// r-isolevel lies FARTHER from the part than the true offset — stock left, never a gouge: the
 /// conservative direction, inherited from the field contract rather than arranged.</para>
@@ -43,22 +45,49 @@ public static class CncSurfacing
     /// (null = half the stepover).
     /// </summary>
     public static MillOperation Raster(
-        Shape shape, MillTool tool, double? sampleStep = null, string name = "raster")
+        Shape shape, MillTool tool, double? sampleStep = null, string name = "raster",
+        MillCutter? cutter = null)
     {
         ArgumentNullException.ThrowIfNull(shape);
         ArgumentNullException.ThrowIfNull(tool);
         tool.Validate();
-        double stepover = tool.Stepover * tool.Diameter;
-        double step = sampleStep ?? stepover / 2;
-        if (!(step > 0) || !double.IsFinite(step))
-            throw new ArgumentException(
-                $"sampleStep must be finite and positive; got {step:0.###}.", nameof(sampleStep));
+        if (cutter is not null)
+        {
+            cutter.Validate();
+            if (cutter.Diameter != tool.Diameter)
+                throw new ArgumentException(
+                    $"The cutter (Ø{cutter.Diameter:0.###}) and the tool (Ø{tool.Diameter:0.###}) "
+                    + "state different diameters — two stated diameters disagreeing is a "
+                    + "modelling error, not a preference.", nameof(cutter));
+            // A flat or bull-nose rides the tessellation (see DropCutter's remarks for why
+            // the field route does not survive the disc); a ball-nose IS the exact route.
+            if (!cutter.IsBallNose)
+                return DropCutter.Raster(shape, tool, cutter, sampleStep, name);
+        }
 
         var sdf = shape.ToImplicit();
         var bounds = shape.Bounds();
         double r = tool.Radius;
         double top = bounds.Max.Z + r + 1;
         double floor = bounds.Min.Z + r;
+        return SerpentineRaster(tool, bounds, sampleStep, name,
+            (x, y) => Drop(sdf, x, y, top, floor, r) - r);
+    }
+
+    /// <summary>The serpentine raster loop both routes share — grid-anchored rows one
+    /// <c>Stepover·Diameter</c> apart, samples one <paramref name="sampleStep"/> apart
+    /// (null = half the stepover), extended a tool radius past the part —
+    /// <paramref name="tipAt"/> answering the TIP height at each sample.</summary>
+    internal static MillOperation SerpentineRaster(
+        MillTool tool, in Aabb bounds, double? sampleStep, string name,
+        Func<double, double, double> tipAt)
+    {
+        double stepover = tool.Stepover * tool.Diameter;
+        double step = sampleStep ?? stepover / 2;
+        if (!(step > 0) || !double.IsFinite(step))
+            throw new ArgumentException(
+                $"sampleStep must be finite and positive; got {step:0.###}.", nameof(sampleStep));
+        double r = tool.Radius;
 
         var passes = new List<MillPass>();
         int firstRow = (int)Math.Ceiling((bounds.Min.Y - r) / stepover - 1e-12);
@@ -73,8 +102,7 @@ public static class CncSurfacing
             for (int j = firstCol; j <= lastCol; j++)
             {
                 double x = (reverse ? lastCol - (j - firstCol) : j) * step;
-                double centreZ = Drop(sdf, x, y, top, floor, r);
-                points.Add(new Vector3d(x, y, centreZ - r));
+                points.Add(new Vector3d(x, y, tipAt(x, y)));
             }
             if (points.Count >= 2)
                 passes.Add(new MillPass(points, IsClosed: false));
@@ -92,11 +120,19 @@ public static class CncSurfacing
     /// on the steep walls waterline exists for, the path is exact to round-off.
     /// </summary>
     public static MillOperation Waterline(
-        Shape shape, MillTool tool, double? sampleStep = null, string name = "waterline")
+        Shape shape, MillTool tool, double? sampleStep = null, string name = "waterline",
+        MillCutter? cutter = null)
     {
         ArgumentNullException.ThrowIfNull(shape);
         ArgumentNullException.ThrowIfNull(tool);
         tool.Validate();
+        if (cutter is not null && !cutter.IsBallNose)
+            throw new ArgumentException(
+                "Waterline contouring supports the ball-nose only: a flat or bull-nose "
+                + "waterline is the contour of the mesh dilated by the tool's bottom disc — a "
+                + "2D arrangement the field identity does not reach (certifying a min over the "
+                + "disc through a 1-Lipschitz oracle is quadratic in the flatness, and flat is "
+                + "the common case). Filed; Raster carries those cutters.", nameof(cutter));
         double r = tool.Radius;
         double step = sampleStep ?? r / 2;
         if (!(step > 0) || !double.IsFinite(step))

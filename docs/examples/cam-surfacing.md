@@ -117,7 +117,44 @@ Passes are in the **shape's own coordinates** (the G-code z word is the tool *ti
 machining convention), and the writer is the stage-2 `CncGcodeWriter` unchanged — a move's
 meaning is its shape, so an XYZ-combined raster move cuts at the feed rate with nothing new.
 
-**Not in stage 3** (each filed in the campaign): flat and bull-nose cutter-location surfaces
-(v1 assumes a ball of the tool's radius), a raster direction other than X, linking rows
-without a retract, adaptive stepover from local curvature, holder/shank collision checking,
-rest machining, and HSM adaptive clearing (stage 4).
+## Flat and bull-nose cutters
+
+Raster takes a `MillCutter` — ball-nose, flat end, or bull-nose — and the routing records an
+**overturned prediction**: the backlog filed flat/bull as "the rounded-cone distance the SDF
+vocabulary already spells", and it does not survive contact with the arithmetic. A
+flat-bottomed tool's cutter-location condition is a *minimum over its disc* of the field, and
+certifying a minimum to ε through a 1-Lipschitz oracle takes Ω((a/ε)²) evaluations wherever
+the field is horizontally flat — which is not the hostile case but the **common** one (every
+plateau a flat cutter exists to finish). The ball is special precisely because its disc is a
+point. So flat and bull-nose ride the **tessellation** with per-mode contact arithmetic — the
+textbook drop-cutter: a vertex lifts the tip by the bottom profile exactly, an edge maximizes
+over a bracketed 1D scan (a torus–line tangency is a quartic), a face's contact is closed
+form (`ρ* = a + r·s/√(1+s²)`) — while a ball-nose cutter keeps the exact implicit route
+byte-for-byte.
+
+```csharp run:cam-flat-cutter
+var dome = Shape.Sphere(10);
+var tool = new MillTool(8, StepDown: 2);
+var flat = CncSurfacing.Raster(dome, tool, cutter: MillCutter.FlatEnd(8));
+var ball = CncSurfacing.Raster(dome, tool);
+double At(MillOperation op, double x) => op.Passes
+    .SelectMany(p => p.Points).First(p => Math.Abs(p.X - x) < 1e-9 && p.Y == 0).Z;
+// The flat spot: with the apex under the disc the tip sits AT the apex — exactly —
+// where a ball rolls off. Past the disc the rim rides the dome (the APT closed form).
+Console.WriteLine($"over the apex offset 2: flat {At(flat, 2):0.####}  ball {At(ball, 2):0.####}");
+Console.WriteLine($"rim contact at 6: {At(flat, 6):0.####} vs closed form "
+    + $"{Math.Sqrt(100 - 2 * 2):0.####} (inscribed mesh: low, never high)");
+```
+
+The oracles are equalities where the geometry makes them possible: the apex vertex sits under
+the flat disc where the bottom profile is exactly zero, so the flat spot is `z == S`
+*exactly*; a flat plate reads its own top exactly out to one disc radius past the edge (the
+edge mode); and a ball pushed through the **mesh** route agrees with the exact field route to
+the chord error — two constructions of one surface checking each other, with the band
+honestly slope-amplified near the silhouette (`dz/dd` diverges there). Waterline stays
+ball-only and refuses the others by name: a flat waterline is the contour of the mesh dilated
+by the disc, a 2D arrangement, filed.
+
+**Not in stage 3** (each filed in the campaign): a raster direction other than X, linking
+rows without a retract, adaptive stepover from local curvature, holder/shank collision
+checking, rest machining, the flat/bull waterline above, and HSM adaptive clearing (stage 4).

@@ -102,6 +102,14 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   (`rpm = 1000·Vc/(π·D)`, `feed = rpm·flutes·chipload`, the spindle cap preserving the chip
   load rather than the feed).
 
+- **Flat & bull-nose cutters** (`MillCutter` + the internal mesh drop-cutter): raster takes
+  a cutter kind; flat/bull ride the tessellation with per-mode contact arithmetic (vertex
+  exact, edge a bracketed 1D scan since a torus-line tangency is a quartic, face closed form)
+  because the filed SDF route does not survive the disc — certifying a min over it through a
+  1-Lipschitz oracle is quadratic in the flatness, and flat is the common case; a ball-nose
+  keeps the exact implicit route byte-for-byte. Flat-spot and APT closed-form oracles; the
+  ball's mesh-vs-field two-construction cross-check; waterline refuses non-ball by name.
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

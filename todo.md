@@ -2474,9 +2474,18 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     asserted point-by-point on both strategies, a vertical cylinder's waterline at
     `R + r` to 1e-6, the flat-top raster exact, the dome apex touched at its own
     height (grid anchoring), and `s²/8r` MEASURED as the chord identity's expansion
-    rather than shipped as the formula. **Stage-3 residuals, open**: flat and
-    bull-nose cutter-location surfaces (the rounded-cone distance the SDF vocabulary
-    already spells), a raster direction other than X, linking rows without a retract,
+    rather than shipped as the formula. **Flat and bull-nose LANDED, and the filed
+    framing was overturned in the instructive direction**: "the rounded-cone distance
+    the SDF vocabulary already spells" fails the arithmetic — the CL condition is a MIN
+    over the tool's disc, and certifying a min to eps via a 1-Lipschitz oracle is
+    Omega((a/eps)^2) wherever the field is horizontally FLAT, the common case, so
+    flat/bull ride the tessellation as the textbook drop-cutter (vertex exact, edge a
+    bracketed 1D scan since torus-line tangency is a quartic, face closed form) with the
+    flat-spot/APT oracles exact and the ball's mesh-vs-field cross-check; the ball is
+    special because its disc is a point, and it keeps the exact field route
+    byte-for-byte. **Stage-3 residuals, open**: the flat/bull WATERLINE (the contour of
+    the mesh dilated by the disc — a 2D arrangement), a raster direction other than X,
+    linking rows without a retract,
     adaptive stepover from local curvature, holder/shank collision checking, and
     rest machining (shared with stage 2's entry).
   - **Stage 4 — HSM adaptive clearing** (the research-grade centrepiece, flagged as

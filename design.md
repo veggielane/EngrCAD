@@ -9215,6 +9215,32 @@ close") while taking minutes on the ones it accepts; banding leaves only the hor
 stacked-plates coincidence the imprint boolean's coplanar tier is built for, and the suite runs
 in seconds.
 
+**Flat and bull-nose cutters landed on the raster, and the filed prediction was overturned
+by an argument worth keeping**: the backlog spelled the feature as "the rounded-cone distance
+the SDF vocabulary already spells", and the field route does not survive the disc. A
+flat-bottomed tool's CL condition is min over its bottom disc of the field ≥ r, and any
+CERTIFIED evaluation of a minimum to precision ε through a 1-Lipschitz oracle needs a
+cover at radius ε in the worst case — Ω((a/ε)²) evaluations — and the worst case is not a
+hostile fixture but a horizontally FLAT field, i.e. every plateau a flat cutter exists to
+finish (a B&B certificate collapses exactly where the field stops sloping). The ball-nose is
+special precisely because its disc is a point, which is WHY stage 3's field identity worked.
+So flat/bull ride the TESSELLATION as the textbook drop-cutter (`MillCutter` +
+`DropCutter`): one bottom-profile function f(ρ) all three kinds share (0 on the disc, the
+torus rise on the corner, +∞ past the flank), contact the max over three modes — a VERTEX
+exact (v.z − f(ρ)), an EDGE maximized by a bracketed 1D scan (a torus–line tangency is a
+quartic, the sharp-corner fillet lesson, so the scan is the honest spelling), a FACE closed
+form (slope match at ρ* = a + r·s/√(1+s²), taken only when the contact lands inside the
+triangle) — over a 2D bucket grid, sharing the SDF route's serpentine loop verbatim
+(`SerpentineRaster`, one grid rule for both routes). The oracles are equalities where the
+geometry allows: the FLAT SPOT over a dome apex is z == S exactly (the apex vertex under the
+disc reads f = 0), a plate reads its top exactly out to one disc radius past its edge (the
+edge mode), the APT rim form √((S+r)² − (d−a)²) − r holds one-sided against the inscribed
+mesh, and a ball pushed through the MESH route agrees with the exact field route to the
+chord error — two constructions checking each other, the comparison band honestly
+slope-amplified near the silhouette where dz/dd diverges. A stated ball cutter takes the
+exact route BYTE-identically; waterline refuses flat/bull by name (their waterline is the
+contour of the mesh dilated by the disc — a 2D arrangement, filed).
+
 **Stage 4 opened with trochoidal slotting** (`CncHsm.TrochoidalSlot`; docs
 `examples/cam-milling.md` §HSM), and the finding that justifies the campaign's whole framing —
 "the engagement angle computed from the evolving stock and BOUNDED by the stated maximum,
