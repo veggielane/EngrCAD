@@ -1629,6 +1629,14 @@ the applied resultant and the equilibrium check survives a coupled solve. The tw
 share the same `AnalysisMesh` **instance**, checked rather than assumed, because a temperature
 field crosses by node index.
 
+Every load condition takes a time-law overload (`Func<double, double>`) — ramped platen,
+duty-cycled load, day–night ambient — moving only the LOAD so the single factorization
+survives (h stays constant by statement; a steady solve refuses a law by name; the energy
+balance splits applied laws from ambient-supply laws exactly as the constant conditions
+do). The oracle is discrete exactness: a prescribed ramp's particular solution a·t + b has
+b = the steady solve of Generation(−ρc·R), and every theta scheme integrates it to
+round-off.
+
 ## Verification
 
 Full tables are on the [docs page](../../docs/examples/fea-thermal.md). The headline numbers:

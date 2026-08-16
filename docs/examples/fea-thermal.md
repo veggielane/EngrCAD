@@ -584,6 +584,55 @@ quarter of `E·alpha·dT`). A statically determinate 3-2-1 restraint gives 1e-10
 - **Sliver elements are the real constraint, and they belong to the mesher** — the same
   limitation the structural page records, refused by name here by the same shared guard.
 
+## Time-varying boundary conditions
+
+Every load condition takes a **time law** overload — `HeatFlux(facets, t => ...)`,
+`HeatLoad(facets, t => ...)`, `Convection(facets, h, t => ambient)`,
+`Temperature(facets, t => ...)` — for the ramped platen, the duty-cycled component, the
+day–night ambient. A law moves only the **load**: the spatial pattern is assembled once at
+add time (at unit law value) and scaled at each instant the transient samples, so the
+single-factorization contract survives untouched. The film coefficient stays constant and
+that is a stated boundary, not an omission — `h` enters the matrix, which is factored
+once, while the ambient enters only the supply. A steady solve refuses a law-carrying
+model by name (it has no time to hand it), and the energy balance keeps the split the
+constant conditions live by: an applied law joins the applied heat, an ambient law joins
+the convective supply.
+
+The oracle with teeth is **discrete exactness**: for a prescribed ramp `R·t` the discrete
+particular solution is `a·t + b` with `a` the uniform vector `R` and `K·b = −M·a` — which
+makes `b` the *steady solver's own answer* for a uniform generation of `−ρc·R` held at
+zero — and any theta scheme integrates a linear-in-time particular solution exactly. Seed
+the run with `b` and every step must land on `b + R·t` to round-off, backward Euler and
+Crank–Nicolson alike:
+
+```csharp run:fea-thermal-timelaw
+var bar = Shape.Box(20, 8, 8).Translate(10, 0, 0);
+var tets = TetMesher.Mesh(bar.ToMesh());
+var mesh = AnalysisMesh.Of(tets);
+var metal = Materials.Aluminium6061;
+double rhoC = metal.Density * metal.SpecificHeat;
+const double rampRate = 3.0;
+
+// b: the steady answer for generation −ρc·R with the ramped face held at law(0) = 0.
+var b = ThermalSolver.Solve(new ThermalModel(mesh, metal)
+    .Temperature(Facets.OnPlane(Vector3d.Zero, new Vector3d(-1, 0, 0)), 0.0)
+    .Generation(-rhoC * rampRate));
+
+var model = new ThermalModel(mesh, metal)
+    .Temperature(Facets.OnPlane(Vector3d.Zero, new Vector3d(-1, 0, 0)), t => rampRate * t);
+var run = ThermalSolver.SolveTransient(model,
+    new ThermalTransientOptions(0.5, 8) { InitialField = [.. b.Temperature] });
+
+double worst = 0;
+foreach (var state in run.States)
+    for (int node = 0; node < mesh.NodeCount; node++)
+        worst = Math.Max(worst,
+            Math.Abs(state.Temperature[node] - (b.Temperature[node] + rampRate * state.Time)));
+Console.WriteLine($"worst |T − (b + R·t)| over the whole run: {worst:E2}");
+if (worst > 1e-8)
+    throw new Exception("the linear particular solution must integrate exactly");
+```
+
 ## Heatsink sizing (correlations checked by the solver)
 
 `HeatsinkSizing.Size` is the spreadsheet a natural-convection heatsink is chosen by, with

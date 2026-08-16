@@ -9627,6 +9627,35 @@ the `Stroke` clockwise-corner defect "filed rather than fixed", when the fix (of
 corner side in BOTH orders — swap as well as negate) had landed in the tamper-mesh
 campaign's own merge with its six-path deficit test; the record now says so.
 
+**Time-varying thermal boundary conditions landed on the seam the transient's own comment
+reserved for them** (`ThermalModel.HeatFlux/HeatLoad/Convection/Temperature` law overloads
+taking a `Func<double, double>`; docs `examples/fea-thermal.md` §Time-varying): the
+stepping had deliberately kept the previous state whole rather than collapsing the
+prescribed columns — its comment said that made "time-varying prescribed values a change
+of one line rather than a rewrite" — and the prediction held. A law moves only the LOAD: a
+condition's spatial pattern is assembled ONCE at add time at unit law value (by the same
+facet quadrature as its constant twin, so the two cannot disagree about geometry) and
+scaled by the law at each instant; the load enters at the scheme's own theta point
+(θ·f(t_next) + (1−θ)·f(t_now)); prescribed laws recompute the prescribed-column products
+per step and each stored state carries its own instant's values; the FILM COEFFICIENT
+stays constant BY STATEMENT — h enters the factored matrix, the ambient only the supply —
+and a steady solve refuses a law-carrying model by name. **The oracle is DISCRETE
+exactness, constructed from the solver's own pieces**: for a prescribed ramp R·t the
+discrete particular solution is a·t + b with a the uniform vector R (the discrete steady
+answer to a constant Dirichlet value is the constant, any element order) and K·b = −M·a —
+so b IS the steady solver's answer for a uniform generation of −ρc·R held at zero — and
+any theta scheme integrates a linear particular solution exactly: seeded with b, every
+step lands on b + R·t at round-off for backward Euler AND Crank–Nicolson. Beside it: a
+lumped body under a sinusoidal ambient at ωτ = 1 reproduces the first-order closed form
+(amplitude A/√2, 45° lag) within 2%, and a square-pulse heat load keeps the run's own
+first law at round-off. **The first build got the ENERGY BALANCE wrong and the failure was
+worth the record**: `EnergyBalance` read the applied heat from the model's CONSTANT nodal
+loads, so a law's power never entered and a pulsed run reported a residual of exactly 0.5
+— the fix needed law KINDS, because an applied law (flux, load) belongs to the applied
+heat while a convective-ambient law belongs to the SUPPLY the convective loss is measured
+against, the same split the constant conditions already live by; one law evaluation per
+step now serves the load and the balance both.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

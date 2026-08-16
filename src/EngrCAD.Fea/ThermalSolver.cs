@@ -411,6 +411,11 @@ public static class ThermalSolver
         ThermalModel model, ThermalSolveOptions? options = null, ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(model);
+        if (model.HasTimeLaws)
+            throw new FeaException(
+                "The model carries time-varying conditions (a Func<double, double> law), "
+                + "and a steady solve has no time to hand them. Use SolveTransient, or "
+                + "state the value the law would take at the instant you mean.");
         options ??= new ThermalSolveOptions();
         var mesh = model.Mesh;
 
@@ -526,8 +531,66 @@ public static class ThermalSolver
         var stopwatch = Stopwatch.StartNew();
         var conduction = AssembleConduction(model, conductivityRule);
         var capacity = AssembleCapacity(model, capacityRule);
-        var load = AssembleLoad(model);
-        var prescribed = PrescribedVector(model);
+        bool timeLaws = model.HasTimeLaws;
+        var load = AssembleLoad(model, 0.0);
+        var loadNow = load;
+        var prescribed = PrescribedVector(model, 0.0);
+
+        // Per-law bookkeeping for the ENERGY BALANCE: an applied law (flux, load) joins
+        // the applied heat at its theta-combined value; a convective-ambient law joins the
+        // SUPPLY the convective loss is measured against — the same split the constant
+        // conditions already live by. One evaluation per law per step serves both the load
+        // and the balance (lawNow/lawNext below).
+        int lawCount = model.LoadLaws.Count;
+        var lawNow = new double[lawCount];
+        var lawNext = new double[lawCount];
+        var patternSum = new double[lawCount];
+        var patternAbsSum = new double[lawCount];
+        double[]? baseSupply = null, supplyTheta = null;
+        for (int j = 0; j < lawCount; j++)
+        {
+            var (pattern, law, _) = model.LoadLaws[j];
+            lawNow[j] = law(0);
+            foreach (double w in pattern)
+            {
+                patternSum[j] += w;
+                patternAbsSum[j] += Math.Abs(w);
+            }
+        }
+        if (model.AmbientLaws.Count > 0)
+        {
+            baseSupply = new double[mesh.FacetCount];
+            for (int f = 0; f < mesh.FacetCount; f++)
+                baseSupply[f] = model.FilmSupplyOf(f);
+            supplyTheta = new double[mesh.FacetCount];
+        }
+
+        double LawApplied(IReadOnlyList<double> values)
+        {
+            double sum = 0;
+            for (int j = 0; j < lawCount; j++)
+                if (!model.LoadLaws[j].IsAmbient)
+                    sum += patternSum[j] * values[j];
+            return sum;
+        }
+        double LawAppliedScale(IReadOnlyList<double> values)
+        {
+            double sum = 0;
+            for (int j = 0; j < lawCount; j++)
+                if (!model.LoadLaws[j].IsAmbient)
+                    sum += patternAbsSum[j] * Math.Abs(values[j]);
+            return sum;
+        }
+        double[]? SupplyAt(IReadOnlyList<double> values)
+        {
+            if (baseSupply is null || supplyTheta is null)
+                return null;
+            baseSupply.CopyTo(supplyTheta, 0);
+            foreach (var (facets, h, lawIndex) in model.AmbientLaws)
+                foreach (int f in facets)
+                    supplyTheta[f] += h * values[lawIndex];
+            return supplyTheta;
+        }
 
         // A = C/dt + theta·K, factored once. The step is
         //   A_ff · T_next,f = f_f + (B · T_now)_f - (A · T_c)_f
@@ -584,7 +647,9 @@ public static class ThermalSolver
         states.Add(new ThermalResults(
             model, (double[])current.Clone(),
             StepReport(
-                model, current, EnergyBalance(model, conduction, load, current, null),
+                model, current,
+                EnergyBalance(model, conduction, load, current, null,
+                    LawApplied(lawNow), LawAppliedScale(lawNow), SupplyAt(lawNow)),
                 options, a, 0, true),
             0));
         times.Add(0);
@@ -603,6 +668,34 @@ public static class ThermalSolver
                 progress.ThrowIfCancelled();
                 progress.Report((double)(step - 1) / transient.Steps);
             }
+            // With time laws the load enters at the scheme's own theta point,
+            // theta·f(t_next) + (1−theta)·f(t_now), and the prescribed-column products are
+            // recomputed from the values at t_next — exactly what "keeping the previous
+            // state whole" (above) was built to allow. Law-free, loadTheta IS the constant
+            // load and nothing is recomputed, bit for bit.
+            double[] loadTheta = load;
+            var lawTheta = lawNow;
+            if (timeLaws)
+            {
+                double tNext = step * dt;
+                var loadNext = AssembleLoad(model, tNext);
+                for (int j = 0; j < lawCount; j++)
+                    lawNext[j] = model.LoadLaws[j].Law(tNext);
+                if (model.HasPrescribedLaws)
+                {
+                    prescribed = PrescribedVector(model, tNext);
+                    conduction.Multiply(prescribed, conductionPrescribed);
+                    capacity.Multiply(prescribed, capacityPrescribed);
+                }
+                loadTheta = new double[loadNow.Length];
+                for (int i = 0; i < loadNow.Length; i++)
+                    loadTheta[i] = theta * loadNext[i] + (1.0 - theta) * loadNow[i];
+                loadNow = loadNext;
+                lawTheta = new double[lawCount];
+                for (int j = 0; j < lawCount; j++)
+                    lawTheta[j] = theta * lawNext[j] + (1.0 - theta) * lawNow[j];
+                (lawNow, lawNext) = (lawNext, lawNow);
+            }
             conduction.Multiply(current, conductionNow);
             capacity.Multiply(current, capacityNow);
             for (int node = 0; node < mesh.NodeCount; node++)
@@ -611,7 +704,7 @@ public static class ThermalSolver
                 if (r < 0)
                     continue;
                 freeCurrent[r] = current[node];
-                rhs[r] = load[node]
+                rhs[r] = loadTheta[node]
                     + capacityNow[node] / dt - (1.0 - theta) * conductionNow[node]
                     - (capacityPrescribed[node] / dt + theta * conductionPrescribed[node]);
             }
@@ -628,7 +721,7 @@ public static class ThermalSolver
             }
             worstResidual = Math.Max(worstResidual, Residual(a, freeNext, rhs));
 
-            var next = Expand(model, reduced, freeNext);
+            var next = Expand(model, reduced, freeNext, prescribed);
 
             // The step's own first law, at its own theta-point — which is where the scheme
             // asserts the balance holds, so checking it anywhere else would measure the
@@ -640,7 +733,9 @@ public static class ThermalSolver
             var thetaState = new double[next.Length];
             for (int i = 0; i < next.Length; i++)
                 thetaState[i] = theta * next[i] + (1.0 - theta) * current[i];
-            var stepBalance = EnergyBalance(model, conduction, load, thetaState, capacityRate);
+            var stepBalance = EnergyBalance(
+                model, conduction, loadTheta, thetaState, capacityRate,
+                LawApplied(lawTheta), LawAppliedScale(lawTheta), SupplyAt(lawTheta));
             integratedHeat += dt * (stepBalance.Applied + stepBalance.Prescribed - stepBalance.Convective);
             integratedScale += dt * stepBalance.Scale;
 
@@ -830,6 +925,25 @@ public static class ThermalSolver
         return load;
     }
 
+    /// <summary>The load at one INSTANT: the constant conditions plus every time-law
+    /// pattern scaled by its law's value there. Identical in value to the constant
+    /// assembly for a law-free model (the law list is empty).</summary>
+    internal static double[] AssembleLoad(ThermalModel model, double time)
+    {
+        var load = AssembleLoad(model);
+        foreach (var (pattern, law, _) in model.LoadLaws)
+        {
+            double value = law(time);
+            if (!double.IsFinite(value))
+                throw new FeaException(
+                    $"A time law returned {value:G4} at t = {time:G6}; a law must be "
+                    + "finite wherever the run samples it.");
+            for (int i = 0; i < load.Length; i++)
+                load[i] += value * pattern[i];
+        }
+        return load;
+    }
+
     internal static int[] ReducedIndices(ThermalModel model, out int freeCount)
     {
         var reduced = new int[model.Mesh.NodeCount];
@@ -847,6 +961,28 @@ public static class ThermalSolver
         var v = new double[model.Mesh.NodeCount];
         for (int node = 0; node < v.Length; node++)
             v[node] = model.IsPrescribed(node) ? model.PrescribedTemperature(node) : 0;
+        return v;
+    }
+
+    /// <summary>The prescribed vector at one INSTANT: constant values as stored, law
+    /// nodes read at <paramref name="time"/>.</summary>
+    private static double[] PrescribedVector(ThermalModel model, double time)
+    {
+        var v = PrescribedVector(model);
+        if (!model.HasPrescribedLaws)
+            return v;
+        for (int node = 0; node < v.Length; node++)
+        {
+            if (model.PrescribedLawOf(node) is { } law)
+            {
+                double value = law(time);
+                if (!double.IsFinite(value))
+                    throw new FeaException(
+                        $"A prescribed-temperature law returned {value:G4} at t = {time:G6}; "
+                        + "a law must be finite wherever the run samples it.");
+                v[node] = value;
+            }
+        }
         return v;
     }
 
@@ -916,6 +1052,20 @@ public static class ThermalSolver
         return temperature;
     }
 
+    /// <summary>Expansion against an EXPLICIT prescribed vector — the transient's form, so
+    /// a state stores the prescribed values at its own instant.</summary>
+    private static double[] Expand(
+        ThermalModel model, int[] reduced, double[] free, double[] prescribed)
+    {
+        var temperature = new double[model.Mesh.NodeCount];
+        for (int node = 0; node < temperature.Length; node++)
+        {
+            int r = reduced[node];
+            temperature[node] = r >= 0 ? free[r] : prescribed[node];
+        }
+        return temperature;
+    }
+
     private static double[] InitialState(ThermalModel model, ThermalTransientOptions transient)
     {
         int n = model.Mesh.NodeCount;
@@ -975,12 +1125,13 @@ public static class ThermalSolver
     /// <param name="capacityRate">Per-node <c>C·dT/dt</c>, or null for a steady state.</param>
     private static Balance EnergyBalance(
         ThermalModel model, PackedSparseMatrix conduction, double[] load,
-        double[] temperature, double[]? capacityRate)
+        double[] temperature, double[]? capacityRate,
+        double appliedLaw = 0, double appliedLawScale = 0, double[]? facetSupply = null)
     {
         var mesh = model.Mesh;
         var product = conduction.Multiply(temperature);
 
-        double applied = 0, prescribedHeat = 0, scale = 0, storageRate = 0;
+        double applied = appliedLaw, prescribedHeat = 0, scale = appliedLawScale, storageRate = 0;
         for (int node = 0; node < mesh.NodeCount; node++)
         {
             applied += model.HeatOf(node);
@@ -1017,7 +1168,8 @@ public static class ThermalSolver
                 weighted += weights[i] * temperature[nodes[i]];
                 area += weights[i];
             }
-            double loss = h * weighted - model.FilmSupplyOf(f) * area;
+            double supply = facetSupply is null ? model.FilmSupplyOf(f) : facetSupply[f];
+            double loss = h * weighted - supply * area;
             convective += loss;
             scale += Math.Abs(loss);
         }

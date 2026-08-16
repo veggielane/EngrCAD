@@ -41,6 +41,9 @@ public sealed class ThermalModel
     private readonly double[] _heat;
     private readonly double[] _filmCoefficient;   // per facet, accumulated
     private readonly double[] _filmSupply;        // per facet, sum of h·T_inf
+    private readonly List<(double[] Pattern, Func<double, double> Law, bool IsAmbient)> _loadLaws = [];
+    private readonly List<(int[] Facets, double FilmCoefficient, int LawIndex)> _ambientLaws = [];
+    private Func<double, double>?[]? _prescribedLaws;
     private readonly Dictionary<int, Material> _materials = [];
     private readonly Dictionary<int, ConductivityLaw> _conductivityLaws = [];
     private Dictionary<int, ConductivityLaw>? _resolvedLaws;
@@ -213,6 +216,29 @@ public sealed class ThermalModel
     /// <summary>Number of facets carrying a convective condition.</summary>
     public int ConvectiveFacetCount => _convectiveFacets;
 
+    /// <summary>The time-varying load channels: a nodal pattern assembled at unit law
+    /// value, scaled by <c>Law(t)</c> at each instant the transient samples. Assembled at
+    /// ADD time exactly as the constant conditions are, so a law and its constant twin
+    /// integrate the same geometry.</summary>
+    internal IReadOnlyList<(double[] Pattern, Func<double, double> Law, bool IsAmbient)> LoadLaws => _loadLaws;
+
+    /// <summary>The convective-ambient laws by FACET — what the energy balance needs,
+    /// because a varying ambient belongs to the CONVECTIVE term (measured against the
+    /// answer), not to the applied heat. <c>LawIndex</c> points into
+    /// <see cref="LoadLaws"/> so one evaluation serves the load and the balance.</summary>
+    internal IReadOnlyList<(int[] Facets, double FilmCoefficient, int LawIndex)> AmbientLaws => _ambientLaws;
+
+    /// <summary>True when any condition carries a time law — which is what makes the model
+    /// a TRANSIENT's input only: a steady solve has no time to hand a law.</summary>
+    public bool HasTimeLaws => _loadLaws.Count > 0 || _prescribedLaws is not null;
+
+    /// <summary>True when any prescribed temperature carries a time law.</summary>
+    internal bool HasPrescribedLaws => _prescribedLaws is not null;
+
+    /// <summary>The prescribed-temperature law on one node, or null when the value is
+    /// constant.</summary>
+    internal Func<double, double>? PrescribedLawOf(int node) => _prescribedLaws?[node];
+
     /// <summary>
     /// Resultant of every applied nodal heat load — the power the boundary must carry
     /// away. Convection is NOT included: its supply depends on the answer, so it is
@@ -264,6 +290,8 @@ public sealed class ThermalModel
         RequireFinite(temperature, nameof(temperature));
         _fixed[node] = true;
         _temperature[node] = temperature;
+        if (_prescribedLaws is not null)
+            _prescribedLaws[node] = null;           // a constant OVERWRITES a law (the rule)
         _conditions.Add($"temperature {temperature:G6} on node {node}");
         return this;
     }
@@ -405,6 +433,141 @@ public sealed class ThermalModel
     /// <summary>Convection on the facets carrying one tag.</summary>
     public ThermalModel Convection(int tag, double filmCoefficient, double ambientTemperature) =>
         Convection(Facets.Tag(tag), filmCoefficient, ambientTemperature);
+
+    // ---- time-varying conditions -------------------------------------------------------
+
+    /// <summary>A heat flux whose VALUE follows a time law, <c>q''(t) = fluxPerArea(t)</c>
+    /// uniformly over the selected facets. The spatial pattern is assembled once at add
+    /// time (at unit flux) and scaled by the law at each instant the transient samples —
+    /// which is what keeps the single-factorization contract: a law moves only the LOAD.
+    /// A model carrying any law is a transient's input only; the steady solve refuses it
+    /// by name.</summary>
+    public ThermalModel HeatFlux(Func<FacetRef, bool> facets, Func<double, double> fluxPerArea)
+    {
+        ArgumentNullException.ThrowIfNull(facets);
+        ArgumentNullException.ThrowIfNull(fluxPerArea);
+        var pattern = new double[Mesh.NodeCount];
+        int count = ApplySurfaceLoad(facets, nameof(HeatFlux), _ => 1.0, pattern);
+        _loadLaws.Add((pattern, fluxPerArea, false));
+        _conditions.Add($"heat flux law on {count} facets");
+        return this;
+    }
+
+    /// <summary>A total heat load whose POWER follows a time law, <c>P(t) =
+    /// totalPower(t)</c> spread over the selected facets as a uniform flux — the
+    /// duty-cycled component. The resultant is exact at every instant: the pattern is
+    /// assembled at exactly one watt total, so <c>pattern·law(t)</c> carries
+    /// <c>law(t)</c> watts whatever the element order.</summary>
+    public ThermalModel HeatLoad(Func<FacetRef, bool> facets, Func<double, double> totalPower)
+    {
+        ArgumentNullException.ThrowIfNull(facets);
+        ArgumentNullException.ThrowIfNull(totalPower);
+
+        var matched = new List<int>();
+        double area = 0;
+        for (int f = 0; f < Mesh.FacetCount; f++)
+        {
+            if (!facets(Describe(f)))
+                continue;
+            matched.Add(f);
+            area += Mesh.FacetArea(f).Length;
+        }
+        if (matched.Count == 0)
+            throw NothingSelected(nameof(HeatLoad));
+        if (!(area > 0))
+            throw new FeaException(
+                $"HeatLoad selected {matched.Count} facets whose total area is zero; "
+                + "a flux cannot be derived.");
+
+        var pattern = new double[Mesh.NodeCount];
+        ApplyToFacets(matched, _ => 1.0 / area, pattern);
+        _loadLaws.Add((pattern, totalPower, false));
+        _conditions.Add($"heat load law over {matched.Count} facets ({area:G6} area)");
+        return this;
+    }
+
+    /// <summary>A convective boundary whose AMBIENT follows a time law — the day–night
+    /// cycle, a chamber ramp. The film coefficient stays CONSTANT and that is a stated
+    /// boundary, not an omission: <c>h</c> enters the conduction MATRIX, which is factored
+    /// once for the whole run, while the ambient enters only the supply
+    /// <c>h·T_inf(t)</c> — so a varying ambient is one more load pattern and a varying
+    /// film would be a different, much larger change.</summary>
+    public ThermalModel Convection(
+        Func<FacetRef, bool> facets, double filmCoefficient, Func<double, double> ambientTemperature)
+    {
+        ArgumentNullException.ThrowIfNull(facets);
+        ArgumentNullException.ThrowIfNull(ambientTemperature);
+        if (!(filmCoefficient > 0) || double.IsInfinity(filmCoefficient))
+            throw new FeaException(
+                $"Convection needs a finite positive film coefficient; {filmCoefficient:G6} was "
+                + "given. Zero is not a condition (leave the surface unmentioned and it is "
+                + "adiabatic, which is the weak form's natural boundary condition), and a "
+                + "negative one is heat flowing up its own gradient, which would make the "
+                + "conduction matrix indefinite.");
+
+        var matched = new List<int>();
+        for (int f = 0; f < Mesh.FacetCount; f++)
+        {
+            if (facets(Describe(f)))
+                matched.Add(f);
+        }
+        if (matched.Count == 0)
+            throw NothingSelected(nameof(Convection));
+
+        double area = 0;
+        foreach (int f in matched)
+        {
+            if (_filmCoefficient[f] == 0)
+                _convectiveFacets++;
+            _filmCoefficient[f] += filmCoefficient;
+            area += Mesh.FacetArea(f).Length;
+        }
+        // The supply at UNIT ambient, integrated exactly as the constant path integrates
+        // h·T_inf — so the law and its constant twin cannot disagree about the geometry.
+        var pattern = new double[Mesh.NodeCount];
+        ApplyToFacets(matched, _ => filmCoefficient, pattern);
+        _ambientLaws.Add(([.. matched], filmCoefficient, _loadLaws.Count));
+        _loadLaws.Add((pattern, ambientTemperature, true));
+        _conditions.Add(
+            $"convection h = {filmCoefficient:G6} to ambient law on "
+            + $"{matched.Count} facets ({area:G6} area)");
+        return this;
+    }
+
+    /// <summary>A prescribed temperature that follows a time law — the ramped platen. The
+    /// stored constant value is <c>temperature(0)</c> (what any steady reader sees); the
+    /// transient reads the law at each step's own time, on both sides of the theta point,
+    /// and each stored state carries the value at its own instant.</summary>
+    public ThermalModel Temperature(Func<FacetRef, bool> facets, Func<double, double> temperature)
+    {
+        ArgumentNullException.ThrowIfNull(facets);
+        ArgumentNullException.ThrowIfNull(temperature);
+        double initial = temperature(0);
+        RequireFinite(initial, nameof(temperature));
+
+        _prescribedLaws ??= new Func<double, double>?[Mesh.NodeCount];
+        int count = 0;
+        var seen = new bool[Mesh.NodeCount];
+        for (int f = 0; f < Mesh.FacetCount; f++)
+        {
+            if (!facets(Describe(f)))
+                continue;
+            foreach (int node in Mesh.Facet(f))
+            {
+                if (seen[node])
+                    continue;
+                seen[node] = true;
+                _fixed[node] = true;
+                _temperature[node] = initial;
+                _prescribedLaws[node] = temperature;
+                count++;
+            }
+        }
+        if (count == 0)
+            throw NothingSelected(nameof(Temperature));
+        _conditions.Add($"prescribed temperature law on {count} nodes");
+        return this;
+    }
 
     // ---- volumetric loads ------------------------------------------------------------
 
@@ -563,7 +726,8 @@ public sealed class ThermalModel
     }
 
     private int ApplySurfaceLoad(
-        Func<FacetRef, bool> facets, string caller, Func<FacetRef, double> flux)
+        Func<FacetRef, bool> facets, string caller, Func<FacetRef, double> flux,
+        double[]? target = null)
     {
         var matched = new List<int>();
         for (int f = 0; f < Mesh.FacetCount; f++)
@@ -573,11 +737,14 @@ public sealed class ThermalModel
         }
         if (matched.Count == 0)
             throw NothingSelected(caller);
-        ApplyToFacets(matched, flux);
+        ApplyToFacets(matched, flux, target ?? _heat);
         return matched.Count;
     }
 
-    private void ApplyToFacets(List<int> facets, Func<FacetRef, double> flux)
+    private void ApplyToFacets(List<int> facets, Func<FacetRef, double> flux) =>
+        ApplyToFacets(facets, flux, _heat);
+
+    private void ApplyToFacets(List<int> facets, Func<FacetRef, double> flux, double[] target)
     {
         int perFacet = Mesh.NodesPerFacet;
         Span<Vector3d> positions = stackalloc Vector3d[6];
@@ -591,7 +758,7 @@ public sealed class ThermalModel
             ThermalElement.FacetLoad(
                 Mesh.Order, positions[..perFacet], flux(Describe(f)), weights);
             for (int i = 0; i < perFacet; i++)
-                _heat[nodes[i]] += weights[i];
+                target[nodes[i]] += weights[i];
         }
     }
 

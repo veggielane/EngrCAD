@@ -688,12 +688,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   consumer would be the fifth reason not to fork it.
 - [ ] **FEA thermal follow-ups** (v1 ✅ landed — `ThermalModel`/`ThermalSolver`/
   `ThermalResults` + `StructuralModel.ThermalLoad`, docs `examples/fea-thermal.md`):
-  - [ ] **Time-varying boundary conditions.** The stepping already carries the previous
-    state whole rather than collapsing the prescribed columns (it has to, for the first
-    step of a step change), so a per-step prescribed value is one line plus a way to
-    express it — a `Func<double, double>` per condition, or a load-step list. Note the
-    constant step is what buys the single factorization, so a time-varying *step* is a
-    different and much larger change.
   - [ ] **Lumped capacity**, for monotonicity under backward Euler at short steps and for
     a future explicit scheme. Row-sum lumping is unavailable for 10-node elements (it
     gives −V/20 at every corner, a negative capacity), so this means a scaled-diagonal
