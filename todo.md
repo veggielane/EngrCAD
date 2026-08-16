@@ -732,11 +732,17 @@ export — is recorded in CLAUDE.md):
   by name since a font has no data form): **variable fonts** (`fvar`/`gvar`, incl. `CFF2` —
   rejected loudly today; PRODUCT-SIZED — fvar/avar axis parsing, gvar per-glyph delta
   interpolation with IUP, and CFF2's separate blend charstring interpreter, each with its
-  own synthetic-font fixture); **`seac` accent composition** (legacy CFF accents — rejected
-  loudly today; needs CFF CHARSET parsing (formats 0/1/2 off DICT op 15, not parsed today)
-  plus the 256-entry StandardEncoding table to resolve bchar/achar codes → SID → GID, then
-  compose the two glyphs shifted by (adx, ady) — a bounded but non-trivial CFF add for a
-  legacy mechanism modern fonts express through the `cmap`).
+  own synthetic-font fixture); **`seac` accent composition ✅
+  landed** — charset formats 0/1/2 parsed off DICT op 15 (absent/0 = the ISOAdobe
+  identity; the predefined Expert charsets refuse at seac by name), the 256-entry
+  Standard Encoding table transcribed (⚠ verify-against-datasheet), and the 4-argument
+  endchar composes base + accent shifted by (adx, ady) VERBATIM — Type 2 carries no
+  sidebearing operands, so the Type 1 asb correction has nothing to correct, the
+  decision documented in place. A nested seac component refuses by name (the spec
+  forbids it, and the refusal is what bounds the recursion); unresolvable codes name
+  the code. Verified coordinate-for-coordinate on synthetic fonts, with the charset
+  tests choosing codes the TABLE routes to different glyphs than the identity would —
+  which is what proves the table was read rather than assumed.
 - [ ] **Text on a path: second line via an offset path.** The rigid-placement UPRIGHT mode
   ✅ landed (`SketchesOnPath`/`Shape.TextOnPath` `upright:` argument — a property of the
   placement, so an argument not a `TextStyle` field; anchors mid-advance, spaces by arc

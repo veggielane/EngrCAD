@@ -10167,6 +10167,25 @@ the whole edge sweep — the offset outruns the outline, and no tangent exists).
 curved tier's variable twin stays open with its reason stated: a variable offset of an
 ARC is a spiral, which the lines-and-arcs vocabulary must FIT rather than carry.
 
+**CFF `seac` accent composition landed as the bounded add it was filed as, with the one
+semantic decision documented rather than inherited** (`CffOutlines` — charset parsing
+off DICT op 15, the transcribed Standard Encoding, and the 4-argument endchar):
+resolving a seac component is CODE → SID (Standard Encoding, the 256-entry table
+transcribed under the ⚠ verify-against-datasheet convention) → GID (the charset:
+formats 0/1/2 parsed, absent-or-0 the ISOAdobe identity where SID == GID, the
+predefined Expert charsets refusing at seac by name since no text font uses them), and
+the composed glyph is the base's contours plus the accent's translated by (adx, ady)
+VERBATIM — the decision being that Type 2 carries no sidebearing operands, so the
+Type 1 `asb` correction has nothing to correct, stated in place rather than silently
+assumed. A component that is itself seac refuses by name — the spec forbids it, and the
+refusal is what bounds the recursion at one level rather than a depth counter. The
+verification is the synthetic-font convention at its strictest: composition asserted
+coordinate-for-coordinate against the component glyphs' own outlines, and the charset
+tests choose codes the TABLE routes to DIFFERENT glyphs than the identity would
+(format 0 reverses the identity, format 1 shifts it), which is what proves the charset
+was read rather than assumed — a parser bug that fell back to SID == GID would pass
+every identity-charset test and fail these by drawing the wrong letter.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

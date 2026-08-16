@@ -230,12 +230,91 @@ public class CffFontTests
     // ---- rejection paths -----------------------------------------------------
 
     [Fact]
-    public void SeacEndchar_IsRejectedByName()
+    public void SeacEndchar_ComposesBasePlusShiftedAccent()
     {
+        // The deprecated accent form, through the identity (ISOAdobe) charset: the
+        // default codes 35/36 are SIDs 4/5, which ARE GIDs 4/5 — the curve and the
+        // wave — so the seac glyph's outline must be the curve's contours followed by
+        // the wave's translated by exactly (adx, ady) = (100, 50), coordinate for
+        // coordinate.
         var font = Load(new SyntheticCffFontOptions { SeacEndchar = true });
+        var composed = font.GetGlyph(SyntheticCffFont.RectGlyph);
+        var curve = font.GetGlyph(SyntheticCffFont.CurveGlyph);
+        var wave = font.GetGlyph(SyntheticCffFont.WaveGlyph);
 
-        var error = Assert.Throws<FontFormatException>(() => font.GetGlyph(SyntheticCffFont.RectGlyph));
-        Assert.Contains("seac", error.Message);
+        Assert.Equal(curve.Contours.Count + wave.Contours.Count, composed.Contours.Count);
+        for (int c = 0; c < curve.Contours.Count; c++)
+            AssertContourEqual(curve.Contours[c], composed.Contours[c], 0, 0);
+        for (int c = 0; c < wave.Contours.Count; c++)
+            AssertContourEqual(wave.Contours[c], composed.Contours[curve.Contours.Count + c], 100, 50);
+    }
+
+    [Theory]
+    [InlineData(0)]   // one SID per glyph, the identity REVERSED: SID 10−g
+    [InlineData(1)]   // one ascending range: SID = GID + 2
+    public void Seac_ResolvesThroughTheCharsetTable(int format)
+    {
+        // The codes are chosen so the TABLE routes them to different glyphs than the
+        // identity would — which is what proves the charset was read rather than
+        // assumed. Format 0 (SID = 10−g): code 37 → SID 6 → GID 4 (curve), code 36 →
+        // SID 5 → GID 5 (wave). Format 1 (SID = g+2): the same codes land on GID 4
+        // and GID 3 (the ring).
+        var font = Load(new SyntheticCffFontOptions
+        {
+            SeacEndchar = true,
+            SeacBaseCode = 37,
+            SeacAccentCode = 36,
+            CharsetFormat = format,
+        });
+        var composed = font.GetGlyph(SyntheticCffFont.RectGlyph);
+        var baseGlyph = font.GetGlyph(SyntheticCffFont.CurveGlyph);
+        var accentGlyph = font.GetGlyph(
+            format == 0 ? SyntheticCffFont.WaveGlyph : SyntheticCffFont.RingGlyph);
+
+        Assert.Equal(baseGlyph.Contours.Count + accentGlyph.Contours.Count, composed.Contours.Count);
+        for (int c = 0; c < baseGlyph.Contours.Count; c++)
+            AssertContourEqual(baseGlyph.Contours[c], composed.Contours[c], 0, 0);
+        for (int c = 0; c < accentGlyph.Contours.Count; c++)
+            AssertContourEqual(
+                accentGlyph.Contours[c], composed.Contours[baseGlyph.Contours.Count + c], 100, 50);
+    }
+
+    [Fact]
+    public void Seac_AnUnresolvableCode_IsRefusedByName()
+    {
+        // Code 127 has no Standard Encoding entry; code 65 ('A', SID 34) resolves past
+        // the synthetic font's 8 glyphs. Both name the failure rather than drawing the
+        // wrong letter.
+        var noEntry = Load(new SyntheticCffFontOptions { SeacEndchar = true, SeacBaseCode = 127 });
+        Assert.Contains("Standard Encoding",
+            Assert.Throws<FontFormatException>(() => noEntry.GetGlyph(SyntheticCffFont.RectGlyph)).Message);
+
+        var pastFont = Load(new SyntheticCffFontOptions { SeacEndchar = true, SeacBaseCode = 65 });
+        Assert.Contains("past the font",
+            Assert.Throws<FontFormatException>(() => pastFont.GetGlyph(SyntheticCffFont.RectGlyph)).Message);
+    }
+
+    [Fact]
+    public void Seac_ANestedComponent_IsRefusedByName()
+    {
+        // Code 33 is SID 2 = GID 2 — the seac glyph ITSELF, so the base component is
+        // seac-composed, which Type 2 forbids (and which is what bounds the recursion).
+        var font = Load(new SyntheticCffFontOptions { SeacEndchar = true, SeacBaseCode = 33 });
+        Assert.Contains("itself seac",
+            Assert.Throws<FontFormatException>(() => font.GetGlyph(SyntheticCffFont.RectGlyph)).Message);
+    }
+
+    private static void AssertContourEqual(
+        GlyphContour expected, GlyphContour actual, double dx, double dy)
+    {
+        Assert.Equal(expected.IsCubic, actual.IsCubic);
+        Assert.Equal(expected.Points.Count, actual.Points.Count);
+        for (int i = 0; i < expected.Points.Count; i++)
+        {
+            Assert.Equal(expected.Points[i].OnCurve, actual.Points[i].OnCurve);
+            Assert.Equal(expected.Points[i].Position.X + dx, actual.Points[i].Position.X);
+            Assert.Equal(expected.Points[i].Position.Y + dy, actual.Points[i].Position.Y);
+        }
     }
 
     [Fact]

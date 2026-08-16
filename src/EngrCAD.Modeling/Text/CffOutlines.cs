@@ -23,7 +23,8 @@ namespace EngrCAD.Modeling;
 /// TrueType's implied-midpoint trap, and the synthetic-font tests pin it with exact
 /// decoded coordinates.</para>
 /// <para><b>Rejected loudly</b> (message names the construct): Type 1 charstrings,
-/// the legacy <c>seac</c> accent composition (endchar with 4 arguments), and the
+/// the legacy <c>seac</c> accent composition is SUPPORTED (endchar with 4 arguments —
+/// see <see cref="ReadGlyph"/>), and the
 /// Type 2 arithmetic/storage operators no real font uses.</para>
 /// </summary>
 internal sealed class CffOutlines
@@ -41,18 +42,29 @@ internal sealed class CffOutlines
     private readonly (int Start, int End)[][] _localSubrsPerFd;
     private readonly byte[] _fdForGlyph;                    // all zero for non-CID fonts
 
+    // GID for each SID, from the charset (op 15). Null when the charset is the
+    // predefined ISOAdobe ordering (0), where SID == GID for every glyph the font has;
+    // seac resolution then uses the identity. The predefined EXPERT charsets (1, 2)
+    // leave _expertCharset set and seac refuses by name — no text font uses them.
+    private readonly Dictionary<int, int>? _gidForSid;
+    private readonly bool _expertCharset;
+
     private CffOutlines(
         byte[] data,
         (int Start, int End)[] charStrings,
         (int Start, int End)[] globalSubrs,
         (int Start, int End)[][] localSubrsPerFd,
-        byte[] fdForGlyph)
+        byte[] fdForGlyph,
+        Dictionary<int, int>? gidForSid,
+        bool expertCharset)
     {
         _data = data;
         _charStrings = charStrings;
         _globalSubrs = globalSubrs;
         _localSubrsPerFd = localSubrsPerFd;
         _fdForGlyph = fdForGlyph;
+        _gidForSid = gidForSid;
+        _expertCharset = expertCharset;
     }
 
     /// <summary>Number of charstrings in the font (must match <c>maxp.numGlyphs</c>;
@@ -124,7 +136,21 @@ internal sealed class CffOutlines
         }
 
         _ = length;                                         // spans were bounds-checked by FontReader as they were read
-        return new CffOutlines(data, charStrings, globalSubrs, localSubrsPerFd, fdForGlyph);
+        // Charset (op 15): 0/absent = ISOAdobe (SID == GID), 1/2 = the predefined
+        // Expert charsets, an offset = an explicit table in format 0, 1 or 2.
+        Dictionary<int, int>? gidForSid = null;
+        bool expertCharset = false;
+        if (top.TryGetValue(15, out var charsetOp) && (int)charsetOp[0] is not 0)
+        {
+            int charsetValue = (int)charsetOp[0];
+            if (charsetValue is 1 or 2)
+                expertCharset = true;
+            else
+                gidForSid = ReadCharset(span, offset + charsetValue, charStrings.Length);
+        }
+
+        return new CffOutlines(
+            data, charStrings, globalSubrs, localSubrsPerFd, fdForGlyph, gidForSid, expertCharset);
     }
 
     private static (int Start, int End)[] ReadPrivateSubrs(
@@ -297,12 +323,103 @@ internal sealed class CffOutlines
         }
     }
 
+    /// <summary>Charset formats 0 (a SID per glyph), 1 and 2 (ranges of consecutive
+    /// SIDs with 1- or 2-byte counts), inverted to SID → GID for seac resolution.
+    /// Glyph 0 is .notdef (SID 0) and is not stored. The FIRST glyph carrying a SID
+    /// wins on a duplicate, matching every other CFF consumer.</summary>
+    private static Dictionary<int, int> ReadCharset(ReadOnlySpan<byte> span, int at, int glyphCount)
+    {
+        var reader = new FontReader(span, at);
+        int format = reader.ReadUInt8();
+        var gidForSid = new Dictionary<int, int> { [0] = 0 };
+        int gid = 1;
+        switch (format)
+        {
+            case 0:
+                for (; gid < glyphCount; gid++)
+                    gidForSid.TryAdd(reader.ReadUInt16(), gid);
+                break;
+            case 1 or 2:
+                while (gid < glyphCount)
+                {
+                    int first = reader.ReadUInt16();
+                    int left = format == 1 ? reader.ReadUInt8() : reader.ReadUInt16();
+                    for (int k = 0; k <= left && gid < glyphCount; k++, gid++)
+                        gidForSid.TryAdd(first + k, gid);
+                }
+                break;
+            default:
+                throw new FontFormatException($"CFF charset format {format} is not defined (0, 1 and 2 exist).");
+        }
+        return gidForSid;
+    }
+
+    /// <summary>
+    /// Adobe Standard Encoding as code → SID, the table seac's bchar/achar codes are
+    /// defined against (CFF spec Appendix B; ⚠ transcribed — verify against the
+    /// datasheet). Codes 32..126 map to SIDs 1..95 sequentially; the high region is
+    /// irregular; unmapped codes carry SID 0 (.notdef), which seac refuses by name.
+    /// </summary>
+    private static readonly ushort[] StandardEncodingSid = BuildStandardEncoding();
+
+    private static ushort[] BuildStandardEncoding()
+    {
+        var sid = new ushort[256];
+        for (int code = 32; code <= 126; code++)
+            sid[code] = (ushort)(code - 31);
+        (int Code, int Sid)[] high =
+        [
+            (161, 96), (162, 97), (163, 98), (164, 99), (165, 100), (166, 101), (167, 102),
+            (168, 103), (169, 104), (170, 105), (171, 106), (172, 107), (173, 108), (174, 109),
+            (175, 110), (177, 111), (178, 112), (179, 113), (180, 114), (182, 115), (183, 116),
+            (184, 117), (185, 118), (186, 119), (187, 120), (188, 121), (189, 122), (191, 123),
+            (193, 124), (194, 125), (195, 126), (196, 127), (197, 128), (198, 129), (199, 130),
+            (200, 131), (202, 132), (203, 133), (205, 134), (206, 135), (207, 136), (208, 137),
+            (225, 138), (227, 139), (232, 140), (233, 141), (234, 142), (235, 143),
+            (241, 144), (245, 145), (248, 146), (249, 147), (250, 148), (251, 149),
+        ];
+        foreach (var (code, s) in high)
+            sid[code] = (ushort)s;
+        return sid;
+    }
+
+    /// <summary>A seac component CODE resolved to its glyph: Standard Encoding names
+    /// the SID, the charset names the glyph. Every miss is named — seac is a claim
+    /// about two specific glyphs, and guessing either draws the wrong letter.</summary>
+    private int ResolveSeacComponent(int glyphIndex, int code, string role)
+    {
+        if ((uint)code > 255)
+            throw new FontFormatException(
+                $"Glyph {glyphIndex}: seac {role} code {code} is outside 0..255.");
+        int sid = StandardEncodingSid[code];
+        if (sid == 0)
+            throw new FontFormatException(
+                $"Glyph {glyphIndex}: seac {role} code {code} has no Standard Encoding entry.");
+        if (_expertCharset)
+            throw new FontFormatException(
+                $"Glyph {glyphIndex}: seac against a predefined Expert charset is not supported.");
+        if (_gidForSid is null)
+        {
+            // ISOAdobe predefined charset: SID == GID.
+            if (sid < _charStrings.Length)
+                return sid;
+            throw new FontFormatException(
+                $"Glyph {glyphIndex}: seac {role} SID {sid} is past the font's {_charStrings.Length} glyphs.");
+        }
+        if (_gidForSid.TryGetValue(sid, out int gid))
+            return gid;
+        throw new FontFormatException(
+            $"Glyph {glyphIndex}: seac {role} SID {sid} is not in the font's charset.");
+    }
+
     // ---- Type 2 charstring interpreter --------------------------------------
 
     /// <summary>Decodes one glyph's outline. Contours are cubic
     /// (<see cref="GlyphContour.IsCubic"/>): on-curve anchors with off-curve control
     /// points in pairs, closing from the last point back to the first.</summary>
-    public List<GlyphContour> ReadGlyph(int glyphIndex)
+    public List<GlyphContour> ReadGlyph(int glyphIndex) => ReadGlyph(glyphIndex, allowSeac: true);
+
+    private List<GlyphContour> ReadGlyph(int glyphIndex, bool allowSeac)
     {
         if ((uint)glyphIndex >= (uint)_charStrings.Length)
             throw new ArgumentOutOfRangeException(nameof(glyphIndex));
@@ -310,7 +427,30 @@ internal sealed class CffOutlines
         var (start, end) = _charStrings[glyphIndex];
         state.Run(start, end, depth: 0);
         state.FlushContour();
-        return state.Contours;
+        if (state.Seac is not { } seac)
+            return state.Contours;
+
+        // The deprecated endchar accent form: the glyph is its BASE character's
+        // outline plus its ACCENT character's, the accent displaced by (adx, ady).
+        // Type 2 carries no sidebearing operands, so adx is the displacement verbatim
+        // (the Type 1 asb correction has nothing to correct here). A component that is
+        // itself seac is forbidden by the spec and refused by name, which is also what
+        // bounds the recursion at one level.
+        if (!allowSeac)
+            throw new FontFormatException(
+                $"Glyph {glyphIndex}: a seac component is itself seac-composed, which Type 2 forbids.");
+        int baseGlyph = ResolveSeacComponent(glyphIndex, seac.BaseCode, "base");
+        int accentGlyph = ResolveSeacComponent(glyphIndex, seac.AccentCode, "accent");
+        var contours = ReadGlyph(baseGlyph, allowSeac: false);
+        var shift = new Vector2d(seac.Adx, seac.Ady);
+        foreach (var contour in ReadGlyph(accentGlyph, allowSeac: false))
+        {
+            var moved = new GlyphPoint[contour.Points.Count];
+            for (int i = 0; i < moved.Length; i++)
+                moved[i] = contour.Points[i] with { Position = contour.Points[i].Position + shift };
+            contours.Add(new GlyphContour(moved, contour.IsCubic));
+        }
+        return contours;
     }
 
     /// <summary>Bias added to subroutine call operands (Type 2 §4.7): small fonts get
@@ -614,6 +754,10 @@ internal sealed class CffOutlines
             Run(subrs[index].Start, subrs[index].End, depth + 1);
         }
 
+        /// <summary>The deprecated endchar accent form's arguments, when this glyph
+        /// used it — the outer <see cref="ReadGlyph(int, bool)"/> composes.</summary>
+        public (double Adx, double Ady, int BaseCode, int AccentCode)? Seac { get; private set; }
+
         private void EndChar()
         {
             if (!_widthParsed)
@@ -623,8 +767,7 @@ internal sealed class CffOutlines
                     _stack.RemoveAt(0);
             }
             if (_stack.Count == 4)
-                throw new FontFormatException(
-                    $"Glyph {glyphIndex}: endchar carries 4 arguments — the deprecated 'seac' accent composition, which is not supported.");
+                Seac = (Arg(0), Arg(1), (int)Arg(2), (int)Arg(3));
             _stack.Clear();
             _ended = true;
         }

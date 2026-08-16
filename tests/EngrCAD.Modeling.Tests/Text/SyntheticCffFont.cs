@@ -19,6 +19,20 @@ internal sealed record SyntheticCffFontOptions
     /// <summary>Replace the 'I' charstring with a legacy seac endchar (4 arguments).</summary>
     public bool SeacEndchar { get; init; }
 
+    /// <summary>The seac base/accent CODES (Standard Encoding) when
+    /// <see cref="SeacEndchar"/> is set. The defaults resolve through the identity
+    /// (ISOAdobe) charset to the Curve and Wave glyphs: code 36 = SID 5 = GID 5 is the
+    /// wave, 35 = SID 4 = GID 4 the curve.</summary>
+    public int SeacBaseCode { get; init; } = 35;
+    public int SeacAccentCode { get; init; } = 36;
+
+    /// <summary>Writes a charset (op 15) in this format: null = none (the predefined
+    /// ISOAdobe identity), 0 = one SID per glyph, 1 = a range. Format 0 REVERSES the
+    /// identity (GID g carries SID 10−g), format 1 shifts it (SID = GID + 2) — both
+    /// chosen so a resolution through the TABLE lands on different glyphs than the
+    /// identity would, which is what proves the table was read.</summary>
+    public int? CharsetFormat { get; init; }
+
     /// <summary>Inject an unsupported Type 2 extension operator (12 15) into 'I'.</summary>
     public bool ArithmeticOp { get; init; }
 }
@@ -152,12 +166,12 @@ internal static class SyntheticCffFont
         // Every DICT offset operand is written in the fixed 5-byte (29) encoding, so
         // DICT sizes do not depend on the values and one measuring pass suffices.
         byte[] Fixed(SyntheticCffFontOptions o, int charStringsAt, int privateSize, int privateAt,
-                     int fdArrayAt, int fdSelectAt)
+                     int fdArrayAt, int fdSelectAt, int charsetAt = 0)
         {
             var cff = new Be();
             cff.U8(1).U8(0).U8(4).U8(4);                             // header: major, minor, hdrSize, offSize
             cff.Bytes(nameIndex);
-            cff.Bytes(IndexOf(TopDict(o, charStringsAt, privateSize, privateAt, fdArrayAt, fdSelectAt)));
+            cff.Bytes(IndexOf(TopDict(o, charStringsAt, privateSize, privateAt, fdArrayAt, fdSelectAt, charsetAt)));
             cff.Bytes(stringIndex);
             cff.Bytes(globalSubrs);
             return cff.ToArray();
@@ -173,11 +187,14 @@ internal static class SyntheticCffFont
             int privateDictSize = PrivateDict(subrsOffset: 0).Length;
             var privateDict = PrivateDict(subrsOffset: privateDictSize);
             int privateAt = charStringsAt + charStrings.Length;
+            int charsetAt = privateAt + privateDict.Length + localSubrs.Length;
             var cff = new Be();
-            cff.Bytes(Fixed(options, charStringsAt, privateDict.Length, privateAt, 0, 0));
+            cff.Bytes(Fixed(options, charStringsAt, privateDict.Length, privateAt, 0, 0, charsetAt));
             cff.Bytes(charStrings);
             cff.Bytes(privateDict);
             cff.Bytes(localSubrs);
+            if (options.CharsetFormat is { } charsetFormat)
+                cff.Bytes(Charset(charsetFormat));
             return cff.ToArray();
         }
         else
@@ -210,9 +227,14 @@ internal static class SyntheticCffFont
     }
 
     private static byte[] TopDict(SyntheticCffFontOptions options, int charStringsAt,
-        int privateSize, int privateAt, int fdArrayAt, int fdSelectAt)
+        int privateSize, int privateAt, int fdArrayAt, int fdSelectAt, int charsetAt = 0)
     {
         var dict = new Be();
+        if (options.CharsetFormat is not null)
+        {
+            DictInt(dict, charsetAt);
+            dict.U8(15);                                             // charset offset
+        }
         if (options.CharstringType is { } type)
         {
             DictInt(dict, type);
@@ -324,6 +346,28 @@ internal static class SyntheticCffFont
 
     // ---- charstrings ---------------------------------------------------------
 
+    /// <summary>Format 0: GID g carries SID 10−g (the identity REVERSED); format 1:
+    /// one ascending range, SID = GID + 2. See the option's remarks.</summary>
+    private static byte[] Charset(int format)
+    {
+        var cs = new Be();
+        cs.U8((byte)format);
+        if (format == 0)
+        {
+            for (int gid = 1; gid < GlyphCount; gid++)
+                cs.U16(10 - gid);
+        }
+        else if (format == 1)
+        {
+            cs.U16(3).U8(GlyphCount - 2);                            // SIDs 3..9 for GIDs 1..7
+        }
+        else
+        {
+            throw new InvalidOperationException("only charset formats 0 and 1 are built here");
+        }
+        return cs.ToArray();
+    }
+
     private static byte[] CharStringsIndex(SyntheticCffFontOptions options)
     {
         var glyphs = new byte[GlyphCount][];
@@ -337,7 +381,9 @@ internal static class SyntheticCffFont
         {
             { SeacEndchar: true } => Cs(cs =>
             {
-                Num(cs, 100); Num(cs, 0); Num(cs, 65); Num(cs, 66);  // adx ady bchar achar
+                Num(cs, Advances[RectGlyph] - NominalWidthX);        // width, then seac
+                Num(cs, 100); Num(cs, 50);                           // adx ady
+                Num(cs, options.SeacBaseCode); Num(cs, options.SeacAccentCode);
                 Op(cs, 14);                                          // seac-form endchar
             }),
             { ArithmeticOp: true } => Cs(cs =>
