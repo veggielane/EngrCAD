@@ -113,6 +113,11 @@ public readonly record struct PartUploadRequest
 /// dihedrals. <b>Empty for a part carrying a displacement</b> — see
 /// <see cref="PartUploads"/>.</param>
 /// <param name="WireEdges">Every unique mesh edge, for the wireframe display mode.</param>
+/// <param name="WireColors">Per-line-vertex field colours for the wireframe (RGB per
+/// endpoint, two endpoints per segment, parallel to <paramref name="WireEdges"/>) — or
+/// null when the part shows no field, or shows a CELL-associated one (a mesh edge
+/// borders two faces, so "which cell's colour" has no answer at an endpoint; the
+/// wireframe then keeps the part colour, honestly).</param>
 /// <param name="Pick">The triangle BVH a raycast tests, or null when none was asked
 /// for. Built at the part's OWN deformation scale (<c>FieldRendering.PickShape</c>).</param>
 public sealed record PartUpload(
@@ -124,6 +129,7 @@ public sealed record PartUpload(
     float[]? Occlusion,
     IReadOnlyList<(Vector3d A, Vector3d B)> FeatureEdges,
     IReadOnlyList<(Vector3d A, Vector3d B)> WireEdges,
+    float[]? WireColors,
     PickMesh? Pick)
 {
     /// <summary>Indices in the mesh's element buffer.</summary>
@@ -196,6 +202,7 @@ public static class PartUploads
             part, mesh, render, field, fieldError, occlusion,
             BuildFeatureEdges(part, request, field),
             request.WireEdges ? WireframeEdges.Extract(mesh) : [],
+            request.WireEdges ? BuildWireColors(mesh, field) : null,
             // Picking follows what is DRAWN at the part's own exaggeration: a BVH is a
             // spatial index, so unlike the shading it cannot be a uniform, and it is built
             // once over the displaced triangles (FieldRendering.PickShape states what that
@@ -220,4 +227,33 @@ public static class PartUploads
         request.FeatureEdges && field is not { Deformed: true }
             ? part.GetFeatureEdges(request.Quality)
             : [];
+
+    /// <summary>
+    /// The wireframe's per-endpoint field colours: the segments walk the SOURCE
+    /// half-edge mesh, so each endpoint takes its source vertex's colour from the same
+    /// <c>FieldRendering.SourceColors</c> the fills are built from — a wireframe reading
+    /// of a result cannot disagree with the shaded one. Null for a part with no field,
+    /// and for a CELL-associated one (an edge borders two faces; no endpoint colour is
+    /// well-defined, so the wireframe keeps the part colour).
+    /// </summary>
+    private static float[]? BuildWireColors(HalfEdgeMesh mesh, FieldMeshData? field)
+    {
+        if (field is not { } f || f.Display.Field.Association != FieldAssociation.Vertex)
+            return null;
+        var display = f.Display;
+        var perSource = FieldRendering.SourceColors(
+            display.Field, display.Range, display.ColorMap, display.LogScale);
+        var indexed = WireframeEdges.ExtractIndexed(mesh);
+        var colors = new float[indexed.Count * 6];
+        for (int i = 0; i < indexed.Count; i++)
+        {
+            var (a, b) = indexed[i];
+            var (ra, ga, ba) = perSource[a];
+            var (rb, gb, bb) = perSource[b];
+            int at = i * 6;
+            colors[at + 0] = ra; colors[at + 1] = ga; colors[at + 2] = ba;
+            colors[at + 3] = rb; colors[at + 4] = gb; colors[at + 5] = bb;
+        }
+        return colors;
+    }
 }

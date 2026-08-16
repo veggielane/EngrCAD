@@ -186,7 +186,8 @@
     /// animation's factor.</param>
     private sealed record PartKeys(
         string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices, PickMesh Pick,
-        bool FieldColored = false, string? Ghost = null, double DeformScale = 0);
+        bool FieldColored = false, string? Ghost = null, double DeformScale = 0,
+        bool WireFieldColored = false);
 
     private readonly List<ViewportInstance> _drawn = [];
     // Parallel to _drawn: the part, instance and pose each entry came from. The parts
@@ -943,7 +944,8 @@
                 part.EffectiveDisplayMode,   // Ghost renders translucent, same as desktop
                 keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices,
                 Visible: true, ClippedBySection: part.ClippedBySection,
-                FieldColored: keys.FieldColored, GhostKey: keys.Ghost, DeformScale: keys.DeformScale));
+                FieldColored: keys.FieldColored, GhostKey: keys.Ghost, DeformScale: keys.DeformScale,
+                WireFieldColored: keys.WireFieldColored));
             _drawnParts.Add(part);
             _drawnInstances.Add(instance);
             _pick.Add(new PickInstance(keys.Pick, instance.World, true, part.ClippedBySection));
@@ -1052,12 +1054,14 @@
         if (upload.WireEdges.Count > 0)
         {
             wireKey = $"part{index}.wire";
-            await gl.UploadLineVerticesAsync(wireKey, RenderGeometry.SegmentVertices(upload.WireEdges));
+            await gl.UploadLineVerticesAsync(
+                wireKey, RenderGeometry.SegmentVertices(upload.WireEdges), upload.WireColors);
         }
 
         return new PartKeys(
             meshKey, edgeKey, upload.FeatureEdgeVertexCount, wireKey, upload.WireEdgeVertexCount,
-            upload.RequirePick, upload.FieldColored, ghostKey, upload.DeformScale);
+            upload.RequirePick, upload.FieldColored, ghostKey, upload.DeformScale,
+            upload.WireColors is not null);
     }
 
     /// <summary>

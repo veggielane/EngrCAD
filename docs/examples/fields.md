@@ -143,6 +143,44 @@ the exaggeration is one float, so **animating it is free** (see
 rather than carried over, because a facet normal is exactly quadratic in the scale, so
 three coefficients reproduce it at every exaggeration.
 
+## Every view style reads the field
+
+A field-coloured part keeps its result colours in **Wireframe** and **Points** too:
+the wireframe's segments take each endpoint's own vertex colour (from the same
+mapping the fills use, so the two readings cannot disagree) and the point sprites
+read the mesh's colour buffer directly. A part with no result keeps its part colour,
+exactly as before — and a **cell**-associated field keeps the part colour in
+wireframe, honestly: a mesh edge borders two faces, so an endpoint has no one cell
+colour to take.
+
+```csharp render:field-wireframe
+// The edge-distance plate again, drawn as a wireframe: the mesh edges carry the
+// field's colours, so the structure and the values read together.
+var top = SketchPlane.At((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY);
+var plate = Shape.Box(90, 50, 10)
+    .Drill(StandardHoles.Clearance(8), [new(-28, 0), new(0, 14), new(28, 0)], depth: 12, top);
+
+var part = new Part("plate", plate) { DisplayMode = DisplayMode.Wireframe };
+var mesh = part.GetMesh();
+
+var bores = Sdf.Union(
+    Sdf.Cylinder(4.5, 40).Translate((-28, 0, 0)),
+    Sdf.Cylinder(4.5, 40).Translate((0, 14, 0)),
+    Sdf.Cylinder(4.5, 40).Translate((28, 0, 0)));
+
+part.AddResult(MeshField.Sample(mesh, "edge distance", "mm", p => bores.Evaluate(p)));
+part.FieldDisplay = new FieldDisplay
+{
+    Field = "edge distance",
+    Range = new FieldRange(0, 25),
+};
+
+var scene = new Scene();
+scene.Add(part);
+```
+
+![The drilled plate's wireframe, its edges coloured by the field](images/field-wireframe.png)
+
 ## Colour maps and ranges
 
 Two maps, and the choice matters:

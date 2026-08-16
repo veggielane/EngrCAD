@@ -9806,6 +9806,32 @@ the case it used to sidestep: the SAME bracket in SAE 1045 renders mostly grey
 (immortal below the endurance limit) with the finite-life band coloured — the honest
 picture of what an endurance limit means.
 
+**Points and wireframe read the field too** (the line and point programs gained the
+`aFieldColor` attribute + `uFieldColor` strength under the `Lit = 0` /
+constant-when-absent rule; `PartUpload.WireColors`; docs `examples/fields.md` §Every
+view style): a field-coloured part used to fall back to its part colour the moment the
+style left Shaded, because the line and point programs were flat-colour. Three facts
+made the fix small and each is worth keeping. **Points came almost free**, because the
+points view draws the MESH buffer — the colour buffer is already in the VAO at slot 3,
+so the whole change is declaring the attribute and setting one uniform per draw.
+**The wireframe needed a parallel buffer, and its correctness rule is that the walk is
+shared**: `WireframeEdges.ExtractIndexed` is the SAME `mesh.Edges` enumeration as
+`Extract`, so segment i and index pair i describe the same edge by construction, and
+each endpoint takes its source vertex's colour from the same
+`FieldRendering.SourceColors` call the fills are built from — a wireframe reading of a
+result structurally cannot disagree with the shaded one (log scale included, since the
+colours come from the one shared mapping). **The neutral state is what keeps every
+incumbent consumer byte-identical**: the line program serves the grid, axes, feature
+edges, annotations, isolines, legend and cube, and none of them says anything about
+the new uniform — a linked program's uniforms initialize to 0 and
+`mix(uColor, v, 0.0)` is `uColor` exactly, so the only draws that change are the ones
+that explicitly turn the strength up (asserted the docs-PNG way: no committed render
+moved). Two boundaries stated rather than smoothed: a CELL-associated field keeps the
+part colour in wireframe (a mesh edge borders two faces, so an endpoint has no one
+cell colour — the smooth-mesh-has-no-face-map reasoning one primitive down), and a
+SELECTED or hovered part keeps the highlight, because with no fill behind them the
+line colour is the only channel selection has.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

@@ -127,6 +127,17 @@ internal static class RenderUploads
     /// <summary>Uploads bare xyz line vertices into a fresh VAO/VBO pair.</summary>
     public static unsafe (uint Vao, uint Vbo) UploadLines(GL gl, float[] vertices)
     {
+        var (vao, vbo, _) = UploadLines(gl, vertices, null);
+        return (vao, vbo);
+    }
+
+    /// <summary>Line upload with an optional per-vertex field-colour buffer (RGB per
+    /// line vertex, attribute 3 — the wireframe of a field-coloured part). A null
+    /// colour list leaves the attribute disabled, so the VAO is what the two-value
+    /// overload always built.</summary>
+    public static unsafe (uint Vao, uint Vbo, uint ColorVbo) UploadLines(
+        GL gl, float[] vertices, float[]? colors)
+    {
         uint vao = gl.GenVertexArray();
         gl.BindVertexArray(vao);
         uint vbo = gl.GenBuffer();
@@ -134,8 +145,17 @@ internal static class RenderUploads
         gl.BufferData<float>(BufferTargetARB.ArrayBuffer, vertices, BufferUsageARB.StaticDraw);
         gl.EnableVertexAttribArray(0);
         gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+        uint colorVbo = 0;
+        if (colors is { Length: > 0 })
+        {
+            colorVbo = gl.GenBuffer();
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, colorVbo);
+            gl.BufferData<float>(BufferTargetARB.ArrayBuffer, colors, BufferUsageARB.StaticDraw);
+            gl.EnableVertexAttribArray(3);
+            gl.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+        }
         gl.BindVertexArray(0);
-        return (vao, vbo);
+        return (vao, vbo, colorVbo);
     }
 
     /// <summary>

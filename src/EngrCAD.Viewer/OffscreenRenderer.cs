@@ -270,7 +270,8 @@ public static class OffscreenRenderer
     /// <summary>One instance's draw data after mode resolution (buffers shared per part).</summary>
     private readonly record struct InstanceDraw(
         EffectiveMode Mode, uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
-        uint WireVao, int WireVertexCount, Matrix4d Model, PartColor Color, Vector3d WorldCenter,
+        uint WireVao, int WireVertexCount, bool WireFieldColored,
+        Matrix4d Model, PartColor Color, Vector3d WorldCenter,
         bool SectionClipped, bool FieldColored, double DeformScale, uint GhostVao, int GhostIndexCount);
 
     /// <summary>The per-part GL buffers a draw needs, shared by every instance of that
@@ -278,7 +279,8 @@ public static class OffscreenRenderer
     /// is only what survives once it has been handed to GL.)</summary>
     private readonly record struct PartBuffers(
         uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
-        uint WireVao, int WireVertexCount, bool FieldColored, double DeformScale,
+        uint WireVao, int WireVertexCount, bool WireFieldColored,
+        bool FieldColored, double DeformScale,
         uint GhostVao, int GhostIndexCount);
 
     /// <summary>
@@ -371,6 +373,7 @@ public static class OffscreenRenderer
         int uLineView = gl.GetUniformLocation(lineProgram, "uView");
         int uLineProj = gl.GetUniformLocation(lineProgram, "uProj");
         int uLineColor = gl.GetUniformLocation(lineProgram, "uColor");
+        int uLineFieldColor = gl.GetUniformLocation(lineProgram, "uFieldColor");
         int uLineSectionEnabled = gl.GetUniformLocation(lineProgram, "uSectionEnabled");
         var lineSection = new SectionUniforms(gl, lineProgram);
         CameraMath.WriteColumnMajor(view, matrix);
@@ -465,12 +468,16 @@ public static class OffscreenRenderer
                 }
                 uint wireVao = 0;
                 int wireVertexCount = 0;
+                bool wireFieldColored = false;
                 if (upload.WireEdges.Count > 0)
                 {
-                    (wireVao, _) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.WireEdges));
+                    (wireVao, _, _) = RenderUploads.UploadLines(
+                        gl, RenderGeometry.SegmentVertices(upload.WireEdges), upload.WireColors);
                     wireVertexCount = upload.WireEdgeVertexCount;
+                    wireFieldColored = upload.WireColors is not null;
                 }
-                shared = new PartBuffers(vao, indexCount, edgeVao, edgeVertexCount, wireVao, wireVertexCount,
+                shared = new PartBuffers(vao, indexCount, edgeVao, edgeVertexCount,
+                    wireVao, wireVertexCount, wireFieldColored,
                     upload.FieldColored, upload.DeformScale, ghostVao, ghostIndexCount);
                 uploaded[part] = shared;
             }
@@ -478,7 +485,8 @@ public static class OffscreenRenderer
             var worldBounds = instance.Bounds();
             draws.Add(new InstanceDraw(
                 mode, shared.Vao, shared.IndexCount, shared.EdgeVao, shared.EdgeVertexCount,
-                shared.WireVao, shared.WireVertexCount, instance.World, part.Color ?? Palette.Steel,
+                shared.WireVao, shared.WireVertexCount, shared.WireFieldColored,
+                instance.World, part.Color ?? Palette.Steel,
                 worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
                 section && part.ClippedBySection,
                 shared.FieldColored, shared.DeformScale, shared.GhostVao, shared.GhostIndexCount));
@@ -554,8 +562,14 @@ public static class OffscreenRenderer
                     CameraMath.WriteColumnMajor(d.Model, matrix);
                     gl.UniformMatrix4(uLineModel, 1, false, matrix);
                     gl.Uniform3(uLineColor, d.Color.R, d.Color.G, d.Color.B);
+                    // A field-coloured wireframe draws its result; reset before the
+                    // next line consumer (the window pass's rule).
+                    if (d.WireFieldColored)
+                        gl.Uniform1(uLineFieldColor, FieldRendering.Strength);
                     gl.BindVertexArray(d.WireVao);
                     gl.DrawArrays(PrimitiveType.Lines, 0, (uint)d.WireVertexCount);
+                    if (d.WireFieldColored)
+                        gl.Uniform1(uLineFieldColor, 0f);
                     break;
             }
         }
@@ -584,6 +598,8 @@ public static class OffscreenRenderer
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uPointModel, 1, false, matrix);
                 gl.Uniform3(uPointColor, d.Color.R, d.Color.G, d.Color.B);
+                gl.Uniform1(gl.GetUniformLocation(pointProgram, "uFieldColor"),
+                    d.FieldColored ? FieldRendering.Strength : 0f);
                 gl.Uniform1(uPointDeformScale, (float)(d.DeformScale * deformFactor));
                 gl.BindVertexArray(d.Vao);
                 gl.DrawElements(PrimitiveType.Points, (uint)d.IndexCount, DrawElementsType.UnsignedInt, (void*)0);

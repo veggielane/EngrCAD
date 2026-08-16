@@ -24,12 +24,13 @@ public class FieldFrameTests
 
     private static ViewportInstance Instance(
         string key, bool fieldColored = false, string? ghost = null,
-        DisplayMode mode = DisplayMode.Shaded) =>
+        DisplayMode mode = DisplayMode.Shaded, bool wireFieldColored = false) =>
         new(key, Matrix4d.Identity, Palette.Brass, Vector3d.Zero, mode,
             EdgeKey: key + ".edges", EdgeVertexCount: 12,
             WireKey: key + ".wire", WireVertexCount: 24,
             Visible: true, ClippedBySection: true,
-            FieldColored: fieldColored, GhostKey: ghost);
+            FieldColored: fieldColored, GhostKey: ghost,
+            WireFieldColored: wireFieldColored);
 
     private static ResolvedFieldDisplay Display(MeshField? deform = null, double scale = 1) =>
         new(MeshField.Scalar("von Mises", "MPa", [0, 10, 40]),
@@ -44,6 +45,50 @@ public class FieldFrameTests
         ViewStyle style = ViewStyle.ShadedWithEdges) =>
         ViewportFrame.Build(instances, Camera, Bounds, aspect: 1.6, furniture: null, style,
             legend: legend);
+
+    [Fact]
+    public void AWireframePartWithWireColours_DrawsItsResult()
+    {
+        // The wire upload carries per-endpoint colours, so the wireframe draw turns the
+        // strength up; a wireframe part WITHOUT them (no field, or a cell field) says
+        // nothing and keeps the line program's neutral 0.
+        var coloured = Build([Instance("a", fieldColored: true,
+            mode: DisplayMode.Wireframe, wireFieldColored: true)]);
+        var wire = Assert.Single(coloured.Draws, d => d.Geometry == "a.wire");
+        Assert.Equal(FieldRendering.Strength, wire.Uniforms!["uFieldColor"]);
+
+        var plain = Build([Instance("b", mode: DisplayMode.Wireframe)]);
+        var plainWire = Assert.Single(plain.Draws, d => d.Geometry == "b.wire");
+        Assert.False(plainWire.Uniforms!.ContainsKey("uFieldColor"));
+    }
+
+    [Fact]
+    public void APointsPartWithAField_DrawsItsResult()
+    {
+        // Points is a GLOBAL view style (default-mode parts follow it); the sprites
+        // draw the mesh upload, which already carries the colour buffer — one uniform
+        // and they read the result.
+        var frame = Build([Instance("a", fieldColored: true)], style: ViewStyle.Points);
+        var points = Assert.Single(frame.Draws, d => d.Mode == "points");
+        Assert.Equal(FieldRendering.Strength, points.Uniforms!["uFieldColor"]);
+
+        var plain = Build([Instance("b")], style: ViewStyle.Points);
+        var plainPoints = Assert.Single(plain.Draws, d => d.Mode == "points");
+        Assert.False(plainPoints.Uniforms!.ContainsKey("uFieldColor"));
+    }
+
+    [Fact]
+    public void SelectionKeepsTheHighlightOnAFieldColouredWireframe()
+    {
+        // With no fill, the line colour is selection's only channel — so a selected
+        // wireframe part draws the highlight, not the field.
+        var frame = ViewportFrame.Build(
+            [Instance("a", fieldColored: true, mode: DisplayMode.Wireframe, wireFieldColored: true)],
+            Camera, Bounds, aspect: 1.6, furniture: null, ViewStyle.ShadedWithEdges,
+            selected: 0);
+        var wire = Assert.Single(frame.Draws, d => d.Geometry == "a.wire");
+        Assert.False(wire.Uniforms!.ContainsKey("uFieldColor"));
+    }
 
     [Fact]
     public void TheSharedFieldUniformIsNeutral()

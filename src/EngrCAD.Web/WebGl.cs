@@ -257,6 +257,14 @@ public sealed class WebGlContext : IAsyncDisposable
         _module.InvokeVoidAsync(
             "uploadLines", _id, key, MemoryMarshal.AsBytes(vertices).ToArray());
 
+    /// <summary>Line upload with per-vertex field colours (RGB per line vertex — a
+    /// field-coloured part's wireframe). Null colours are the plain upload.</summary>
+    public ValueTask UploadLineVerticesAsync(
+        string key, ReadOnlySpan<float> vertices, float[]? colors) =>
+        _module.InvokeVoidAsync(
+            "uploadLines", _id, key, MemoryMarshal.AsBytes(vertices).ToArray(),
+            colors is { Length: > 0 } ? MemoryMarshal.AsBytes<float>(colors).ToArray() : []);
+
     /// <summary>Drops one uploaded geometry (a part removed from the scene).</summary>
     public ValueTask ReleaseGeometryAsync(string key) =>
         _module.InvokeVoidAsync("releaseGeometry", _id, key);

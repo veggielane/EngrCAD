@@ -534,32 +534,45 @@ public static class ViewerShaders
         }
         """;
 
-    /// <summary>Flat-color line vertex shader (grid, axes, feature edges, wireframe).</summary>
+    /// <summary>Flat-color line vertex shader (grid, axes, feature edges, wireframe).
+    /// Carries the field-colour attribute so a WIREFRAME part can draw its simulation
+    /// result: under the same constant-when-absent rule the mesh program follows, a
+    /// line upload with no colour buffer reads the disabled attribute's constant and a
+    /// draw that says nothing leaves uFieldColor at 0, so mix returns uColor
+    /// bit-identically for every incumbent consumer (grid, axes, annotations, legend,
+    /// isolines, cube).</summary>
     public const string LineVertex = """
         in vec3 aPos;
+        in vec3 aFieldColor;
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProj;
         out vec3 vWorldPos;
+        out vec3 vFieldColor;
         void main()
         {
             vec4 world = uModel * vec4(aPos, 1.0);
             vWorldPos = world.xyz;
+            vFieldColor = aFieldColor;
             gl_Position = uProj * uView * world;
         }
         """;
 
     /// <summary>Flat-color line fragment shader; lines that belong to the model are
-    /// clipped by the section planes consistently with the fills.</summary>
+    /// clipped by the section planes consistently with the fills. uFieldColor mixes the
+    /// per-vertex field colour in exactly as the mesh program does (0 = off = uColor,
+    /// since mix(x, y, 0.0) is x for any finite y).</summary>
     public const string LineFragment = SectionClip + """
         in vec3 vWorldPos;
+        in vec3 vFieldColor;
         uniform vec3 uColor;
+        uniform float uFieldColor;
         out vec4 fragColor;
         void main()
         {
             if (sectionClipped(vWorldPos))
                 discard;
-            fragColor = vec4(uColor, 1.0);
+            fragColor = vec4(mix(uColor, vFieldColor, uFieldColor), 1.0);
         }
         """;
 
@@ -572,6 +585,7 @@ public static class ViewerShaders
     /// mesh, so it has never followed a deformation.)</para></summary>
     public const string PointVertex = """
         in vec3 aPos;
+        in vec3 aFieldColor;
         in vec3 aDeformOffset;
         uniform mat4 uModel;
         uniform mat4 uView;
@@ -579,10 +593,12 @@ public static class ViewerShaders
         uniform float uPointSize;
         uniform float uDeformScale;
         out vec3 vWorldPos;
+        out vec3 vFieldColor;
         void main()
         {
             vec4 world = uModel * vec4(aPos + uDeformScale * aDeformOffset, 1.0);
             vWorldPos = world.xyz;
+            vFieldColor = aFieldColor;
             gl_Position = uProj * uView * world;
             gl_PointSize = uPointSize;
         }
@@ -592,7 +608,9 @@ public static class ViewerShaders
     /// gl_PointCoord), section-clipped consistently with the model.</summary>
     public const string PointFragment = SectionClip + """
         in vec3 vWorldPos;
+        in vec3 vFieldColor;
         uniform vec3 uColor;
+        uniform float uFieldColor;
         out vec4 fragColor;
         void main()
         {
@@ -601,7 +619,7 @@ public static class ViewerShaders
             vec2 d = gl_PointCoord - vec2(0.5);
             if (dot(d, d) > 0.25)
                 discard;
-            fragColor = vec4(uColor, 1.0);
+            fragColor = vec4(mix(uColor, vFieldColor, uFieldColor), 1.0);
         }
         """;
 

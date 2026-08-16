@@ -23,6 +23,60 @@ public class PartUploadTests
     }
 
     [Fact]
+    public void WireColors_TakeEachEndpointsSourceVertexColour()
+    {
+        // The wireframe reading of a result must be the shaded one's: each segment
+        // endpoint takes its SOURCE vertex's colour from the same SourceColors call the
+        // fills are built from, in WireframeEdges' own walk order.
+        var part = Plate(p => p.FieldDisplay = new FieldDisplay { Field = "stress" });
+        var upload = PartUploads.Build(part, PartUploadRequest.All);
+
+        Assert.NotNull(upload.WireColors);
+        var display = upload.Field!.Value.Display;
+        var perSource = FieldRendering.SourceColors(
+            display.Field, display.Range, display.ColorMap, display.LogScale);
+        var indexed = WireframeEdges.ExtractIndexed(upload.Mesh);
+        Assert.Equal(indexed.Count * 6, upload.WireColors!.Length);
+        Assert.Equal(upload.WireEdges.Count, indexed.Count);
+        for (int i = 0; i < indexed.Count; i++)
+        {
+            var (a, b) = indexed[i];
+            Assert.Equal(perSource[a].R, upload.WireColors[i * 6 + 0]);
+            Assert.Equal(perSource[a].G, upload.WireColors[i * 6 + 1]);
+            Assert.Equal(perSource[a].B, upload.WireColors[i * 6 + 2]);
+            Assert.Equal(perSource[b].R, upload.WireColors[i * 6 + 3]);
+            Assert.Equal(perSource[b].G, upload.WireColors[i * 6 + 4]);
+            Assert.Equal(perSource[b].B, upload.WireColors[i * 6 + 5]);
+        }
+        // The indexed walk and the position walk describe the same edges.
+        for (int i = 0; i < indexed.Count; i++)
+        {
+            Assert.Equal(upload.Mesh.GetPosition(indexed[i].A), upload.WireEdges[i].A);
+            Assert.Equal(upload.Mesh.GetPosition(indexed[i].B), upload.WireEdges[i].B);
+        }
+    }
+
+    [Fact]
+    public void WireColors_AreNullWithoutAFieldAndForACellField()
+    {
+        // No display: the wireframe keeps the part colour (strength stays 0).
+        Assert.Null(PartUploads.Build(Plate(), PartUploadRequest.All).WireColors);
+
+        // A CELL field has no per-vertex value — an edge borders two faces, so an
+        // endpoint colour is not well-defined and the wireframe honestly keeps the
+        // part colour rather than picking a face.
+        var part = Plate(p =>
+        {
+            p.AddResult(MeshField.CellScalar(
+                "per-face", "", [.. Enumerable.Repeat(1.0, p.GetMesh().FaceCount)]));
+            p.FieldDisplay = new FieldDisplay { Field = "per-face" };
+        });
+        var upload = PartUploads.Build(part, PartUploadRequest.All);
+        Assert.NotNull(upload.Field);   // the display resolved — only the wire declines
+        Assert.Null(upload.WireColors);
+    }
+
+    [Fact]
     public void Build_All_ProducesEveryPiece()
     {
         var upload = PartUploads.Build(Plate(), PartUploadRequest.All);

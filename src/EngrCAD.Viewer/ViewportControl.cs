@@ -28,10 +28,10 @@ public sealed class ViewportControl : OpenGlControlBase
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
     private int _uAlpha, _uAmbientOcclusion, _uFieldColor, _uDeformScale, _uMatcap;
     private uint _lineProgram;
-    private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
+    private int _uLineModel, _uLineView, _uLineProj, _uLineColor, _uLineFieldColor;
     private int _uLineSectionEnabled;   // raw handle for the cube/annotation overlays
     private uint _pointProgram;
-    private int _uPointModel, _uPointView, _uPointProj, _uPointColor, _uPointSize, _uPointDeformScale;
+    private int _uPointModel, _uPointView, _uPointProj, _uPointColor, _uPointSize, _uPointDeformScale, _uPointFieldColor;
 
     // The section-plane uniforms of each program, written through the shared
     // SectionUniforms helper so the window and the headless pass clip identically.
@@ -50,7 +50,7 @@ public sealed class ViewportControl : OpenGlControlBase
     // ambient occlusion on can backfill occlusion buffers without re-uploading geometry.
     private readonly record struct PartBuffers(
         Part Part, uint Vao, uint Vbo, uint Ebo, uint EdgeVao, uint EdgeVbo,
-        uint WireVao, uint WireVbo, uint AoVbo, uint FieldVbo, uint DeformVbo,
+        uint WireVao, uint WireVbo, uint WireColorVbo, uint AoVbo, uint FieldVbo, uint DeformVbo,
         uint GhostVao, uint GhostVbo, uint GhostEbo);
 
     private readonly List<PartBuffers> _gpuBuffers = [];
@@ -77,7 +77,8 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly record struct GpuMesh(
         uint Vao, uint Vbo, uint Ebo, int IndexCount, Matrix4d Model, (float R, float G, float B) Color,
         uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
-        uint WireVao, uint WireVbo, int WireVertexCount, Vector3d WorldCenter,
+        uint WireVao, uint WireVbo, int WireVertexCount, bool WireFieldColored,
+        Vector3d WorldCenter,
         // Field display: whether this instance's mesh carries a field-colour buffer, the
         // part's own displacement exaggeration (0 when it draws undeformed), and the
         // undeformed shape's buffers when a deformed one is being shown.
@@ -284,6 +285,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uLineView = _gl.GetUniformLocation(_lineProgram, "uView");
         _uLineProj = _gl.GetUniformLocation(_lineProgram, "uProj");
         _uLineColor = _gl.GetUniformLocation(_lineProgram, "uColor");
+        _uLineFieldColor = _gl.GetUniformLocation(_lineProgram, "uFieldColor");
         _uLineSectionEnabled = _gl.GetUniformLocation(_lineProgram, "uSectionEnabled");
         _lineSection = new SectionUniforms(_gl, _lineProgram);
 
@@ -294,6 +296,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uPointColor = _gl.GetUniformLocation(_pointProgram, "uColor");
         _uPointSize = _gl.GetUniformLocation(_pointProgram, "uPointSize");
         _uPointDeformScale = _gl.GetUniformLocation(_pointProgram, "uDeformScale");
+        _uPointFieldColor = _gl.GetUniformLocation(_pointProgram, "uFieldColor");
         _pointSection = new SectionUniforms(_gl, _pointProgram);
         // Desktop GL ignores gl_PointSize unless program point size is enabled; the
         // cap does not exist under GLES (it is always on), where enabling it errors.
@@ -308,7 +311,8 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly record struct SharedMesh(
         uint Vao, uint Vbo, uint Ebo, int IndexCount,
         uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
-        uint WireVao, uint WireVbo, int WireVertexCount, PickMesh Pick, uint AoVbo,
+        uint WireVao, uint WireVbo, int WireVertexCount, bool WireFieldColored,
+        PickMesh Pick, uint AoVbo,
         bool FieldColored, double DeformScale, uint GhostVao, int GhostIndexCount);
 
     /// <summary>Uploads an instance list, replacing existing GPU resources. Each
@@ -347,7 +351,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 _meshes.Add(new GpuMesh(
                     s.Vao, s.Vbo, s.Ebo, s.IndexCount, instance.World, (color.R, color.G, color.B),
                     s.EdgeVao, s.EdgeVbo, s.EdgeVertexCount,
-                    s.WireVao, s.WireVbo, s.WireVertexCount,
+                    s.WireVao, s.WireVbo, s.WireVertexCount, s.WireFieldColored,
                     worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
                     s.FieldColored, s.DeformScale, s.GhostVao, s.GhostIndexCount));
                 _pickData.Add(s.Pick);
@@ -403,7 +407,8 @@ public sealed class ViewportControl : OpenGlControlBase
         var (vao, vbo, ebo, aoVbo, fieldVbo, deformVbo) = RenderUploads.UploadMesh(
             gl, render, upload.Occlusion, field?.Colors, field?.Deformation);
         var (edgeVao, edgeVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.FeatureEdges));
-        var (wireVao, wireVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.WireEdges));
+        var (wireVao, wireVbo, wireColorVbo) = RenderUploads.UploadLines(
+            gl, RenderGeometry.SegmentVertices(upload.WireEdges), upload.WireColors);
 
         // The undeformed shape, ghosted behind the deformed one — the comparison IS the
         // point of a deformed-shape plot. It keeps its OWN buffers rather than re-drawing
@@ -419,12 +424,12 @@ public sealed class ViewportControl : OpenGlControlBase
         }
 
         _gpuBuffers.Add(new PartBuffers(
-            part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo, fieldVbo, deformVbo,
-            ghostVao, ghostVbo, ghostEbo));
+            part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, wireColorVbo,
+            aoVbo, fieldVbo, deformVbo, ghostVao, ghostVbo, ghostEbo));
 
         return new SharedMesh(vao, vbo, ebo, upload.IndexCount,
             edgeVao, edgeVbo, upload.FeatureEdgeVertexCount,
-            wireVao, wireVbo, upload.WireEdgeVertexCount,
+            wireVao, wireVbo, upload.WireEdgeVertexCount, upload.WireColors is not null,
             upload.RequirePick, aoVbo,
             upload.FieldColored, upload.DeformScale, ghostVao, ghostIndexCount);
     }
@@ -441,6 +446,8 @@ public sealed class ViewportControl : OpenGlControlBase
             gl.DeleteVertexArray(b.EdgeVao);
             gl.DeleteBuffer(b.WireVbo);
             gl.DeleteVertexArray(b.WireVao);
+            if (b.WireColorVbo != 0)
+                gl.DeleteBuffer(b.WireColorVbo);
             if (b.AoVbo != 0)
                 gl.DeleteBuffer(b.AoVbo);
             if (b.FieldVbo != 0)
@@ -722,8 +729,19 @@ public sealed class ViewportControl : OpenGlControlBase
                     gl.UniformMatrix4(_uLineModel, 1, false, matrix);
                     var wireColor = HighlightedColor(i, m.Color);
                     gl.Uniform3(_uLineColor, wireColor.R, wireColor.G, wireColor.B);
+                    // A field-coloured part's wireframe draws its result: strength up
+                    // for THIS draw only, reset before the next line consumer — the
+                    // uniform is program state, and every other line draw (edges, grid,
+                    // annotations, legend) relies on the neutral 0. A selected or
+                    // hovered part keeps the highlight instead: the line colour is the
+                    // only channel selection has here.
+                    bool wireField = m.WireFieldColored && i != _selected && i != _hovered;
+                    if (wireField)
+                        gl.Uniform1(_uLineFieldColor, FieldRendering.Strength);
                     gl.BindVertexArray(m.WireVao);
                     gl.DrawArrays(PrimitiveType.Lines, 0, (uint)m.WireVertexCount);
+                    if (wireField)
+                        gl.Uniform1(_uLineFieldColor, 0f);
                     break;
                 case EffectiveMode.ShadedWithEdges when m.EdgeVertexCount > 0:
                     DrawFeatureEdges(gl, i, matrix);
@@ -755,6 +773,13 @@ public sealed class ViewportControl : OpenGlControlBase
                 gl.UniformMatrix4(_uPointModel, 1, false, matrix);
                 var pointColor = HighlightedColor(i, m.Color);
                 gl.Uniform3(_uPointColor, pointColor.R, pointColor.G, pointColor.B);
+                // The mesh VAO already carries the field-colour buffer, so a
+                // field-coloured part's points take their result colours with one
+                // uniform (selection/hover keep the highlight — colour is the only
+                // channel it has here, the wireframe rule).
+                gl.Uniform1(_uPointFieldColor,
+                    m.FieldColored && i != _selected && i != _hovered
+                        ? FieldRendering.Strength : 0f);
                 // The points view draws the mesh buffer, so it follows the displacement
                 // exactly as the fills do — the CPU path gave it that for free by
                 // uploading displaced positions.

@@ -25,4 +25,17 @@ public static class WireframeEdges
             segments.Add((edge.Origin.Position, edge.Destination.Position));
         return segments;
     }
+
+    /// <summary>The SAME walk as <see cref="Extract"/>, as source-vertex index pairs —
+    /// what places a per-vertex field colour on the wireframe's endpoints. One
+    /// enumeration each, both over <c>mesh.Edges</c> in its own order, so segment i's
+    /// endpoints and index pair i describe the same edge by construction.</summary>
+    public static List<(int A, int B)> ExtractIndexed(HalfEdgeMesh mesh)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        var indices = new List<(int, int)>(mesh.EdgeCount);
+        foreach (var edge in mesh.Edges)
+            indices.Add((edge.Origin.Index, edge.Destination.Index));
+        return indices;
+    }
 }

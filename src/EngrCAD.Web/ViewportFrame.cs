@@ -56,7 +56,8 @@ public readonly record struct ViewportInstance(
     bool ClippedBySection = true,
     bool FieldColored = false,
     string? GhostKey = null,
-    double DeformScale = 0);
+    double DeformScale = 0,
+    bool WireFieldColored = false);
 
 /// <summary>
 /// The field legend's uploads: the colour bar's triangle vertices and the combined
@@ -461,10 +462,16 @@ public static class ViewportFrame
                 // With no fill there is also no uHighlight to act on, which is why
                 // selection and hover reach a wireframe part through its LINE colour.
                 case EffectiveMode.Wireframe when instance.WireKey is not null && instance.WireVertexCount > 0:
-                    draws.Add(Line(instance.WireKey, ColumnMajor(instance.World),
+                    var wire = Line(instance.WireKey, ColumnMajor(instance.World),
                         Rgb(Highlight.LineColor(i, selected, hovered, Tuple(instance.Color))),
                         first: 0, count: instance.WireVertexCount,
-                        unclip: sectionActive && !instance.ClippedBySection));
+                        unclip: sectionActive && !instance.ClippedBySection);
+                    // A field-coloured part's wireframe draws its result colours — the
+                    // wire upload carries them per endpoint — unless selection or hover
+                    // claims the line colour (the only channel a fill-less part has).
+                    if (instance.WireFieldColored && i != selected && i != hovered)
+                        wire.Uniforms!["uFieldColor"] = FieldRendering.Strength;   // Line() always builds the dict
+                    draws.Add(wire);
                     break;
             }
         }
@@ -486,6 +493,11 @@ public static class ViewportFrame
                 // must reach them through the colour.
                 ["uColor"] = Rgb(Highlight.LineColor(i, selected, hovered, Tuple(instance.Color))),
             };
+            // The mesh upload already carries the field-colour buffer, so a
+            // field-coloured part's points take their result colours with one uniform
+            // (selection/hover keep the highlight, the wireframe rule).
+            if (instance.FieldColored && i != selected && i != hovered)
+                pointUniforms["uFieldColor"] = FieldRendering.Strength;
             // The points view draws the mesh buffer, so it follows the displacement too.
             Deformed(pointUniforms, instance, deformFactor);
             Unclipped(pointUniforms, sectionActive, instance);

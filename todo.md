@@ -690,10 +690,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   `VtuWriter` in EngrCAD.Mesh, `Part.Results`/`FieldDisplay`/`TryResolveFieldDisplay` in
   Modeling, `ColorMaps`/`FieldRendering`/`FieldLegend` in Viewer.Core, drawn in all
   three front ends with `--export .vtu` and `docs/examples/fields.md`):
-  - [ ] **Points/wireframe view styles ignore field colour.** The point and line
-    programs are flat-colour; a field-coloured part drawn in Points or Wireframe falls
-    back to its part colour. The attribute is already uploaded, so this is a per-vertex
-    colour varying in those two shaders.
   - [ ] **One legend per view.** The viewer shows the first visible part's display;
     several parts on genuinely different scales cannot each get a bar. Stacked legends,
     or a scene-level shared range, are the honest options.

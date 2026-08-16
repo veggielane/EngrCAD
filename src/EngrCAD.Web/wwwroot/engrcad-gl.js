@@ -222,7 +222,7 @@ export function uploadMesh(id, key, positions, normals, indices, occlusion, fiel
 }
 
 /** Uploads a line list (feature edges, grid, axes): packed float32 position triples. */
-export function uploadLines(id, key, positions) {
+export function uploadLines(id, key, positions, colors) {
     const ctx = require(id);
     const gl = ctx.gl;
     const existing = ctx.lines.get(key);
@@ -233,9 +233,19 @@ export function uploadLines(id, key, positions) {
     const posBuffer = buffer(gl, gl.ARRAY_BUFFER, positions);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    // Optional per-vertex field colours (a field-coloured part's wireframe), the same
+    // optional-buffer rule the mesh path follows: absent leaves attribute 3 disabled,
+    // and a draw that says nothing keeps uFieldColor's neutral 0, so the incumbent
+    // line consumers are pixel-identical.
+    let colorBuffer = null;
+    if (colors && colors.byteLength > 0) {
+        colorBuffer = buffer(gl, gl.ARRAY_BUFFER, colors);
+        gl.enableVertexAttribArray(3);
+        gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 0, 0);
+    }
     gl.bindVertexArray(null);
 
-    ctx.lines.set(key, { vao, posBuffer, vertexCount: positions.byteLength / 12 });
+    ctx.lines.set(key, { vao, posBuffer, colorBuffer, vertexCount: positions.byteLength / 12 });
 }
 
 function buffer(gl, target, bytes) {
@@ -258,6 +268,7 @@ function releaseMesh(gl, mesh) {
 function releaseLines(gl, line) {
     gl.deleteVertexArray(line.vao);
     gl.deleteBuffer(line.posBuffer);
+    if (line.colorBuffer) gl.deleteBuffer(line.colorBuffer);
 }
 
 export function releaseGeometry(id, key) {
