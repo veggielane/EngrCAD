@@ -221,6 +221,23 @@ export function uploadMesh(id, key, positions, normals, indices, occlusion, fiel
     });
 }
 
+/**
+ * Transient playback: re-specifies an uploaded mesh's field-colour buffer (attribute 3)
+ * with a new step's colours. The attribute pointer references the buffer OBJECT, so the
+ * VAO is untouched and nothing else about the upload changes — the browser's half of
+ * the desktop's colours-only re-upload. A mesh without a field buffer is left alone
+ * (a participating part is always uploaded with one).
+ */
+export function updateFieldColors(id, key, colors) {
+    const ctx = require(id);
+    const gl = ctx.gl;
+    const mesh = ctx.meshes.get(key);
+    if (!mesh || !mesh.fieldBuffer) return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.fieldBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+}
+
 /** Uploads a line list (feature edges, grid, axes): packed float32 position triples. */
 export function uploadLines(id, key, positions, colors, deformation) {
     const ctx = require(id);

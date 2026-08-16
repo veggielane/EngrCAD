@@ -264,6 +264,7 @@ else
             await CheckPickingAsync(counts);
             await CheckVisibilityAndHighlightAsync(counts);
             await CheckTabSwitchAsync(counts);
+            await CheckFieldSequenceAsync(counts);
             await CheckSectionAsync(counts);
             await CheckAnnotationsAsync(counts);
             await CheckViewCubeAsync(counts);
@@ -442,6 +443,38 @@ else
         counts["tabSwitchMs"] = Viewport!.InstanceCount == 4 ? (int)clock.ElapsedMilliseconds : -1;
         counts["assemblyInstances"] = Viewport.InstanceCount;
         counts["bodyAssembly"] = Body(await Viewport.CapturePixelsAsync());
+        await _view.ShowTabAsync(0);
+        for (int i = 0; i < 200 && Viewport.InstanceCount != 2; i++)
+            await Task.Delay(10);
+    }
+
+    /// <summary>
+    /// Transient playback through the REAL browser buffer path — the check the value
+    /// tests cannot make, because the colours-only re-upload ends in a JS
+    /// <c>gl.bufferData</c> the .NET side never sees. The oracle is the batched
+    /// export's A→B→A: stepping to the second result must CHANGE pixels
+    /// (fieldStepPixels &gt; 0), and stepping back must restore the first capture
+    /// EXACTLY (fieldStepReturn == 0) — a re-upload that leaked into any other buffer,
+    /// or a stale cached colour array, fails one side or the other.
+    /// </summary>
+    private async Task CheckFieldSequenceAsync(Dictionary<string, int> counts)
+    {
+        Trace("field sequence");
+        await _view!.ShowTabAsync(2);
+        for (int i = 0; i < 200 && Viewport!.InstanceCount != 1; i++)
+            await Task.Delay(10);
+        counts["transientInstances"] = Viewport!.InstanceCount;
+
+        var track = new FieldSequenceTrack([("T@0", 0), ("T@5", 5)]);
+        await Viewport.SetAnimationAsync(new Animation(2).With(track));
+        await Viewport.SetAnimationTimeAsync(0);
+        var stepA = await Viewport.CapturePixelsAsync();
+        await Viewport.SetAnimationTimeAsync(1);
+        counts["fieldStepPixels"] = Differences(stepA, await Viewport.CapturePixelsAsync());
+        await Viewport.SetAnimationTimeAsync(0);
+        counts["fieldStepReturn"] = Differences(stepA, await Viewport.CapturePixelsAsync());
+
+        await Viewport.SetAnimationAsync(null);
         await _view.ShowTabAsync(0);
         for (int i = 0; i < 200 && Viewport.InstanceCount != 2; i++)
             await Task.Delay(10);
@@ -814,6 +847,19 @@ else
             rig.Add(stack);
             rig.Add(stack, Frame3d.FromOrthonormal((110, 0, 0), Vector3d.UnitX, Vector3d.UnitY));
             scene.AddTab("Assembly").Add(rig);
+
+            // Under ?report only: a third tab carrying a two-step transient fixture, so
+            // the self-check can drive a FieldSequenceTrack through the REAL WebGL
+            // buffer-update path (the readers' demo stays exactly the two tabs it was).
+            if (_report)
+            {
+                var transient = new Part("Transient", Shape.Box(60, 30, 6));
+                var transientMesh = transient.GetMesh();
+                transient.AddResult(MeshField.Sample(transientMesh, "T@0", "K", q => 300 + q.X));
+                transient.AddResult(MeshField.Sample(transientMesh, "T@5", "K", q => 300 + 4 * q.X));
+                transient.FieldDisplay = new FieldDisplay { Field = "T@0" };
+                scene.AddTab("Transient").Add(transient);
+            }
 
             _scene = scene;
             _flange = part;

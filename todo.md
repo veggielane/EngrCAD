@@ -659,14 +659,11 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   - (A deformed part's missing feature edges, and picking during an animation, moved to
     their own item below now that the deformation rides a uniform.)
 
-- [ ] **Transient playback residual rungs** (the core ✅ landed: `FieldSequenceTrack` —
-  steps as (result name, REAL seconds), hold-last semantics, the fifth `Animation` slot —
-  with window playback re-uploading ONE colour buffer per step through the retained
-  source-index lookups (the measured 0.042/0.68 ms path) and stills applying the same
-  `TryDisplayFor` rule, byte-identical to a static render of the step's configuration):
-  - **Web parity**: `FrameDescription` colour re-upload, its own rung as filed when the
-    desktop half landed (the batched-export rung ✅ landed — `RenderSequence` takes
-    per-frame selections, the warm cache re-uploads colours only, APNG rides it).
+- [ ] **Transient playback residual rungs** (the core ✅ landed — `FieldSequenceTrack`,
+  window playback, stills, the batched export, AND web parity: the browser applies a
+  step through `updateFieldColors`, a colours-only `gl.bufferData` into the mesh's
+  field buffer, driven from the same `TryDisplayFor` rule and verified by the `?report`
+  A→B→A pixel check — `fieldStepPixels > 0`, `fieldStepReturn == 0`):
   - **A frequency/load-step slider** driving `Part.Results` is the same shape of problem;
     result persistence beside `FeatureHistory.SaveParameters` is a third neighbour.
 - [ ] **Picking during a deformation animation** (the EDGES half of this item ✅ landed —

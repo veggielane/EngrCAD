@@ -10011,8 +10011,20 @@ run of frames holding one step re-upload nothing, the hold-last common case. Ver
 at the batch's own bar: a three-frame sequence stepping A → B → A is byte-identical to
 one fresh `Render` per frame with the same selection — the THIRD frame is the assertion
 with teeth, a warm cache returning to a step it has already shown, which only the
-re-upload path can make match. Scope: window playback + stills + the batched
-export/APNG; web parity stays a filed rung.
+re-upload path can make match. **And the browser closed the ladder**: `engrcad-gl.js`
+gained `updateFieldColors` (a `gl.bufferData` into the uploaded mesh's field buffer —
+the attribute pointer references the buffer OBJECT, so the VAO is untouched),
+`EngrCadViewport` retains the source-index lookups on its per-part key record (uploads
+survive tab switches by part reference, so the lookups ride the same lifetime) and
+applies the sample's step at the same point poses are applied, with the repeat-selection
+no-op and hold-last semantics the window states. Verified through the REAL WebGL path,
+which no value test can reach because the re-upload ends in JavaScript: the `?report`
+self-check gained a report-only third tab carrying a two-step fixture and drives the
+A→B→A oracle at the pixel level — stepping forward must change pixels
+(`fieldStepPixels > 0`) and stepping back must restore the first capture EXACTLY
+(`fieldStepReturn == 0`), which a re-upload leaking into any other buffer or a stale
+colour array fails from one side or the other. Scope: window + stills + batched
+export/APNG + web — the playback ladder is complete.
 
 **A displaced part's feature edges and wireframe landed as ONE line-program attribute,
 and retiring the no-edges rule kept both halves of its own reasoning**

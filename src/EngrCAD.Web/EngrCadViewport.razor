@@ -187,7 +187,11 @@
     private sealed record PartKeys(
         string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices, PickMesh Pick,
         bool FieldColored = false, string? Ghost = null, double DeformScale = 0,
-        bool WireFieldColored = false);
+        bool WireFieldColored = false,
+        // Transient playback: the source-index lookups a colours-only re-upload needs
+        // (the window's _fieldAnimation, kept on the key record since uploads survive
+        // tab switches by part reference). Null for a part with no field colours.
+        int[]? SourceVertices = null, int[]? SourceFaces = null);
 
     private readonly List<ViewportInstance> _drawn = [];
     // Parallel to _drawn: the part, instance and pose each entry came from. The parts
@@ -527,6 +531,16 @@
         return ApplyPosesAsync();
     }
 
+    /// <summary>Replaces the animation and re-poses (the direct-call path, like
+    /// <see cref="SetViewStyleAsync"/> — for a host driving the viewport by reference
+    /// rather than by parameter binding). Null returns to the document's own poses.</summary>
+    public Task SetAnimationAsync(Animation? animation)
+    {
+        Animation = animation;
+        _shownAnimation = (Animation, AnimationTime);
+        return ApplyPosesAsync();
+    }
+
     /// <summary>Scrubs <see cref="Animation"/> to timeline t ∈ [0, 1] and re-poses. The
     /// evaluation is <c>Animation.At(t)</c> — the same pure function the desktop
     /// transport scrubs and every export samples, so a browser frame and an exported one
@@ -574,10 +588,49 @@
 
         if (Animation?.At(AnimationTime).Camera is { } camera)
             _camera = camera;
+        // A field-sequence track's step rides the same application point as the poses:
+        // one colours-only re-upload per step change, before the frame draws.
+        if (Animation is { FieldTrack: { } fieldTrack }
+            && Animation.At(AnimationTime).FieldName is { } stepField)
+            await ApplyFieldSelectionAsync(fieldTrack, stepField);
         // Annotations are posed by their instance transform, so a re-pose invalidates
         // the billboarded cache exactly as a camera move does.
         _annotationsDirty = true;
         await PumpAsync();
+    }
+
+    // Transient playback (the browser half): which step the uploaded colour buffers
+    // currently show. Null clears nothing — a finished clip HOLDS its last step, the
+    // window's own semantics.
+    private (FieldSequenceTrack Track, string FieldName)? _fieldSelection;
+
+    /// <summary>
+    /// Applies a <see cref="FieldSequenceTrack"/> step: every participating part (the
+    /// track's own <c>TryDisplayFor</c> rule — a display plus ALL the run's steps as
+    /// results) gets its mesh colour buffer re-specified for the step's field over the
+    /// run's ONE range. A repeat of the current selection is a no-op, so a paused
+    /// playback costs nothing per tick.
+    /// </summary>
+    private async Task ApplyFieldSelectionAsync(FieldSequenceTrack track, string fieldName)
+    {
+        if (_gl is null)
+            return;
+        if (_fieldSelection is { } current
+            && ReferenceEquals(current.Track, track) && current.FieldName == fieldName)
+            return;
+        _fieldSelection = (track, fieldName);
+        foreach (var (part, keys) in _keys)
+        {
+            if (keys.SourceVertices is null
+                || !track.TryDisplayFor(part, fieldName, out var display))
+                continue;
+            var lookup = display.Field.Association == FieldAssociation.Cell
+                ? keys.SourceFaces!
+                : keys.SourceVertices;
+            var colors = FieldRendering.Colors(
+                display.Field, display.Range, display.ColorMap, lookup, display.LogScale);
+            await _gl.UpdateFieldColorsAsync(keys.Mesh, colors);
+        }
     }
 
     // ---- view cube ----
@@ -894,6 +947,9 @@
         _drawnParts.Clear();
         _drawnInstances.Clear();
         _pick.Clear();
+        // A fresh load may have re-uploaded a released part with its display's own
+        // colours, so the next sample application must not be skipped as a repeat.
+        _fieldSelection = null;
         _contours = null;
         _annotationItems.Clear();
         _annotationsDirty = true;
@@ -1064,7 +1120,9 @@
         return new PartKeys(
             meshKey, edgeKey, upload.FeatureEdgeVertexCount, wireKey, upload.WireEdgeVertexCount,
             upload.RequirePick, upload.FieldColored, ghostKey, upload.DeformScale,
-            upload.WireColors is not null);
+            upload.WireColors is not null,
+            field is not null ? render.SourceVertices : null,
+            field is not null ? render.SourceFaces : null);
     }
 
     /// <summary>

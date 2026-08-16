@@ -273,6 +273,12 @@ public sealed class WebGlContext : IAsyncDisposable
             colors is { Length: > 0 } ? MemoryMarshal.AsBytes<float>(colors).ToArray() : [],
             deformation is { Length: > 0 } ? MemoryMarshal.AsBytes<float>(deformation).ToArray() : []);
 
+    /// <summary>Re-specifies an uploaded mesh's field-colour buffer with a new step's
+    /// colours (transient playback — the browser's colours-only re-upload).</summary>
+    public ValueTask UpdateFieldColorsAsync(string key, float[] colors) =>
+        _module.InvokeVoidAsync(
+            "updateFieldColors", _id, key, MemoryMarshal.AsBytes<float>(colors).ToArray());
+
     /// <summary>Drops one uploaded geometry (a part removed from the scene).</summary>
     public ValueTask ReleaseGeometryAsync(string key) =>
         _module.InvokeVoidAsync("releaseGeometry", _id, key);
