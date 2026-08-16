@@ -190,4 +190,79 @@ public class AnimationStillTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    /// <summary>
+    /// The batched export's transient playback: a sequence whose frames select DIFFERENT
+    /// steps must be byte-identical to one fresh <c>Render</c> per frame with the same
+    /// selection. The batch's second frame is the case with teeth — a warm cache whose
+    /// colour buffers show the previous step, so only the colours-only re-upload path
+    /// can make it match the fresh render.
+    /// </summary>
+    [SkippableFact]
+    public void ABatchedFieldSequenceIsByteIdenticalToOneRenderPerFrame()
+    {
+        Skip.If(SkipReason is not null, SkipReason);
+
+        var scene = new Scene();
+        var part = new Part("plate", Shape.Box(20, 10, 2));
+        var mesh = part.GetMesh();
+        part.AddResult(Mesh.MeshField.Sample(mesh, "T@0", "K", p => 300 + p.X));
+        part.AddResult(Mesh.MeshField.Sample(mesh, "T@5", "K", p => 300 + 4 * p.X));
+        part.FieldDisplay = new FieldDisplay { Field = "T@0" };
+        scene.Add(part);
+        scene.PreMesh();
+
+        var instances = (IReadOnlyList<PartInstance>)[.. scene.Instances()];
+        var camera = CameraMath.DefaultCamera(instances.Select(i => i.Bounds())
+            .Aggregate(Core.Aabb.Empty, (a, b) => a.Union(b)));
+        var track = new FieldSequenceTrack([("T@0", 0), ("T@5", 5)]);
+
+        // Three frames: step 0, step 1, and step 0 AGAIN — the third frame proves the
+        // re-upload is not one-way (the cache must come BACK from the later step too).
+        string[] steps = ["T@0", "T@5", "T@0"];
+        var frames = new List<(IReadOnlyList<PartInstance> Instances, CameraState Camera,
+            double DeformFactor, IReadOnlyList<SectionPlane>? Sections)>();
+        var fieldSteps = new List<(FieldSequenceTrack Track, string FieldName)?>();
+        foreach (var step in steps)
+        {
+            frames.Add((instances, camera, 1.0, null));
+            fieldSteps.Add((track, step));
+        }
+
+        var batched = OffscreenRenderer.RenderSequence(frames, 128, 96, fieldSteps: fieldSteps);
+        Assert.Equal(3, batched.Count);
+        for (int i = 0; i < steps.Length; i++)
+        {
+            var single = OffscreenRenderer.Render(instances, 128, 96, camera,
+                fieldStep: (track, steps[i]));
+            Assert.Equal(Convert.ToHexString(single), Convert.ToHexString(batched[i]));
+        }
+
+        // ... and the two steps are genuinely different pictures, or the comparison
+        // proves nothing about the re-upload.
+        Assert.NotEqual(Convert.ToHexString(batched[0]), Convert.ToHexString(batched[1]));
+        // Frame 2's warm-cache return to step 0 equals frame 0's picture exactly.
+        Assert.Equal(Convert.ToHexString(batched[0]), Convert.ToHexString(batched[2]));
+    }
+
+    [SkippableFact]
+    public void MismatchedFieldStepCountIsRefusedByName()
+    {
+        Skip.If(SkipReason is not null, SkipReason);
+
+        var scene = ExplodableScene();
+        scene.PreMesh();
+        var camera = CameraMath.DefaultCamera(scene.Instances().Select(i => i.Bounds())
+            .Aggregate(Core.Aabb.Empty, (a, b) => a.Union(b)));
+        var frames = new List<(IReadOnlyList<PartInstance> Instances, CameraState Camera,
+            double DeformFactor, IReadOnlyList<SectionPlane>? Sections)>
+        {
+            ([.. scene.Instances()], camera, 1.0, null),
+            ([.. scene.Instances()], camera, 1.0, null),
+        };
+        var oneStep = new List<(FieldSequenceTrack Track, string FieldName)?> { null };
+        var ex = Assert.Throws<ArgumentException>(() =>
+            OffscreenRenderer.RenderSequence(frames, 64, 64, fieldSteps: oneStep));
+        Assert.Contains("parallel to frames", ex.Message);
+    }
 }

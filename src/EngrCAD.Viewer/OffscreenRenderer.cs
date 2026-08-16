@@ -156,6 +156,12 @@ public static class OffscreenRenderer
     /// so per-frame sections ride the one-context batch exactly as the deformation scalar does:
     /// they change what a frame LOOKS like without changing what is in it.
     /// </summary>
+    /// <param name="fieldSteps">Per-frame field-sequence selections, parallel to
+    /// <paramref name="frames"/> — a transient playback's step at each instant, applied
+    /// through the track's own <c>TryDisplayFor</c> rule exactly as a single still
+    /// applies it; a warm cache re-uploads only the colour floats when the step moved.
+    /// Null (the default) keeps every frame on the parts' own displays, bit-identical to
+    /// before the parameter existed.</param>
     public static IReadOnlyList<byte[]> RenderSequence(
         IReadOnlyList<(IReadOnlyList<PartInstance> Instances, CameraState Camera, double DeformFactor,
             IReadOnlyList<SectionPlane>? Sections)> frames,
@@ -166,11 +172,16 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         bool fields = true, ShadingStyle shading = ShadingStyle.Lit,
-        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop,
+        IReadOnlyList<(FieldSequenceTrack Track, string FieldName)?>? fieldSteps = null)
     {
         ArgumentNullException.ThrowIfNull(frames);
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
+        if (fieldSteps is not null && fieldSteps.Count != frames.Count)
+            throw new ArgumentException(
+                $"fieldSteps must be parallel to frames: {fieldSteps.Count} selections for "
+                + $"{frames.Count} frames.", nameof(fieldSteps));
         if (frames.Count == 0)
             return [];
 
@@ -180,13 +191,14 @@ public static class OffscreenRenderer
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
         var cache = new PassCache(gl);
         var pixels = new List<byte[]>(frames.Count);
-        foreach (var (instances, camera, deformFactor, sections) in frames)
+        for (int i = 0; i < frames.Count; i++)
         {
+            var (instances, camera, deformFactor, sections) = frames[i];
             var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera,
                 furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
                 sections ?? sectionPlanes, sectionCombine,
                 supersample, preview: null, previewWorld: null, fields, deformFactor, shading, annotationDepth,
-                fieldStep: null);
+                fieldStep: fieldSteps?[i]);
             pixels.Add(Downsample(oversized, width, height, supersample));
         }
         return pixels;
@@ -319,6 +331,20 @@ public static class OffscreenRenderer
         /// <summary>Uploads keyed by <see cref="Part"/> REFERENCE — the same identity
         /// <c>Scene.AllParts</c> dedupes by, so N instances of one part share one set.</summary>
         public Dictionary<Part, PartBuffers> Uploaded { get; } = [];
+
+        /// <summary>
+        /// Transient playback across the batch: per field-coloured part, the slim data a
+        /// colours-only re-upload needs — the live colour VBO and the source-index
+        /// lookups — captured at upload (the window's <c>_fieldAnimation</c>, one context
+        /// over). A cache HIT whose frame selects a different step re-uploads through
+        /// this rather than rebuilding anything.
+        /// </summary>
+        public Dictionary<Part, (uint FieldVbo, int[] VertexLookup, int[] FaceLookup)>
+            FieldAnimation { get; } = [];
+
+        /// <summary>The step the cached colour buffers currently show — so a run of
+        /// frames holding one step re-uploads nothing (the hold-last common case).</summary>
+        public (FieldSequenceTrack Track, string FieldName)? AppliedFieldStep { get; set; }
     }
 
     private static unsafe byte[] Draw(
@@ -415,6 +441,35 @@ public static class OffscreenRenderer
         // uploaded: mesh VAO for fills/points/translucency, feature edges for the
         // shaded-with-edges look and translucent silhouettes, wire edges for wireframe.
         var uploaded = cache.Uploaded;
+        // A field-sequence frame against a WARM cache: when the selection moved since the
+        // colours were last uploaded, re-upload just the colour floats into each
+        // participating part's retained VBO (the attribute pointer references the buffer
+        // OBJECT, so no VAO is touched) — the batched twin of the window's
+        // ApplyPendingFieldSelection, and the whole per-frame cost the measurement put at
+        // 0.042/0.68 ms. Parts this frame is about to upload fresh take the same step in
+        // the miss path below, so both roads end at one configuration.
+        if (fieldStep is { } selection
+            && (cache.AppliedFieldStep is not { } applied
+                || !ReferenceEquals(applied.Track, selection.Track)
+                || applied.FieldName != selection.FieldName))
+        {
+            foreach (var (cachedPart, animation) in cache.FieldAnimation)
+            {
+                if (!selection.Track.TryDisplayFor(cachedPart, selection.FieldName, out var stepDisplay))
+                    continue;
+                var lookup = stepDisplay.Field.Association == FieldAssociation.Cell
+                    ? animation.FaceLookup
+                    : animation.VertexLookup;
+                var stepColors = FieldRendering.Colors(
+                    stepDisplay.Field, stepDisplay.Range, stepDisplay.ColorMap, lookup,
+                    stepDisplay.LogScale);
+                gl.BindBuffer(BufferTargetARB.ArrayBuffer, animation.FieldVbo);
+                gl.BufferData<float>(BufferTargetARB.ArrayBuffer, stepColors, BufferUsageARB.StaticDraw);
+            }
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        }
+        if (fieldStep is not null)
+            cache.AppliedFieldStep = fieldStep;
         var draws = new List<InstanceDraw>(instances.Count);
         foreach (var instance in instances)
         {
@@ -470,9 +525,13 @@ public static class OffscreenRenderer
                 int ghostIndexCount = 0;
                 if (shaded)
                 {
-                    (vao, _, _, _, _, _) = RenderUploads.UploadMesh(
+                    uint fieldVbo;
+                    (vao, _, _, _, fieldVbo, _) = RenderUploads.UploadMesh(
                         gl, render, upload.Occlusion, field?.Colors, field?.Deformation);
                     indexCount = upload.IndexCount;
+                    if (field is not null && fieldVbo != 0)
+                        cache.FieldAnimation[part] =
+                            (fieldVbo, render.SourceVertices, render.SourceFaces);
                     if (upload.ShowGhost)
                     {
                         (ghostVao, _, _, _, _, _) = RenderUploads.UploadMesh(gl, render);

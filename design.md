@@ -9999,9 +9999,20 @@ VBO per field-coloured part, captured at upload — no render mesh is held and n
 rebuilt (`FieldRendering.Colors` gained the retained-lookup overload the path wants).
 The verification bar is the deformation track's: a still of the animation at a step is
 BYTE-IDENTICAL to a static render of the same scene with the step's field and the run
-range stated explicitly — both roads reach one configuration. Scope stated: window
-playback + stills; the batched-export re-upload (a cache hit must refresh aFieldColor
-when the selection changed) and web parity are re-filed as their own rungs.
+range stated explicitly — both roads reach one configuration. **The batched
+export rides it too** (`RenderSequence`'s optional per-frame `fieldSteps`, parallel to
+`frames` and refused by name on a count mismatch; `AnimationExport` builds the list off
+the samples it already evaluates, so an APNG of a transient run plays its steps): the
+`PassCache` retains the window's `_fieldAnimation` data one context over — the live
+colour VBO and the source-index lookups per field-coloured part — and a warm-cache
+frame whose selection MOVED re-uploads just the colour floats (the attribute pointer
+references the buffer OBJECT, so no VAO is touched), with `AppliedFieldStep` making a
+run of frames holding one step re-upload nothing, the hold-last common case. Verified
+at the batch's own bar: a three-frame sequence stepping A → B → A is byte-identical to
+one fresh `Render` per frame with the same selection — the THIRD frame is the assertion
+with teeth, a warm cache returning to a step it has already shown, which only the
+re-upload path can make match. Scope: window playback + stills + the batched
+export/APNG; web parity stays a filed rung.
 
 ## 7. Query layer
 

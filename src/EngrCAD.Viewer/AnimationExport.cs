@@ -126,6 +126,13 @@ public static class AnimationExport
         var timeline =
             new List<(IReadOnlyList<PartInstance> Instances, CameraState Camera, double DeformFactor,
                 IReadOnlyList<SectionPlane>? Sections)>(frames);
+        // A field-sequence track's steps ride the batch as per-frame selections — the
+        // colours-only re-upload inside the shared cache — so an APNG of a transient run
+        // plays its steps exactly as the window and a still do. Null when the animation
+        // carries no field track, keeping the export bit-identical to before.
+        var fieldSteps = animation.FieldTrack is null
+            ? null
+            : new List<(FieldSequenceTrack Track, string FieldName)?>(frames);
         CameraState used = fixedCamera ?? CameraMath.DefaultCamera(Aabb.Empty);
         for (int i = 0; i < frames; i++)
         {
@@ -135,9 +142,12 @@ public static class AnimationExport
                 ?? throw new InvalidOperationException(
                     "No camera: the animation has no camera track and none was supplied.");
             timeline.Add((sample.Instances ?? defaults, used, sample.DeformFactor, sample.Sections));
+            fieldSteps?.Add(sample.FieldName is { } stepField && animation.FieldTrack is { } fieldTrack
+                ? (fieldTrack, stepField) : null);
         }
         var pixels = OffscreenRenderer.RenderSequence(
-            timeline, width, height, furniture: true, style, ambientOcclusion: ambientOcclusion);
+            timeline, width, height, furniture: true, style, ambientOcclusion: ambientOcclusion,
+            fieldSteps: fieldSteps);
         return (pixels, used);
     }
 }

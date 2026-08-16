@@ -197,7 +197,9 @@ shows **one range** throughout (the display's explicit range, else the union of 
 steps' own), since a legend that rescales per frame lies. Applying a step re-uploads
 one colour buffer and nothing else — measured at 0.042/0.68 ms per frame on
 12k/195k-vertex meshes — and a still of the animation at a step is byte-identical to a
-static render of the same configuration.
+static render of the same configuration. The batched APNG/frame export applies the same
+rule per frame through the shared upload cache, so an exported clip of a transient run
+plays its steps exactly as the window does.
 
 ```csharp run:field-sequence
 var part = new Part("plate", Shape.Box(20, 10, 2));

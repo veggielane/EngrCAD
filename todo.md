@@ -664,11 +664,9 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   with window playback re-uploading ONE colour buffer per step through the retained
   source-index lookups (the measured 0.042/0.68 ms path) and stills applying the same
   `TryDisplayFor` rule, byte-identical to a static render of the step's configuration):
-  - **Batched export** (`RenderSequence`/APNG): the per-frame colour re-upload inside the
-    upload CACHE — a cache hit must re-upload aFieldColor when the frame's selection
-    changed, the stated price the measurement already put at 0.68 ms/frame heavy.
   - **Web parity**: `FrameDescription` colour re-upload, its own rung as filed when the
-    desktop half landed.
+    desktop half landed (the batched-export rung ✅ landed — `RenderSequence` takes
+    per-frame selections, the warm cache re-uploads colours only, APNG rides it).
   - **A frequency/load-step slider** driving `Part.Results` is the same shape of problem;
     result persistence beside `FeatureHistory.SaveParameters` is a third neighbour.
 - [ ] **A displaced part's feature edges and pick geometry** — the two things a
