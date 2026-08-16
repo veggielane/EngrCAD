@@ -9963,6 +9963,18 @@ optional parameter: three internal call sites passed `fitTolerance` positionally
 the new slot and were moved to named arguments — the compiler caught all three, which
 is the argument for optionals over overload pairs here.
 
+**Web lightening joined the keyed bore as a blank sketch feature** (`LighteningSpec` +
+the `lightening:` optional on `SpurGear`/`HelicalGear`): N circular holes evenly on a
+bolt circle in the gear's web, defaulting to the web's own MIDDLE (midway between the
+bore's reach — the keyway's top when one is cut — and the root circle), each removing
+exactly π·d²/4 of blank area (the volume identity held at mass-properties grade beside
+the keyed bore's). The three refusals are closed-form and each names its numbers: a
+hole reaching the bore's clear radius, one reaching the root circle, and neighbours
+overlapping (the chord 2·R·sin(π/n) against d — the planetary neighbour-clearance test
+one feature over). The remaining set-screw BOSS is filed with its reason: a boss needs
+a 3D hub proud of the web, i.e. a revolved blank cross-section rather than one
+extrude — a gear-blank redesign, not a hole.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

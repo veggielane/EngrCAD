@@ -264,6 +264,34 @@ public class GearTests
             () => StandardKeys.For(100)).Message);
     }
 
+    /// <summary>Lightening holes remove exactly N·π·d²/4 of blank area — the sketch is
+    /// exact — and the solid follows at mass-properties grade; holes that reach the
+    /// bore, the root or each other refuse by name.</summary>
+    [Fact]
+    public void LighteningHoles_RemoveExactlyTheirOwnArea()
+    {
+        var spec = new GearSpec(module: 2.5, teeth: 30);
+        var plain = new Part("plain", Gears.SpurGear(spec, 8, boreDiameter: 16));
+        var light = new Part("light", Gears.SpurGear(spec, 8, boreDiameter: 16,
+            lightening: new LighteningSpec(count: 5, holeDiameter: 9)));
+
+        double removed = 5 * Math.PI * 81.0 / 4 * 8;
+        double expected = plain.MassProperties().Volume - removed;
+        double actual = light.MassProperties().Volume;
+        Assert.True(Math.Abs(actual - expected) <= 1e-6 * expected,
+            $"lightened volume {actual} vs plain-minus-holes {expected}");
+
+        Assert.Contains("reach the root", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 8, boreDiameter: 16,
+                lightening: new LighteningSpec(3, 12, circleDiameter: 58))).Message);
+        Assert.Contains("reach the bore", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 8, boreDiameter: 16,
+                lightening: new LighteningSpec(3, 9, circleDiameter: 18))).Message);
+        Assert.Contains("overlap each other", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 8, boreDiameter: 16,
+                lightening: new LighteningSpec(12, 12))).Message);
+    }
+
     // ---- the exact area identity ----
 
     [Theory]

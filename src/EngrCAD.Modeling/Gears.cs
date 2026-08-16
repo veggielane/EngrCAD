@@ -512,10 +512,10 @@ public static partial class Gears
     /// representations (the profile is lines and circular arcs).
     /// </summary>
     public static Shape SpurGear(GearSpec spec, double faceWidth, double boreDiameter = 0,
-        KeywaySpec? keyway = null,
+        KeywaySpec? keyway = null, LighteningSpec? lightening = null,
         double? fitTolerance = null)
     {
-        var sketch = GearBlank(spec, faceWidth, boreDiameter, keyway, fitTolerance);
+        var sketch = GearBlank(spec, faceWidth, boreDiameter, keyway, lightening, fitTolerance);
         return Shape.Extrude(sketch, faceWidth);
     }
 
@@ -533,13 +533,13 @@ public static partial class Gears
     /// mesh, and B-Rep is honestly Impossible — <c>Explain</c> reports it.
     /// </remarks>
     public static Shape HelicalGear(GearSpec spec, double faceWidth, double helixAngleDegrees,
-        double boreDiameter = 0, KeywaySpec? keyway = null,
+        double boreDiameter = 0, KeywaySpec? keyway = null, LighteningSpec? lightening = null,
         double? fitTolerance = null, int? slices = null)
     {
         if (!(Math.Abs(helixAngleDegrees) < 60))
             throw new ArgumentOutOfRangeException(nameof(helixAngleDegrees),
                 "Helix angle must lie strictly between -60 and 60 degrees.");
-        var sketch = GearBlank(spec, faceWidth, boreDiameter, keyway, fitTolerance);
+        var sketch = GearBlank(spec, faceWidth, boreDiameter, keyway, lightening, fitTolerance);
         if (helixAngleDegrees == 0)
             return Shape.Extrude(sketch, faceWidth);
         double twist = faceWidth * Math.Tan(helixAngleDegrees * Math.PI / 180) / (spec.PitchDiameter / 2);
@@ -547,7 +547,7 @@ public static partial class Gears
     }
 
     private static Sketch GearBlank(GearSpec spec, double faceWidth, double boreDiameter,
-        KeywaySpec? keyway, double? fitTolerance)
+        KeywaySpec? keyway, LighteningSpec? lightening, double? fitTolerance)
     {
         ArgumentNullException.ThrowIfNull(spec);
         if (!(faceWidth > 0))
@@ -563,16 +563,51 @@ public static partial class Gears
         if (boreDiameter >= spec.RootDiameter)
             throw new ArgumentOutOfRangeException(nameof(boreDiameter),
                 $"Bore diameter {boreDiameter:0.###} reaches the root circle (diameter {spec.RootDiameter:0.###}).");
+        double innerClear = boreDiameter / 2;
+        var blank = profile.Sketch;
         if (keyway is { } seat)
         {
             if (boreDiameter / 2 + seat.HubDepth >= spec.RootDiameter / 2)
                 throw new ArgumentOutOfRangeException(nameof(keyway),
                     $"The keyway reaches radius {boreDiameter / 2 + seat.HubDepth:0.###}, into the " +
                     $"root circle (radius {spec.RootDiameter / 2:0.###}).");
-            return profile.Sketch.WithHole(KeyedBore(boreDiameter, seat));
+            innerClear = boreDiameter / 2 + seat.HubDepth;
+            blank = blank.WithHole(KeyedBore(boreDiameter, seat));
         }
-        return profile.Sketch.WithHole(Sketch.Circle(boreDiameter / 2));
+        else
+        {
+            blank = blank.WithHole(Sketch.Circle(boreDiameter / 2));
+        }
+        if (lightening is { } holes)
+        {
+            double rootR = spec.RootDiameter / 2;
+            // Null centres the ring midway between the bore's reach and the root.
+            double circleR = (holes.CircleDiameter ?? innerClear + rootR) / 2;
+            double d = holes.HoleDiameter;
+            if (circleR - d / 2 <= innerClear)
+                throw new ArgumentOutOfRangeException(nameof(lightening),
+                    $"Ø{d:0.###} lightening holes on a Ø{2 * circleR:0.###} circle reach the bore " +
+                    $"(clear radius {innerClear:0.###}).");
+            if (circleR + d / 2 >= rootR)
+                throw new ArgumentOutOfRangeException(nameof(lightening),
+                    $"Ø{d:0.###} lightening holes on a Ø{2 * circleR:0.###} circle reach the root " +
+                    $"circle (radius {rootR:0.###}).");
+            double neighbourChord = 2 * circleR * Math.Sin(Math.PI / holes.Count);
+            if (holes.Count > 1 && neighbourChord <= d)
+                throw new ArgumentOutOfRangeException(nameof(lightening),
+                    $"{holes.Count} Ø{d:0.###} holes on a Ø{2 * circleR:0.###} circle overlap each " +
+                    $"other (neighbour spacing {neighbourChord:0.###}).");
+            for (int k = 0; k < holes.Count; k++)
+            {
+                double angle = 2 * Math.PI * k / holes.Count;
+                blank = blank.WithHole(Sketch.Circle(
+                    new Vector2d(circleR * Math.Cos(angle), circleR * Math.Sin(angle)), d / 2));
+            }
+        }
+        return blank;
     }
+
+
 
     /// <summary>
     /// A bore with a DIN 6885 parallel-key seat, as the hole profile a gear (or any hub)
@@ -741,4 +776,37 @@ public static partial class Gears
             _ => throw new InvalidOperationException($"Unexpected gear outline curve {curve.GetType().Name}."),
         };
     }
+}
+
+/// <summary>
+/// Web lightening: <see cref="Count"/> circular holes of <see cref="HoleDiameter"/>
+/// evenly spaced on a bolt circle in a gear's web, between the bore (or the keyway's
+/// reach) and the root circle. <see cref="CircleDiameter"/> null centres the ring
+/// midway between the two — the web's own middle. Each hole removes exactly π·d²/4 of
+/// blank area, which is what the tests hold the sketch to; holes that reach the bore,
+/// the root circle or each other are refused by name where the blank is built.
+/// </summary>
+public readonly record struct LighteningSpec
+{
+    public LighteningSpec(int count, double holeDiameter, double? circleDiameter = null)
+    {
+        if (count < 1)
+            throw new ArgumentOutOfRangeException(nameof(count));
+        if (!(holeDiameter > 0) || !double.IsFinite(holeDiameter))
+            throw new ArgumentOutOfRangeException(nameof(holeDiameter));
+        if (circleDiameter is { } c && (!(c > 0) || !double.IsFinite(c)))
+            throw new ArgumentOutOfRangeException(nameof(circleDiameter));
+        Count = count;
+        HoleDiameter = holeDiameter;
+        CircleDiameter = circleDiameter;
+    }
+
+    /// <summary>How many holes ring the web.</summary>
+    public int Count { get; }
+
+    /// <summary>Each hole's diameter, mm.</summary>
+    public double HoleDiameter { get; }
+
+    /// <summary>The bolt circle's diameter, or null for the web's own middle.</summary>
+    public double? CircleDiameter { get; }
 }

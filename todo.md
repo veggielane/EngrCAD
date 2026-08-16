@@ -70,10 +70,11 @@ design.md §2). Residuals:
     z_min = 2(h_a* − x)/sin²α by name; drawing the actual generated trochoid would
     admit z ≥ ~12 if it can be VERIFIED (the conjugate-contact instrument exists and
     measurably sees a 5e-2 flank error as 5.6e-4 rad of transmission wobble).
-  - **Set screw boss and web/spoke lightening** (the keyway half ✅ landed —
-    `StandardKeys`/`KeywaySpec` + `Gears.KeyedBore` + the `keyway:` optional on
-    `SpurGear`/`HelicalGear`, exact in all three representations with a closed-form
-    hole area).
+  - **Set screw boss** (the keyway ✅ and web lightening ✅ halves landed —
+    `StandardKeys`/`KeywaySpec`/`Gears.KeyedBore` and `LighteningSpec`, both exact
+    sketch features with closed-form areas). A boss needs a 3D HUB — a cylinder proud
+    of the web, i.e. a revolved blank cross-section rather than one extrude — so it is
+    a gear-blank redesign, not a hole.
   - **The apex relief groove on a herringbone** (`HerringboneGears`) — the one part
     of the double-helical form that did NOT land, and the entry carries its
     measurement so it cannot rot into a guess. A hobbed herringbone cannot have a

@@ -160,6 +160,13 @@ if (Math.Abs(bore.Area() - area) > 1e-9)
 
 var gear = Gears.SpurGear(new GearSpec(2.5, 24), faceWidth: 8, boreDiameter: 20, keyway);
 if (gear.ToMesh().Volume() <= 0) throw new Exception("the keyed gear is a solid");
+
+// Web lightening: N holes on a bolt circle (default: the web's own middle), each
+// removing exactly pi*d^2/4 of blank area; holes reaching the bore, the root circle
+// or each other are refused by name.
+var light = Gears.SpurGear(new GearSpec(2.5, 30), faceWidth: 8, boreDiameter: 16,
+    lightening: new LighteningSpec(count: 5, holeDiameter: 9));
+if (light.ToMesh().Volume() <= 0) throw new Exception("the lightened gear is a solid");
 ```
 
 ## Putting a pair in mesh
