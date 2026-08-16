@@ -222,7 +222,7 @@ export function uploadMesh(id, key, positions, normals, indices, occlusion, fiel
 }
 
 /** Uploads a line list (feature edges, grid, axes): packed float32 position triples. */
-export function uploadLines(id, key, positions, colors) {
+export function uploadLines(id, key, positions, colors, deformation) {
     const ctx = require(id);
     const gl = ctx.gl;
     const existing = ctx.lines.get(key);
@@ -243,9 +243,18 @@ export function uploadLines(id, key, positions, colors) {
         gl.enableVertexAttribArray(3);
         gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 0, 0);
     }
+    // Optional per-vertex displacement (a displaced part's feature edges or wireframe),
+    // attribute 4 under the same rule: absent reads (0, 0, 0), so aPos + s*0 is aPos
+    // whatever uDeformScale a draw carries.
+    let deformBuffer = null;
+    if (deformation && deformation.byteLength > 0) {
+        deformBuffer = buffer(gl, gl.ARRAY_BUFFER, deformation);
+        gl.enableVertexAttribArray(4);
+        gl.vertexAttribPointer(4, 3, gl.FLOAT, false, 0, 0);
+    }
     gl.bindVertexArray(null);
 
-    ctx.lines.set(key, { vao, posBuffer, colorBuffer, vertexCount: positions.byteLength / 12 });
+    ctx.lines.set(key, { vao, posBuffer, colorBuffer, deformBuffer, vertexCount: positions.byteLength / 12 });
 }
 
 function buffer(gl, target, bytes) {
@@ -269,6 +278,7 @@ function releaseLines(gl, line) {
     gl.deleteVertexArray(line.vao);
     gl.deleteBuffer(line.posBuffer);
     if (line.colorBuffer) gl.deleteBuffer(line.colorBuffer);
+    if (line.deformBuffer) gl.deleteBuffer(line.deformBuffer);
 }
 
 export function releaseGeometry(id, key) {

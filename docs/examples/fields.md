@@ -133,9 +133,15 @@ exaggeration is not stated is a picture of a shape that does not exist. Set
 `ShowUndeformed = false` to drop the ghost, or `DeformScale = 0` to leave the geometry
 alone entirely.
 
-A deformed part draws **no feature-edge overlay** — those edges come from the exact
-B-Rep and describe geometry that has moved — and picking follows what is drawn, so a
-click selects the part where it is on screen.
+A deformed part **draws its feature-edge overlay, displaced with the shape**: each edge
+sample carries its own displacement (interpolated from the field at the sample's nearest
+mesh facet — exact for any affine displacement, and within the facets' own interpolation
+otherwise), riding a line-program attribute under the same `uDeformScale` the fills
+follow, so the outline is right at every exaggeration and animating it is still one
+float per frame. The wireframe view follows the displacement the same way — its
+endpoints are mesh vertices, so they take their own displacement vectors exactly.
+Picking follows what is drawn at the part's own scale, so a click selects the part
+where it is on screen.
 
 **The displacement is sent once, as a vertex attribute**, and the shader applies
 `position + uDeformScale * displacement`. A mesh with no displacement buffer reads zero,

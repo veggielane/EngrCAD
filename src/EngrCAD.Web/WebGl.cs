@@ -261,9 +261,17 @@ public sealed class WebGlContext : IAsyncDisposable
     /// field-coloured part's wireframe). Null colours are the plain upload.</summary>
     public ValueTask UploadLineVerticesAsync(
         string key, ReadOnlySpan<float> vertices, float[]? colors) =>
+        UploadLineVerticesAsync(key, vertices, colors, null);
+
+    /// <summary>Line upload with optional per-vertex field colours (attribute 3) AND
+    /// per-vertex displacement vectors (attribute 4 — a displaced part's feature edges
+    /// or wireframe). Either null is the plain upload for that attribute.</summary>
+    public ValueTask UploadLineVerticesAsync(
+        string key, ReadOnlySpan<float> vertices, float[]? colors, float[]? deformation) =>
         _module.InvokeVoidAsync(
             "uploadLines", _id, key, MemoryMarshal.AsBytes(vertices).ToArray(),
-            colors is { Length: > 0 } ? MemoryMarshal.AsBytes<float>(colors).ToArray() : []);
+            colors is { Length: > 0 } ? MemoryMarshal.AsBytes<float>(colors).ToArray() : [],
+            deformation is { Length: > 0 } ? MemoryMarshal.AsBytes<float>(deformation).ToArray() : []);
 
     /// <summary>Drops one uploaded geometry (a part removed from the scene).</summary>
     public ValueTask ReleaseGeometryAsync(string key) =>

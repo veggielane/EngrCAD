@@ -5674,12 +5674,12 @@ configuration. A click is therefore exact on a static plot and at a load ramp's 
 off by the difference in exaggeration in between. Rebuilding a spatial index per frame is
 exactly the cost this design exists to avoid, so the mismatch is documented instead of
 paid for. `FieldRendering.Deform` survives for this one job, which is not a second render
-path but a different question asked of the same formula. The same reasoning fixes the
-feature-edge overlay to whether a part *carries* a displacement rather than to the current
-factor: the draw list must not depend on t, or a clip could not reuse one upload. The
-visible consequence is worth stating — the factor-0 frame of an animation is the
-undeformed *shape* without the undeformed part's chrome, so it is not the same picture as
-a still of a part whose own scale is 0.
+path but a different question asked of the same formula. (The feature-edge overlay used
+to be governed by the same reasoning — dropped whenever a part *carries* a displacement,
+so the draw list never depends on t — and has since been RESTORED the way the fills were:
+the edges carry their own displacement attribute and follow the same scale, so they are
+drawn at every factor and correct at every factor, and the draw list still never depends
+on t. See the "deformed edges" record below.)
 
 The legend follows the effective factor, because its title states the number: a bar
 reading `40X DEFORMED` over a frame drawn at 20× is exactly the lie the title exists to
@@ -10014,6 +10014,45 @@ with teeth, a warm cache returning to a step it has already shown, which only th
 re-upload path can make match. Scope: window playback + stills + the batched
 export/APNG; web parity stays a filed rung.
 
+**A displaced part's feature edges and wireframe landed as ONE line-program attribute,
+and retiring the no-edges rule kept both halves of its own reasoning**
+(`LineVertex`'s `aDeformOffset` + `uDeformScale`; `PartUpload.FeatureEdgeDeformation`/
+`WireDeformation`; `MeshProjectionTarget.TryInterpolate`; docs `examples/fields.md`):
+the rule was "a part carrying a displacement draws NO feature-edge overlay at any
+factor", for two stated reasons — a static overlay over a displaced shape is a WRONG
+outline rather than a coarse one, and the draw list must not depend on t or a clip could
+not reuse one upload. Displacing the edges by their own attribute satisfies both AT
+ONCE: the overlay is drawn at every factor and lands on the displaced rims at every
+factor, and it is one uniform per frame exactly as the fills are — so the retirement is
+the rule's own logic completed rather than reversed. Three pieces carry it. **A
+feature-edge sample is an exact B-Rep curve point, not a mesh vertex**, so its
+displacement is INTERPOLATED: `MeshProjectionTarget.TryInterpolate` reports the nearest
+triangle's corners (in the construction mesh's own vertex numbering — triangulation
+fans existing vertices and invents none) plus clamped barycentric weights, and the
+offset is the weighted sum of the corners' own vectors — exact for any affine
+displacement wherever the sample lies in a facet's plane (a box's edges, asserted
+value-for-value against the field's closed form), and within the fills' own facet
+interpolation otherwise, so the outline sits on the displaced surface to the same order
+the shading does. **A wireframe endpoint IS a source vertex**, so its offset is
+`VectorAt` through the same `ExtractIndexed` pairs the wire colours ride — no
+interpolation, and it closes a gap that PREDATES the attribute path (a deformed part in
+Wireframe had always drawn its undeformed edges while its fills moved). **The
+constant-when-absent rule does the byte-identity work from both sides**: a line VAO
+without the buffer reads offset (0,0,0), so `aPos + s·0` is `aPos` for any finite scale
+and every incumbent line consumer — grid, axes, annotations, legend, isolines, cube —
+is untouched with no uniform resets anywhere; and a DISPLACED wireframe at factor 0 is
+byte-identical to its scale-0 twin's render (asserted), the same rule met from the other
+side. All three front ends set the one per-draw scale (`DrawFeatureEdges` and the wire
+case in the window, both line loops plus the translucent-edge pass offscreen, and
+`Deformed(edge.Uniforms, …)` in the browser frame — asserted as VALUES there, the
+DeformFrameTests way). The regression with teeth: a deformed part's ShadedWithEdges
+render used to be byte-identical to its Shaded render, and now differs — with the
+overlay's own pixel SET moving between factor 0 and factor 1, so the test sees the
+outline FOLLOW the shape rather than merely exist. What deliberately did NOT change:
+picking stays built once at the part's own scale (the spatial-index-cannot-be-a-uniform
+reason stands), and the factor-0 frame of an animation still differs from a scale-0
+still — by the ghost alone now, which is the difference that was always real.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
@@ -10532,7 +10571,9 @@ geometry kernel building *that* model in the reader's tab. The pieces are
   belong in the shared code is every rule about the CONTENT, and the payoff is one of
   them: **a part carrying a displacement draws no feature-edge overlay at any factor** had
   been written out three times, once per pass. Verified the only way a pure render
-  refactor can be: all 108 committed docs PNGs byte-identical.
+  refactor can be: all 108 committed docs PNGs byte-identical. (The rule itself has since
+  been retired — the edges now carry their own displacement attribute — and retiring it
+  was ONE edit for exactly the reason this extraction exists.)
 - **Assembly name is not namespace, deliberately.** `EngrCAD.Viewer.Core` publishes types
   in namespace `EngrCAD.Viewer`. Nothing in .NET requires a namespace to live in one
   assembly, and `SectionPlane`/`ViewStyle` are public API with call sites in options,

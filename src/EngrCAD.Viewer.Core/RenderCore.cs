@@ -544,14 +544,16 @@ public static class ViewerShaders
     public const string LineVertex = """
         in vec3 aPos;
         in vec3 aFieldColor;
+        in vec3 aDeformOffset;
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProj;
+        uniform float uDeformScale;
         out vec3 vWorldPos;
         out vec3 vFieldColor;
         void main()
         {
-            vec4 world = uModel * vec4(aPos, 1.0);
+            vec4 world = uModel * vec4(aPos + uDeformScale * aDeformOffset, 1.0);
             vWorldPos = world.xyz;
             vFieldColor = aFieldColor;
             gl_Position = uProj * uView * world;

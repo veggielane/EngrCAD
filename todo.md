@@ -669,25 +669,15 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
     per-frame selections, the warm cache re-uploads colours only, APNG rides it).
   - **A frequency/load-step slider** driving `Part.Results` is the same shape of problem;
     result persistence beside `FeatureHistory.SaveParameters` is a third neighbour.
-- [ ] **A displaced part's feature edges and pick geometry** — the two things a
-  `DeformationTrack` deliberately does not move, both filed with their reasons in
-  design.md (§6b, "Animating a deformed result").
-  - **Feature edges**: a part carrying a displacement draws none at any factor, so a
-    deformed plot has no outline. Displacing the exact B-Rep edge samples by the same
-    field would restore it — the sampling is the `SourceVertices` question, since an edge
-    sample is not a mesh vertex — and the edges could then ride the same attribute path
-    (a line program with `aDeformOffset`), which would keep them free during an animation
-    rather than merely correct in a still. The **wireframe** view has the same gap and
-    predates all of this: `WireframeEdges.Extract` reads the source half-edge mesh, so a
-    deformed part in Wireframe has always drawn its undeformed edges while its fills (and
-    now its point sprites) move. One line-program attribute closes both.
-  - **Picking during an animation**: the pick BVH is built once at the part's own
-    `DeformScale`, so a click is exact at factor 1 and off by the difference in
-    exaggeration in between. A cheap fix is not obvious — rebuilding a spatial index per
-    frame is the cost the design avoids — but a *deformed-ray* trick may exist for small
-    displacements, and at minimum the viewer could refuse to hover-highlight while
-    playback is running rather than silently answering from stale geometry.
-
+- [ ] **Picking during a deformation animation** (the EDGES half of this item ✅ landed —
+  feature edges AND wireframe now carry per-endpoint displacement on the line program's
+  own `aDeformOffset`, following `uDeformScale` in all three front ends; the no-edges
+  rule is retired, design.md has the record): the pick BVH is built once at the part's
+  own `DeformScale`, so a click is exact at factor 1 and off by the difference in
+  exaggeration in between. A cheap fix is not obvious — rebuilding a spatial index per
+  frame is the cost the design avoids — but a *deformed-ray* trick may exist for small
+  displacements, and at minimum the viewer could refuse to hover-highlight while
+  playback is running rather than silently answering from stale geometry.
 - [ ] **Instagram Reel / YouTube Short compatible animation export.** The pieces mostly
   exist — `Animation` is a pure-`t` timeline, `OffscreenRenderer.RenderSequence` renders a
   whole clip through one context, and `ApngWriter`/`GifWriter`/`AnimationExport` already

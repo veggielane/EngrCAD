@@ -31,8 +31,10 @@ namespace EngrCAD.Viewer;
 //    uploads on one thread. That part must NOT look the same.)
 //
 // What DOES belong here is every rule about the CONTENT, and one of them had been
-// written out three times: a part carrying a displacement draws NO feature-edge overlay
-// at any factor. See BuildFeatureEdges.
+// written out three times: a part carrying a displacement used to draw NO feature-edge
+// overlay at any factor. That rule is RETIRED — the edges now carry their own
+// displacement attribute and follow the same uDeformScale the fills do, so they are
+// drawn at every factor and correct at every factor. See BuildFeatureEdgeDeformation.
 
 /// <summary>
 /// Which pieces of a part's upload a front end wants, and where baked occlusion comes
@@ -47,9 +49,9 @@ public readonly record struct PartUploadRequest
     /// carries results.</summary>
     public bool Fields { get; init; }
 
-    /// <summary>Collect <c>Part.GetFeatureEdges()</c> for the edge overlay. Note this is
-    /// permission, not a guarantee: a deformed part gets none regardless (see
-    /// <see cref="PartUpload.FeatureEdges"/>).</summary>
+    /// <summary>Collect <c>Part.GetFeatureEdges()</c> for the edge overlay. A deformed
+    /// part's edges come with <see cref="PartUpload.FeatureEdgeDeformation"/> so the
+    /// overlay follows the displaced shape.</summary>
     public bool FeatureEdges { get; init; }
 
     /// <summary>Collect every unique mesh edge, for the wireframe display mode.</summary>
@@ -128,8 +130,10 @@ public sealed record PartUpload(
     string? FieldError,
     float[]? Occlusion,
     IReadOnlyList<(Vector3d A, Vector3d B)> FeatureEdges,
+    float[]? FeatureEdgeDeformation,
     IReadOnlyList<(Vector3d A, Vector3d B)> WireEdges,
     float[]? WireColors,
+    float[]? WireDeformation,
     PickMesh? Pick)
 {
     /// <summary>Indices in the mesh's element buffer.</summary>
@@ -198,11 +202,14 @@ public static class PartUploads
 
         var occlusion = request.Occlusion?.Invoke(mesh, render);
 
+        var featureEdges = BuildFeatureEdges(part, request);
         return new PartUpload(
             part, mesh, render, field, fieldError, occlusion,
-            BuildFeatureEdges(part, request, field),
+            featureEdges,
+            BuildFeatureEdgeDeformation(mesh, featureEdges, field),
             request.WireEdges ? WireframeEdges.Extract(mesh) : [],
             request.WireEdges ? BuildWireColors(mesh, field) : null,
+            request.WireEdges ? BuildWireDeformation(mesh, field) : null,
             // Picking follows what is DRAWN at the part's own exaggeration: a BVH is a
             // spatial index, so unlike the shading it cannot be a uniform, and it is built
             // once over the displaced triangles (FieldRendering.PickShape states what that
@@ -212,21 +219,81 @@ public static class PartUploads
                 : null);
     }
 
-    /// <summary>
-    /// The edge overlay's segments — and the one content rule that had been written out
-    /// once per front end.
-    /// <para><b>A part carrying a displacement gets NO overlay, at any factor.</b> Those
-    /// edges describe geometry that has moved, so drawing them over the displaced shape
-    /// would be a wrong outline rather than a coarse one. The test is whether the part
-    /// CARRIES a displacement, never what the scale happens to be at this instant: the
-    /// draw list must not depend on an animation's t, which is exactly what lets a whole
-    /// clip reuse one upload.</para>
-    /// </summary>
+    /// <summary>The edge overlay's segments. A displaced part's edges are drawn too —
+    /// they carry <see cref="PartUpload.FeatureEdgeDeformation"/> and follow the
+    /// displacement through the line program's own attribute, so the draw list still
+    /// never depends on an animation's t (the rule that lets a clip reuse one
+    /// upload).</summary>
     private static IReadOnlyList<(Vector3d A, Vector3d B)> BuildFeatureEdges(
-        Part part, in PartUploadRequest request, FieldMeshData? field) =>
-        request.FeatureEdges && field is not { Deformed: true }
-            ? part.GetFeatureEdges(request.Quality)
-            : [];
+        Part part, in PartUploadRequest request) =>
+        request.FeatureEdges ? part.GetFeatureEdges(request.Quality) : [];
+
+    /// <summary>
+    /// Per-endpoint displacement vectors for the feature-edge overlay (3 floats each,
+    /// segment order — the line program's <c>aDeformOffset</c>), or null for a part
+    /// with no displacement, which keeps the incumbent upload bit-identical.
+    /// <para>An edge sample is an exact B-Rep curve point, NOT a mesh vertex, so its
+    /// displacement is interpolated: the nearest source-mesh triangle's corners weighted
+    /// barycentrically (<see cref="MeshProjectionTarget.TryInterpolate"/>). Exact for
+    /// any affine displacement field, and within the fill's own facet interpolation
+    /// otherwise — the edge sits on the displaced surface to the same order the shaded
+    /// facets do.</para>
+    /// </summary>
+    private static float[]? BuildFeatureEdgeDeformation(
+        HalfEdgeMesh mesh, IReadOnlyList<(Vector3d A, Vector3d B)> edges, FieldMeshData? field)
+    {
+        if (edges.Count == 0 || field is not { Deformed: true } f
+            || f.Display.Deform is not { } displacement)
+            return null;
+        var target = new MeshProjectionTarget(mesh);
+        var result = new float[edges.Count * 6];
+        for (int i = 0; i < edges.Count; i++)
+        {
+            var (a, b) = edges[i];
+            WriteOffset(result, i * 6, InterpolatedOffset(target, displacement, a));
+            WriteOffset(result, i * 6 + 3, InterpolatedOffset(target, displacement, b));
+        }
+        return result;
+    }
+
+    private static Vector3d InterpolatedOffset(
+        MeshProjectionTarget target, MeshField displacement, in Vector3d point)
+    {
+        if (!target.TryInterpolate(point, out var corners, out var weights))
+            return Vector3d.Zero;
+        return displacement.VectorAt(corners.A) * weights.A
+             + displacement.VectorAt(corners.B) * weights.B
+             + displacement.VectorAt(corners.C) * weights.C;
+    }
+
+    private static void WriteOffset(float[] buffer, int at, in Vector3d offset)
+    {
+        buffer[at] = (float)offset.X;
+        buffer[at + 1] = (float)offset.Y;
+        buffer[at + 2] = (float)offset.Z;
+    }
+
+    /// <summary>
+    /// The wireframe's per-endpoint displacement vectors — the exact twin of
+    /// <see cref="BuildWireColors"/>, and simpler than the feature edges' builder
+    /// because a wireframe endpoint IS a source vertex: no interpolation, just
+    /// <c>VectorAt</c> through the same <c>ExtractIndexed</c> pairs the colours use.
+    /// Null for a part with no displacement.
+    /// </summary>
+    private static float[]? BuildWireDeformation(HalfEdgeMesh mesh, FieldMeshData? field)
+    {
+        if (field is not { Deformed: true } f || f.Display.Deform is not { } displacement)
+            return null;
+        var indexed = WireframeEdges.ExtractIndexed(mesh);
+        var result = new float[indexed.Count * 6];
+        for (int i = 0; i < indexed.Count; i++)
+        {
+            var (a, b) = indexed[i];
+            WriteOffset(result, i * 6, displacement.VectorAt(a));
+            WriteOffset(result, i * 6 + 3, displacement.VectorAt(b));
+        }
+        return result;
+    }
 
     /// <summary>
     /// The wireframe's per-endpoint field colours: the segments walk the SOURCE

@@ -118,15 +118,20 @@ public class PartUploadTests
         Assert.Contains("Pick", thrown.Message, StringComparison.Ordinal);
     }
 
-    // ---- The rule that used to be stated three times -------------------------------
+    // ---- The retired no-edges rule and its replacement ------------------------------
 
     [Fact]
-    public void Build_ADeformedPart_GetsNoFeatureEdgesEvenThoughOneWasAskedFor()
+    public void Build_ADeformedPart_KeepsItsFeatureEdges_WithTheirOwnOffsets()
     {
-        // Those edges describe geometry that has moved, so drawing them over the
-        // displaced shape would be a WRONG outline rather than a coarse one. Before the
-        // extraction this rule lived in ViewportControl, OffscreenRenderer AND the Blazor
-        // viewport; here it is asserted once, on the one implementation.
+        // The rule used to be "a part carrying a displacement gets NO overlay" — a wrong
+        // outline being worse than none. Retired: the edges now carry their OWN
+        // displacement (attribute 4 of the line program) and follow the same
+        // uDeformScale the fills follow, so the overlay is drawn at every factor and
+        // right at every factor, and the draw list still never depends on t.
+        //
+        // The fixture's displacement is AFFINE, u = (0, 0, x), and a box's edge samples
+        // lie exactly on its planar facets — so the barycentric interpolation must
+        // reproduce the field's own value at every sample, not merely approximate it.
         var part = Plate(p => p.FieldDisplay = new FieldDisplay
         {
             Field = "stress",
@@ -136,11 +141,41 @@ public class PartUploadTests
         var upload = PartUploads.Build(part, PartUploadRequest.All);
 
         Assert.True(upload.Field!.Value.Deformed);
-        Assert.Empty(upload.FeatureEdges);
-        Assert.Equal(0, upload.FeatureEdgeVertexCount);
-        // The wireframe is every mesh edge of the UNDEFORMED mesh and the shader displaces
-        // it with the fill, so it is unaffected -- only the exact-B-Rep overlay is dropped.
-        Assert.NotEmpty(upload.WireEdges);
+        Assert.NotEmpty(upload.FeatureEdges);
+        Assert.NotNull(upload.FeatureEdgeDeformation);
+        Assert.Equal(upload.FeatureEdges.Count * 6, upload.FeatureEdgeDeformation!.Length);
+        for (int i = 0; i < upload.FeatureEdges.Count; i++)
+        {
+            var (a, b) = upload.FeatureEdges[i];
+            AssertOffset(upload.FeatureEdgeDeformation, i * 6, 0, 0, a.X);
+            AssertOffset(upload.FeatureEdgeDeformation, i * 6 + 3, 0, 0, b.X);
+        }
+
+        // The wireframe's offsets are its endpoints' own vertex values — the
+        // BuildWireColors twin, exact by lookup rather than by interpolation.
+        Assert.NotNull(upload.WireDeformation);
+        var indexed = WireframeEdges.ExtractIndexed(upload.Mesh);
+        var displacement = upload.Field!.Value.Display.Deform!;
+        Assert.Equal(indexed.Count * 6, upload.WireDeformation!.Length);
+        for (int i = 0; i < indexed.Count; i++)
+        {
+            var (a, b) = indexed[i];
+            var ua = displacement.VectorAt(a);
+            var ub = displacement.VectorAt(b);
+            Assert.Equal((float)ua.X, upload.WireDeformation[i * 6 + 0]);
+            Assert.Equal((float)ua.Y, upload.WireDeformation[i * 6 + 1]);
+            Assert.Equal((float)ua.Z, upload.WireDeformation[i * 6 + 2]);
+            Assert.Equal((float)ub.X, upload.WireDeformation[i * 6 + 3]);
+            Assert.Equal((float)ub.Y, upload.WireDeformation[i * 6 + 4]);
+            Assert.Equal((float)ub.Z, upload.WireDeformation[i * 6 + 5]);
+        }
+    }
+
+    private static void AssertOffset(float[] buffer, int at, double x, double y, double z)
+    {
+        Assert.InRange(Math.Abs(buffer[at] - x), 0, 1e-5);
+        Assert.InRange(Math.Abs(buffer[at + 1] - y), 0, 1e-5);
+        Assert.InRange(Math.Abs(buffer[at + 2] - z), 0, 1e-5);
     }
 
     [Fact]
@@ -149,9 +184,12 @@ public class PartUploadTests
         var coloured = Plate(p => p.FieldDisplay = new FieldDisplay { Field = "stress" });
         var plain = Plate();
 
+        var colouredUpload = PartUploads.Build(coloured, PartUploadRequest.All);
         Assert.Equal(
             PartUploads.Build(plain, PartUploadRequest.All).FeatureEdges.Count,
-            PartUploads.Build(coloured, PartUploadRequest.All).FeatureEdges.Count);
+            colouredUpload.FeatureEdges.Count);
+        Assert.Null(colouredUpload.FeatureEdgeDeformation);
+        Assert.Null(colouredUpload.WireDeformation);
     }
 
     [Fact]
@@ -172,6 +210,9 @@ public class PartUploadTests
         Assert.False(upload.Field!.Value.Deformed);
         Assert.Equal(0, upload.DeformScale);
         Assert.NotEmpty(upload.FeatureEdges);
+        // No displacement buffers either — the incumbent upload, bit-identical.
+        Assert.Null(upload.FeatureEdgeDeformation);
+        Assert.Null(upload.WireDeformation);
     }
 
     [Fact]

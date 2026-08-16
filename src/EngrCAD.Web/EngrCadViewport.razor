@@ -1047,7 +1047,9 @@
             edgeKey = $"part{index}.edges";
             // Packed by the shared RenderGeometry.SegmentVertices, so the browser uploads
             // the same floats in the same order as both desktop passes.
-            await gl.UploadLineVerticesAsync(edgeKey, RenderGeometry.SegmentVertices(upload.FeatureEdges));
+            await gl.UploadLineVerticesAsync(
+                edgeKey, RenderGeometry.SegmentVertices(upload.FeatureEdges), null,
+                upload.FeatureEdgeDeformation);
         }
 
         string? wireKey = null;
@@ -1055,7 +1057,8 @@
         {
             wireKey = $"part{index}.wire";
             await gl.UploadLineVerticesAsync(
-                wireKey, RenderGeometry.SegmentVertices(upload.WireEdges), upload.WireColors);
+                wireKey, RenderGeometry.SegmentVertices(upload.WireEdges), upload.WireColors,
+                upload.WireDeformation);
         }
 
         return new PartKeys(

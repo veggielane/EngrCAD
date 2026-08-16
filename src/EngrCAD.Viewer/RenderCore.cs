@@ -135,8 +135,21 @@ internal static class RenderUploads
     /// line vertex, attribute 3 — the wireframe of a field-coloured part). A null
     /// colour list leaves the attribute disabled, so the VAO is what the two-value
     /// overload always built.</summary>
-    public static unsafe (uint Vao, uint Vbo, uint ColorVbo) UploadLines(
+    public static (uint Vao, uint Vbo, uint ColorVbo) UploadLines(
         GL gl, float[] vertices, float[]? colors)
+    {
+        var (vao, vbo, colorVbo, _) = UploadLines(gl, vertices, colors, null);
+        return (vao, vbo, colorVbo);
+    }
+
+    /// <summary>Line upload with optional per-vertex field colours (attribute 3) AND
+    /// per-vertex displacement vectors (attribute 4 — a displaced part's feature edges
+    /// or wireframe, following the line program's <c>uDeformScale</c> exactly as the
+    /// fills follow the mesh program's). Either null leaves its attribute disabled: a
+    /// disabled attribute reads (0, 0, 0), so <c>aPos + s*0</c> is <c>aPos</c> for any
+    /// finite scale and every incumbent line consumer is byte-identical.</summary>
+    public static unsafe (uint Vao, uint Vbo, uint ColorVbo, uint DeformVbo) UploadLines(
+        GL gl, float[] vertices, float[]? colors, float[]? deformation)
     {
         uint vao = gl.GenVertexArray();
         gl.BindVertexArray(vao);
@@ -154,8 +167,17 @@ internal static class RenderUploads
             gl.EnableVertexAttribArray(3);
             gl.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
         }
+        uint deformVbo = 0;
+        if (deformation is { Length: > 0 })
+        {
+            deformVbo = gl.GenBuffer();
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, deformVbo);
+            gl.BufferData<float>(BufferTargetARB.ArrayBuffer, deformation, BufferUsageARB.StaticDraw);
+            gl.EnableVertexAttribArray(4);
+            gl.VertexAttribPointer(4, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+        }
         gl.BindVertexArray(0);
-        return (vao, vbo, colorVbo);
+        return (vao, vbo, colorVbo, deformVbo);
     }
 
     /// <summary>

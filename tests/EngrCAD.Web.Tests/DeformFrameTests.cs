@@ -103,6 +103,40 @@ public class DeformFrameTests
     }
 
     [Fact]
+    public void ADisplacedInstancesEdgeOverlayCarriesTheScale()
+    {
+        // The edge overlay follows the displacement through the line program's own
+        // attribute, so its draw must send the same uDeformScale the fill sends — one
+        // scale, two programs, or the outline would detach from the shape mid-clip.
+        var instance = Instance("a", deformScale: 40) with
+        {
+            EdgeKey = "a.edges",
+            EdgeVertexCount = 24,
+        };
+        var frame = Build([instance], factor: 0.25);
+        var edge = Assert.Single(frame.Draws, d => d.Geometry == "a.edges");
+        Assert.Equal(10f, Uniform(edge, "uDeformScale"));
+        // An undisplaced part's edge draw still says nothing (the neutral 0).
+        var plainFrame = Build([Instance("b") with { EdgeKey = "b.edges", EdgeVertexCount = 24 }]);
+        var plainEdge = Assert.Single(plainFrame.Draws, d => d.Geometry == "b.edges");
+        Assert.Null(Uniform(plainEdge, "uDeformScale"));
+    }
+
+    [Fact]
+    public void ADisplacedWireframeCarriesTheScale()
+    {
+        var instance = Instance("a", deformScale: 40) with
+        {
+            Mode = DisplayMode.Wireframe,
+            WireKey = "a.wire",
+            WireVertexCount = 36,
+        };
+        var frame = Build([instance], factor: 0.5);
+        var wire = Assert.Single(frame.Draws, d => d.Geometry == "a.wire");
+        Assert.Equal(20f, Uniform(wire, "uDeformScale"));
+    }
+
+    [Fact]
     public void ThePointsViewFollowsTheDisplacement()
     {
         // The points view draws the mesh buffer, so it must displace with it — the CPU

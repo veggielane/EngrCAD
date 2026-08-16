@@ -127,6 +127,59 @@ public sealed class MeshProjectionTarget : IProjectionTarget
         return Distance3d.ClosestPointOnTriangle(point, a, b, c);
     }
 
+    /// <summary>
+    /// The nearest surface point's TRIANGLE and barycentric weights — what a consumer
+    /// needs to interpolate a per-vertex field (a displacement) at an arbitrary
+    /// on-surface point. The corner indices are in the construction mesh's OWN vertex
+    /// numbering (triangulation fans existing vertices and invents none, so they index
+    /// the original mesh's vertex table verbatim). Weights are clamped to the triangle
+    /// and sum to 1; a degenerate winning triangle falls back to its first corner.
+    /// False only when the mesh answered no nearest triangle at all.
+    /// </summary>
+    public bool TryInterpolate(
+        in Vector3d point,
+        out (int A, int B, int C) corners,
+        out (double A, double B, double C) weights)
+    {
+        corners = default;
+        weights = default;
+        var metric = new TriangleDistance(_positions, _triangles, point);
+        if (!_bvh.Nearest(point, ref metric, out int triangle, out _))
+            return false;
+
+        int ia = _triangles[3 * triangle];
+        int ib = _triangles[3 * triangle + 1];
+        int ic = _triangles[3 * triangle + 2];
+        var a = _positions[ia];
+        var b = _positions[ib];
+        var c = _positions[ic];
+        var q = Distance3d.ClosestPointOnTriangle(point, a, b, c);
+
+        // Barycentrics of q by the 2x2 normal system. Exact-zero guard on the Gram
+        // determinant (a division guard, not a tolerance — the epsilon-ladder rule): a
+        // degenerate triangle has no barycentric frame, and its nearest corner is the
+        // honest answer for a display interpolation.
+        var e0 = b - a;
+        var e1 = c - a;
+        var d = q - a;
+        double d00 = e0.Dot(e0), d01 = e0.Dot(e1), d11 = e1.Dot(e1);
+        double det = d00 * d11 - d01 * d01;
+        double u = 0, v = 0;
+        if (det > 0)
+        {
+            double r0 = d.Dot(e0), r1 = d.Dot(e1);
+            u = (d11 * r0 - d01 * r1) / det;
+            v = (d00 * r1 - d01 * r0) / det;
+            // q lies ON the triangle, so u, v are in range up to round-off; the clamp
+            // only trims that round-off so the weights stay a convex combination.
+            u = Math.Clamp(u, 0, 1);
+            v = Math.Clamp(v, 0, 1 - u);
+        }
+        corners = (ia, ib, ic);
+        weights = (1 - u - v, u, v);
+        return true;
+    }
+
     private readonly struct TriangleDistance(Vector3d[] positions, int[] triangles, Vector3d point) : IBvhDistance
     {
         public double DistanceTo(int item)

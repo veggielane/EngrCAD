@@ -542,7 +542,9 @@ public static class OffscreenRenderer
                 int edgeVertexCount = 0;
                 if (upload.FeatureEdges.Count > 0)
                 {
-                    (edgeVao, _) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.FeatureEdges));
+                    (edgeVao, _, _, _) = RenderUploads.UploadLines(
+                        gl, RenderGeometry.SegmentVertices(upload.FeatureEdges), null,
+                        upload.FeatureEdgeDeformation);
                     edgeVertexCount = upload.FeatureEdgeVertexCount;
                 }
                 uint wireVao = 0;
@@ -550,8 +552,9 @@ public static class OffscreenRenderer
                 bool wireFieldColored = false;
                 if (upload.WireEdges.Count > 0)
                 {
-                    (wireVao, _, _) = RenderUploads.UploadLines(
-                        gl, RenderGeometry.SegmentVertices(upload.WireEdges), upload.WireColors);
+                    (wireVao, _, _, _) = RenderUploads.UploadLines(
+                        gl, RenderGeometry.SegmentVertices(upload.WireEdges), upload.WireColors,
+                        upload.WireDeformation);
                     wireVertexCount = upload.WireEdgeVertexCount;
                     wireFieldColored = upload.WireColors is not null;
                 }
@@ -625,6 +628,7 @@ public static class OffscreenRenderer
         // Line overlay: feature edges for shaded-with-edges parts, full wireframe for
         // wireframe parts. Model lines are section-clipped consistently with fills.
         gl.UseProgram(lineProgram);
+        int uLineDeformScale = gl.GetUniformLocation(lineProgram, "uDeformScale");
         foreach (var d in draws)
         {
             lineSection.SetEnabled(gl, d.SectionClipped);   // model lines clip with their fill
@@ -634,6 +638,9 @@ public static class OffscreenRenderer
                     CameraMath.WriteColumnMajor(d.Model, matrix);
                     gl.UniformMatrix4(uLineModel, 1, false, matrix);
                     gl.Uniform3(uLineColor, 0.09f, 0.10f, 0.11f);
+                    // A displaced part's edges follow the fills (attribute-absent parts
+                    // are immune: a disabled attribute 4 reads (0,0,0)).
+                    gl.Uniform1(uLineDeformScale, (float)(d.DeformScale * deformFactor));
                     gl.BindVertexArray(d.EdgeVao);
                     gl.DrawArrays(PrimitiveType.Lines, 0, (uint)d.EdgeVertexCount);
                     break;
@@ -641,6 +648,7 @@ public static class OffscreenRenderer
                     CameraMath.WriteColumnMajor(d.Model, matrix);
                     gl.UniformMatrix4(uLineModel, 1, false, matrix);
                     gl.Uniform3(uLineColor, d.Color.R, d.Color.G, d.Color.B);
+                    gl.Uniform1(uLineDeformScale, (float)(d.DeformScale * deformFactor));
                     // A field-coloured wireframe draws its result; reset before the
                     // next line consumer (the window pass's rule).
                     if (d.WireFieldColored)
@@ -735,6 +743,7 @@ public static class OffscreenRenderer
                 lineSection.SetEnabled(gl, d.SectionClipped);
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uLineModel, 1, false, matrix);
+                gl.Uniform1(uLineDeformScale, (float)(d.DeformScale * deformFactor));
                 gl.BindVertexArray(d.EdgeVao);
                 gl.DrawArrays(PrimitiveType.Lines, 0, (uint)d.EdgeVertexCount);
             }

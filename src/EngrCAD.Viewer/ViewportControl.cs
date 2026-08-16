@@ -27,6 +27,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
     private int _uAlpha, _uAmbientOcclusion, _uFieldColor, _uDeformScale, _uMatcap;
+    private int _uLineDeformScale;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor, _uLineFieldColor;
     private int _uLineSectionEnabled;   // raw handle for the cube/annotation overlays
@@ -49,8 +50,9 @@ public sealed class ViewportControl : OpenGlControlBase
     // which references the same ids once per instance. The Part is kept so switching
     // ambient occlusion on can backfill occlusion buffers without re-uploading geometry.
     private readonly record struct PartBuffers(
-        Part Part, uint Vao, uint Vbo, uint Ebo, uint EdgeVao, uint EdgeVbo,
-        uint WireVao, uint WireVbo, uint WireColorVbo, uint AoVbo, uint FieldVbo, uint DeformVbo,
+        Part Part, uint Vao, uint Vbo, uint Ebo, uint EdgeVao, uint EdgeVbo, uint EdgeDeformVbo,
+        uint WireVao, uint WireVbo, uint WireColorVbo, uint WireDeformVbo,
+        uint AoVbo, uint FieldVbo, uint DeformVbo,
         uint GhostVao, uint GhostVbo, uint GhostEbo);
 
     private readonly List<PartBuffers> _gpuBuffers = [];
@@ -295,6 +297,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uLineProj = _gl.GetUniformLocation(_lineProgram, "uProj");
         _uLineColor = _gl.GetUniformLocation(_lineProgram, "uColor");
         _uLineFieldColor = _gl.GetUniformLocation(_lineProgram, "uFieldColor");
+        _uLineDeformScale = _gl.GetUniformLocation(_lineProgram, "uDeformScale");
         _uLineSectionEnabled = _gl.GetUniformLocation(_lineProgram, "uSectionEnabled");
         _lineSection = new SectionUniforms(_gl, _lineProgram);
 
@@ -415,9 +418,12 @@ public sealed class ViewportControl : OpenGlControlBase
         var field = upload.Field;
         var (vao, vbo, ebo, aoVbo, fieldVbo, deformVbo) = RenderUploads.UploadMesh(
             gl, render, upload.Occlusion, field?.Colors, field?.Deformation);
-        var (edgeVao, edgeVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.FeatureEdges));
-        var (wireVao, wireVbo, wireColorVbo) = RenderUploads.UploadLines(
-            gl, RenderGeometry.SegmentVertices(upload.WireEdges), upload.WireColors);
+        var (edgeVao, edgeVbo, _, edgeDeformVbo) = RenderUploads.UploadLines(
+            gl, RenderGeometry.SegmentVertices(upload.FeatureEdges), null,
+            upload.FeatureEdgeDeformation);
+        var (wireVao, wireVbo, wireColorVbo, wireDeformVbo) = RenderUploads.UploadLines(
+            gl, RenderGeometry.SegmentVertices(upload.WireEdges), upload.WireColors,
+            upload.WireDeformation);
 
         // The undeformed shape, ghosted behind the deformed one — the comparison IS the
         // point of a deformed-shape plot. It keeps its OWN buffers rather than re-drawing
@@ -433,7 +439,8 @@ public sealed class ViewportControl : OpenGlControlBase
         }
 
         _gpuBuffers.Add(new PartBuffers(
-            part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, wireColorVbo,
+            part, vao, vbo, ebo, edgeVao, edgeVbo, edgeDeformVbo,
+            wireVao, wireVbo, wireColorVbo, wireDeformVbo,
             aoVbo, fieldVbo, deformVbo, ghostVao, ghostVbo, ghostEbo));
         if (field is not null && fieldVbo != 0)
             _fieldAnimation.Add((part, fieldVbo, render.SourceVertices, render.SourceFaces));
@@ -461,6 +468,10 @@ public sealed class ViewportControl : OpenGlControlBase
             gl.DeleteVertexArray(b.WireVao);
             if (b.WireColorVbo != 0)
                 gl.DeleteBuffer(b.WireColorVbo);
+            if (b.EdgeDeformVbo != 0)
+                gl.DeleteBuffer(b.EdgeDeformVbo);
+            if (b.WireDeformVbo != 0)
+                gl.DeleteBuffer(b.WireDeformVbo);
             if (b.AoVbo != 0)
                 gl.DeleteBuffer(b.AoVbo);
             if (b.FieldVbo != 0)
@@ -752,6 +763,9 @@ public sealed class ViewportControl : OpenGlControlBase
                     bool wireField = m.WireFieldColored && i != _selected && i != _hovered;
                     if (wireField)
                         gl.Uniform1(_uLineFieldColor, FieldRendering.Strength);
+                    // The wireframe follows the displacement exactly as the fills do
+                    // (immune-by-disabled-attribute for undisplaced parts, as above).
+                    gl.Uniform1(_uLineDeformScale, (float)(m.DeformScale * _deformFactor));
                     gl.BindVertexArray(m.WireVao);
                     gl.DrawArrays(PrimitiveType.Lines, 0, (uint)m.WireVertexCount);
                     if (wireField)
@@ -1286,6 +1300,11 @@ public sealed class ViewportControl : OpenGlControlBase
         var m = _meshes[index];
         CameraMath.WriteColumnMajor(m.Model, matrix);
         gl.UniformMatrix4(_uLineModel, 1, false, matrix);
+        // A displaced part's edge VAO carries its own offsets (attribute 4), so the
+        // overlay follows the fills through the same scale. Every other line VAO has
+        // the attribute disabled — offset (0,0,0) — so no reset is needed: aPos + s*0
+        // is aPos exactly, whatever s this leaves behind.
+        gl.Uniform1(_uLineDeformScale, (float)(m.DeformScale * _deformFactor));
         if (index == _selected)
             gl.Uniform3(_uLineColor, Highlight.Selection.R, Highlight.Selection.G, Highlight.Selection.B);
         else

@@ -451,10 +451,14 @@ public static class ViewportFrame
                 // the near-black overlay colour, exactly as ViewportControl.DrawFeatureEdges
                 // does — hover deliberately does NOT tint edges there, so it does not here.
                 case EffectiveMode.ShadedWithEdges when instance.EdgeKey is not null && instance.EdgeVertexCount > 0:
-                    draws.Add(Line(instance.EdgeKey, ColumnMajor(instance.World),
+                    var edge = Line(instance.EdgeKey, ColumnMajor(instance.World),
                         i == selected ? Rgb(Highlight.Selection) : EdgeColor,
                         first: 0, count: instance.EdgeVertexCount,
-                        unclip: sectionActive && !instance.ClippedBySection));
+                        unclip: sectionActive && !instance.ClippedBySection);
+                    // A displaced part's edge upload carries its own offsets, so the
+                    // overlay follows the fills through the same per-draw scale.
+                    Deformed(edge.Uniforms!, instance, deformFactor);
+                    draws.Add(edge);
                     break;
                 // Wireframe draws in the part's OWN colour, not the edge colour: with no
                 // fill behind them the dark edge colour would be nearly invisible against
@@ -471,6 +475,8 @@ public static class ViewportFrame
                     // claims the line colour (the only channel a fill-less part has).
                     if (instance.WireFieldColored && i != selected && i != hovered)
                         wire.Uniforms!["uFieldColor"] = FieldRendering.Strength;   // Line() always builds the dict
+                    // The wireframe follows the displacement exactly as the fills do.
+                    Deformed(wire.Uniforms!, instance, deformFactor);
                     draws.Add(wire);
                     break;
             }
@@ -739,10 +745,12 @@ public static class ViewportFrame
             var instance = instances[index];
             if (instance.EdgeKey is null || instance.EdgeVertexCount == 0)
                 continue;
-            draws.Add(Line(instance.EdgeKey, ColumnMajor(instance.World),
+            var edge = Line(instance.EdgeKey, ColumnMajor(instance.World),
                 index == selected ? Rgb(Highlight.Selection) : EdgeColor,
                 first: 0, count: instance.EdgeVertexCount,
-                unclip: sectionActive && !instance.ClippedBySection));
+                unclip: sectionActive && !instance.ClippedBySection);
+            Deformed(edge.Uniforms!, instance, deformFactor);
+            draws.Add(edge);
         }
     }
 

@@ -162,12 +162,13 @@ public class DeformationAnimationTests
         Skip.If(SkipReason is not null, SkipReason);
 
         // The consequence of keeping the DRAW LIST independent of t, stated as a test
-        // rather than left to be discovered: a part that CARRIES a displacement draws no
-        // feature-edge overlay and does draw its ghost, at every factor including zero —
-        // because deciding that per frame would make an animation re-upload, which is the
-        // one thing this design does not do. So the factor-0 frame is the undeformed
-        // SHAPE without the undeformed part's chrome, and a display whose own scale is 0
-        // (no buffer, edges back, no ghost) is a genuinely different picture.
+        // rather than left to be discovered: a part that CARRIES a displacement draws its
+        // ghost at every factor including zero — deciding that per frame would make an
+        // animation re-upload, which is the one thing this design does not do. (The edge
+        // overlay used to be part of this difference and no longer is: it is drawn now,
+        // carrying its own displacement attribute, so at factor 0 it sits exactly on the
+        // undeformed rims.) A display whose own scale is 0 draws no ghost, which keeps
+        // the two pictures genuinely different.
         var camera = Camera(Cantilever(25));
         var animated = OffscreenRenderer.Render(
             [.. Cantilever(25).Instances()], W, H, camera, furniture: false,
@@ -190,9 +191,10 @@ public class DeformationAnimationTests
         //
         // The fixture isolates it: a displacement field that is identically ZERO with a
         // non-zero stated scale. Every draw is then factor-independent — the body never
-        // moves, the ghost and the missing edge overlay are the same at every factor — so
-        // ANY pixel difference between two factors can only be the legend's title, which
-        // is stroke geometry and changes when the number does.
+        // moves, the edge overlay's offsets are zero so it never moves either, and the
+        // ghost is the same at every factor — so ANY pixel difference between two factors
+        // can only be the legend's title, which is stroke geometry and changes when the
+        // number does.
         var scene = new Scene();
         var part = new Part("plate", Shape.Box(60, 12, 3), Palette.Steel);
         scene.Add(part);
@@ -223,5 +225,85 @@ public class DeformationAnimationTests
         Assert.True(part.TryResolveFieldDisplay(out var display, out _));
         Assert.Contains("25X", FieldLegend.Title(FieldRendering.AtFactor(display, 1)!.Value));
         Assert.Contains("12.5X", FieldLegend.Title(FieldRendering.AtFactor(display, 0.5)!.Value));
+    }
+
+    [SkippableFact]
+    public void ADeformedPartDrawsItsEdgeOverlay_AndTheOverlayFollowsTheFactor()
+    {
+        Skip.If(SkipReason is not null, SkipReason);
+
+        // THE regression for the retired rule: a deformed part's ShadedWithEdges render
+        // used to be byte-identical to its Shaded render, because the overlay was
+        // dropped at upload. The edges are drawn now — and they follow the displacement,
+        // so the overlay PIXELS (where with-edges differs from shaded) move with the
+        // factor rather than outlining a shape that is no longer there.
+        var scene = Cantilever(25);
+        var camera = Camera(scene);
+        var instances = scene.Instances().ToList();
+
+        byte[] At(ViewStyle style, double factor) => OffscreenRenderer.Render(
+            instances, W, H, camera, furniture: false, style,
+            SectionAxis.Z, sectionOffset: null, ambientOcclusion: false,
+            sectionPlanes: null, sectionCombine: SectionCombine.Intersection,
+            preview: null, previewWorld: null, fields: true, deformFactor: factor);
+
+        var shaded1 = At(ViewStyle.Shaded, 1);
+        var edges1 = At(ViewStyle.ShadedWithEdges, 1);
+        Assert.NotEqual(Convert.ToHexString(shaded1), Convert.ToHexString(edges1));
+
+        // The overlay's own pixel set at factor 0 vs factor 1: both non-empty, and
+        // different sets — the outline moved with the shape.
+        static List<int> Overlay(byte[] shaded, byte[] withEdges)
+        {
+            var pixels = new List<int>();
+            for (int i = 0; i < shaded.Length; i += 4)
+            {
+                if (shaded[i] != withEdges[i] || shaded[i + 1] != withEdges[i + 1]
+                    || shaded[i + 2] != withEdges[i + 2])
+                    pixels.Add(i / 4);
+            }
+            return pixels;
+        }
+
+        var overlay0 = Overlay(At(ViewStyle.Shaded, 0), At(ViewStyle.ShadedWithEdges, 0));
+        var overlay1 = Overlay(shaded1, edges1);
+        Assert.NotEmpty(overlay0);
+        Assert.NotEmpty(overlay1);
+        Assert.NotEqual(overlay0, overlay1);
+    }
+
+    [SkippableFact]
+    public void AWireframeOfADeformedPart_FollowsTheDisplacement()
+    {
+        Skip.If(SkipReason is not null, SkipReason);
+
+        // The wireframe gap PREDATES the attribute path: WireframeEdges reads the source
+        // half-edge mesh, so a deformed part in Wireframe always drew its undeformed
+        // edges while its fills moved. Now the wire upload carries per-endpoint offsets:
+        // the factor moves the wireframe (it used to be factor-independent), and at
+        // factor 0 the render is byte-identical to a scale-0 twin's — the offsets
+        // contribute exactly zero, the constant-when-absent rule met from the other side.
+        Scene Wireframe(double scale)
+        {
+            var scene = Cantilever(scale);
+            var part = scene.Tabs[0].Parts[0];
+            part.DisplayMode = DisplayMode.Wireframe;
+            part.FieldDisplay = part.FieldDisplay! with { ShowUndeformed = false };
+            return scene;
+        }
+
+        var deformed = Wireframe(25);
+        var camera = Camera(deformed);
+
+        byte[] At(Scene scene, double factor) => OffscreenRenderer.Render(
+            [.. scene.Instances()], W, H, camera, furniture: false, ViewStyle.ShadedWithEdges,
+            SectionAxis.Z, sectionOffset: null, ambientOcclusion: false,
+            sectionPlanes: null, sectionCombine: SectionCombine.Intersection,
+            preview: null, previewWorld: null, fields: true, deformFactor: factor);
+
+        var rest = At(deformed, 0);
+        var moved = At(deformed, 1);
+        Assert.NotEqual(Convert.ToHexString(rest), Convert.ToHexString(moved));
+        Assert.Equal(Convert.ToHexString(At(Wireframe(0), 1)), Convert.ToHexString(rest));
     }
 }
