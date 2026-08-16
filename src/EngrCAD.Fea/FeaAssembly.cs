@@ -166,6 +166,59 @@ internal static class FeaAssembly
         return builder.ToSymmetricUpper();
     }
 
+    /// <summary>
+    /// The FULL conduction matrix over every node — CONDUCTION ONLY, no convection films
+    /// (its one scaling consumer, the thermal topology optimiser, refuses convection by
+    /// name, and <see cref="ThermalSolver"/> keeps its own film-carrying assembly for the
+    /// solves that want one).
+    ///
+    /// <para><paramref name="scale"/> multiplies each element's conductance — the SIMP
+    /// seam, exactly as <see cref="Stiffness"/> carries it: null SKIPS the multiply, so an
+    /// unscaled assembly is the bits it always was; a scale of exactly 1 everywhere would
+    /// also be bit-identical (a finite double times 1.0 is itself), but "no scale" and "a
+    /// scale that happens to be 1" are different statements and the branch says so.</para>
+    /// </summary>
+    public static PackedSparseMatrix Conductance(
+        ThermalModel model, in TetQuadrature rule, IReadOnlyList<double>? scale = null)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var mesh = model.Mesh;
+        int perElement = mesh.NodesPerElement;
+        var builder = new SparseMatrixBuilder(mesh.NodeCount, mesh.NodeCount);
+        var ke = new double[perElement * perElement];
+        var positions = new Vector3d[perElement];
+
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            var nodes = mesh.Element(e);
+            for (int i = 0; i < perElement; i++)
+                positions[i] = mesh.Position(nodes[i]);
+            ThermalElement.Conductivity(
+                mesh.Order, positions, model.ConductivityLawOf(e), rule, ke);
+            if (scale is not null)
+            {
+                double s = scale[e];
+                for (int i = 0; i < ke.Length; i++)
+                    ke[i] *= s;
+            }
+            for (int i = 0; i < perElement; i++)
+            {
+                int row = i * perElement;
+                for (int j = 0; j < perElement; j++)
+                {
+                    double v = ke[row + j];
+                    if (v == 0)
+                        continue;                            // pattern decision, not a tolerance
+                    // Symmetric-upper storage: the local matrix is symmetric, so exactly
+                    // one of the ordered pairs contributes each undirected entry.
+                    if (nodes[i] <= nodes[j])
+                        builder.Add(nodes[i], nodes[j], v);
+                }
+            }
+        }
+        return builder.ToSymmetricUpper();
+    }
+
     /// <summary>The free-free block of a full matrix (see <see cref="ReducedIndices"/> for
     /// the monotonicity this relies on).</summary>
     public static PackedSparseMatrix Reduce(PackedSparseMatrix full, int[] reduced, int freeCount)

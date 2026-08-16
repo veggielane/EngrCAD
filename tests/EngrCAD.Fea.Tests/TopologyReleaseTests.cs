@@ -285,7 +285,7 @@ public sealed class TopologyReleaseTests(TopologyReleaseTests.OptimisedMbb fixtu
                 ? 1.0 : 1e-3;
         }
         var result = new TopologyResult(
-            model, options, density, density, volumes, [], TopologyStop.Converged, 1, 1);
+            model.Mesh, model, null, options, density, density, volumes, [], TopologyStop.Converged, 1, 1);
 
         var released = result.Release(new TopologyReleaseOptions { Stage = TopologyReleaseStage.IsoSurface });
         output.WriteLine($"components {released.ComponentCount}, iso faces {released.IsoSurface.FaceCount}");
@@ -310,7 +310,7 @@ public sealed class TopologyReleaseTests(TopologyReleaseTests.OptimisedMbb fixtu
         var field = new double[model.Mesh.ElementCount];
         Array.Fill(field, 0.2);
         var result = new TopologyResult(
-            model, options, field, field, volumes, [], TopologyStop.Converged, 1, 1);
+            model.Mesh, model, null, options, field, field, volumes, [], TopologyStop.Converged, 1, 1);
 
         var ex = Assert.Throws<FeaException>(() =>
             result.Release(new TopologyReleaseOptions { Threshold = 0.9 }));

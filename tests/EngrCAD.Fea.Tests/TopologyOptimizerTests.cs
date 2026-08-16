@@ -374,7 +374,7 @@ public sealed class TopologyOptimizerTests(ITestOutputHelper output)
             density[e] = x / TopologyFixtures.BarLength;
         }
         var result = new TopologyResult(
-            model, options, density, density, volumes, [], TopologyStop.Converged, 1, 1);
+            model.Mesh, model, null, options, density, density, volumes, [], TopologyStop.Converged, 1, 1);
 
         var surface = result.ExtractSurface(threshold);
         Assert.True(surface.IsClosed);
@@ -419,6 +419,6 @@ public sealed class TopologyOptimizerTests(ITestOutputHelper output)
         var field = new double[model.Mesh.ElementCount];
         Array.Fill(field, density);
         return new TopologyResult(
-            model, options, field, field, volumes, [], TopologyStop.Converged, 1, 1);
+            model.Mesh, model, null, options, field, field, volumes, [], TopologyStop.Converged, 1, 1);
     }
 }

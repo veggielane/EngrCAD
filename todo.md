@@ -2683,8 +2683,16 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   with the thermal solver as the measurement). Honest boundary: correlations are
   ORIENTATION-specific (vertical vs horizontal plates differ) and only the transcribed
   cases are offered, by name; forced-convection needs a stated film coefficient (no CFD).
-- [ ] **Topology-optimised HEAT SINK — thermal SIMP plus the docs example (sequenced
-  after the CNC campaign).** The structural optimiser's loop is nearly physics-blind:
+- **Thermal SIMP LANDED** (`TopologyOptimizer.MinimizeThermal` + the
+  `fea-topology.md` volume-to-point example): the loop proved physics-blind as predicted —
+  `FeaAssembly.Conductance` learned the per-element scale, the shared `RunOptimization`
+  extraction left the structural path bit-identical (its whole suite the oracle), the
+  p = 1/3 uniform closed forms met EXACTLY, FD sensitivity 9.2e-8, `f'T = Σρᵖ·E_e` to
+  twelve digits, the dendrite at 25% of the uniform smear. Convection and nonzero
+  prescribed temperatures refuse by name (design-dependent loads); a ZERO sink is the
+  volume-to-point convention. The remaining half of the original entry (below) stays open.
+- [ ] **Topology-optimised HEAT SINK — the RENDERED dendrite docs figure and a
+  convection-backed design workflow (was: thermal SIMP plus the docs example).** The structural optimiser's loop is nearly physics-blind:
   thermal compliance `T'·q` over a density-scaled conductance is the same OC iteration
   with `FeaAssembly.Conductance` learning the optional per-element scale
   `FeaAssembly.Stiffness` already carries (null skips the multiply, the incumbent path

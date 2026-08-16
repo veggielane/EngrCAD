@@ -160,7 +160,7 @@ public sealed class TopologyRefusalTests
         var field = new double[model.Mesh.ElementCount];
         Array.Fill(field, 0.2);
         var result = new TopologyResult(
-            model, options, field, field, volumes, [], TopologyStop.Converged, 1, 1);
+            model.Mesh, model, null, options, field, field, volumes, [], TopologyStop.Converged, 1, 1);
         var error = Assert.Throws<FeaException>(() => result.ExtractSurface(0.9));
         Assert.Contains("No material survives", error.Message, StringComparison.Ordinal);
     }

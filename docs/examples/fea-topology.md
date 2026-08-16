@@ -486,3 +486,51 @@ while this solves 3D elasticity on tetrahedra. What is asserted instead:
   A value near 1 means the radius is smaller than an element, and a radius that small is
   refused by name.
 - `result.ToText()` prints the per-iteration table a convergence plot is read off.
+
+## Thermal topology optimisation
+
+The optimiser's loop is nearly physics-blind, and `MinimizeThermal` is the measurement of
+that claim: the density scales the **conductance** instead of the stiffness
+(`FeaAssembly.Conductance` learned the optional per-element scale `Stiffness` already
+carried — null skips the multiply, so every incumbent thermal assembly is bit-identical),
+the field solved is temperature, and the OC iteration, filters, passive regions and volume
+constraint carry over verbatim. The classic problem it solves is **volume-to-point**: a
+generating region drained to a cold sink through a budget of high-conductivity material,
+which optimises into the well-known dendrite.
+
+```csharp run:fea-topology-thermal
+var space = Shape.Box(40, 40, 5);
+var tets = TetMesher.Mesh(space.ToMesh(), new TetMeshOptions
+{
+    RefineQuality = true,
+    MaxElementSize = 4,          // coarse on purpose - this fence prints numbers, not a study
+});
+var material = new Material("conductor", 1, 0, 7.85e-9).WithThermal(200, 500e6);
+var model = new ThermalModel(AnalysisMesh.Of(tets), material);
+model.Temperature(Facets.OnPlane(new Vector3d(-20, 0, 0), Vector3d.UnitX), 0); // the ZERO sink
+model.Generation(0.5);                                       // the domain's own heat
+var result = TopologyOptimizer.MinimizeThermal(model, new TopologyOptions
+{
+    VolumeFraction = 0.3,
+    FilterRadius = 8.0,          // a minimum member size: several elements wide
+    MaxIterations = 80,
+});
+Console.WriteLine($"uniform smear {result.History[0].Compliance:0} -> dendrite "
+    + $"{result.Compliance:0} ({result.Compliance / result.History[0].Compliance:P0} "
+    + $"of the uniform design's thermal compliance, {result.Iterations} iterations)");
+```
+
+The honest scope is **conduction-dominated design**, and each exclusion carries its reason:
+convection is refused by name (a film on an evolving boundary is a load that moves with the
+design, so compliance stops being self-adjoint — the same reason the structural optimiser
+refuses self-weight); a *nonzero* prescribed temperature is refused too (the coupling term
+`K_fc·T_c` scales with the density of the elements touching the sink), while a **zero**
+prescribed temperature contributes nothing and *is* the volume-to-point sink — measure the
+field as the rise above it. Generation stays fixed: the heat is the domain's, not the
+material's (the electronics filling the void make it; the conductor drains it). Verified in
+the structural optimiser's own style: the p = 1 and p = 3 uniform closed forms are met
+**exactly** (ratio 1.0 to ten digits), the sensitivity matches a central difference through
+the production evaluator at 9.2e-8, `f'T` equals `Σ ρᵖ·E_e` to twelve digits, and the
+dendrite reaches **25%** of the uniform design's compliance on the structured test
+fixture (the coarser fence above measures its own 37% — the ratio is mesh-dependent, the
+direction is not).

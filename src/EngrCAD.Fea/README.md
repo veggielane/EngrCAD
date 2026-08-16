@@ -3127,3 +3127,14 @@ reduced stiffness):
 | 10 800 | 6 600 | 19.7 ms | 1 204.9 ms | 1 176.2 ms | **1.02×** |
 
 The remaining lever is a preconditioned CG warm-started from the previous iterate (filed).
+
+## Thermal topology optimisation (`TopologyOptimizer.MinimizeThermal`)
+
+The structural SIMP loop with the density scaling the CONDUCTANCE (`FeaAssembly.Conductance`
+gained the optional per-element scale `Stiffness` already carried; the shared loop is
+physics-blind and the structural path routes through it verbatim — its whole committed test
+suite is the extraction's regression oracle). Volume-to-point: generation fixed (the
+domain's, not the material's), the sink a ZERO prescribed temperature; convection and
+nonzero prescribed temperatures refused by name (design-dependent loads — not self-adjoint).
+Verified: p = 1/3 uniform closed forms exact, FD sensitivity 9.2e-8 through the production
+evaluator, f'T = sum(rho^p*E_e) to twelve digits, the dendrite at 25% of the uniform design.

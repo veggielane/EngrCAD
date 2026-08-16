@@ -801,7 +801,7 @@ public static class ThermalSolver
 
     /// <summary>Nodal heat loads plus every convective facet's KNOWN supply,
     /// <c>integral(h·T_inf·N_i dA)</c>.</summary>
-    private static double[] AssembleLoad(ThermalModel model)
+    internal static double[] AssembleLoad(ThermalModel model)
     {
         var mesh = model.Mesh;
         var load = new double[mesh.NodeCount];
@@ -830,7 +830,7 @@ public static class ThermalSolver
         return load;
     }
 
-    private static int[] ReducedIndices(ThermalModel model, out int freeCount)
+    internal static int[] ReducedIndices(ThermalModel model, out int freeCount)
     {
         var reduced = new int[model.Mesh.NodeCount];
         int free = 0;
@@ -1193,7 +1193,7 @@ public static class ThermalSolver
 
     // ---- refusals --------------------------------------------------------------------
 
-    private static void RequireConductivity(ThermalModel model)
+    internal static void RequireConductivity(ThermalModel model)
     {
         var offenders = new List<string>();
         var seen = new HashSet<string>();

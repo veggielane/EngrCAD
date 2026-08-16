@@ -370,8 +370,139 @@ public static class TopologyOptimizer
                 design[e] = options.MinimumDensity;
         }
 
-        var updated = new double[count];
         var evaluator = new Evaluator(cases, options, filter, rule, progress);
+        return RunOptimization(
+            mesh, model, thermal: null, options, evaluator, filter, passive, design,
+            volumes, totalVolume, progress);
+    }
+
+    /// <summary>
+    /// Minimises THERMAL compliance <c>c = f'T</c> — the volume-to-point problem: a
+    /// generating region drained to a cold sink through a budget of high-conductivity
+    /// material, which optimises into the classic dendrite. The loop is the structural
+    /// optimiser's own (physics-blind by construction); what changes is only which matrix
+    /// the density scales (<see cref="FeaAssembly.Conductance"/> learned the optional
+    /// per-element scale <see cref="FeaAssembly.Stiffness"/> already carried) and which
+    /// field is solved.
+    ///
+    /// <para><b>The honest scope is conduction-dominated design, and each exclusion carries
+    /// its reason.</b> CONVECTION is refused by name: a film on an evolving boundary is a
+    /// load that moves with the design, so compliance stops being self-adjoint and the
+    /// element-energy sensitivity would be wrong rather than inaccurate — exactly why the
+    /// structural optimiser refuses self-weight. A NONZERO prescribed temperature is
+    /// refused for the same family of reason: the coupling term <c>K_fc·T_c</c> scales with
+    /// the density of the elements touching the sink, so the effective load moves with the
+    /// design; a ZERO prescribed temperature contributes nothing and IS the volume-to-point
+    /// sink. GENERATION and nodal/facet heat loads are fine and stay FIXED — the heat is
+    /// the DOMAIN's, not the material's (the electronics filling the void make it, not the
+    /// conductive material draining it), which is what keeps the load vector constant and
+    /// the problem self-adjoint.</para>
+    /// </summary>
+    public static TopologyResult MinimizeThermal(
+        ThermalModel model, TopologyOptions options, ProgressCancel? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(options);
+        RequireUsableOptions(options);
+        ThermalSolver.RequireConductivity(model);
+
+        var mesh = model.Mesh;
+        for (int f = 0; f < mesh.FacetCount; f++)
+        {
+            if (model.FilmCoefficientOf(f) != 0)
+                throw new FeaException(
+                    "A CONVECTION condition makes this a design-dependent load problem: the "
+                    + "film sits on a boundary the optimisation is reshaping, so the load "
+                    + "moves with the design and compliance stops being self-adjoint — the "
+                    + "element-energy sensitivity would be wrong rather than inaccurate, the "
+                    + "same reason the structural optimiser refuses self-weight. Hold the "
+                    + "sink with a (zero) prescribed temperature instead.");
+        }
+        bool anyPrescribed = false;
+        for (int node = 0; node < mesh.NodeCount; node++)
+        {
+            if (!model.IsPrescribed(node))
+                continue;
+            anyPrescribed = true;
+            double value = model.PrescribedTemperature(node);
+            if (value != 0)
+                throw new FeaException(
+                    $"A prescribed temperature of {value:G6} is design-dependent: the "
+                    + "coupling term K_fc*T_c scales with the density of the elements "
+                    + "touching the sink, so the effective load moves with the design. "
+                    + "Prescribe ZERO and measure the field as the rise above the sink — "
+                    + "the volume-to-point convention.");
+        }
+        if (!anyPrescribed)
+            throw new FeaException(
+                "No temperature is held anywhere: conduction's null space on a connected "
+                + "body is the constants, so nothing drives the field. Hold a sink at zero.");
+
+        var rule = TetQuadrature.For(mesh.Order);
+        FeaGuards.RequireUsableElements(mesh, rule, "conductivity");
+
+        int count = mesh.ElementCount;
+        var volumes = new double[count];
+        for (int e = 0; e < count; e++)
+            volumes[e] = mesh.ElementVolume(e);
+        double totalVolume = 0;
+        foreach (double v in volumes)
+            totalVolume += v;
+
+        var passive = ComputePassive(
+            mesh, options, volumes, options.VolumeFraction * totalVolume, out _);
+
+        var filter = options.Filter == TopologyFilter.None
+            ? null
+            : DensityFilter.Build(mesh, options.FilterRadius, volumes, progress);
+        if (filter is not null && filter.MaxNeighbours <= 1)
+            throw new FeaException(
+                $"The filter radius {options.FilterRadius:G6} reaches no element beyond each "
+                + "element's own centroid, so the filter does nothing and the answer would be "
+                + "mesh-dependent. A filter radius is a minimum MEMBER size, so it has to be "
+                + "several elements wide: refine the mesh, or state a radius the mesh can "
+                + "express.");
+
+        var design = new double[count];
+        if (options.InitialDensity is { } seed)
+        {
+            if (seed.Count != count)
+                throw new ArgumentException(
+                    $"InitialDensity has {seed.Count} values for {count} elements.",
+                    nameof(options));
+            for (int e = 0; e < count; e++)
+                design[e] = Math.Clamp(seed[e], options.MinimumDensity, 1.0);
+        }
+        else
+        {
+            Array.Fill(design, options.VolumeFraction);
+        }
+        for (int e = 0; e < count; e++)
+        {
+            if (passive[e] == PassiveSolid)
+                design[e] = 1.0;
+            else if (passive[e] == PassiveVoid)
+                design[e] = options.MinimumDensity;
+        }
+
+        var evaluator = new ThermalEvaluator(model, options, filter, rule, progress);
+        return RunOptimization(
+            mesh, model: null, thermal: model, options, evaluator, filter, passive, design,
+            volumes, totalVolume, progress);
+    }
+
+    /// <summary>The optimisation loop both physics share — the OC iteration over whatever
+    /// compliance the evaluator answers, physics-blind by construction (the structural
+    /// path routes through here verbatim, so its every committed number is the extraction's
+    /// own regression oracle).</summary>
+    private static TopologyResult RunOptimization(
+        AnalysisMesh mesh, StructuralModel? model, ThermalModel? thermal,
+        TopologyOptions options, ITopologyEvaluator evaluator, DensityFilter? filter,
+        byte[] passive, double[] design, double[] volumes, double totalVolume,
+        ProgressCancel? progress)
+    {
+        int count = mesh.ElementCount;
+        var updated = new double[count];
         var volumeGradient = VolumeGradient(filter, options.Filter, volumes);
 
         var history = new List<TopologyIteration>();
@@ -425,7 +556,7 @@ public static class TopologyOptimizer
 
         progress?.Report(1);
         return new TopologyResult(
-            model, options, design, physical, volumes, history, stop,
+            mesh, model, thermal, options, design, physical, volumes, history, stop,
             (int)Math.Round(filter?.MeanNeighbours ?? 1), filter?.MaxNeighbours ?? 1);
     }
 
@@ -568,7 +699,199 @@ public static class TopologyOptimizer
     /// it. Everything else it buys is incidental (buffers allocated once, the load vector
     /// assembled once).</para>
     /// </summary>
-    internal sealed class Evaluator
+    /// <summary>The thermal twin of <see cref="Evaluator"/>: assemble the density-scaled
+    /// conductance, solve the fixed heat load, read the per-element THERMAL energy
+    /// <c>E_e = T_e' k0_e T_e</c> at the assembly's own quadrature — so
+    /// <c>sum rho^p·E_e</c> and <c>f'T</c> are the SAME number, two constructions checking
+    /// each other, exactly the structural identity.</summary>
+    internal sealed class ThermalEvaluator : ITopologyEvaluator
+    {
+        private readonly ThermalModel _model;
+        private readonly TopologyOptions _options;
+        private readonly DensityFilter? _filter;
+        private readonly TetQuadrature _rule;
+        private readonly ProgressCancel? _progress;
+        private readonly int[] _reduced;
+        private readonly int _freeCount;
+        private readonly double[] _load;
+        private readonly double[] _free;
+        private readonly double[] _temperature;
+        private readonly double[] _scale;
+        private readonly double[] _energy;
+        private readonly double[] _sensitivity;
+        private SparseCholeskySymbolic? _symbolic;
+
+        internal ThermalEvaluator(
+            ThermalModel model, TopologyOptions options, DensityFilter? filter,
+            in TetQuadrature rule, ProgressCancel? progress)
+        {
+            _model = model;
+            _options = options;
+            _filter = filter;
+            _rule = rule;
+            _progress = progress;
+            int count = model.Mesh.ElementCount;
+            _reduced = ThermalSolver.ReducedIndices(model, out _freeCount);
+            if (_freeCount == 0)
+                throw new FeaException(
+                    "Every node's temperature is prescribed; there is nothing to solve for.");
+            // The prescribed temperatures are all exactly ZERO (enforced at entry), so the
+            // reduced load needs no K_fc correction: it is the free entries verbatim.
+            var full = ThermalSolver.AssembleLoad(model);
+            _load = new double[_freeCount];
+            for (int node = 0; node < _reduced.Length; node++)
+                if (_reduced[node] >= 0)
+                    _load[_reduced[node]] = full[node];
+            _free = new double[_freeCount];
+            _temperature = new double[model.Mesh.NodeCount];
+            _scale = new double[count];
+            _energy = new double[count];
+            _sensitivity = new double[count];
+            PhysicalDensity = new double[count];
+            DesignSensitivity = new double[count];
+        }
+
+        /// <summary>The physical density the last <see cref="Evaluate"/> built the
+        /// conductance from.</summary>
+        internal double[] PhysicalDensity { get; }
+
+        /// <summary><c>dc/dx</c> from the last <see cref="Evaluate"/>, filter included.</summary>
+        public double[] DesignSensitivity { get; }
+
+        /// <summary>The thermal compliance <c>c = f'T</c> of one design.</summary>
+        public double Evaluate(IReadOnlyList<double> design, int iteration = 1)
+        {
+            var mesh = _model.Mesh;
+            int count = mesh.ElementCount;
+
+            if (_filter is not null && _options.Filter == TopologyFilter.Density)
+                _filter.Apply(design, PhysicalDensity);
+            else
+                for (int e = 0; e < count; e++)
+                    PhysicalDensity[e] = design[e];
+
+            double penalty = EffectivePenalty(_options, iteration);
+            for (int e = 0; e < count; e++)
+                _scale[e] = Math.Pow(PhysicalDensity[e], penalty);
+
+            var full = FeaAssembly.Conductance(_model, _rule, _scale);
+            var reducedMatrix = FeaAssembly.Reduce(full, _reduced, _freeCount);
+            SparseCholesky factor;
+            try
+            {
+                _symbolic ??= SparseCholesky.AnalyzePattern(reducedMatrix, _options.Ordering);
+                factor = _symbolic.Factorize(reducedMatrix, _progress);
+            }
+            catch (InvalidOperationException ex)
+            {
+                double softest = 1;
+                foreach (double rho in PhysicalDensity)
+                    softest = Math.Min(softest, rho);
+                throw new FeaException(
+                    $"The conductance could not be factorized at iteration {iteration} "
+                    + $"(softest element density {softest:G4}). A SIMP void element keeps "
+                    + $"rho_min^p = {Math.Pow(_options.MinimumDensity, _options.Penalty):G3} "
+                    + "of the solid conductance, so a region that has emptied out is a poor "
+                    + "conductor rather than an absent one — but a part of the mesh joined "
+                    + "to the sink only through such a region can still be effectively "
+                    + $"adrift. Raise {nameof(TopologyOptions.MinimumDensity)}, or check "
+                    + "the mesh quality (TetQuality.Analyze / TetSmoothing.Smooth).", ex);
+            }
+
+            factor.Solve(_load, _free);
+            for (int node = 0; node < mesh.NodeCount; node++)
+            {
+                int i = _reduced[node];
+                _temperature[node] = i >= 0 ? _free[i] : 0;
+            }
+
+            double compliance = 0;
+            for (int i = 0; i < _freeCount; i++)
+                compliance += _load[i] * _free[i];
+
+            AccumulateElementEnergies();
+
+            for (int e = 0; e < count; e++)
+            {
+                _sensitivity[e] = -penalty
+                    * Math.Pow(PhysicalDensity[e], penalty - 1) * _energy[e];
+            }
+
+            switch (_options.Filter)
+            {
+                case TopologyFilter.Density:
+                    _filter!.ApplyTranspose(_sensitivity, DesignSensitivity);
+                    break;
+                case TopologyFilter.Sensitivity:
+                    _filter!.ApplySensitivity(
+                        design, _sensitivity, DesignSensitivity, _options.MinimumDensity);
+                    break;
+                default:
+                    Array.Copy(_sensitivity, DesignSensitivity, count);
+                    break;
+            }
+            return compliance;
+        }
+
+        /// <summary><c>sum_e rho_e^p·E_e</c> — the compliance by its OTHER route; equal to
+        /// <c>f'T</c> to round-off, two constructions checking each other.</summary>
+        internal double ComplianceFromEnergies()
+        {
+            double sum = 0;
+            for (int e = 0; e < _energy.Length; e++)
+                sum += _scale[e] * _energy[e];
+            return sum;
+        }
+
+        private void AccumulateElementEnergies()
+        {
+            var mesh = _model.Mesh;
+            int perElement = mesh.NodesPerElement;
+            var ke = new double[perElement * perElement];
+            var positions = new Vector3d[perElement];
+            var te = new double[perElement];
+
+            for (int e = 0; e < mesh.ElementCount; e++)
+            {
+                if ((e & 1023) == 0)
+                    _progress?.ThrowIfCancelled();
+                var nodes = mesh.Element(e);
+                for (int i = 0; i < perElement; i++)
+                {
+                    positions[i] = mesh.Position(nodes[i]);
+                    te[i] = _temperature[nodes[i]];
+                }
+                // The UNSCALED element conductance, the same arithmetic the assembly builds
+                // — which is exactly what makes the two-constructions identity structural
+                // rather than approximate.
+                ThermalElement.Conductivity(
+                    mesh.Order, positions, _model.ConductivityLawOf(e), _rule, ke);
+                double sum = 0;
+                for (int i = 0; i < perElement; i++)
+                {
+                    double row = 0;
+                    int baseIndex = i * perElement;
+                    for (int j = 0; j < perElement; j++)
+                        row += ke[baseIndex + j] * te[j];
+                    sum += te[i] * row;
+                }
+                _energy[e] = sum;
+            }
+        }
+    }
+
+    /// <summary>The evaluator seam the shared optimisation loop drives: one compliance
+    /// evaluation per design, leaving the design-variable sensitivity filled. The loop is
+    /// physics-blind — the structural and thermal evaluators differ only in which matrix
+    /// they scale and which field they solve.</summary>
+    internal interface ITopologyEvaluator
+    {
+        double Evaluate(IReadOnlyList<double> design, int iteration);
+
+        double[] DesignSensitivity { get; }
+    }
+
+    internal sealed class Evaluator : ITopologyEvaluator
     {
         private readonly StructuralModel _model;
         private readonly TopologyOptions _options;
@@ -627,11 +950,11 @@ public static class TopologyOptimizer
 
         /// <summary><c>dc/dx</c> from the last <see cref="Evaluate"/> — the gradient with
         /// respect to the DESIGN variable, filter included.</summary>
-        internal double[] DesignSensitivity { get; }
+        public double[] DesignSensitivity { get; }
 
         /// <summary>The compliance <c>c = f'u</c> of one design, leaving
         /// <see cref="DesignSensitivity"/> and <see cref="PhysicalDensity"/> filled.</summary>
-        internal double Evaluate(IReadOnlyList<double> design, int iteration = 1)
+        public double Evaluate(IReadOnlyList<double> design, int iteration = 1)
         {
             var mesh = _model.Mesh;
             int count = mesh.ElementCount;
@@ -826,6 +1149,22 @@ public static class TopologyOptimizer
 
     /// <summary>The pieces a test needs to drive one evaluation through the production
     /// path — the same construction <see cref="Minimize"/> makes.</summary>
+    internal static (ThermalEvaluator Evaluator, double[] Volumes) BuildThermalEvaluator(
+        ThermalModel model, TopologyOptions options)
+    {
+        RequireUsableOptions(options);
+        ThermalSolver.RequireConductivity(model);
+        var rule = TetQuadrature.For(model.Mesh.Order);
+        FeaGuards.RequireUsableElements(model.Mesh, rule, "conductivity");
+        var volumes = new double[model.Mesh.ElementCount];
+        for (int e = 0; e < volumes.Length; e++)
+            volumes[e] = model.Mesh.ElementVolume(e);
+        var filter = options.Filter == TopologyFilter.None
+            ? null
+            : DensityFilter.Build(model.Mesh, options.FilterRadius, volumes);
+        return (new ThermalEvaluator(model, options, filter, rule, null), volumes);
+    }
+
     internal static (Evaluator Evaluator, double[] Volumes) BuildEvaluator(
         StructuralModel model, TopologyOptions options)
     {
@@ -970,6 +1309,12 @@ public static class TopologyOptimizer
     /// settings that have no legal value.</summary>
     private static void RequireUsableModel(StructuralModel model, TopologyOptions options)
     {
+        RequireUsableOptions(options);
+        RequireUsableStructural(model, options);
+    }
+
+    private static void RequireUsableOptions(TopologyOptions options)
+    {
         if (!(options.VolumeFraction > 0) || !(options.VolumeFraction < 1))
             throw new ArgumentOutOfRangeException(
                 nameof(options), options.VolumeFraction,
@@ -1005,7 +1350,10 @@ public static class TopologyOptimizer
         if (options.MaxIterations < 1)
             throw new ArgumentOutOfRangeException(
                 nameof(options), options.MaxIterations, "At least one iteration is needed.");
+    }
 
+    private static void RequireUsableStructural(StructuralModel model, TopologyOptions options)
+    {
         if (model.HasVolumeLoad)
             throw new FeaException(
                 "A gravity or body load makes this a DESIGN-DEPENDENT load problem, which this "

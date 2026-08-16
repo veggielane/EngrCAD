@@ -60,7 +60,9 @@ public sealed partial class TopologyResult
     private double[]? _nodal;
 
     internal TopologyResult(
-        StructuralModel model,
+        AnalysisMesh mesh,
+        StructuralModel? model,
+        ThermalModel? thermal,
         TopologyOptions options,
         double[] design,
         double[] physical,
@@ -70,7 +72,9 @@ public sealed partial class TopologyResult
         int meanNeighbours,
         int maxNeighbours)
     {
+        Mesh = mesh;
         Model = model;
+        ThermalModel = thermal;
         Options = options;
         _design = design;
         _physical = physical;
@@ -81,14 +85,18 @@ public sealed partial class TopologyResult
         MaxNeighbours = maxNeighbours;
     }
 
-    /// <summary>The model that was optimised — its mesh, materials, supports and loads.</summary>
-    public StructuralModel Model { get; }
+    /// <summary>The STRUCTURAL model that was optimised — null for a thermal run (see
+    /// <see cref="ThermalModel"/>); exactly one of the two is set.</summary>
+    public StructuralModel? Model { get; }
+
+    /// <summary>The THERMAL model that was optimised — null for a structural run.</summary>
+    public ThermalModel? ThermalModel { get; }
 
     /// <summary>The settings the run used.</summary>
     public TopologyOptions Options { get; }
 
     /// <summary>The analysis mesh the densities are indexed by.</summary>
-    public AnalysisMesh Mesh => Model.Mesh;
+    public AnalysisMesh Mesh { get; }
 
     /// <summary>Why the run stopped.</summary>
     public TopologyStop Stop { get; }
