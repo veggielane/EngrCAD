@@ -245,7 +245,11 @@ public static class EngrCad
             preview: null, previewWorld: null, fields,
             // A deformation track reaches the pass as one scalar; with no such track the
             // factor is 1, so a still of a pose-only animation is unchanged.
-            sample.DeformFactor, shading, annotationDepth);
+            sample.DeformFactor, shading, annotationDepth,
+            // A field-sequence track's step reaches it as a selection: which stored
+            // result each participating part shows, over the run's one range.
+            sample.FieldName is { } stepField && animation.FieldTrack is { } fieldTrack
+                ? (fieldTrack, stepField) : null);
     }
 
     /// <summary>

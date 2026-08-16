@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Mesh;
 using EngrCAD.Modeling;
 
 namespace EngrCAD.Viewer;
@@ -49,7 +50,7 @@ public enum AnimationEasing
 /// carries stand).</summary>
 public sealed record AnimationSample(
     IReadOnlyList<PartInstance>? Instances, CameraState? Camera, double? DeformScale = null,
-    IReadOnlyList<SectionPlane>? Sections = null)
+    IReadOnlyList<SectionPlane>? Sections = null, string? FieldName = null)
 {
     /// <summary>The deformation factor a renderer should apply — the track's value, or 1
     /// when nothing is animating it. One property so no front end has to spell the
@@ -141,6 +142,128 @@ public abstract class SectionTrack : AnimationTrack
 }
 
 /// <summary>
+/// A track that drives WHICH RESULT a part displays over the timeline — the transient
+/// playback player (a thermal run's stored temperature steps, a load sweep). It is the
+/// one track whose sample is a result SELECTION rather than matrices, a camera or a
+/// scalar, and the contract extension is stated with its cost model: applying a
+/// selection re-uploads ONE colour buffer (measured 0.042 / 0.68 ms per frame at
+/// 12k / 195k render vertices — <c>FieldPlaybackBenchmark</c>); nothing else the
+/// animation contract protects moves — instance count and order, the meshes, the pick
+/// BVH are all untouched.
+/// <para><b>Hold-last-step semantics, deliberately</b>: the stored states ARE the
+/// answers at their own instants, so a t between steps shows the latest step at or
+/// before it — holding is honest where tweening colours between two solutions would
+/// invent a state the solver never produced.</para>
+/// <para><b>Participation</b> is the consumer's rule (the <c>PoseByPath</c> lesson): a
+/// part shows a track's steps only when it carries ALL of them as results; a track
+/// saying nothing about a part leaves it alone.</para>
+/// </summary>
+public sealed class FieldSequenceTrack : AnimationTrack
+{
+    private readonly string[] _names;
+    private readonly double[] _seconds;
+
+    /// <summary>The run's steps: each result NAME with its own REAL time (seconds,
+    /// strictly increasing — the solver's own instants, which is what makes the
+    /// playback honest about time rather than about step index).</summary>
+    public FieldSequenceTrack(IReadOnlyList<(string FieldName, double Seconds)> steps)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        if (steps.Count == 0)
+            throw new ArgumentException("A field sequence needs at least one step.", nameof(steps));
+        _names = new string[steps.Count];
+        _seconds = new double[steps.Count];
+        for (int i = 0; i < steps.Count; i++)
+        {
+            var (name, seconds) = steps[i];
+            if (string.IsNullOrEmpty(name))
+                throw new ArgumentException($"Step {i} names no result.", nameof(steps));
+            if (!double.IsFinite(seconds))
+                throw new ArgumentOutOfRangeException(nameof(steps), $"Step {i}'s time is not finite.");
+            if (i > 0 && !(seconds > _seconds[i - 1]))
+                throw new ArgumentException(
+                    $"Step times must strictly increase ({seconds:G6} after {_seconds[i - 1]:G6}).",
+                    nameof(steps));
+            _names[i] = name;
+            _seconds[i] = seconds;
+        }
+    }
+
+    /// <summary>Every step's result name, in run order — what a consumer checks a
+    /// part's results against to decide participation.</summary>
+    public IReadOnlyList<string> FieldNames => _names;
+
+    /// <summary>The result selected at track-local <paramref name="t"/> ∈ [0,1]: t maps
+    /// linearly over the run's REAL span, and the answer is the latest step at or
+    /// before that instant (hold-last; before the first step, the first).</summary>
+    public string FieldAt(double t)
+    {
+        double clamped = Math.Clamp(t, 0, 1);
+        double time = _seconds[0] + clamped * (_seconds[^1] - _seconds[0]);
+        int at = 0;
+        for (int i = 1; i < _seconds.Length; i++)
+        {
+            if (_seconds[i] <= time)
+                at = i;
+            else
+                break;
+        }
+        return _names[at];
+    }
+
+    /// <summary>The run's real time at track-local <paramref name="t"/> — what a legend
+    /// or a caption states as the displayed instant.</summary>
+    public double SecondsAt(double t) =>
+        _seconds[0] + Math.Clamp(t, 0, 1) * (_seconds[^1] - _seconds[0]);
+
+    /// <summary>
+    /// The display a participating part shows for <paramref name="fieldName"/>'s step —
+    /// the ONE application rule every consumer asks (window playback, stills, batched
+    /// export), so a frame cannot mean two things. Returns false when the part does not
+    /// participate: it must carry a display AND every one of the run's steps as results
+    /// (a track saying nothing about a part leaves it alone — the PoseByPath lesson).
+    /// The clip shows ONE range throughout: the display's own EXPLICIT range, else the
+    /// UNION of the step fields' ranges — a legend that rescales per frame lies.
+    /// </summary>
+    public bool TryDisplayFor(Part part, string fieldName, out ResolvedFieldDisplay display)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        display = default;
+        if (!part.TryResolveFieldDisplay(out var resolved, out _))
+            return false;
+        foreach (var name in _names)
+        {
+            if (part.Result(name) is null)
+                return false;
+        }
+        var step = part.Result(fieldName);
+        if (step is null)
+            return false;
+        var range = part.FieldDisplay?.Range ?? RunRange(part);
+        if (range.IsEmpty)
+            return false;
+        display = resolved with { Field = step, Range = range };
+        return true;
+    }
+
+    /// <summary>The union of every step field's own range on <paramref name="part"/> —
+    /// the clip's shared scale when the display states none explicitly.</summary>
+    public FieldRange RunRange(Part part)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        double min = double.PositiveInfinity, max = double.NegativeInfinity;
+        foreach (var name in _names)
+        {
+            if (part.Result(name) is not { } field || field.Range.IsEmpty)
+                continue;
+            min = Math.Min(min, field.Range.Min);
+            max = Math.Max(max, field.Range.Max);
+        }
+        return min <= max ? new FieldRange(min, max) : new FieldRange(1, 0);
+    }
+}
+
+/// <summary>
 /// A timeline over poses and the camera: a duration (seconds — playback and export
 /// timing), an easing, at most one <see cref="PoseTrack"/> and at most one
 /// <see cref="CameraTrack"/>. <see cref="At"/> is a PURE function of t, which is the
@@ -174,6 +297,10 @@ public sealed class Animation
 
     /// <summary>The section track, when the animation drives the clip planes.</summary>
     public SectionTrack? SectionTrack { get; private set; }
+
+    /// <summary>The field-sequence track, when the animation steps through stored
+    /// results (a transient run's playback).</summary>
+    public FieldSequenceTrack? FieldTrack { get; private set; }
 
     public Animation(double durationSeconds = 5, AnimationEasing easing = AnimationEasing.Linear)
     {
@@ -239,6 +366,20 @@ public sealed class Animation
         return this;
     }
 
+    /// <summary>Adds the field-sequence track (at most one — two selections of one
+    /// part's displayed result have no defined composition; sequence within one track,
+    /// whose steps are already an ordered run). Chainable.</summary>
+    public Animation With(FieldSequenceTrack track)
+    {
+        ArgumentNullException.ThrowIfNull(track);
+        if (FieldTrack is not null)
+            throw new InvalidOperationException(
+                "This animation already has a field-sequence track. Two selections of one " +
+                "displayed result have no defined composition; put the whole run in one track.");
+        FieldTrack = track;
+        return this;
+    }
+
     /// <summary>
     /// The animation evaluated at timeline <paramref name="t"/> (clamped to [0,1]):
     /// eased, windowed, handed to the tracks. Pure — the same t always returns the same
@@ -252,7 +393,8 @@ public sealed class Animation
         var camera = CameraTrack is { } view ? view.CameraAt(view.LocalT(eased)) : null;
         double? deform = DeformationTrack is { } flex ? flex.ScaleAt(flex.LocalT(eased)) : null;
         var sections = SectionTrack is { } clip ? clip.SectionsAt(clip.LocalT(eased)) : null;
-        return new AnimationSample(poses, camera, deform, sections);
+        string? fieldName = FieldTrack is { } run ? run.FieldAt(run.LocalT(eased)) : null;
+        return new AnimationSample(poses, camera, deform, sections, fieldName);
     }
 
     /// <summary>The animation evaluated at <paramref name="seconds"/> into playback.</summary>

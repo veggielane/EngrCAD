@@ -96,7 +96,8 @@ public static class OffscreenRenderer
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
         bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit,
-        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop,
+        (FieldSequenceTrack Track, string FieldName)? fieldStep = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -111,7 +112,7 @@ public static class OffscreenRenderer
         var cache = new PassCache(gl);
         var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera, furniture,
             style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample,
-            preview, previewWorld, fields, deformFactor, shading, annotationDepth);
+            preview, previewWorld, fields, deformFactor, shading, annotationDepth, fieldStep);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -184,7 +185,8 @@ public static class OffscreenRenderer
             var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera,
                 furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
                 sections ?? sectionPlanes, sectionCombine,
-                supersample, preview: null, previewWorld: null, fields, deformFactor, shading, annotationDepth);
+                supersample, preview: null, previewWorld: null, fields, deformFactor, shading, annotationDepth,
+                fieldStep: null);
             pixels.Add(Downsample(oversized, width, height, supersample));
         }
         return pixels;
@@ -257,11 +259,12 @@ public static class OffscreenRenderer
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
         bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit,
-        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop)
+        AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop,
+        (FieldSequenceTrack Track, string FieldName)? fieldStep = null)
     {
         var pixels = Render(instances, width, height, camera, furniture, style, sectionAxis, sectionOffset,
             ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor,
-            shading, annotationDepth);
+            shading, annotationDepth, fieldStep);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -324,7 +327,8 @@ public static class OffscreenRenderer
         ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion,
         IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld, bool fields,
-        double deformFactor, ShadingStyle shading, AnnotationDepth annotationDepth)
+        double deformFactor, ShadingStyle shading, AnnotationDepth annotationDepth,
+        (FieldSequenceTrack Track, string FieldName)? fieldStep = null)
     {
         uint meshProgram = cache.MeshProgram;
         uint lineProgram = cache.LineProgram;
@@ -443,6 +447,22 @@ public static class OffscreenRenderer
                 });
                 var render = upload.Render;
                 var field = upload.Field;
+                // Transient playback: a still of a FieldSequenceTrack step swaps the
+                // participating part's display for the step's field over the run's ONE
+                // range (the track's own TryDisplayFor rule), rebuilding just the
+                // colour floats — the deformation buffers and everything else ride
+                // through untouched.
+                if (fieldStep is { } step && field is { } data
+                    && step.Track.TryDisplayFor(part, step.FieldName, out var swapped))
+                {
+                    field = data with
+                    {
+                        Display = swapped,
+                        Colors = FieldRendering.Colors(
+                            swapped.Field, swapped.Range, swapped.ColorMap, render,
+                            swapped.LogScale),
+                    };
+                }
 
                 uint vao = 0;
                 int indexCount = 0;
@@ -741,7 +761,7 @@ public static class OffscreenRenderer
             // an animated frame must say the number it was drawn at (the window's
             // ActiveFieldDisplays applies the same multiply). Factor 1 leaves it exact.
             var displays = draws.Exists(d => d.FieldColored)
-                ? FieldDisplays(instances) : [];
+                ? FieldDisplays(instances, fieldStep) : [];
             for (int i = 0; i < displays.Count; i++)
                 displays[i] = FieldRendering.AtFactor(displays[i], deformFactor)!.Value;
             new FieldLegendLayer().Draw(gl, displays, width, height, supersample,
@@ -773,13 +793,23 @@ public static class OffscreenRenderer
     /// each, matching the window's <c>ViewportControl.ActiveFieldDisplays</c>: a
     /// legend is a single scale, so several parts on different scales get a STACK of
     /// bars rather than one bar that lies.</summary>
-    private static List<ResolvedFieldDisplay> FieldDisplays(IReadOnlyList<PartInstance> instances)
+    private static List<ResolvedFieldDisplay> FieldDisplays(
+        IReadOnlyList<PartInstance> instances,
+        (FieldSequenceTrack Track, string FieldName)? fieldStep = null)
     {
         var displays = new List<ResolvedFieldDisplay>();
         foreach (var instance in instances)
         {
-            if (instance.Part.TryResolveFieldDisplay(out var resolved, out _)
-                && !displays.Contains(resolved))
+            // A playback step's legend shows the STEP's field over the run's one range
+            // (the same TryDisplayFor rule the fills applied), so the bar cannot say
+            // one thing while the colours say another.
+            ResolvedFieldDisplay resolved;
+            if (fieldStep is { } step
+                && step.Track.TryDisplayFor(instance.Part, step.FieldName, out var swapped))
+                resolved = swapped;
+            else if (!instance.Part.TryResolveFieldDisplay(out resolved, out _))
+                continue;
+            if (!displays.Contains(resolved))
                 displays.Add(resolved);
         }
         return displays;

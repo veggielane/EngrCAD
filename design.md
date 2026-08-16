@@ -9975,6 +9975,34 @@ one feature over). The remaining set-screw BOSS is filed with its reason: a boss
 a 3D hub proud of the web, i.e. a revolved blank cross-section rather than one
 extrude — a gear-blank redesign, not a hole.
 
+**Transient playback landed as the fifth animation slot, and the contract extension is
+stated with its cost model** (`FieldSequenceTrack`; `Animation.FieldTrack`;
+`ViewportControl.SetFieldSelection`; docs `examples/fields.md` §Transient playback):
+the animation contract was "matrices, a camera or a scalar — never a re-meshed part",
+and a field-sequence track extends it with a result SELECTION, whose cost is one
+colour-buffer re-upload per step (measured 0.042/0.68 ms per frame at 12k/195k render
+vertices — `FieldPlaybackBenchmark`, the measurement that DECIDED this design before it
+was built: the full publish path is 40–50× more and n-buffers-uploaded-once costs 137 MB
+at 60 heavy steps); instance count and order, the meshes and the pick BVH are all
+untouched. Three rules carry it. **Hold-last-step, deliberately**: steps are (result
+name, REAL seconds) and t maps linearly over the run's span to the latest step at or
+before the instant — the stored states ARE the answers at their own instants, so
+holding is honest where tweening colours would invent a state the solver never
+produced. **The application rule lives on the TRACK** (`TryDisplayFor` — participation
+is carrying a display AND every step as a result, the `PoseByPath`
+a-track-saying-nothing-leaves-you-alone lesson; the clip's ONE range is the display's
+explicit range, else the union of the steps' own, read off the raw nullable
+`FieldDisplay.Range` since the resolved form cannot distinguish explicit from derived),
+so the window, the stills and the legend ask one rule and cannot disagree. **The window
+retains only what the re-upload needs**: the source-index lookups and the live colour
+VBO per field-coloured part, captured at upload — no render mesh is held and none is
+rebuilt (`FieldRendering.Colors` gained the retained-lookup overload the path wants).
+The verification bar is the deformation track's: a still of the animation at a step is
+BYTE-IDENTICAL to a static render of the same scene with the step's field and the run
+range stated explicitly — both roads reach one configuration. Scope stated: window
+playback + stills; the batched-export re-upload (a cache hit must refresh aFieldColor
+when the selection changed) and web parity are re-filed as their own rungs.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

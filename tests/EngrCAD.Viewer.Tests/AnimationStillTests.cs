@@ -134,4 +134,60 @@ public class AnimationStillTests
         scene.AllParts.First(p => p.Name == "lid").Hidden = true;
         Assert.Equal(all - 1, EngrCad.PoseAt(scene, animation, 0.4).Count);
     }
+
+    // ---- transient playback stills ----
+
+    /// <summary>The field-sequence verification bar: a still of the animation at a
+    /// step is BYTE-IDENTICAL to a static render of the same scene whose part displays
+    /// that step's field over the run's one range explicitly — both roads reach one
+    /// configuration, which is what makes the track a selection rather than a second
+    /// rendering path.</summary>
+    [SkippableFact]
+    public void AFieldSequenceStillEqualsTheStaticRenderOfTheSameStep()
+    {
+        Skip.If(SkipReason is not null, SkipReason);
+
+        Scene SceneWith(Action<Part>? display = null)
+        {
+            var scene = new Scene();
+            var part = new Part("plate", Shape.Box(20, 10, 2));
+            var mesh = part.GetMesh();
+            part.AddResult(Mesh.MeshField.Sample(mesh, "T@0", "K", p => 300 + p.X));
+            part.AddResult(Mesh.MeshField.Sample(mesh, "T@5", "K", p => 300 + 4 * p.X));
+            part.FieldDisplay = new FieldDisplay { Field = "T@0" };
+            display?.Invoke(part);
+            scene.Add(part);
+            return scene;
+        }
+
+        var track = new FieldSequenceTrack([("T@0", 0), ("T@5", 5)]);
+        var animated = SceneWith();
+        var animation = new Animation(durationSeconds: 2).With(track);
+
+        string dir = Path.Combine(Path.GetTempPath(), "engrcad-fieldseq-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // t = 1: the last step. The static twin states the step field and the RUN
+            // range (the union of both steps' own ranges) explicitly.
+            string stillPath = Path.Combine(dir, "still.png");
+            EngrCad.RenderToImage(animated, animation, t: 1, stillPath, width: 320, height: 240);
+
+            var part = animated.Tabs[0].Parts[0];
+            var runRange = track.RunRange(part);
+            var staticScene = SceneWith(p => p.FieldDisplay = new FieldDisplay
+            {
+                Field = "T@5",
+                Range = runRange,
+            });
+            string staticPath = Path.Combine(dir, "static.png");
+            EngrCad.RenderToImage(staticScene, staticPath, width: 320, height: 240);
+
+            Assert.Equal(File.ReadAllBytes(staticPath), File.ReadAllBytes(stillPath));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

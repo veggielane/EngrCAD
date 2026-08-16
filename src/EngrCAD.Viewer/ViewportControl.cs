@@ -55,6 +55,15 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private readonly List<PartBuffers> _gpuBuffers = [];
 
+    // Transient playback (a FieldSequenceTrack): per field-coloured part, the slim data
+    // a colours-only re-upload needs — the source-index lookups and the live colour
+    // VBO — retained at upload so a step swap never rebuilds a render mesh (the
+    // measured 0.042/0.68 ms path against the 40-50x publish path).
+    private readonly List<(Part Part, uint FieldVbo, int[] VertexLookup, int[] FaceLookup)>
+        _fieldAnimation = [];
+    private (FieldSequenceTrack Track, string FieldName)? _pendingFieldSelection;
+    private (FieldSequenceTrack Track, string FieldName)? _fieldSelection;
+
     private readonly object _sceneLock = new();
     private (IReadOnlyList<PartInstance> Instances, bool Frame, IReadOnlyList<bool>? Visible)? _pending;
 
@@ -426,6 +435,8 @@ public sealed class ViewportControl : OpenGlControlBase
         _gpuBuffers.Add(new PartBuffers(
             part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, wireColorVbo,
             aoVbo, fieldVbo, deformVbo, ghostVao, ghostVbo, ghostEbo));
+        if (field is not null && fieldVbo != 0)
+            _fieldAnimation.Add((part, fieldVbo, render.SourceVertices, render.SourceFaces));
 
         return new SharedMesh(vao, vbo, ebo, upload.IndexCount,
             edgeVao, edgeVbo, upload.FeatureEdgeVertexCount,
@@ -437,6 +448,8 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>Deletes the per-part GPU buffers (once each — instances share them).</summary>
     private void DeleteMeshBuffers(GL gl)
     {
+        _fieldAnimation.Clear();
+        _fieldSelection = null;
         foreach (var b in _gpuBuffers)
         {
             gl.DeleteBuffer(b.Vbo);
@@ -617,6 +630,7 @@ public sealed class ViewportControl : OpenGlControlBase
             ApplyPoses(gl, p.Instances, p.Frame);
         if (_ambientOcclusion)
             BackfillOcclusion(gl);   // no-op unless a part was uploaded with AO off
+        ApplyPendingFieldSelection(gl);   // transient playback: colours-only re-upload
 
         // View-cube hook 1: a click on the cube armed a pose animation — advance the
         // orbit camera toward it and keep frames coming until it lands.
@@ -1809,6 +1823,56 @@ public sealed class ViewportControl : OpenGlControlBase
     /// </summary>
     public ResolvedFieldDisplay? ActiveFieldDisplay =>
         _showFields ? FieldRendering.AtFactor(_activeField, _deformFactor) : null;
+
+    /// <summary>
+    /// Applies a <see cref="FieldSequenceTrack"/> step: every participating part (it
+    /// carries a display and ALL the run's step results — the track's own
+    /// <c>TryDisplayFor</c> rule) gets its colour buffer re-uploaded for the step's
+    /// field over the run's ONE range. Queued for the render pass, which owns the GL
+    /// context; a repeat of the current selection is a no-op, so a paused playback
+    /// costs nothing per frame. Null clears nothing — a finished clip HOLDS its last
+    /// step, exactly as a finished explode stays exploded.
+    /// </summary>
+    public void SetFieldSelection(FieldSequenceTrack? track, string? fieldName)
+    {
+        if (track is null || fieldName is null)
+            return;
+        lock (_sceneLock)
+        {
+            if (_fieldSelection is { } current
+                && ReferenceEquals(current.Track, track) && current.FieldName == fieldName)
+                return;
+            _pendingFieldSelection = (track, fieldName);
+        }
+        RequestNextFrameRendering();
+    }
+
+    private unsafe void ApplyPendingFieldSelection(GL gl)
+    {
+        (FieldSequenceTrack Track, string FieldName)? pending;
+        lock (_sceneLock)
+        {
+            pending = _pendingFieldSelection;
+            _pendingFieldSelection = null;
+            if (pending is not null)
+                _fieldSelection = pending;
+        }
+        if (pending is not { } selection)
+            return;
+        foreach (var (part, fieldVbo, vertexLookup, faceLookup) in _fieldAnimation)
+        {
+            if (!selection.Track.TryDisplayFor(part, selection.FieldName, out var display))
+                continue;
+            var lookup = display.Field.Association == FieldAssociation.Cell
+                ? faceLookup
+                : vertexLookup;
+            var colors = FieldRendering.Colors(
+                display.Field, display.Range, display.ColorMap, lookup, display.LogScale);
+            gl.BindBuffer(BufferTargetARB.ArrayBuffer, fieldVbo);
+            gl.BufferData<float>(BufferTargetARB.ArrayBuffer, colors, BufferUsageARB.StaticDraw);
+        }
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+    }
 
     /// <summary>Every DISTINCT resolvable display among the visible instances, in draw
     /// order at the effective exaggeration — one legend each (a bar per scale, because

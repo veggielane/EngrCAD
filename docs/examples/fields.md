@@ -184,6 +184,40 @@ scene.Add(part);
 
 ![The drilled plate's wireframe, its edges coloured by the field](images/field-wireframe.png)
 
+## Transient playback
+
+A transient run's stored steps play back as a **field-sequence track** — the fifth
+animation slot, and the one whose sample is a result *selection* rather than matrices,
+a camera or a scalar. Steps are (result name, **real seconds**) pairs; `t` maps
+linearly over the run's real span with **hold-last-step** semantics, because the
+stored states are the answers at their own instants — holding is honest where tweening
+colours between two solutions would invent a state the solver never produced. A part
+participates when it carries a display and *all* the run's steps as results; the clip
+shows **one range** throughout (the display's explicit range, else the union of the
+steps' own), since a legend that rescales per frame lies. Applying a step re-uploads
+one colour buffer and nothing else — measured at 0.042/0.68 ms per frame on
+12k/195k-vertex meshes — and a still of the animation at a step is byte-identical to a
+static render of the same configuration.
+
+```csharp run:field-sequence
+var part = new Part("plate", Shape.Box(20, 10, 2));
+var mesh = part.GetMesh();
+part.AddResult(MeshField.Sample(mesh, "T@0", "K", p => 300 + p.X));
+part.AddResult(MeshField.Sample(mesh, "T@5", "K", p => 300 + 4 * p.X));
+part.FieldDisplay = new FieldDisplay { Field = "T@0" };
+
+var track = new FieldSequenceTrack([("T@0", 0), ("T@5", 5)]);
+if (track.FieldAt(0) != "T@0" || track.FieldAt(1) != "T@5")
+    throw new Exception("t maps over the run's real time");
+if (track.FieldAt(0.49) != "T@0")
+    throw new Exception("hold-last: 2.45 s still shows the 0 s step");
+
+// The run's one range: the union of the steps' own.
+var range = track.RunRange(part);
+if (range.Min != 260 || range.Max != 340)
+    throw new Exception($"the clip's range is the union, was {range.Min}..{range.Max}");
+```
+
 ## Colour maps and ranges
 
 Two maps, and the choice matters:

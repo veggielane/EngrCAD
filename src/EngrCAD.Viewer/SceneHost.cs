@@ -750,6 +750,8 @@ internal sealed class SceneHost
         if (sample.Camera is { } camera)
             Viewport.Camera = camera;
         Viewport.DeformFactor = sample.DeformFactor;
+        if (sample.FieldName is { } stepField)
+            Viewport.SetFieldSelection(playback.Animation.FieldTrack, stepField);
         if (sample.Sections is { } sections)
         {
             // A section track drives the window's own clip state (the toolbar's planes are

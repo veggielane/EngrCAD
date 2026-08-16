@@ -409,4 +409,53 @@ public class AnimationTests
         var refusal = Assert.Throws<ArgumentException>(() => new MechanismTrack(study));
         Assert.Contains("at least two", refusal.Message);
     }
+
+    // ---- the field-sequence track ----
+
+    [Fact]
+    public void FieldSequenceTrack_HoldsTheLatestStepAtOrBeforeTheInstant()
+    {
+        // Steps at their REAL times: t maps linearly over [10, 40] s, and the answer is
+        // the latest step at or before that instant — hold-last, never a tween, because
+        // a colour between two stored solutions is a state the solver never produced.
+        var track = new FieldSequenceTrack([("T@10", 10), ("T@20", 20), ("T@40", 40)]);
+
+        Assert.Equal("T@10", track.FieldAt(0));
+        Assert.Equal("T@10", track.FieldAt(0.32));     // 19.6 s: still the 10 s step
+        Assert.Equal("T@20", track.FieldAt(0.34));     // 20.2 s
+        Assert.Equal("T@20", track.FieldAt(0.99));     // 39.7 s: the 40 s step not yet reached
+        Assert.Equal("T@40", track.FieldAt(1));
+        // Clamp semantics outside [0,1], like every other track.
+        Assert.Equal("T@10", track.FieldAt(-2));
+        Assert.Equal("T@40", track.FieldAt(3));
+        // The displayed instant, for a caption.
+        Assert.Equal(10, track.SecondsAt(0));
+        Assert.Equal(40, track.SecondsAt(1));
+        Assert.Equal(25, track.SecondsAt(0.5));
+    }
+
+    [Fact]
+    public void FieldSequenceTrack_RidesTheAnimationAsItsOwnSlot()
+    {
+        var animation = new Animation(durationSeconds: 2)
+            .With(new FieldSequenceTrack([("a", 0), ("b", 1)]));
+
+        Assert.Equal("a", animation.At(0).FieldName);
+        Assert.Equal("b", animation.At(1).FieldName);
+        // A second track refuses — two selections of one result cannot compose.
+        Assert.Throws<InvalidOperationException>(() =>
+            animation.With(new FieldSequenceTrack([("c", 0), ("d", 1)])));
+        // An animation without one says nothing (the null the consumers key on).
+        Assert.Null(new Animation().At(0.5).FieldName);
+    }
+
+    [Fact]
+    public void FieldSequenceTrack_RefusesMalformedRuns()
+    {
+        Assert.Throws<ArgumentException>(() => new FieldSequenceTrack([]));
+        Assert.Throws<ArgumentException>(
+            () => new FieldSequenceTrack([("a", 5), ("b", 5)]));          // not increasing
+        Assert.Throws<ArgumentException>(
+            () => new FieldSequenceTrack([("", 0), ("b", 1)]));           // nameless step
+    }
 }

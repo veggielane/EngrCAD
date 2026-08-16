@@ -239,16 +239,32 @@ public static class FieldRendering
     {
         ArgumentNullException.ThrowIfNull(field);
         ArgumentNullException.ThrowIfNull(render);
-        var perSource = SourceColors(field, range, map, logScale);
-
         // A cell field looks up by the render vertex's source FACE — every duplicate of
         // a face's corners takes that face's value, so the cell renders flat with no
         // shader change; a vertex field looks up by source vertex, as ever.
         var lookup = field.Association == FieldAssociation.Cell
             ? render.SourceFaces
             : render.SourceVertices;
-        var colors = new float[render.VertexCount * 3];
-        for (int v = 0; v < render.VertexCount; v++)
+        return Colors(field, range, map, lookup, logScale);
+    }
+
+    /// <summary>
+    /// The retained-lookup form of <see cref="Colors(MeshField, in FieldRange,
+    /// FieldColorMap, RenderMesh, bool)"/> — for a consumer that kept only the
+    /// source-index map after upload (the transient-playback path re-uploads colours
+    /// per step without holding the whole render mesh). The caller supplies the lookup
+    /// its field's ASSOCIATION wants: source vertices for a vertex field, source faces
+    /// for a cell field.
+    /// </summary>
+    public static float[] Colors(
+        MeshField field, in FieldRange range, FieldColorMap map, int[] lookup,
+        bool logScale = false)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(lookup);
+        var perSource = SourceColors(field, range, map, logScale);
+        var colors = new float[lookup.Length * 3];
+        for (int v = 0; v < lookup.Length; v++)
         {
             var (r, g, b) = perSource[lookup[v]];
             colors[v * 3] = r;
