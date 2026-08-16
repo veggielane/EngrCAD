@@ -13,13 +13,18 @@ implementing. Ordered roughly by value-for-effort within each section.
   footprint and the run linker ✅ landed — `Region2dThickness` + `SpaceFillingCurve.OverTiled`
   + `TiledHilbertLattice` in Core, `RunLinker` in Modeling; see design.md §2 and §6b). What is
   left is all about the FOOTPRINT measurement rather than the fill:
-  - [ ] **`InfillPath.Footprint`/`CoveredArea` cost O(E²) per arrangement** — measured 0.9 /
-    1.1 / 3.6 s for 28 / 136 / 564-point fills of a 60×40 plate, which is why the docs example
-    is modest. A stroke that unioned per RUN and then merged the runs by bounds (they are
-    mostly disjoint) would do better, and `Region2dBoolean.UnionAll` already gets the
-    curve-ordered input its balanced fold wants. Note the constraint that makes this a job
-    rather than a patch: the arrangement is bit-pinned by `Region2dGoldenTests` and drives
-    `infill-hilbert.png`, so a re-association of the fold has to be shown not to move either.
+  - [ ] **`InfillPath.Footprint` is slow and the filed remedy is measured MOOT** (2026-08-16,
+    i9-9900K: 183 / 251 / 1602 ms for 32 / 160 / 640-point fills of a 60×40 plate). The
+    proposal was "stroke per RUN, then merge the runs by bounds" — but `Footprint` ALREADY
+    strokes per run (it has since `ExactFootprint` landed), and splitting the cost shows the
+    cross-run `UnionAll` is only **22%** (388 of 1602 ms at 640 points) while the per-run
+    STROKES are 78% — and `Region2dOffset.Stroke` already unions its slabs through
+    `Region2dBoolean.UnionAll`'s balanced fold, so there is no cheap association win left
+    either (scaling measured ~E^1.25 between 149 and 629 segments, not the filed E²). What
+    remains is research-grade: a fundamentally different footprint algorithm (one sweep over
+    ALL slabs at once, or an arrangement of the path's offset curves) rather than a better
+    fold — and the bit-pin constraint stands, since `Region2dGoldenTests` and
+    `infill-hilbert.png` pin the incumbent output bits.
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
