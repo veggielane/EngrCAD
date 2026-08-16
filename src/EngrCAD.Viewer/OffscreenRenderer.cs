@@ -394,7 +394,7 @@ public static class OffscreenRenderer
         var eye = CameraMath.Eye(cam.Yaw, cam.Pitch, cam.Distance, cam.Target);
         var view = CameraMath.LookAt(eye, cam.Target, Vector3d.UnitZ);
         var (nearPlane, farPlane) = CameraMath.FrustumPlanes(cam.Distance, bounds);
-        var proj = CameraMath.Perspective(Math.PI / 4, (double)width / height, nearPlane, farPlane);
+        var proj = CameraMath.Perspective(CameraMath.FovY, (double)width / height, nearPlane, farPlane);
 
         Span<float> matrix = stackalloc float[16];
 

@@ -317,7 +317,7 @@ public static class ViewportFrame
         var eye = CameraMath.Eye(camera.Yaw, camera.Pitch, camera.Distance, camera.Target);
         var view = CameraMath.LookAt(eye, camera.Target, Vector3d.UnitZ);
         var (near, far) = CameraMath.FrustumPlanes(camera.Distance, sceneBounds);
-        var projection = CameraMath.Perspective(Math.PI / 4, aspect, near, far);
+        var projection = CameraMath.Perspective(CameraMath.FovY, aspect, near, far);
 
         // Frame-constant uniforms travel once instead of once per draw call. Names absent
         // from a program are skipped, so one set serves the mesh, line and point programs

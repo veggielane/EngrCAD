@@ -682,6 +682,12 @@ public static class CameraMath
     /// </summary>
     public const double PitchLimit = Math.PI / 2 - 0.01;
 
+    /// <summary>The perspective vertical field of view every render pass draws with
+    /// (π/4). ONE constant, because it was spelled as a literal in three front ends and
+    /// once more in the reel framing — and a framing solved against a different frustum
+    /// than the renderer draws with would be a claim about a different camera.</summary>
+    public static readonly double FovY = Math.PI / 4;
+
     /// <summary>Eye position of the orbit camera.</summary>
     public static Vector3d Eye(double yaw, double pitch, double distance, in Vector3d target) =>
         target + new Vector3d(

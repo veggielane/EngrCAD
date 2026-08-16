@@ -2189,7 +2189,7 @@ public sealed class ViewportControl : OpenGlControlBase
         var (near, far) = CameraMath.FrustumPlanes(_distance, _sceneBounds);
         return _orthographic
             ? CameraMath.Orthographic(_distance * Math.Tan(Math.PI / 8), aspect, near, far)
-            : CameraMath.Perspective(Math.PI / 4, aspect, near, far);
+            : CameraMath.Perspective(CameraMath.FovY, aspect, near, far);
     }
 
     // Shader sources live in ViewerShaders (RenderCore.cs), shared verbatim with the

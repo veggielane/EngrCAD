@@ -67,10 +67,11 @@ public sealed record ReelFormat(
 /// </summary>
 public static class ReelFraming
 {
-    /// <summary>The perspective field of view every render pass uses (π/4). The framing
-    /// must solve against the same frustum the renderer draws with, or "fits the safe
-    /// area" would be a claim about a different camera.</summary>
-    public static readonly double FovY = Math.PI / 4;
+    /// <summary>The perspective field of view the framing solves against —
+    /// <see cref="CameraMath.FovY"/>, the renderer's own, by reference rather than by a
+    /// second literal (a framing solved against a different frustum would be a claim
+    /// about a different camera).</summary>
+    public static double FovY => CameraMath.FovY;
 
     /// <summary>
     /// The camera that FILLS <paramref name="format"/>'s safe area with
