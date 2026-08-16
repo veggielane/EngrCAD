@@ -9607,6 +9607,26 @@ derived (`floor` of the width over the pitch), so the objective is deliberately
 DISCONTINUOUS in the spacing — the topology-changes case derivative-free search exists for,
 here in its mildest form.
 
+**The infill's exact-footprint option landed as the named alternative the estimator rule
+requires** (`InfillPath.ExactFootprint`/`ExactCoveredArea`/`ExactCoveredFraction`; docs
+`examples/infill.md`): the polygonal `CoveredFraction` measures through inscribed round
+joins — a one-sided under-estimate, the safe direction for a coverage claim — and the exact
+option runs the same measurement through `CurvedRegion2dOffset.Stroke`, whose round joins
+and caps are exact sectors and half-discs, so the footprint IS the path's Minkowski sum
+with the bead disc. The oracles are equalities where the polygonal twin can only approach
+from below: a single straight run's exact area is the stadium `L·w + π(w/2)²` to nine
+decimals and an isolated point's is the full πr² disc, with the real-fill assertion the
+ORDERING (exact strictly above polygonal, both in [0, 1]). Two decisions carried over
+rather than re-made: round joins and caps are the only style offered (they are the toolpath
+truth, and the exact-Minkowski claim is theirs alone), and the DENOMINATOR stays the
+flattened `RegionArea` — the flattened region is what the path was clipped against, so the
+ratio is the covered fraction of the region the fill was actually computed on, where an
+exact sketch area would divide an exact numerator by a different region than the one that
+decided the runs. The stale institutional record fixed alongside: CLAUDE.md still called
+the `Stroke` clockwise-corner defect "filed rather than fixed", when the fix (offer each
+corner side in BOTH orders — swap as well as negate) had landed in the tamper-mesh
+campaign's own merge with its six-path deficit test; the record now says so.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

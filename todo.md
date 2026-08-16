@@ -20,12 +20,6 @@ implementing. Ordered roughly by value-for-effort within each section.
     curve-ordered input its balanced fold wants. Note the constraint that makes this a job
     rather than a patch: the arrangement is bit-pinned by `Region2dGoldenTests` and drives
     `infill-hilbert.png`, so a re-association of the fold has to be shown not to move either.
-  - [ ] **The footprint uses the POLYGONAL `Region2dOffset.Stroke`, not the curved twin.** A
-    clipped curve is straight segments only, so the two differ solely in the round joins and
-    caps — inscribed fans against exact sectors — which makes the reported coverage a one-sided
-    UNDER-estimate, the safe direction for a coverage claim. An exact-footprint option over
-    `CurvedRegion2dOffset.Stroke` would raise the number by the sagitta and is worth having
-    when the fill's own bead width is the deliverable.
   - [ ] **Gosper's achieved spacing runs 2–2.6× finer than the request** (measured 0.51 / 0.38
     / 0.77 / 0.58 of the ask at orders 5–7) where a square family's stays under 2×, because the
     island is placed by a CONSERVATIVE inradius: the nearest unvisited site's distance from the

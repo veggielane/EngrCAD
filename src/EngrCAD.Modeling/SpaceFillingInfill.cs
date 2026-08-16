@@ -339,6 +339,59 @@ public sealed class InfillPath
     public double CoveredFraction(double? width = null, OffsetJoin join = OffsetJoin.Round) =>
         RegionArea > 0 ? CoveredArea(width, join) / RegionArea : 0;
 
+    /// <summary>
+    /// The EXACT swept footprint — the curved twin of <see cref="Footprint"/>, named rather
+    /// than a silent upgrade because two estimators answering one question must both be
+    /// nameable. With round joins and caps (the only style offered — they are the toolpath
+    /// truth) the exact stroke IS the path's Minkowski sum with the bead disc, where the
+    /// polygonal route is short of it by the inscribed-arc sagitta, a one-sided
+    /// UNDER-estimate; ask for this one when the fill's own bead width is the deliverable.
+    /// Costlier: every union runs the curved arrangement.
+    /// </summary>
+    public IReadOnlyList<CurvedRegion2d> ExactFootprint(double? width = null)
+    {
+        double bead = width ?? Spacing;
+        if (!(bead > 0) || !double.IsFinite(bead))
+            throw new ArgumentOutOfRangeException(nameof(width), "The bead width must be positive.");
+
+        var pieces = new List<CurvedRegion2d>();
+        foreach (var run in Runs)
+        {
+            if (run.Count >= 2)
+            {
+                var edges = new List<CurvedEdge2d>(run.Count - 1);
+                for (int i = 1; i < run.Count; i++)
+                    edges.Add(CurvedEdge2d.Line(run[i - 1], run[i]));
+                pieces.AddRange(CurvedRegion2dOffset.Stroke(edges, bead));
+            }
+            else
+            {
+                pieces.Add(CurvedRegion2d.Disc(run[0], bead / 2));
+            }
+        }
+        return CurvedRegion2dBoolean.UnionAll(pieces);
+    }
+
+    /// <summary>The exact footprint's area inside the region — measured by intersecting the
+    /// two through the curved boolean, never assumed from the path length.</summary>
+    public double ExactCoveredArea(double? width = null)
+    {
+        var footprint = ExactFootprint(width);
+        if (footprint.Count == 0)
+            return 0;
+        var region = _regions.Select(CurvedRegion2d.FromRegion).ToList();
+        return CurvedRegion2dBoolean.Intersection(footprint, region).Sum(r => r.Area);
+    }
+
+    /// <summary>The exact-footprint coverage fraction. The DENOMINATOR deliberately stays
+    /// <see cref="RegionArea"/> — the flattened region is what the path was CLIPPED against,
+    /// so this is the covered fraction of the region the fill was actually computed on; an
+    /// exact sketch area would divide an exact numerator by a different region than the one
+    /// that decided the runs. Always at least <see cref="CoveredFraction"/> for the same
+    /// width — the polygonal footprint is inscribed in this one.</summary>
+    public double ExactCoveredFraction(double? width = null) =>
+        RegionArea > 0 ? ExactCoveredArea(width) / RegionArea : 0;
+
     /// <summary>The footprint an isolated point leaves under a round cap: a disc, as an
     /// INSCRIBED polygon matching <see cref="Region2dOffset"/>'s round joins — vertices exactly
     /// on the circle and chords inside it, so a lone point can never over-report coverage.</summary>

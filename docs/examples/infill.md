@@ -169,6 +169,19 @@ clipped curve is straight segments only, so the polygonal stroke and the exact c
 differ solely in the round joins and caps — inscribed fans against exact sectors — which makes
 the reported number a one-sided under-estimate, the safe direction for a coverage claim.
 
+### The exact footprint
+
+`CoveredFraction` measures through the polygonal `Region2dOffset.Stroke`, whose round
+joins are *inscribed* fans — a one-sided under-estimate, the safe direction for a coverage
+claim. `ExactCoveredFraction` is the **named alternative** (two estimators answering one
+question must both be nameable): the curved-tier stroke's round joins and caps are exact
+sectors and half-discs, so the footprint *is* the path's Minkowski sum with the bead disc,
+and a single straight run's area is the stadium `L·w + π(w/2)²` as an equality. The
+denominator deliberately stays the flattened region — that is the region the path was
+clipped against, so the ratio is the covered fraction of the region the fill was actually
+computed on. Ask for it when the fill's own bead width is the deliverable; it is costlier,
+since every union runs the curved arrangement.
+
 ## What is refused, and why
 
 A fill that quietly misses part of the region is the one failure it must not have, so both ways

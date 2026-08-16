@@ -334,3 +334,49 @@ public class SpaceFillingInfillTests
         Assert.True(thickness.Minimum < fill.Spacing + 2 * fill.Clearance);
     }
 }
+
+/// <summary>
+/// The exact-footprint option: the curved-tier stroke whose round joins and caps are exact
+/// sectors and half-discs, so the footprint IS the path's Minkowski sum with the bead disc
+/// and the polygonal route is inscribed in it — a one-sided ordering the tests assert both
+/// as the fraction inequality on a real fill and as closed-form equalities on hand-built
+/// single-run paths, where the polygonal twin can only approach from below.
+/// </summary>
+public class ExactInfillFootprintTests
+{
+    private static Sketch Plate() => Sketch.Rectangle(40, 30);
+
+    [Fact]
+    public void TheExactFraction_DominatesThePolygonal_OnARealFill()
+    {
+        var fill = SpaceFillingInfill.Fill(Plate(), 4.0);
+        double polygonal = fill.CoveredFraction();
+        double exact = fill.ExactCoveredFraction();
+        Assert.True(exact > polygonal,
+            $"exact {exact:0.####} must exceed the inscribed polygonal {polygonal:0.####}");
+        Assert.InRange(exact, polygonal, 1.0);
+        // Determinism: the curved union is as deterministic as the polygonal one.
+        Assert.Equal(exact, fill.ExactCoveredFraction(), 15);
+    }
+
+    [Fact]
+    public void ASingleStraightRun_IsTheStadiumClosedForm_Exactly()
+    {
+        // A hand-built path: one straight run of length 10 at bead 2 — the exact stroke is
+        // the stadium L·w + π(w/2)², an EQUALITY (round caps are exact half-discs), where
+        // the polygonal twin approaches from below.
+        var region = Sketch.Rectangle(40, 30).ToRegions();
+        var curve = SpaceFillingCurve.Over(
+            new Aabb(new Vector3d(-20, -15, 0), new Vector3d(20, 15, 0)), SpaceFillingFamily.Hilbert, 4.0);
+        var path = new InfillPath(
+            curve, 0, [new[] { new Vector2d(-5, 0), new Vector2d(5, 0) }], region);
+        double area = path.ExactFootprint(2.0).Sum(r => r.Area);
+        Assert.Equal(10 * 2 + Math.PI, area, 9);
+        Assert.True(path.Footprint(2.0).Sum(r => r.Area) < area);
+
+        // And an isolated point's exact footprint is the full round-cap disc.
+        var point = new InfillPath(
+            curve, 0, [new[] { new Vector2d(0, 0) }], region);
+        Assert.Equal(Math.PI, point.ExactFootprint(2.0).Sum(r => r.Area), 9);
+    }
+}
