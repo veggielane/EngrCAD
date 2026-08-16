@@ -49,11 +49,6 @@ implementing. Ordered roughly by value-for-effort within each section.
   a `ConstrainedSketch` is an INPUT to a feature rather than a `[Param]`, so it belongs
   in `Feature.SaveInputs` beside `InputJson.SaveCurves`, and the solved output is an
   ordinary `Sketch` that already round-trips.
-  - **Tangency to a cubic BÉZIER** is the one carrier the tangency vocabulary refuses,
-    and it is refused with its reason rather than deferred: a cubic has no closed-form
-    support function, so the constraint is `cross(B(t) − p, d) = 0` together with
-    `cross(B′(t), d) = 0` — two rows over the foot parameter as a new variable, which is
-    the `PointOnBezier` shape plus one row, and removes the one DOF a tangency means.
 
 ## Deformation / analysis follow-ups
 

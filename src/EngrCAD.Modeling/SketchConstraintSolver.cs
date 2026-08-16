@@ -1114,6 +1114,139 @@ internal sealed class TangentLineEllipseConstraint : SketchConstraint
 }
 
 /// <summary>
+/// A line tangent to a cubic bézier's CARRIER — the one tangency with no closed-form
+/// support function, so the FOOT parameter rides as a solver variable: two rows (the
+/// foot point lies ON the line, and the curve's derivative there is PARALLEL to it)
+/// over one new unknown, removing exactly the one DOF a tangency means.
+///
+/// <para>Written in LIVE space exactly as <see cref="PointOnBezierConstraint"/> is:
+/// the control points ride the chord similarity, <c>B(t) = s + (e − s)·β(t)</c> for
+/// the fixed complex β read off the DRAWN offsets, so the carrier transports rigidly
+/// with its joints and every derivative is a complex-block one-liner. Which of the up
+/// to two parallel tangents is meant is the DRAWING's choice, made when the foot was
+/// seeded (see <c>TangencyParameter</c>) — the branch-selector rule the whole layer
+/// runs on.</para>
+/// </summary>
+internal sealed class TangentLineBezierConstraint : SketchConstraint
+{
+    private readonly int _p1, _p2;
+    private readonly int _start, _end;
+    private readonly int _foot;
+    private readonly Vector2d _a1, _a2;   // control offsets over the drawn chord
+
+    public TangentLineBezierConstraint(
+        int p1, int p2, int start, int end, int foot,
+        in Vector2d drawnStart, in Vector2d drawnEnd, in Vector2d control1, in Vector2d control2)
+    {
+        _p1 = p1;
+        _p2 = p2;
+        _start = start;
+        _end = end;
+        _foot = foot;
+        var chord = drawnEnd - drawnStart;
+        _a1 = PointOnEllipseConstraint.ComplexDivide(control1 - drawnStart, chord);
+        _a2 = PointOnEllipseConstraint.ComplexDivide(control2 - drawnStart, chord);
+    }
+
+    public override int Rows => 2;
+
+    /// <summary>β(t), β′(t) and β″(t) over the drawn chord.</summary>
+    private (Vector2d Value, Vector2d First, Vector2d Second) Beta(double t)
+    {
+        double u = 1 - t;
+        var value = _a1 * (3 * u * u * t) + _a2 * (3 * u * t * t) + new Vector2d(t * t * t, 0);
+        var first = _a1 * (3 * u * (u - 2 * t)) + _a2 * (3 * t * (2 * u - t))
+            + new Vector2d(3 * t * t, 0);
+        var second = _a1 * (6 * (3 * t - 2)) + _a2 * (6 * (1 - 3 * t))
+            + new Vector2d(6 * t, 0);
+        return (value, first, second);
+    }
+
+    public override void Residual(double[] x, double scale, double[] residual, int row)
+    {
+        var p1 = Point(x, _p1);
+        var d = Point(x, _p2) - p1;
+        double length = d.Length;
+        if (!(length > 0))
+        {
+            residual[row] = 0;
+            residual[row + 1] = 0;
+            return;
+        }
+        var unit = d / length;
+        var s = Point(x, _start);
+        var chord = Point(x, _end) - s;
+        var (beta, first, _) = Beta(x[_foot]);
+        var on = s + PointOnEllipseConstraint.ComplexMultiply(chord, beta);
+        var tangent = PointOnEllipseConstraint.ComplexMultiply(chord, first);
+        residual[row] = (on - p1).Cross(unit);
+        residual[row + 1] = tangent.Cross(unit);
+    }
+
+    public override void Jacobian(double[] x, double scale, double[] jacobian, int row, int columns)
+    {
+        var p1 = Point(x, _p1);
+        var d = Point(x, _p2) - p1;
+        double length = d.Length;
+        if (!(length > 0))
+            return;
+        var unit = d / length;
+        var s = Point(x, _start);
+        var chord = Point(x, _end) - s;
+        var (beta, first, second) = Beta(x[_foot]);
+        var on = s + PointOnEllipseConstraint.ComplexMultiply(chord, beta);
+        var tangent = PointOnEllipseConstraint.ComplexMultiply(chord, first);
+        var w = on - p1;
+
+        // ---- the foot column: d(row0)/dt = B'(t)·×unit, d(row1)/dt = B''(t)·×unit.
+        Add(jacobian, row, columns, _foot, tangent.Cross(unit));
+        Add(jacobian, row + 1, columns, _foot,
+            PointOnEllipseConstraint.ComplexMultiply(chord, second).Cross(unit));
+
+        // ---- the line's endpoints. Both rows are cross(k, d)/|d| for their own k, so
+        // they share the derivative form d/dd = ((−k.Y, k.X) − unit·f)/|d|; p1 also
+        // enters row 0 directly through w = B − p1.
+        double f0 = w.Cross(unit);
+        double f1 = tangent.Cross(unit);
+        var dd0 = (new Vector2d(-w.Y, w.X) - unit * f0) / length;
+        var dd1 = (new Vector2d(-tangent.Y, tangent.X) - unit * f1) / length;
+        var direct = new Vector2d(-unit.Y, unit.X);   // d(cross(w, unit))/dp1 through w
+
+        Add(jacobian, row, columns, _p1, direct.X - dd0.X);
+        Add(jacobian, row, columns, _p1 + 1, direct.Y - dd0.Y);
+        Add(jacobian, row, columns, _p2, dd0.X);
+        Add(jacobian, row, columns, _p2 + 1, dd0.Y);
+        Add(jacobian, row + 1, columns, _p1, -dd1.X);
+        Add(jacobian, row + 1, columns, _p1 + 1, -dd1.Y);
+        Add(jacobian, row + 1, columns, _p2, dd1.X);
+        Add(jacobian, row + 1, columns, _p2 + 1, dd1.Y);
+
+        // ---- the carrier's joints, through the chord similarity: for a residual
+        // cross(k, unit) whose k depends on a joint through a complex block R_z, the
+        // contribution is conj(z) applied to the residual's gradient in k — the
+        // TangentLineEllipseConstraint Contribute pattern.
+        var g0 = new Vector2d(unit.Y, -unit.X);    // d(cross(k, unit))/dk
+        // Row 0: B = s + R_beta(e − s): d/ds = I − R_beta, d/de = R_beta.
+        var g0s = g0 - Conjugate(beta, g0);
+        var g0e = Conjugate(beta, g0);
+        Add(jacobian, row, columns, _start, g0s.X);
+        Add(jacobian, row, columns, _start + 1, g0s.Y);
+        Add(jacobian, row, columns, _end, g0e.X);
+        Add(jacobian, row, columns, _end + 1, g0e.Y);
+        // Row 1: B' = R_beta'(e − s): d/ds = −R_beta', d/de = R_beta'.
+        var g1e = Conjugate(first, g0);
+        Add(jacobian, row + 1, columns, _start, -g1e.X);
+        Add(jacobian, row + 1, columns, _start + 1, -g1e.Y);
+        Add(jacobian, row + 1, columns, _end, g1e.X);
+        Add(jacobian, row + 1, columns, _end + 1, g1e.Y);
+    }
+
+    /// <summary>Transpose of the complex-multiplication block: conj(z) applied to g.</summary>
+    private static Vector2d Conjugate(in Vector2d z, in Vector2d g) =>
+        PointOnEllipseConstraint.ComplexMultiply(new Vector2d(z.X, -z.Y), g);
+}
+
+/// <summary>
 /// The Levenberg–Marquardt engine behind <see cref="ConstrainedSketch"/> — the
 /// MateSolver pattern on plain 2D length variables (no frames, no rotation encoding, so
 /// no variable scaling is needed: every variable is already a length). Dense linear

@@ -230,6 +230,146 @@ public class SketchCurveConstraintTests
         Assert.Equal(0, tangent.Dot(line), 1e-9);
     }
 
+    // ---- a line tangent to a cubic's carrier ----
+
+    /// <summary>
+    /// A cubic has no closed-form support function, so its tangency carries the FOOT as
+    /// a solver variable — two rows over one new unknown. Verified GEOMETRICALLY on the
+    /// solved sketch: the line touches the bézier (minimum distance ~0) and does not
+    /// CROSS it there (the signed distance keeps one sign around the touch), which is
+    /// what separates a tangency from a secant that happens to pass near.
+    /// </summary>
+    [Fact]
+    public void ALineIsPulledOntoTangencyWithACubicsCarrier()
+    {
+        var drawn = ArchWithBezier().WithHole(TriangleHole(6));
+        var cs = drawn.Constrain();
+        cs.Tangent(cs.HoleLine(0, 0), cs.Curve(2))
+          .Fix(cs.Point(0))
+          .Fix(cs.Point(1))
+          .Fix(cs.Point(2));
+
+        var result = cs.TrySolve();
+        Assert.True(result.Converged, result.ToString());
+        var solved = result.Sketch!;
+
+        var bezier = solved.ToCurves().OfType<BezierCurve2d>().Single();
+        var (a, b) = SolvedHoleBase(solved);
+        var unit = (b - a).Normalized();
+
+        double SignedDistance(double t)
+        {
+            var q = bezier.PointAt(t);
+            return (q - a).Cross(unit);
+        }
+        var (best, bestT) = NearestApproach(bezier, a, unit);
+        Assert.True(best <= 1e-7, $"the line must touch the cubic (nearest {best} at t {bestT})");
+
+        // No crossing near the touch: every signed distance within ±0.15 of the foot
+        // keeps one sign (tolerating the touch's own ~0 samples).
+        int positive = 0, negative = 0;
+        for (int i = -30; i <= 30; i++)
+        {
+            double t = bestT + 0.005 * i;
+            if (t < 0 || t > 1)
+                continue;
+            double sd = SignedDistance(t);
+            if (sd > 1e-7) positive++;
+            if (sd < -1e-7) negative++;
+        }
+        Assert.True(positive == 0 || negative == 0,
+            $"a tangent line must not cross the curve ({positive} above, {negative} below)");
+    }
+
+    /// <summary>Two rows over one new unknown remove exactly ONE degree of freedom —
+    /// asserted off the solver's own rank, the same instrument the point-on-curve
+    /// constraints are held to.</summary>
+    [Fact]
+    public void CubicTangencyRemovesExactlyOneDegreeOfFreedom()
+    {
+        var drawn = ArchWithBezier().WithHole(TriangleHole(6));
+        var baseline = drawn.Constrain().TrySolve();
+
+        var cs = drawn.Constrain();
+        cs.Tangent(cs.HoleLine(0, 0), cs.Curve(2));
+        var result = cs.TrySolve();
+
+        Assert.True(result.Converged, result.ToString());
+        // ONE new unknown (the foot) against TWO new rows — read off the solver's own
+        // rank, the PointOnBezier instrument.
+        Assert.Equal(baseline.FreeDegreesOfFreedom + 1, result.FreeDegreesOfFreedom);
+        Assert.Equal(baseline.ConstrainedDegreesOfFreedom + 2, result.ConstrainedDegreesOfFreedom);
+        Assert.Equal(baseline.RemainingDegreesOfFreedom - 1, result.RemainingDegreesOfFreedom);
+    }
+
+    /// <summary>An S-shaped cubic has TWO tangents parallel to a horizontal line — one
+    /// under each lobe — and which is meant is the DRAWING's choice: the hole drawn near
+    /// the lower lobe lands on the lower tangency, never teleporting across.</summary>
+    [Fact]
+    public void TheDrawnConfigurationSelectsTheTangencyBranch()
+    {
+        // An S across the top (drawn CCW so normalization keeps the segment order):
+        // from (40, 0) to (0, 0), dipping toward (30, −40) over its first half and
+        // rising toward (10, 40) over its second — two lobes, two horizontal tangents.
+        var s = Sketch.Start(0, -20)
+            .LineTo((40, -20))
+            .LineTo((40, 0))
+            .BezierTo((30, -40), (10, 40), (0, 0))
+            .Close()
+            .WithHole(Sketch.Start(12, 6).LineTo((20, 6)).LineTo((16, 12)).Close());
+
+        var cs = s.Constrain();
+        cs.Tangent(cs.HoleLine(0, 0), cs.Curve(2))
+          .Fix(cs.Point(0))
+          .Fix(cs.Point(1));
+
+        var result = cs.TrySolve();
+        Assert.True(result.Converged, result.ToString());
+        var solved = result.Sketch!;
+
+        var bezier = solved.ToCurves().OfType<BezierCurve2d>().Single();
+        var (a, b) = SolvedHoleBase(solved);
+        var unit = (b - a).Normalized();
+        var (best, bestT) = NearestApproach(bezier, a, unit);
+        Assert.True(best <= 1e-7, $"tangent (nearest {best})");
+        // Drawn against the UPWARD lobe's region: the touch stays in that half.
+        Assert.InRange(bestT, 0.5, 0.95);
+    }
+
+    /// <summary>The closest approach of a cubic to a line, by a coarse scan REFINED two
+    /// levels — a 1/400 grid alone reads a true tangency as ~2.5e-7 purely from sampling
+    /// a parabola off its vertex, so the refinement is what makes 1e-7 a statement about
+    /// the SOLVE rather than about the probe.</summary>
+    private static (double Distance, double T) NearestApproach(
+        BezierCurve2d bezier, Vector2d a, Vector2d unit)
+    {
+        double bestT = 0, best = double.PositiveInfinity;
+        void Scan(double lo, double hi, int samples)
+        {
+            for (int i = 0; i <= samples; i++)
+            {
+                double t = lo + (hi - lo) * i / samples;
+                double sd = Math.Abs((bezier.PointAt(t) - a).Cross(unit));
+                if (sd < best)
+                    (best, bestT) = (sd, t);
+            }
+        }
+        Scan(0, 1, 400);
+        Scan(Math.Max(0, bestT - 0.0025), Math.Min(1, bestT + 0.0025), 400);
+        Scan(Math.Max(0, bestT - 1e-5), Math.Min(1, bestT + 1e-5), 400);
+        return (best, bestT);
+    }
+
+    /// <summary>The solved base of the triangular hole, read off the solved sketch by
+    /// what it IS (the hole's one straight segment between its two lowest-numbered
+    /// joints) rather than by an index a normalization could move.</summary>
+    private static (Vector2d A, Vector2d B) SolvedHoleBase(Sketch solved)
+    {
+        var hole = solved.Holes[0];
+        var seg = hole.Segments[0];
+        return (seg.Start, seg.End);
+    }
+
     // ---- a line tangent to an elliptical carrier ----
 
     /// <summary>An arch with a triangular hole whose base can be dragged onto the arch.</summary>
@@ -326,20 +466,6 @@ public class SketchCurveConstraintTests
         var thrown = Assert.Throws<ArgumentException>(
             () => cs.Tangent(cs.HoleLine(0, 0), cs.Curve(1)));
         Assert.Contains("through the ellipse's centre", thrown.Message);
-    }
-
-    /// <summary>A cubic has no closed-form support function, so its tangency needs the foot
-    /// parameter as a variable — a different constraint shape, refused BY NAME with that
-    /// reason rather than approximated.</summary>
-    [Fact]
-    public void TangencyToABezierIsRefusedWithItsReason()
-    {
-        var drawn = ArchWithBezier().WithHole(
-            Sketch.Start(10, 5).LineTo((30, 5)).LineTo((20, 12)).Close());
-        var cs = drawn.Constrain();
-        var thrown = Assert.Throws<ArgumentException>(
-            () => cs.Tangent(cs.HoleLine(0, 0), cs.Curve(2)));
-        Assert.Contains("foot parameter", thrown.Message);
     }
 
     // ---- helpers ----

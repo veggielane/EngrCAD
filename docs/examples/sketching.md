@@ -233,9 +233,13 @@ distance from a point of it to a line with unit normal n̂ through q is
 so tangency is *one extreme vanishing*: one signed, first-order row, no new unknown, and
 exactly the circular form when A and B are perpendicular and equal. Which of the two
 tangents is meant is read off the drawing, so a line drawn **through** the centre states
-no side and is refused by name. A cubic bézier is refused too, with its reason: it has
-no closed-form support function, so its tangency would need the foot parameter as a
-variable — a different constraint shape.
+no side and is refused by name. A cubic bézier **works too**, by the different shape its
+lack of a closed-form support function forces: the foot parameter joins the system as
+its own variable — `B(t)` lies on the line and `B′(t)` runs along it, two rows against
+one unknown, removing exactly the one degree of freedom a tangency means (asserted off
+the solver's own rank). The drawn configuration seeds the foot and selects the branch:
+of the up-to-two carrier tangents parallel to the drawn line, the solve lands on the one
+the drawing put the line near.
 
 ## Placing sketches in 3D
 

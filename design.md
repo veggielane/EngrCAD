@@ -9870,6 +9870,31 @@ centring expression), which is what keeps every committed field render byte-iden
 The legend caches on display CONTENTS (per-entry record equality), the annotation
 overlay's value-equality rule, in the window layer and the browser alike.
 
+**Tangency to a cubic bézier landed — the one carrier the tangency vocabulary refused**
+(`TangentLineBezierConstraint`; `ConstrainedSketch.Tangent(line, curve)` now takes a
+`CubicSeg`; docs `examples/sketching.md`): the refusal's own reason spelled the
+implementation — no closed-form support function means the FOOT parameter joins the
+system as a solver variable, and the constraint is `B(t)` on the line plus `B′(t)`
+parallel to it, two rows over one new unknown, removing exactly the one DOF a tangency
+means (asserted off the solver's own rank, the `PointOnBezier` instrument). Written in
+LIVE space exactly as `PointOnBezierConstraint` is — the control points ride the chord
+similarity, `B(t) = s + (e − s)·β(t)` for the fixed complex β read off the drawn
+offsets — so the analytic Jacobian is complex-block one-liners: the foot column is
+`B′ × û` and `B″ × û` (row 1's t-derivative IS row 2's value), the line's endpoints take
+the shared `cross(k, d)/|d|` derivative form the ellipse tangency already uses, and the
+carrier's joints enter through the conjugate blocks. **The branch selector is the drawn
+configuration, computed rather than scanned**: the carrier's tangents parallel to the
+drawn line are the real roots of a plain QUADRATIC in t (B′ is quadratic and the cross
+with a fixed direction is scalar), and the root whose point lies nearest the drawn line
+is the tangency the drawing means — with a dense-scan fallback for a line no carrier
+tangent parallels, since the solve may still rotate the line into reach. The verifying
+test measures the SOLVED geometry (the line touches to 1e-7 and does not CROSS — the
+signed distance keeps one sign around the touch, which is what separates a tangency
+from a secant), and the probe had to be REFINED to say so: a 1/400 parameter grid reads
+a true tangency as ~2.5e-7 purely from sampling a parabola off its vertex, so the
+two-level refinement is what makes the tolerance a statement about the solve rather
+than about the probe.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

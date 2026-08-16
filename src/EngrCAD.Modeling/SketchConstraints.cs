@@ -730,11 +730,30 @@ public sealed class ConstrainedSketch
         RequireOwned(line.Owner, line.Description);
         RequireOwned(curve.Owner, curve.Description);
         string what = $"Tangent({line}, {curve})";
+        if (curve.Segment is CubicSeg cubicSeg)
+        {
+            // A cubic has no closed-form support function, so its tangency takes the
+            // FOOT parameter as a solver variable — the PointOnBezier shape plus one
+            // row: B(t) lies on the line AND B'(t) is parallel to it, two rows over one
+            // new unknown, removing exactly the one DOF a tangency means.
+            RequireChord(curve, what);
+            var seedNow = _map.Seed;
+            var q1 = SketchVariables.Point(seedNow, line.P1);
+            var q2 = SketchVariables.Point(seedNow, line.P2);
+            var drawnDirection = q2 - q1;
+            if (!(drawnDirection.LengthSquared > 0))
+                throw new ArgumentException($"{what}: {line} is drawn with no length.");
+            int cubicFoot = AddAuxiliary(
+                TangencyParameter(cubicSeg, q1, drawnDirection / drawnDirection.Length));
+            return Add(new TangentLineBezierConstraint(
+                line.P1, line.P2, curve.Start, curve.End, cubicFoot,
+                cubicSeg.P0, cubicSeg.P3, cubicSeg.Control1, cubicSeg.Control2)
+                { Name = what });
+        }
         if (curve.Segment is not EllipseSeg ellipse)
             throw new ArgumentException(
-                $"{what}: tangency is available for an elliptical arc, whose carrier is a conic with a " +
-                "closed-form support function. A cubic bézier has none, so its tangency needs its foot " +
-                "parameter as a solver variable and is not in the vocabulary.");
+                $"{what}: tangency is available for an elliptical arc or a cubic bézier; " +
+                $"{curve} is neither.");
         // A full-ellipse loop's carrier is simply FIXED, which is legal: the row is still
         // first order in the line's own two points.
         if (curve.Start >= 0 && curve.Start == curve.End)
@@ -867,6 +886,65 @@ public sealed class ConstrainedSketch
             if (!(Math.Abs(curvature) > 0))
                 break;
             best -= gradient / curvature;
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// The tangency foot the DRAWN configuration selects — the branch selector the whole
+    /// layer runs on. The tangents of the CARRIER parallel to the drawn line are the real
+    /// roots of <c>cross(B'(t), d̂) = 0</c>, a plain quadratic in t; among them the one
+    /// whose point lies nearest the drawn line is the tangency the drawing means. With no
+    /// real root (no carrier tangent runs the drawn way — the solve may still rotate the
+    /// line) the seed falls back to a dense scan minimizing the combined residual.
+    /// </summary>
+    private static double TangencyParameter(CubicSeg cubic, Vector2d onLine, Vector2d unit)
+    {
+        // B'(t)/3 = (1−t)²·(C1−P0) + 2(1−t)t·(C2−C1) + t²·(P3−C2); crossing with the
+        // unit direction gives a·t² + b·t + c for the three edge crosses.
+        double q0 = (cubic.Control1 - cubic.P0).Cross(unit);
+        double q1 = (cubic.Control2 - cubic.Control1).Cross(unit);
+        double q2 = (cubic.P3 - cubic.Control2).Cross(unit);
+        double a = q0 - 2 * q1 + q2;
+        double b = 2 * (q1 - q0);
+        double c = q0;
+
+        double best = double.NaN, bestMiss = double.PositiveInfinity;
+        void Consider(double t)
+        {
+            if (!double.IsFinite(t))
+                return;
+            double miss = Math.Abs((BezierPoint(cubic, t) - onLine).Cross(unit));
+            if (miss < bestMiss)
+                (bestMiss, best) = (miss, t);
+        }
+        if (Math.Abs(a) > 0)
+        {
+            double disc = b * b - 4 * a * c;
+            if (disc >= 0)
+            {
+                double root = Math.Sqrt(disc);
+                Consider((-b + root) / (2 * a));
+                Consider((-b - root) / (2 * a));
+            }
+        }
+        else if (Math.Abs(b) > 0)
+        {
+            Consider(-c / b);
+        }
+        if (double.IsFinite(best))
+            return best;
+
+        // No parallel tangent on the carrier: scan for the least-violating start.
+        const int samples = 96;
+        for (int i = 0; i <= samples; i++)
+        {
+            double t = -0.5 + 2.0 * i / samples;
+            double r0 = (BezierPoint(cubic, t) - onLine).Cross(unit);
+            double r1 = BezierDerivative(cubic, t).Cross(unit);
+            double miss = r0 * r0 + r1 * r1;
+            if (miss < bestMiss)
+                (bestMiss, best) = (miss, t);
         }
         return best;
     }
