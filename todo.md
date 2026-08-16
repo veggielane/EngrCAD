@@ -2517,8 +2517,17 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     between the exact 3.414 and the sharp 4.0). No-retract row linking LANDED
     (`linkRows:` — rows merge into one pass with connectors sampled ON the CL surface
     via the same tipAt, one plunge instead of one per row, both cutter routes through
-    the one serpentine rule, default off byte-identical). **Stage-3 residuals, open**:
-    adaptive stepover from local curvature. Holder/shank collision LANDED
+    the one serpentine rule, default off byte-identical). **Stage-3 residuals: NONE open.** Adaptive stepover LANDED
+    (`CncSurfacing.AdaptiveRaster` — the scallop height is the stated number and
+    the row spacing follows the surface: each next row placed by bisection on the
+    MEASURED worst 3D CL-point distance through the ScallopHeight chord identity,
+    exactly cos θ times the flat spacing on a tilted plane (held at 45° by test),
+    first-order on curved surfaces and said so; corner radius governs, flat cutter
+    refused by name; rows part-anchored since a variable spacing has no stated
+    number for the phase rule to hold; cliffs floor at flat/32 — the wall belongs
+    to the flank; the acceptance carries a 1e-9 relative grace because
+    cusp(flatSpacing) == h MATHEMATICALLY and an exact comparison hands a flat
+    plate's fast path to FP rounding). Holder/shank collision LANDED
     (`CncHolder.Check` — the holder as a conservative flat disc riding stickout
     above the tip, so collision is the FLAT drop-cutter question at the holder's
     own radius through the shared `DropProbe`; the report carries every colliding

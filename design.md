@@ -9254,7 +9254,8 @@ passes UNCHANGED — a move's meaning is its shape, so an XYZ-combined raster mo
 feed rate with nothing new — which is the payoff of classifying moves rather than annotating
 them. Filed by name at the time — and since landed with their own records: flat/bull-nose
 cutter-location surfaces, a raster direction other than X, no-retract row linking, rest
-machining, and holder/shank collision; still open: adaptive stepover from local curvature.
+machining, and holder/shank collision; the last of which — adaptive
+stepover — has since landed too (the record below).
 
 **The material-removal record and the toolpath animation landed as the PAIR the animation
 system's own rule splits them into** (`CncStock.Simulate` in Cam; `PathTracks.Follow` in
@@ -9512,6 +9513,39 @@ operation needing depth-plus-rise; determinism; and refusals by name, including 
 wider than its cutter refused as VACUOUS — such a disc cannot collide before the cutter's
 own flank engages, and the number to verify there is the flute length, which the check does
 not model.
+
+**Adaptive stepover landed by inverting which number is HELD** (`CncSurfacing.AdaptiveRaster`;
+docs `examples/cam-surfacing.md`): a uniform raster holds the row spacing and lets the
+scallop grow with the tilt; the adaptive raster holds the SCALLOP and lets the spacing
+follow the surface — each next row is placed by bisection on the MEASURED worst 3D distance
+between corresponding CL points of the row pair, pushed through the same chord identity
+`ScallopHeight` states (`h = r − √(r² − (d/2)²)`), so no new formula exists to disagree
+with the uniform one. **On a tilted plane the chord between CL points IS the surface
+distance, so the spacing is EXACTLY cos θ times the flat spacing** — held at 45° by test
+against a boolean-free ramp fixture (an extruded right triangle rotated so the hypotenuse's
+slope runs across the rows) to 1e-5 with the flat plate taking the full flat spacing to
+1e-12 — and on curved surfaces the chord is first-order (under on convex, over on concave),
+stated rather than hidden. Three decisions carry it. **The governing radius is the CORNER
+radius** (a ball's is its own): the cusp between passes is cut by the corner torus, so a
+bull-nose adapts on its corner radius — a flat plate under a 6 mm bull with a 1 mm corner
+spaces at StepoverForScallop(1, h), asserted — and a FLAT cutter is refused by name, since
+it leaves facets, not scallops, and the chord identity has nothing to govern. **Rows anchor
+to the PART, deliberately outside the phase rule**: the rule makes a pattern a function of
+its stated spacing, and a variable spacing has no stated number to be a function of — the
+pattern is a function of the surface, which is the feature. **At a cliff the spacing FLOORS
+at 1/32 of the flat spacing and moves on**: a near-vertical wall's CL-point distance is
+dominated by the drop, not the row spacing, so no spacing can meet the target there and
+stalling would be a refusal of every part with a steep wall — the wall's finish is governed
+by the flank, which no stepover rule can change (asserted: the march completes past a
+12-tall wall, the floor engages only across it, and the row count stays far under the
+all-floored bound). **One FP finding worth keeping**: at exactly the flat spacing the cusp
+equals the target MATHEMATICALLY (the identity closes: r − √(r² − h(2r−h)) = h), so an
+exact acceptance comparison hands a flat plate's fast path to the rounding of one square
+root — measured, the ball route passed and the bull route bisected to 3.6e-10 under the
+flat spacing on the same geometry — hence acceptance carries a 1e-9 RELATIVE grace, the
+bisection's own tolerance grade, admitting nothing coarser than the search already accepts
+(the `PolygonFan` tie-guard family: a predicate whose two sides are mathematically equal at
+the boundary needs a stated tie rule, or the last bits decide).
 
 ## 7. Query layer
 

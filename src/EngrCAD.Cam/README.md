@@ -246,8 +246,13 @@ the shape's own SDF instead of approximating an offset mesh.
   `StepoverForScallop` its exact inverse; the classic `s²/8r` is its measured small-stepover
   expansion. Passes are in the shape's own coordinates (G-code z = the TIP) and the stage-2
   `CncGcodeWriter` carries them unchanged. Flat/bull-nose cutters, raster angle, no-retract
-  row linking and rest machining have since landed; adaptive stepover stays filed.
-  Docs: `docs/examples/cam-surfacing.md`.
+  row linking and rest machining have since landed. Docs: `docs/examples/cam-surfacing.md`.
+- **`AdaptiveRaster`**: the scallop height is the stated number and the row spacing follows
+  the surface — each next row placed by bisection on the measured worst 3D CL-point
+  distance through the same chord identity, so a 45° slope spaces at exactly cos 45° times
+  the flat spacing. Corner radius governs (a flat cutter leaves facets, refused by name);
+  rows anchor to the part (a variable spacing has no stated number for the phase rule to
+  hold); cliffs floor at 1/32 of the flat spacing — the wall belongs to the flank.
 - **`CncHolder.Check`**: holder collision over finished geometry. The holder is a
   conservative flat disc riding `StickoutLength` above the tip, so a pass point collides
   exactly when the flat drop-cutter height at the holder's own radius exceeds

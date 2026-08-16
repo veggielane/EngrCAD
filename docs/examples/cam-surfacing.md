@@ -173,6 +173,43 @@ end and the next row's start sampled *on* the cutter-location surface through th
 drop — the link carries exactly the fidelity a within-row chord does, and one plunge
 replaces one per row.
 
+## Adaptive stepover (`AdaptiveRaster`)
+
+A uniform raster keeps the row *spacing* constant, so the scallop grows wherever the
+surface tilts — the CL points spread apart on the surface by 1/cos θ. `AdaptiveRaster`
+inverts that: the **scallop height** is the stated number, and each next row is placed by
+bisection on the *measured* worst 3D distance between corresponding CL points of the row
+pair, through the same chord identity `ScallopHeight` states. On a plane tilted by θ the
+chord between CL points IS the surface distance, so the spacing lands on exactly
+`cos θ` times the flat spacing — a closed form the tests hold at 45° — and on curved
+surfaces the chord is first-order (an under-estimate on convex, over on concave), stated
+rather than hidden.
+
+The governing radius is the **corner radius** (a ball's is its own radius): the cusp
+between passes is cut by the corner torus, so a bull-nose adapts on its corner and a flat
+cutter — which leaves facets, not scallops — refuses by name. Rows anchor to the *part*,
+not the global grid: the phase rule deliberately does not apply, because a variable
+spacing has no stated number to be a function of. At a cliff the spacing floors at 1/32 of
+the flat spacing and moves on — a wall's CL distance is dominated by the drop, so no
+stepover rule can meet the target there; the wall's finish belongs to the flank.
+
+```csharp run:cam-adaptive
+var ramp = Shape.Extrude(
+    Sketch.Polygon([new(-15, 0), new(15, 0), new(-15, 30)]), 40).RotateY(-Math.PI / 2);
+var op = CncSurfacing.AdaptiveRaster(ramp, new MillTool(6), scallopHeight: 0.05,
+    sampleStep: 2);
+double flat = CncSurfacing.StepoverForScallop(3, 0.05);
+var ys = op.Passes.Select(p => p.Points[0].Y).ToList();
+var slopePairs = Enumerable.Range(1, ys.Count - 1)
+    .Where(i => ys[i - 1] > 5 && ys[i] < 20)
+    .Select(i => ys[i] - ys[i - 1]).ToList();
+Console.WriteLine($"flat spacing {flat:0.####}; on the 45-degree slope "
+    + $"{slopePairs.Average():0.####} ~= flat*cos45 = {flat * Math.Cos(Math.PI / 4):0.####}");
+Console.WriteLine($"{ys.Count} rows over the ramp against "
+    + $"{(int)Math.Ceiling(36 / flat) + 1} a uniform raster at the same scallop would need "
+    + "everywhere the slope demands");
+```
+
 ## Holder collision (`CncHolder`)
 
 The holder is modelled as a **flat disc** of the holder diameter whose bottom rides
@@ -208,6 +245,5 @@ point's disc can reach adds that dip to the minimum stickout, and the honest clo
 stops being the obstacle height. Real setup arithmetic, and exactly the kind a machinist
 eyeballing "boss height plus a bit" misses the same way.
 
-**Not in stage 3** (each filed in the campaign): adaptive stepover from local curvature,
-and HSM adaptive clearing (stage 4). Rest machining landed on the milling page; the
+**Not in stage 3**: HSM adaptive clearing (stage 4). Rest machining landed on the milling page; the
 flat/bull waterline above landed as the silhouette-dilation contour.

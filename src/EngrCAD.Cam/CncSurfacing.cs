@@ -78,6 +78,185 @@ public static class CncSurfacing
             (x, y) => Drop(sdf, x, y, top, floor, r) - r, rasterAngleDegrees, linkRows);
     }
 
+    /// <summary>
+    /// Adaptive-stepover raster finishing — the row spacing follows the SURFACE so the
+    /// scallop height stays at the stated value instead of the row spacing staying at a
+    /// stated number: each next row is placed by bisection on the MEASURED worst 3D distance
+    /// between corresponding CL points of the row pair, through the same chord identity
+    /// <see cref="ScallopHeight"/> states (`h = r − √(r² − (d/2)²)` with d the CL-point
+    /// distance), so on a plane TILTED by θ the spacing is exactly `cos θ` times the flat
+    /// spacing — the chord between CL points IS the surface distance on a plane at any tilt
+    /// — and on curved surfaces the chord is first-order (an under-estimate on convex, over
+    /// on concave), stated rather than hidden. The governing radius is the CORNER radius
+    /// (the ball's is its own radius), because the cusp between passes is cut by the corner
+    /// torus; a FLAT cutter leaves facets, not scallops, and is refused by name.
+    ///
+    /// <para><b>Rows anchor to the part, not the global grid</b> — the phase rule
+    /// deliberately does not apply, because a variable spacing has no stated number to be a
+    /// function of; the pattern is a function of the surface, which is the feature. The
+    /// first row sits one tool radius below the part's Y extent and the last exactly one
+    /// radius above it (a clamped final row only shrinks its spacing, which is the safe
+    /// direction). <b>At a cliff the spacing floors</b> at 1/32 of the flat spacing and
+    /// moves on: a near-vertical wall's CL-point distance is dominated by the drop, not the
+    /// row spacing, so no spacing can meet the target there — the wall's finish is governed
+    /// by the tool's flank, which no stepover rule can change.</para>
+    /// </summary>
+    public static MillOperation AdaptiveRaster(
+        Shape shape, MillTool tool, double scallopHeight, double? sampleStep = null,
+        string name = "adaptive", MillCutter? cutter = null)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        ArgumentNullException.ThrowIfNull(tool);
+        tool.Validate();
+        var bounds = shape.Bounds();
+        double r = tool.Radius;
+        double effectiveRadius;
+        Func<double, double, double> tipAt;
+        if (cutter is not null)
+        {
+            cutter.Validate();
+            if (cutter.Diameter != tool.Diameter)
+                throw new ArgumentException(
+                    $"The cutter (Ø{cutter.Diameter:0.###}) and the tool (Ø{tool.Diameter:0.###}) "
+                    + "state different diameters — two stated diameters disagreeing is a "
+                    + "modelling error, not a preference.", nameof(cutter));
+            if (cutter.CornerRadius == 0)
+                throw new ArgumentException(
+                    "A FLAT cutter leaves facets, not scallops — the chord identity the "
+                    + "adaptive spacing rests on is the corner radius's, and a flat end has "
+                    + "none. State a ball or bull-nose cutter, or use the uniform Raster.",
+                    nameof(cutter));
+            effectiveRadius = cutter.CornerRadius;
+            if (cutter.IsBallNose)
+            {
+                var ballSdf = shape.ToImplicit();
+                double ballTop = bounds.Max.Z + r + 1;
+                double ballFloor = bounds.Min.Z + r;
+                tipAt = (x, y) => Drop(ballSdf, x, y, ballTop, ballFloor, r) - r;
+            }
+            else
+            {
+                var probe = new DropProbe(
+                    shape.ToMesh().Triangulated(), cutter.Radius, bounds.Min.Z);
+                tipAt = (x, y) => probe.TipAt(x, y, cutter);
+            }
+        }
+        else
+        {
+            effectiveRadius = r;
+            var sdf = shape.ToImplicit();
+            double top = bounds.Max.Z + r + 1;
+            double floor = bounds.Min.Z + r;
+            tipAt = (x, y) => Drop(sdf, x, y, top, floor, r) - r;
+        }
+
+        double flatSpacing = StepoverForScallop(effectiveRadius, scallopHeight);
+        double step = sampleStep ?? (tool.Stepover * tool.Diameter) / 2;
+        if (!(step > 0) || !double.IsFinite(step))
+            throw new ArgumentException(
+                $"sampleStep must be finite and positive; got {step:0.###}.", nameof(sampleStep));
+
+        int firstCol = (int)Math.Ceiling((bounds.Min.X - r) / step - 1e-12);
+        int lastCol = (int)Math.Floor((bounds.Max.X + r) / step + 1e-12);
+        int cols = lastCol - firstCol + 1;
+        double yLow = bounds.Min.Y - r, yHigh = bounds.Max.Y + r;
+
+        // Acceptance carries a 1e-9 relative grace: at EXACTLY the flat spacing the cusp
+        // equals the target mathematically, so an exact comparison hands the fast path to
+        // FP rounding (a flat plate would bisect or not per the last bits of one sqrt);
+        // the grace is the bisection's own tolerance grade, so it admits nothing coarser
+        // than the search already accepts.
+        bool Meets(double cusp) => cusp <= scallopHeight * (1 + 1e-9);
+
+        double[] SampleRow(double y)
+        {
+            var z = new double[cols];
+            for (int j = 0; j < cols; j++)
+                z[j] = tipAt((firstCol + j) * step, y);
+            return z;
+        }
+
+        double WorstCusp(double[] za, double ya, double[] zb, double yb)
+        {
+            double dy = yb - ya, worst = 0;
+            for (int j = 0; j < cols; j++)
+            {
+                double dz = zb[j] - za[j];
+                double d = Math.Min(Math.Sqrt(dy * dy + dz * dz), 2 * effectiveRadius);
+                double cusp = effectiveRadius
+                    - Math.Sqrt(effectiveRadius * effectiveRadius - d * d / 4);
+                if (cusp > worst)
+                    worst = cusp;
+            }
+            return worst;
+        }
+
+        var rowYs = new List<double> { yLow };
+        var rowZs = new List<double[]> { SampleRow(yLow) };
+        double floorSpacing = flatSpacing / 32;
+        while (rowYs[^1] < yHigh)
+        {
+            double y = rowYs[^1];
+            var z = rowZs[^1];
+            double hi = Math.Min(flatSpacing, yHigh - y);
+            var zHi = SampleRow(y + hi);
+            double dy;
+            double[] zNext;
+            if (Meets(WorstCusp(z, y, zHi, y + hi)))
+            {
+                (dy, zNext) = (hi, zHi);                     // flat enough: full spacing
+            }
+            else
+            {
+                double lo = Math.Min(floorSpacing, hi);
+                var zLo = SampleRow(y + lo);
+                if (!Meets(WorstCusp(z, y, zLo, y + lo)))
+                {
+                    (dy, zNext) = (lo, zLo);                 // cliff-limited: floor and move on
+                }
+                else
+                {
+                    // Bisect for the largest spacing meeting the target; keep the passing
+                    // (lo) side's samples so the emitted row is the one that was verified.
+                    for (int i = 0; i < 60 && hi - lo > 1e-9 * flatSpacing; i++)
+                    {
+                        double mid = 0.5 * (lo + hi);
+                        var zMid = SampleRow(y + mid);
+                        if (Meets(WorstCusp(z, y, zMid, y + mid)))
+                        {
+                            lo = mid;
+                            zLo = zMid;
+                        }
+                        else
+                        {
+                            hi = mid;
+                        }
+                    }
+                    (dy, zNext) = (lo, zLo);
+                }
+            }
+            rowYs.Add(y + dy);
+            rowZs.Add(zNext);
+        }
+
+        var passes = new List<MillPass>();
+        bool reverse = false;
+        for (int k = 0; k < rowYs.Count; k++)
+        {
+            var points = new List<Vector3d>(cols);
+            for (int j = 0; j < cols; j++)
+            {
+                int col = reverse ? cols - 1 - j : j;
+                points.Add(new Vector3d(
+                    (firstCol + col) * step, rowYs[k], rowZs[k][col]));
+            }
+            if (points.Count >= 2)
+                passes.Add(new MillPass(points, IsClosed: false));
+            reverse = !reverse;
+        }
+        return new MillOperation(name, tool, passes);
+    }
+
     /// <summary>The serpentine raster loop both routes share — grid-anchored rows one
     /// <c>Stepover·Diameter</c> apart, samples one <paramref name="sampleStep"/> apart
     /// (null = half the stepover), extended a tool radius past the part —
