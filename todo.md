@@ -2506,8 +2506,10 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     silhouette-dilation contour (exact for flat; a banded conservative ladder for the
     bull corner — each band clips above z + r·k/K and grows the band's OUTER reach, so
     it over-covers: stock never gouge; the 45°-cone oracle brackets the banded 3.661
-    between the exact 3.414 and the sharp 4.0). **Stage-3 residuals, open**:
-    linking rows without a retract,
+    between the exact 3.414 and the sharp 4.0). No-retract row linking LANDED
+    (`linkRows:` — rows merge into one pass with connectors sampled ON the CL surface
+    via the same tipAt, one plunge instead of one per row, both cutter routes through
+    the one serpentine rule, default off byte-identical). **Stage-3 residuals, open**:
     adaptive stepover from local curvature, holder/shank collision checking, and
     rest machining (shared with stage 2's entry).
   - **Stage 4 — HSM adaptive clearing** (the research-grade centrepiece, flagged as

@@ -150,6 +150,11 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   clips above z + r·k/K, grows by the band's OUTER reach: over-covers, stock never gouge);
   the 45°-cone oracle brackets the banded 3.661 between the exact 3.414 and the sharp 4.0.
 
+- **No-retract row linking** (`Raster(linkRows: true)`, opt-in, default byte-identical):
+  serpentine rows merge into ONE pass, connectors sampled ON the CL surface through the same
+  tipAt (the fidelity of a within-row chord — gouge-free by the same construction); one
+  plunge replaces one per row, both cutter routes through the one serpentine rule.
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

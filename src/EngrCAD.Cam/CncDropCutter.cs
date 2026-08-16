@@ -97,7 +97,7 @@ internal static class DropCutter
     /// the part's own bottom.</summary>
     public static MillOperation Raster(
         Shape shape, MillTool tool, MillCutter cutter, double? sampleStep, string name,
-        double angleDegrees = 0)
+        double angleDegrees = 0, bool linkRows = false)
     {
         var mesh = shape.ToMesh().Triangulated();
         var (positions, faces) = mesh.ToIndexed();
@@ -157,7 +157,7 @@ internal static class DropCutter
         }
 
         return CncSurfacing.SerpentineRaster(tool, bounds, sampleStep, name, TipAt,
-            angleDegrees);
+            angleDegrees, linkRows);
     }
 
     /// <summary>The tip height at which the cutter, axis at (x, y), first touches this

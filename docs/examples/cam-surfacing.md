@@ -167,7 +167,13 @@ the grid anchors in the **rotated frame** — the phase rule, a pattern being a 
 the stated spacing and angle, never of where the part sits — and a quarter turn is **exact**
 (a sign swap, never a `cos`), so a 90° raster is the transposed grid to the last bit.
 
-**Not in stage 3** (each filed in the campaign): linking rows without a retract, adaptive
-stepover from local curvature, holder/shank collision checking, and HSM adaptive clearing
-(stage 4). Rest machining landed on the milling page; the flat/bull waterline above landed
-as the silhouette-dilation contour.
+Raster rows **link without a retract** (`linkRows: true`, both cutter routes through the
+one serpentine rule): the rows merge into one pass, the connecting stretch between a row's
+end and the next row's start sampled *on* the cutter-location surface through the same
+drop — the link carries exactly the fidelity a within-row chord does, and one plunge
+replaces one per row.
+
+**Not in stage 3** (each filed in the campaign): adaptive stepover from local curvature,
+holder/shank collision checking, and HSM adaptive clearing (stage 4). Rest machining landed
+on the milling page; the flat/bull waterline above landed as the silhouette-dilation
+contour.

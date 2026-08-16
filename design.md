@@ -9343,6 +9343,15 @@ between the exact a + r(√2 − 1) = 3.414 (never gouged below) and the sharp e
 corner never engages a wall except at its equator) and a flat cutter on the cone reads the
 cone radius + R exactly, one-sided against the inscribed tessellation.
 
+**No-retract row linking is one sentence of design**: the connector between a serpentine
+row's end and the next row's start is sampled ON the cutter-location surface through the
+SAME tipAt the rows themselves use, so it carries exactly the fidelity a within-row chord
+does — gouge-free by the same construction, nothing new to prove — and merging the rows
+into one pass replaces one plunge per row with one per operation. Opt-in (`linkRows`,
+default off byte-identical), both cutter routes through the one serpentine rule, the row
+samples themselves asserted IDENTICAL to the unlinked emission (linking adds only the
+connectors).
+
 **Stage 4 opened with trochoidal slotting** (`CncHsm.TrochoidalSlot`; docs
 `examples/cam-milling.md` §HSM), and the finding that justifies the campaign's whole framing —
 "the engagement angle computed from the evolving stock and BOUNDED by the stated maximum,

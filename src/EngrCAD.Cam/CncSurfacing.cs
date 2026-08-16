@@ -49,7 +49,7 @@ public static class CncSurfacing
     /// </summary>
     public static MillOperation Raster(
         Shape shape, MillTool tool, double? sampleStep = null, string name = "raster",
-        MillCutter? cutter = null, double rasterAngleDegrees = 0)
+        MillCutter? cutter = null, double rasterAngleDegrees = 0, bool linkRows = false)
     {
         ArgumentNullException.ThrowIfNull(shape);
         ArgumentNullException.ThrowIfNull(tool);
@@ -66,7 +66,7 @@ public static class CncSurfacing
             // the field route does not survive the disc); a ball-nose IS the exact route.
             if (!cutter.IsBallNose)
                 return DropCutter.Raster(shape, tool, cutter, sampleStep, name,
-                    rasterAngleDegrees);
+                    rasterAngleDegrees, linkRows);
         }
 
         var sdf = shape.ToImplicit();
@@ -75,7 +75,7 @@ public static class CncSurfacing
         double top = bounds.Max.Z + r + 1;
         double floor = bounds.Min.Z + r;
         return SerpentineRaster(tool, bounds, sampleStep, name,
-            (x, y) => Drop(sdf, x, y, top, floor, r) - r, rasterAngleDegrees);
+            (x, y) => Drop(sdf, x, y, top, floor, r) - r, rasterAngleDegrees, linkRows);
     }
 
     /// <summary>The serpentine raster loop both routes share — grid-anchored rows one
@@ -89,7 +89,7 @@ public static class CncSurfacing
     /// arithmetic verbatim.</summary>
     internal static MillOperation SerpentineRaster(
         MillTool tool, in Aabb bounds, double? sampleStep, string name,
-        Func<double, double, double> tipAt, double angleDegrees = 0)
+        Func<double, double, double> tipAt, double angleDegrees = 0, bool linkRows = false)
     {
         double stepover = tool.Stepover * tool.Diameter;
         double step = sampleStep ?? stepover / 2;
@@ -135,10 +135,28 @@ public static class CncSurfacing
         int firstCol = (int)Math.Ceiling((uMin - r) / step - 1e-12);
         int lastCol = (int)Math.Floor((uMax + r) / step + 1e-12);
         bool reverse = false;
+        List<Vector3d>? linked = linkRows ? [] : null;
+        int linkSamples = Math.Max(1, (int)Math.Ceiling(stepover / step - 1e-12));
         for (int k = firstRow; k <= lastRow; k++)
         {
             double v = k * stepover;
-            var points = new List<Vector3d>(lastCol - firstCol + 1);
+            var points = linked ?? new List<Vector3d>(lastCol - firstCol + 1);
+            // Linked rows connect ON the surface: the stretch from the previous row's end
+            // to this row's start is sampled through the SAME tipAt, so the link carries
+            // exactly the fidelity a within-row chord does — gouge-free by the same
+            // construction, and no retract exists to take back.
+            if (linked is { Count: > 0 })
+            {
+                double uEnd = (reverse ? lastCol : firstCol) * step;
+                double vPrev = (k - 1) * stepover;
+                for (int m = 1; m < linkSamples; m++)
+                {
+                    double vm = vPrev + (v - vPrev) * m / linkSamples;
+                    double x = uEnd * ux + vm * vx;
+                    double y = uEnd * uy + vm * vy;
+                    points.Add(new Vector3d(x, y, tipAt(x, y)));
+                }
+            }
             for (int j = firstCol; j <= lastCol; j++)
             {
                 double u = (reverse ? lastCol - (j - firstCol) : j) * step;
@@ -146,10 +164,12 @@ public static class CncSurfacing
                 double y = u * uy + v * vy;
                 points.Add(new Vector3d(x, y, tipAt(x, y)));
             }
-            if (points.Count >= 2)
+            if (linked is null && points.Count >= 2)
                 passes.Add(new MillPass(points, IsClosed: false));
             reverse = !reverse;
         }
+        if (linked is { Count: >= 2 })
+            passes.Add(new MillPass(linked, IsClosed: false));
         return new MillOperation(name, tool, passes);
     }
 
