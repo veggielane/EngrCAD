@@ -361,6 +361,10 @@ foreach (var s in snippets)
         || !TryReadVariable<SectionCombine?>(state, "sectionCombine", s, errors, out var declaredCombine)
         || !TryReadVariable<CameraState>(state, "camera", s, errors, out var declaredCamera)
         || !TryReadVariable<double?>(state, "explode", s, errors, out var declaredExplode)
+        // `renderSize` (a (width, height) tuple) overrides the default 1600x1120 —
+        // what a PORTRAIT figure (the reel-export docs) declares; 2x the display size
+        // remains the caller's business exactly as with the default.
+        || !TryReadVariable<(int Width, int Height)?>(state, "renderSize", s, errors, out var declaredSize)
         || !TryReadVariable<ShadingStyle?>(state, "shading", s, errors, out var declaredShading)
         || !TryReadVariable<AnnotationDepth?>(state, "annotationDepth", s, errors, out var declaredPmiDepth)
         || !TryReadVariable<ConstructionPreviewRequest?>(state, "preview", s, errors, out var declaredPreview))
@@ -380,7 +384,9 @@ foreach (var s in snippets)
         {
             // 2x supersampled relative to the display size in the docs pages — the
             // offscreen renderer has no MSAA, so browser downscaling anti-aliases.
-            EngrCad.RenderToImage(scene, pngPath, width: 1600, height: 1120, declaredCamera,
+            EngrCad.RenderToImage(scene, pngPath,
+                width: declaredSize?.Width ?? 1600, height: declaredSize?.Height ?? 1120,
+                declaredCamera,
                 s.Style,
                 planes is { Count: > 0 } ? AxisOf(planes[0]) : s.SectionAxis,
                 planes is { Count: > 0 } ? planes[0].Offset : s.SectionOffset,

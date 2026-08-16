@@ -316,6 +316,58 @@ uniforms:
   upload. So the factor-0 frame is the undeformed *shape* without the undeformed part's
   chrome; it is not the same picture as a still of a part whose own scale is 0.
 
+## Reels and Shorts
+
+`ReelExport.RenderReel` is the social-video preset: a frame sequence at the platform's
+size and rate, framed **into its safe area** (both portrait platforms overlay roughly
+the bottom 15% with captions and the right edge with the like/share rail — a model
+framed to the full frame is a model partly under UI), with the platform's duration cap
+enforced as a **refusal that names the platform** rather than a silent trim. The
+platforms want MP4/H.264, and the honest dependency-free route is the frame sequence
+plus ffmpeg — so the result carries the exact command:
+
+```
+ffmpeg -framerate 30 -i frame-%04d.png -c:v libx264 -pix_fmt yuv420p -vf "scale=1080:1920" reel.mp4
+```
+
+```csharp render:reel-poster
+var scene = new Scene();
+var flange = Shape.Cylinder(40, 10) - Shape.Cylinder(14, 30);
+var body = new Part("flange", flange.Fillet(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ)));
+scene.Add(body);
+scene.Add(new Part("plate", Shape.Cylinder(34, 4).Translate(0, 0, -7), new PartColor(0.94f, 0.44f, 0.16f)));
+
+// The portrait framing: every corner of the model's bounds projects INSIDE the safe
+// rectangle, filling it on the binding axis and centred in it — which for an
+// asymmetric safe area puts the model up and left of the frame centre.
+var format = ReelFormat.InstagramReel;
+var camera = ReelFraming.CameraFor(scene.Instances()
+    .Select(i => i.Bounds()).Aggregate(Aabb.Empty, (a, b) => a.Union(b)), format);
+
+// A clip past the cap refuses by name, before a frame is spent.
+try
+{
+    new Animation(120).With(new ExplodeTrack(scene)).RenderReel(scene, ".", format);
+    throw new Exception("a 120 s Reel must refuse");
+}
+catch (ArgumentException e) when (e.Message.Contains("Instagram Reel")) { }
+
+var renderSize = (540, 960);   // the docs figure renders at the format's own 9:16
+```
+
+![A flange framed for a portrait Reel](images/reel-poster.png)
+
+The result also carries the **aliasing measurement**: the fastest per-frame body
+rotation, read at *half steps* because a frame-to-frame matrix delta folds at π — a
+4.2 rad step and a −2.1 rad step are the same matrix, so a whole-step reading could
+never see past Nyquist (`RenderReel` refuses at π, where even the direction of
+rotation is unrepresentable, and `SlowdownFactorFor` gives the caption number when a
+mechanism is deliberately shown slowed). The measure is body-level, honestly:
+tooth-level detail aliases far earlier — a tooth's period is a pitch, not a turn —
+which is [the gear-clip lesson](gears.md), and only the caller knows a tooth count.
+`RenderReelPoster` writes one still with the safe rectangle drawn over it, the
+proofing aid that shows where the captions land before ninety frames are spent.
+
 ## Playing in the viewer
 
 Give the window the animation and the toolbar grows a transport — Play/Pause, Loop,

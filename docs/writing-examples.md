@@ -44,7 +44,10 @@ planes instead of boolean-cut fakes:
 
 `animate:` fences take `style:<name>` and `frames:<2..120>` (default 24). The
 snippet's `animation` variable (and `camera`, when there is no camera track) rides
-the same declared-variable convention as `render:` fences.
+the same declared-variable convention as `render:` fences. A `render:` fence may also
+declare `var renderSize = (width, height);` — a `(int, int)` tuple — to override the
+default 1600×1120 (a portrait figure, for instance); the 2×-the-display-size rule stays
+the author's to honour.
 
 Unknown options fail the build.
 

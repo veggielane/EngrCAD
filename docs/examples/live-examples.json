@@ -679,6 +679,12 @@
       "live": true
     },
     {
+      "id": "reel-poster",
+      "page": "examples/animation.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: 'Animation' does not contain a definition for 'RenderReel' and no accessible extension method 'RenderReel' accepting a first argument of type 'Animation' could be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
       "id": "remesh-plate",
       "page": "examples/remeshing.md",
       "live": true

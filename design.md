@@ -10065,6 +10065,40 @@ picking stays built once at the part's own scale (the spatial-index-cannot-be-a-
 reason stands), and the factor-0 frame of an animation still differs from a scale-0
 still — by the ghost alone now, which is the difference that was always real.
 
+**Reel/Short export landed as the composition it was filed as, and both real findings
+came from the checks** (`ReelFormat`/`ReelFraming` in Viewer.Core, `ReelExport` in
+Viewer; docs `examples/animation.md` §Reels and Shorts): the presets carry the frame
+size/rate, the platform's duration CAP and its SAFE AREA (nominal transcriptions,
+⚠ verify-against-datasheet — both portrait platforms overlay roughly the bottom 15%
+and the right rail), and the three things a preset genuinely adds are framing INTO the
+safe area, the cap as a refusal NAMING the platform (never a silent trim), and the
+aliasing check as a measurement. **The framing is closed-form per round**: at a fixed
+orbit orientation each corner's NDC coordinate is `a/(D + w)` with a and w fixed, so
+the minimal filling distance is a max over per-corner solutions, and the asymmetric
+safe area is honoured by shifting the TARGET in view space (the orbit camera's one
+lever — it has no principal-point offset), iterated because the shift is first-order in
+depth-spread-over-distance. **Finding one: a blanket distance floor eats the fill** —
+a diagonal-length floor parked the landscape preset's camera past its own constraints
+and the safe area filled only 0.70; the floor must be the exact front-of-eye
+requirement (the nearest corner's depth, unchanged by the lateral shift), which is the
+cries-wolf rule for a guard in a solver: a guard wider than its own condition quietly
+becomes the binding constraint. **Finding two: a frame-to-frame matrix delta FOLDS at
+π, so the Nyquist refusal it was to feed was unreachable** — a 4.2 rad step and a
+−2.1 rad step are the SAME rotation matrix, found by the test that expected the
+refusal to fire and watched the measure read 2.09 for a two-turn clip. The measure
+samples at HALF steps and sums the two principal angles, which reads the true advance
+up to 2π per frame; an exact 2π per frame is genuinely invisible to ANY sampling
+measure, the honest boundary. The measure is body-level and says so — tooth-level
+detail aliases at the PITCH, not the turn (the gear-clip lesson), and only the caller
+knows a tooth count — so `MaxRotationPerFrameRadians` rides the result with
+`SlowdownFactorFor` as the caption number, and the hard refusal sits at π where even
+the direction of rotation is gone. The safe-area overlay is CPU-drawn on the finished
+poster pixels (no shader, no three-front-end plumbing, and a poster without it is
+exactly the export's frame); MP4 stays the documented ffmpeg recipe carried ON the
+result (`libx264`/`yuv420p`), the dependency-free H.264 assessment staying filed. The
+docs figure renders portrait through DocsGen's new `renderSize` snippet variable — the
+one generator change, following the declared-variable convention `camera` set.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
