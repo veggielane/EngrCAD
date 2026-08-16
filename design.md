@@ -10143,6 +10143,30 @@ a NON-RIGID placement instead — a z-scaled post, which `Transformed` refuses w
 mesh boolean of boxes stays exact — and the test asserts the same 8 through the mesh
 grade's name, the deliberate act of proving the two roads meet where both are exact.
 
+**Variable outline offset landed with the filed construction corrected by its own
+derivation** (`Region2dOffset.Offset(region, distances)`; per-vertex distances, linear
+in arc length): the backlog filed "trapezoid slabs + interpolated-radius joins", and
+the trapezoid is measurably the WRONG slab — the exact swept region of a linearly
+varying disc along a segment is bounded by the external TANGENT line of the two end
+circles (feet at n̂·cos φ − d̂·sin φ with sin φ = Δr/L, satisfying the tangency
+condition m̂·(L·d̂ + Δr·m̂) = 0 exactly), and the trapezoid through the offset
+endpoints under-covers near the smaller end by the tangency wedge — asserted by a
+witness point BETWEEN the secant and the tangent, derived from the quadratic rather
+than eyeballed. Each vertex takes a ROUND join of its own radius between the adjacent
+tangent-foot directions — `AddCornerJoin` already arcs between whatever unit normals it
+is handed, which is what made the reuse exact — and all-equal distances DELEGATE to the
+constant path outright, bit-identical by construction. **The oracle is exact
+membership**: p is in the dilation iff the region holds it or some edge's swept disc
+reaches it, and minimising |p − e(t)|² − r(t)² is QUADRATIC in t (both terms are), so
+the predicate is closed form — thousands of grid probes assert the built region against
+it wherever the margin clears the join arcs' chord band, the only approximation in the
+build (the tangent slabs are exact lines). Refusals by name: holes (v1 — compose),
+non-positive distances (outward only; variable EROSION needs the complement frame's
+distances defined, a real open question), and Δr ≥ L (the larger end's disc swallows
+the whole edge sweep — the offset outruns the outline, and no tangent exists). The
+curved tier's variable twin stays open with its reason stated: a variable offset of an
+ARC is a spiral, which the lines-and-arcs vocabulary must FIT rather than carry.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

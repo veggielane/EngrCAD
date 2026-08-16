@@ -125,6 +125,67 @@ public static class Region2dOffset
     }
 
     /// <summary>
+    /// Outward dilation with a PER-VERTEX distance, interpolated linearly in arc length
+    /// along each edge — a draft-like grow whose reach varies around the outline.
+    /// <para><b>The slab is the external TANGENT slab, not the trapezoid through the
+    /// offset endpoints.</b> The exact swept region of a linearly varying disc along a
+    /// segment is bounded by the external tangent line of the two end circles, tilted by
+    /// sin φ = (r₁ − r₀)/L off the edge normal; the trapezoid through the two offset
+    /// endpoints under-covers near the smaller end by exactly the tangency wedge (the
+    /// backlog filed the trapezoid, and the derivation corrected it). Each vertex then
+    /// takes a ROUND join of its own radius between the adjacent tangent-foot
+    /// directions — round only, because the tangent-slab boundary makes the round join
+    /// the one whose primitive is exactly the swept set.</para>
+    /// <para>Same union-of-primitives construction as the constant
+    /// <see cref="Offset(Region2d, double, OffsetJoin, double, double)"/>; ALL-EQUAL
+    /// distances DELEGATE to it outright, so the constant case is bit-identical by
+    /// construction rather than by luck. Refused by name: a hole-carrying region (v1 —
+    /// offset outer and holes separately and compose), a non-positive or non-finite
+    /// distance (outward dilation; variable erosion is filed), and an edge whose
+    /// distance CHANGES BY MORE THAN ITS LENGTH — there the larger end's disc swallows
+    /// the whole edge sweep and no tangent exists; the offset is growing faster than
+    /// the outline advances, so the caller splits the edge or eases the step.</para>
+    /// </summary>
+    public static IReadOnlyList<Region2d> Offset(
+        Region2d region, IReadOnlyList<double> distances,
+        double arcTolerance = DefaultArcTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        ArgumentNullException.ThrowIfNull(distances);
+        if (!(arcTolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(arcTolerance), "The arc tolerance must be positive.");
+        if (region.Holes.Count > 0)
+            throw new ArgumentException(
+                "Variable offset takes a hole-free region in v1; offset the outer boundary and the holes "
+                + "separately and compose them.", nameof(region));
+        var loop = region.Outer;
+        if (distances.Count != loop.Count)
+            throw new ArgumentException(
+                $"{distances.Count} distances for {loop.Count} outline vertices; supply one per vertex.",
+                nameof(distances));
+        for (int i = 0; i < distances.Count; i++)
+        {
+            if (!double.IsFinite(distances[i]) || !(distances[i] > 0))
+                throw new ArgumentOutOfRangeException(
+                    nameof(distances),
+                    $"Distance {i} is {distances[i]}; every distance must be positive and finite "
+                    + "(this is the outward dilation — variable erosion is filed).");
+        }
+
+        // All equal is the constant offset, delegated so it is bit-identical by
+        // construction (exact comparison: equal INPUTS, not a tolerance).
+        bool allEqual = true;
+        for (int i = 1; i < distances.Count && allEqual; i++)
+            allEqual = distances[i] == distances[0];
+        if (allEqual)
+            return Offset(region, distances[0], OffsetJoin.Round, DefaultMiterLimit, arcTolerance);
+
+        var primitives = new List<Region2d> { region };
+        AddVariableLoopPrimitives(loop, region.IsCounterClockwise, distances, arcTolerance, primitives);
+        return Region2dBoolean.UnionAll(primitives);
+    }
+
+    /// <summary>
     /// Strokes an OPEN polyline into a region of the given <paramref name="width"/> —
     /// a toolpath's swept footprint, a slot from its centre line, an SVG-style stroke.
     /// The same union-of-primitives construction as <see cref="Offset"/>: one
@@ -375,6 +436,58 @@ public static class Region2dOffset
                 OutwardNormal(directions[previous], materialOnLeft),
                 OutwardNormal(directions[i], materialOnLeft),
                 delta, join, miterLimit, arcTolerance, into);
+        }
+    }
+
+    /// <summary>The variable twin of <see cref="AddLoopPrimitives"/>: one external
+    /// TANGENT slab per edge (see the public method's derivation note) and one round
+    /// join per vertex at that vertex's own radius, spanning the adjacent tangent-foot
+    /// directions — <see cref="AddCornerJoin"/> already arcs between whatever unit
+    /// normals it is handed, which is what makes the reuse exact rather than
+    /// approximate.</summary>
+    private static void AddVariableLoopPrimitives(
+        IReadOnlyList<Vector2d> loop, bool materialOnLeft, IReadOnlyList<double> distances,
+        double arcTolerance, List<Region2d> into)
+    {
+        int count = loop.Count;
+        var tangentNormals = new Vector2d[count];
+        var live = new bool[count];
+        for (int i = 0; i < count; i++)
+        {
+            int next = (i + 1) % count;
+            var edge = loop[next] - loop[i];
+            double length = edge.Length;
+            if (!(length > 0))
+                continue; // exact-zero division guard (scale-free, not a tolerance)
+            double ra = distances[i], rb = distances[next];
+            if (Math.Abs(rb - ra) >= length)
+                throw new ArgumentException(
+                    $"The offset changes by |{rb} − {ra}| = {Math.Abs(rb - ra)} over edge {i}, whose length "
+                    + $"is only {length}: the larger end's disc swallows the whole edge sweep and no tangent "
+                    + "slab exists. Split the edge or ease the step.", nameof(distances));
+
+            var direction = edge / length;
+            var normal = OutwardNormal(direction, materialOnLeft);
+            // The external tangent line tilts off the normal by sin φ = (rb − ra)/L,
+            // rotating AGAINST the direction of travel toward the smaller end; the foot
+            // direction m̂ = n̂·cos φ − d̂·sin φ satisfies the tangency condition
+            // m̂·(L·d̂ + (rb − ra)·m̂) = 0 exactly.
+            double sin = (rb - ra) / length;
+            double cos = Math.Sqrt(1 - sin * sin);
+            var foot = normal * cos - direction * sin;
+            tangentNormals[i] = foot;
+            live[i] = true;
+            into.Add(new Region2d([loop[i], loop[next], loop[next] + foot * rb, loop[i] + foot * ra]));
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            int previous = PreviousLive(live, i);
+            if (previous < 0 || !live[i])
+                continue;
+            AddCornerJoin(
+                loop[i], tangentNormals[previous], tangentNormals[i], distances[i],
+                OffsetJoin.Round, DefaultMiterLimit, arcTolerance, into);
         }
     }
 

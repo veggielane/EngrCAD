@@ -775,15 +775,23 @@ export — is recorded in CLAUDE.md):
   corner joins so reversals get round noses, closed circuits enclose holes; **exact
   curved offsets ✅ landed** — `CurvedRegion2dOffset` keeps arcs as arcs and makes round
   joins true sectors, which retires the inscribed-arc contract rather than honouring it):
-  **variable offset along the outline** (per-vertex distances —
-  trapezoid slabs + interpolated-radius joins on the same union construction; design
-  question: how distances interpolate along an edge, linear-in-arclength being the
-  obvious rule). **Scope note:** this is a `EngrCAD.Core.Geometry2` change —
-  `Region2dOffset`/`CurvedRegion2dOffset` own the slab-and-join union, and `Sketch.Offset`
-  is a thin delegation — so it cannot be built from the Modeling side without a second
-  copy of that construction. The curved tier landing has NOT made the item obsolete: it
-  retired the inscribed-arc contract (an exactly-offset arc IS the true offset), which is
-  about join FIDELITY, while this is about the distance VARYING along the outline.
+  **variable offset along the
+  outline ✅ landed** (`Region2dOffset.Offset(region, distances)` — per-vertex distances,
+  linear in arc length, all-equal delegating to the constant path bit-identically) —
+  **and the filed construction was WRONG in the instructive direction**: the exact slab
+  of a linearly varying disc is bounded by the EXTERNAL TANGENT line of the two end
+  circles (tilt sin φ = Δr/L), not the trapezoid through the offset endpoints, which
+  under-covers near the smaller end by the tangency wedge (asserted by a witness point
+  between the secant and the tangent). Verified by an EXACT membership oracle — the
+  per-edge minimisation of |p − e(t)|² − r(t)² is QUADRATIC in t, so the predicate is
+  closed form and thousands of grid probes assert the built region against it outside
+  the join arcs' chord band. Refused by name: holes (compose outer and holes yourself,
+  v1), non-positive distances (variable EROSION stays open here — the complement trick
+  needs the frame's distances defined, a real design question), and an edge whose
+  distance changes by more than its length (the larger disc swallows the sweep; no
+  tangent exists). Also open: the CURVED tier's variable twin (`CurvedRegion2dOffset`
+  — a variable offset of an ARC is a spiral, not an arc, so it needs a fit tier), and
+  `Sketch.Offset` exposure once erosion composes.
 - [ ] **Twist-extrude follow-ups** (`Shape.Extrude(sketch, height, twist, scale, slices)`
   ✅ landed — taper = B-Rep-Native ruled loft, twist = direct mesh section sweep with
   twist-matched profile subdivision + collinear-chord-zip caps, implicit via mesh SDF):
