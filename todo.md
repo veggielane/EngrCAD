@@ -66,21 +66,17 @@ design.md §2). Residuals:
   straight-line limit, hence exact, hence no fit deviation to report) and the
   **worm and crossed-helical wheel** (`Gears.Worm`/`WormPair`/`WormWheel` — the worm
   is a thread and rides `MakeThreadedRod`) have landed too):
-  - **Backlash allowance** — a circumferential thinning parameter on `GearSpec`
-    (thin each tooth by j/2), so a real pair at standard centre distance has running
-    clearance; today's teeth are the zero-backlash nominal.
   - **Trochoid root for low tooth counts** — `Gears.Spur` refuses below
     z_min = 2(h_a* − x)/sin²α by name; drawing the actual generated trochoid would
     admit z ≥ ~12 if it can be VERIFIED (the conjugate-contact instrument exists and
     measurably sees a 5e-2 flank error as 5.6e-4 rad of transmission wobble).
-  - **Internal gears** — invert the material side and the tip/root roles (the RACK
-    half of this item landed as `Gears.Rack`/`RackBar`).
+  - **Internal gears** — the GEOMETRY landed as `PlanetaryGears.RingProfile` (the
+    ring's bore is exactly the outline of a cutter gear with addendum and dedendum
+    swapped — lines and arcs, exact in all three representations); what remains is only
+    surfacing it as a first-class `Gears` entry with its own spec, outside a planetary
+    set.
   - **Keyway on the bore** (DIN 6885 parallel key seat as a sketch boolean on the
     blank), set screw boss, web/spoke lightening.
-  - **Measurement identities** — span measurement over k teeth W = m·cos α·((k−½)π +
-    z·inv α) and measurement over pins, as arithmetic on `GearSpec` plus a
-    measured-off-the-sketch check (the tooth-thickness bisection pattern in
-    `GearTests` generalizes).
   - **The apex relief groove on a herringbone** (`HerringboneGears`) — the one part
     of the double-helical form that did NOT land, and the entry carries its
     measurement so it cannot rot into a guess. A hobbed herringbone cannot have a

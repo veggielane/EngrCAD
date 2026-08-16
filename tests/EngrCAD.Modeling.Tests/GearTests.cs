@@ -96,6 +96,122 @@ public class GearTests
             $"thickness {measured} vs {spec.ToothThicknessAtPitch}");
     }
 
+    // ---- backlash + the measurement identities ----
+
+    /// <summary>The allowance thins the drawn tooth by exactly j — the same
+    /// pitch-circle bisection instrument as the nominal thickness test, on a
+    /// backlashed spec, whose <c>ToothThicknessAtPitch</c> already carries the
+    /// subtraction (one source of truth, so the drawn flank and the arithmetic
+    /// cannot disagree about what the allowance did).</summary>
+    [Fact]
+    public void Backlash_ThinsTheMeasuredToothThicknessByExactlyJ()
+    {
+        var nominal = new GearSpec(module: 2, teeth: 20, pressureAngleDegrees: 20);
+        var thinned = nominal with { Backlash = 0.12 };
+        Assert.Equal(nominal.ToothThicknessAtPitch - 0.12, thinned.ToothThicknessAtPitch, 12);
+
+        var profile = Gears.Spur(thinned);
+        var region = profile.Sketch.ToRegion();
+        double r = thinned.PitchDiameter / 2;
+        double psi = profile.Geometry.HalfToothAngle;
+        double gapHalf = Math.PI / thinned.Teeth - psi;
+        double left = BisectCrossing(region, r, 0, psi + 0.8 * gapHalf);
+        double right = BisectCrossing(region, r, 0, -(psi + 0.8 * gapHalf));
+        double measured = r * (left - right);
+        double band = 3 * profile.FitTolerance;
+        Assert.True(Math.Abs(measured - thinned.ToothThicknessAtPitch) <= 2 * band,
+            $"thinned thickness {measured} vs {thinned.ToothThicknessAtPitch}");
+    }
+
+    [Fact]
+    public void Backlash_ZeroIsBitIdentical_AndEatingTheToothIsRefused()
+    {
+        var spec = new GearSpec(module: 2, teeth: 20);
+        var a = Gears.Spur(spec).Sketch.ToCurves();
+        var b = Gears.Spur(spec with { Backlash = 0 }).Sketch.ToCurves();
+        Assert.Equal(a.Count, b.Count);   // the exact-zero branch: same construction
+
+        var thrown = Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.Spur(spec with { Backlash = spec.ToothThicknessAtPitch + 1 }));
+        Assert.Contains("eats the whole", thrown.Message);
+    }
+
+    /// <summary>The span identity: W = (k−1)·p_b + cos α·(s + m·z·inv α) must equal the
+    /// textbook closed form at zero backlash, drop by exactly j·cos α with the
+    /// allowance, and agree with the SKETCH through the measured thickness — which is
+    /// what holds the drawn flank to the arithmetic the caliper dimension claims.</summary>
+    [Fact]
+    public void SpanOverTeeth_MatchesTheTextbookFormAndTheMeasuredThickness()
+    {
+        var spec = new GearSpec(module: 2, teeth: 20, pressureAngleDegrees: 20, profileShift: 0.2);
+        double alpha = Math.PI / 9;
+        double inv = GearSpec.InvoluteFunction(alpha);
+        double textbook = 2 * Math.Cos(alpha) * ((3 - 0.5) * Math.PI + 20 * inv)
+            + 2 * 0.2 * 2 * Math.Sin(alpha);
+        Assert.Equal(textbook, spec.SpanOverTeeth(3), 10);
+
+        var thinned = spec with { Backlash = 0.1 };
+        Assert.Equal(spec.SpanOverTeeth(3) - 0.1 * Math.Cos(alpha), thinned.SpanOverTeeth(3), 12);
+
+        // Off the sketch: rebuild W from the MEASURED pitch thickness.
+        var profile = Gears.Spur(thinned);
+        var region = profile.Sketch.ToRegion();
+        double r = thinned.PitchDiameter / 2;
+        double psi = profile.Geometry.HalfToothAngle;
+        double gapHalf = Math.PI / thinned.Teeth - psi;
+        double measured = r * (BisectCrossing(region, r, 0, psi + 0.8 * gapHalf)
+            - BisectCrossing(region, r, 0, -(psi + 0.8 * gapHalf)));
+        double rebuilt = 2 * thinned.BasePitch
+            + Math.Cos(alpha) * (measured + 2 * 20 * inv);
+        Assert.True(Math.Abs(rebuilt - thinned.SpanOverTeeth(3)) <= 6 * profile.FitTolerance,
+            $"span {thinned.SpanOverTeeth(3)} vs sketch-rebuilt {rebuilt}");
+
+        var thrown = Assert.Throws<ArgumentOutOfRangeException>(() => spec.SpanOverTeeth(9));
+        Assert.Contains("outside the involute flank", thrown.Message);
+    }
+
+    /// <summary>The over-pins dimension against an INDEPENDENT sketch oracle: a pin
+    /// seated in a tooth space touches both flanks, i.e. the region's own signed
+    /// distance at the pin centre equals the pin radius — bisected along the space
+    /// centreline, sharing no line with the involute-function arithmetic it checks.</summary>
+    [Fact]
+    public void MeasurementOverPins_MatchesASketchSeatedPin()
+    {
+        var spec = new GearSpec(module: 2, teeth: 20, pressureAngleDegrees: 20)
+            { Backlash = 0.1 };
+        double pin = 3.5;
+        double claimed = spec.MeasurementOverPins(pin);
+
+        var region = Gears.Spur(spec).Sketch.ToRegion();
+        double spaceAzimuth = Math.PI / spec.Teeth;   // the +X tooth is centred on 0
+        double Distance(double radius) => region.SignedDistance(new Vector2d(
+            radius * Math.Cos(spaceAzimuth), radius * Math.Sin(spaceAzimuth)));
+
+        // sd grows with radius over the flank-contact range: bisect sd = pin/2.
+        double lo = spec.RootDiameter / 2, hi = spec.TipDiameter / 2 + pin;
+        Assert.True(Distance(lo) < pin / 2 && Distance(hi) > pin / 2, "bracket");
+        for (int i = 0; i < 60; i++)
+        {
+            double mid = (lo + hi) / 2;
+            if (Distance(mid) < pin / 2)
+                lo = mid;
+            else
+                hi = mid;
+        }
+        double seated = 2 * (lo + hi) / 2 + pin;   // even tooth count: across a diameter
+        double band = 6 * Gears.Spur(spec).FitTolerance;
+        Assert.True(Math.Abs(seated - claimed) <= band,
+            $"over pins {claimed} vs sketch-seated {seated}");
+
+        // Refusals, both directions, by name.
+        Assert.Contains("below the base circle",
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => spec.MeasurementOverPins(0.05)).Message);
+        Assert.Contains("clear of the tooth tips",
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => spec.MeasurementOverPins(400)).Message);
+    }
+
     // ---- the exact area identity ----
 
     [Theory]

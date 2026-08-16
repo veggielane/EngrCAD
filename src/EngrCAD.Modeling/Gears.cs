@@ -58,6 +58,16 @@ public sealed record GearSpec
     /// <summary>Root fillet radius coefficient ρ_f* (of module). ISO 53 profile A: 0.38.</summary>
     public double RootFilletCoefficient { get; init; } = 0.38;
 
+    /// <summary>Circumferential backlash allowance j (mm, at the pitch circle): THIS
+    /// gear's teeth are thinned by j, so a pair at standard centre distance runs with
+    /// clearance equal to the SUM of the two members' allowances. 0 (the default) is
+    /// the zero-backlash nominal every existing gear draws — an exact-zero branch in
+    /// the generator, so a spec stating nothing is bit-identical. The thinning rotates
+    /// each flank toward the tooth centre by j/(2·r_pitch); it is exact, because a
+    /// cycloid this is not — an involute rotated about its own centre is the same
+    /// involute at another phase.</summary>
+    public double Backlash { get; init; }
+
     internal double PressureAngleRadians => PressureAngleDegrees * Math.PI / 180;
 
     /// <summary>Pitch (reference) diameter d = m·z.</summary>
@@ -79,9 +89,109 @@ public sealed record GearSpec
     /// <summary>Root diameter d_f = m·(z − 2·(h_f* − x)).</summary>
     public double RootDiameter => Module * (Teeth - 2 * (DedendumCoefficient - ProfileShift));
 
-    /// <summary>Tooth thickness along the pitch circle s = m·(π/2 + 2x·tan α).</summary>
+    /// <summary>Tooth thickness along the pitch circle s = m·(π/2 + 2x·tan α) − j
+    /// (the <see cref="Backlash"/> allowance thins it; subtracting an exact 0 is the
+    /// identity, so a backlash-free spec reads the incumbent value bit for bit).</summary>
     public double ToothThicknessAtPitch =>
-        Module * (Math.PI / 2 + 2 * ProfileShift * Math.Tan(PressureAngleRadians));
+        Module * (Math.PI / 2 + 2 * ProfileShift * Math.Tan(PressureAngleRadians)) - Backlash;
+
+    /// <summary>The involute function inv α = tan α − α, of an angle in RADIANS — the
+    /// arithmetic every measurement identity below leans on.</summary>
+    public static double InvoluteFunction(double radians) => Math.Tan(radians) - radians;
+
+    /// <summary>
+    /// The span (base tangent) measurement over <paramref name="k"/> teeth — the
+    /// caliper dimension W = (k − 1)·p_b + cos α·(s + m·z·inv α), which REDUCES to the
+    /// textbook m·cos α·((k − ½)π + z·inv α) + 2x·m·sin α at zero backlash and drops by
+    /// exactly j·cos α with the allowance (a pitch-circle thinning is a base-circle
+    /// thinning times cos α). Refused when the caliper's contact would miss the
+    /// involute flank: the contact radius √(r_b² + (W/2)²) must lie between the base
+    /// and tip circles, which is what bounds k for a given tooth count.
+    /// </summary>
+    public double SpanOverTeeth(int k)
+    {
+        if (k < 1)
+            throw new ArgumentOutOfRangeException(nameof(k), "The span must cover at least one tooth.");
+        double alpha = PressureAngleRadians;
+        double w = (k - 1) * BasePitch
+            + Math.Cos(alpha) * (ToothThicknessAtPitch + Module * Teeth * InvoluteFunction(alpha));
+        double rb = BaseDiameter / 2;
+        double contactRadius = Math.Sqrt(rb * rb + w * w / 4);
+        if (contactRadius <= rb || contactRadius >= TipDiameter / 2)
+            throw new ArgumentOutOfRangeException(nameof(k),
+                $"A span over {k} teeth puts the caliper contact at radius {contactRadius:G6}, " +
+                $"outside the involute flank (base {rb:G6} to tip {TipDiameter / 2:G6}); " +
+                "choose k so the contact lands on the flank.");
+        return w;
+    }
+
+    /// <summary>
+    /// The measurement over two pins (balls) of <paramref name="pinDiameter"/> seated
+    /// in opposite tooth spaces — even tooth counts measure across a diameter, odd ones
+    /// across the nearest-to-opposite pair (the centre distance times cos(90°/z)). The
+    /// contact pressure angle solves inv α_M = d_pin/(m·z·cos α) − π/z + s/(m·z) + inv α
+    /// (the <see cref="Backlash"/>-thinned tooth thickness s widens the space and drops
+    /// the measurement, exactly as a real allowance does), inverted by Newton on the
+    /// involute function. A pin too small to reach the flank (inv α_M ≤ 0 — it would
+    /// seat on the root fillet) or so large its contact leaves the tip is refused by
+    /// name.
+    /// </summary>
+    public double MeasurementOverPins(double pinDiameter)
+    {
+        if (!(pinDiameter > 0) || !double.IsFinite(pinDiameter))
+            throw new ArgumentOutOfRangeException(nameof(pinDiameter));
+        double alpha = PressureAngleRadians;
+        double rb = BaseDiameter / 2;
+        double rp = PitchDiameter / 2;
+        // inv α_M = r_pin/r_b − (half space angle at base), the pin centre on the
+        // space centreline with its contact normal tangent to the base circle.
+        double halfSpaceAtBase = Math.PI / Teeth
+            - (ToothThicknessAtPitch / (2 * rp) + InvoluteFunction(alpha));
+        double invM = pinDiameter / (2 * rb) - halfSpaceAtBase;
+        if (invM <= 0)
+            throw new ArgumentOutOfRangeException(nameof(pinDiameter),
+                $"A Ø{pinDiameter:G6} pin seats below the base circle (inv α_M = {invM:G4} ≤ 0) — " +
+                "it would rest on the root fillet, not the involute flank; use a larger pin.");
+        // The pin centre cannot sit past the tip circle plus its own radius, which
+        // bounds the contact pressure angle: α_M ≤ acos(r_b/(r_tip + r_pin)). Checked
+        // in inv-space BEFORE the Newton inversion — the involute function has a
+        // second branch past π/2 the iteration would otherwise land on, returning a
+        // confidently wrong measurement instead of a refusal.
+        double maxAlpha = Math.Acos(Math.Min(1.0, rb / (TipDiameter / 2 + pinDiameter / 2)));
+        if (invM >= InvoluteFunction(maxAlpha))
+            throw new ArgumentOutOfRangeException(nameof(pinDiameter),
+                $"A Ø{pinDiameter:G6} pin stands clear of the tooth tips and cannot seat; " +
+                "use a smaller pin.");
+        double alphaM = InverseInvolute(invM);
+        double centreRadius = rb / Math.Cos(alphaM);
+        if (centreRadius - pinDiameter / 2 >= TipDiameter / 2)
+            throw new ArgumentOutOfRangeException(nameof(pinDiameter),
+                $"A Ø{pinDiameter:G6} pin stands clear of the tooth tips and cannot seat; " +
+                "use a smaller pin.");
+        return Teeth % 2 == 0
+            ? 2 * centreRadius + pinDiameter
+            : 2 * centreRadius * Math.Cos(Math.PI / (2 * Teeth)) + pinDiameter;
+    }
+
+    /// <summary>Newton inversion of inv α = tan α − α (derivative tan²α), seeded by the
+    /// classical cube-root estimate α ≈ (3·inv)^⅓ — quadratic from there, and the
+    /// involute function is convex increasing on (0, π/2) so the iteration is safe.</summary>
+    private static double InverseInvolute(double value)
+    {
+        double a = Math.Cbrt(3 * value);
+        for (int i = 0; i < 32; i++)
+        {
+            double f = Math.Tan(a) - a - value;
+            double slope = Math.Tan(a) * Math.Tan(a);
+            if (!(slope > 0))
+                break;
+            double step = f / slope;
+            a -= step;
+            if (Math.Abs(step) < 1e-15)
+                break;
+        }
+        return a;
+    }
 
     /// <summary>
     /// The rack-generation undercut limit z_min = 2·(h_a* − x)/sin²α: below this tooth
@@ -245,6 +355,21 @@ public static partial class Gears
 
         double invAlpha = Math.Tan(alpha) - alpha;
         double psi = (Math.PI / 2 + 2 * x * Math.Tan(alpha)) / z;   // half tooth angle at pitch
+        if (spec.Backlash != 0)
+        {
+            // The allowance thins the tooth by j at the pitch circle — each flank
+            // rotates j/(2·r_pitch) toward the tooth centre. An exact-zero branch, so a
+            // spec stating no backlash generates bit-identical geometry.
+            if (!(spec.Backlash > 0) || !double.IsFinite(spec.Backlash))
+                throw new ArgumentOutOfRangeException(nameof(spec),
+                    "Backlash must be a finite, non-negative allowance.");
+            double nominal = spec.Module * (Math.PI / 2 + 2 * x * Math.Tan(alpha));
+            if (spec.Backlash >= nominal)
+                throw new ArgumentOutOfRangeException(nameof(spec),
+                    $"A backlash of {spec.Backlash:G6} eats the whole {nominal:G6} tooth " +
+                    "thickness at the pitch circle.");
+            psi -= spec.Backlash / (spec.Module * z);
+        }
         double theta0 = -psi - invAlpha;               // right-flank involute origin ray
         double tTip = Math.Sqrt(ra * ra / (rb * rb) - 1);
 

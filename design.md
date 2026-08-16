@@ -9923,6 +9923,27 @@ skip). What deliberately did NOT land: wiring into `Feature.SaveInputs`, because
 feature carries a `ConstrainedSketch` input today — the seam is ready for the first
 one that does.
 
+**Gear backlash and the inspection dimensions landed as arithmetic held to the sketch**
+(`GearSpec.Backlash`/`SpanOverTeeth`/`MeasurementOverPins`; docs `examples/gears.md`
+§Backlash): the allowance thins THIS gear's teeth by j at the pitch circle — each flank
+rotates j/(2·r_pitch) toward the tooth centre, EXACT because an involute rotated about
+its own centre is the same involute at another phase — behind an exact-zero branch, so
+a spec stating nothing generates bit-identical geometry (all 126 incumbent gear tests
+unmoved), and `ToothThicknessAtPitch` carries the subtraction so the generator reads
+ONE source of truth. The span identity is written as `(k−1)·p_b + cos α·(s + m·z·inv α)`
+rather than the textbook expansion, which makes both properties one substitution each
+(reduces to the textbook form at j = 0; drops exactly j·cos α with the allowance, a
+pitch-circle thinning being a base-circle thinning times cos α) — and the sketch check
+REBUILDS W from the MEASURED pitch thickness, which is what holds the drawn flank to
+the caliper dimension. The over-pins measurement is verified against an INDEPENDENT
+oracle sharing no arithmetic with it: a seated pin touches both flanks, i.e. the
+region's own signed distance at the pin centre equals the pin radius, bisected along
+the space centreline. **One trap paid for**: the involute function has a second branch
+past π/2, and a pin large enough to push inv α_M onto it made the Newton inversion
+return a confidently wrong measurement instead of a refusal — the tips guard is
+therefore checked in INV-SPACE before the inversion (α_M ≤ acos(r_b/(r_tip + r_pin)),
+one closed form), the bisection-needs-a-monotone-bracket lesson in Newton clothing.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

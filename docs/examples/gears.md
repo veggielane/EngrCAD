@@ -105,6 +105,39 @@ three representations; a bore is one `boreDiameter` argument, and keyways are a
 filed follow-up. Everything below is this profile put to work — swept along a
 helix, mirrored, laid flat, or replaced by a different flank curve entirely.
 
+## Backlash, and the inspection dimensions
+
+A real pair runs with clearance: `GearSpec.Backlash` thins **this gear's** teeth by
+`j` at the pitch circle (each flank rotates `j/(2·r_pitch)` toward the tooth centre —
+exact, since an involute rotated about its own centre is the same involute at another
+phase), so a pair's circumferential play is the *sum* of the two members' allowances.
+The default 0 is the zero-backlash nominal every existing gear draws, bit for bit.
+
+The two dimensions an inspector actually measures ride as arithmetic on the spec, and
+each is held to the drawn sketch rather than to its own formula: the **span (base
+tangent) measurement** over k teeth, `W = (k−1)·p_b + cos α·(s + m·z·inv α)` — the
+textbook `m·cos α·((k−½)π + z·inv α) + 2x·m·sin α` at zero backlash, dropping by
+exactly `j·cos α` with the allowance — and the **measurement over pins**, whose
+contact pressure angle solves `inv α_M` in closed form and inverts by Newton (even
+tooth counts measure across a diameter, odd across `cos(90°/z)`). A span whose caliper
+contact would miss the flank, a pin too small to reach it (it would seat on the root
+fillet) and a pin too large to seat are each refused by name.
+
+```csharp run:gear-measurements
+var spec = new GearSpec(module: 2, teeth: 20) { Backlash = 0.1 };
+if (Math.Abs(spec.ToothThicknessAtPitch - (Math.PI - 0.1)) > 1e-12)
+    throw new Exception("the allowance thins the pitch thickness by exactly j");
+
+double nominal = new GearSpec(module: 2, teeth: 20).SpanOverTeeth(3);
+double alpha = Math.PI / 9;
+if (Math.Abs(spec.SpanOverTeeth(3) - (nominal - 0.1 * Math.Cos(alpha))) > 1e-12)
+    throw new Exception("a pitch-circle thinning is a base-circle thinning times cos(alpha)");
+
+double overPins = spec.MeasurementOverPins(3.5);
+if (!(overPins > spec.TipDiameter))
+    throw new Exception("the pins stand proud of the tips on a standard gear");
+```
+
 ## Putting a pair in mesh
 
 Drawing two gears is not the same as meshing them. `GearMeshing` answers the
