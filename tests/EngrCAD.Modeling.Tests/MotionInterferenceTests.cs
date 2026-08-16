@@ -93,6 +93,69 @@ public class MotionInterferenceTests
         });
     }
 
+    [Fact]
+    public void ExactVolumes_AreBrepExactForBrepBackedParts()
+    {
+        // The same spinner built from Shape boxes: both parts lower to B-Reps, so the
+        // volume takes the exact boolean of the POSED solids. The oracle is a closed
+        // form: at the crossing's middle frame the drive angle is exactly π (73 frames
+        // over [0, 2π] put a frame value AT π), where the 20-long arm covers the post's
+        // x ∈ [7, 9] and the overlap is the box [7,9] × [−1,1] × [−1,1] = 8 exactly —
+        // a claim the mesh route can only approach at its chord grade. The post is
+        // WIDER than the arm in y on purpose, so every face pair is transversal.
+        var rig = new Assembly("rig");
+        var ground = rig.Add(new Part("ground", Shape.Box(2, 2, 1).Translate(0, 0, -4)));
+        var arm = rig.Add(new Part("arm", Shape.Box(20, 2, 2)));
+        rig.Add(new Part("post", Shape.Box(2, 4, 6)), At(8, 0, 0));
+        var pin = Joint.Revolute(
+            MateGeometry.Axis(ground, (0, 0, 0), Vector3d.UnitZ),
+            MateGeometry.Axis(arm, (0, 0, 0), Vector3d.UnitZ), "pin");
+        var mechanism = new Mechanism(rig).Ground(ground).Add(pin);
+        var study = mechanism.Sweep(MechanismDriver.Angle(pin), 0, 2 * Math.PI, frames: 73);
+
+        var report = study.CheckInterference(new InterferenceOptions { ExactVolumes = true });
+        var pair = Assert.Single(report.Pairs);
+        var middle = pair.Ranges.Single(r => r.Start < Math.PI && Math.PI < r.End);
+        Assert.Equal(InterferenceVolumeSource.BrepBoolean, middle.VolumeSource);
+        Assert.NotNull(middle.Volume);
+        Assert.InRange(Math.Abs(middle.Volume!.Value - 8), 0, 1e-9);
+    }
+
+    [Fact]
+    public void ExactVolumes_NameTheMeshGradeWhereTheyFallBack()
+    {
+        // Mesh-backed parts have no solid to intersect, so the grade is the mesh
+        // boolean's and the SOURCE says so — the incumbent behaviour, now nameable.
+        var (mechanism, pin) = SpinnerRig(postX: 8);
+        var study = mechanism.Sweep(MechanismDriver.Angle(pin), 0, 2 * Math.PI, frames: 73);
+        var report = study.CheckInterference(new InterferenceOptions { ExactVolumes = true });
+        Assert.All(Assert.Single(report.Pairs).Ranges,
+            r => Assert.Equal(InterferenceVolumeSource.MeshBoolean, r.VolumeSource));
+
+        // And a placement the exact tier REFUSES — a part carrying a SCALED
+        // transform, which BrepSolid.Transformed rejects as non-rigid — falls back to
+        // the mesh grade rather than failing the whole report. The post is scaled in z
+        // only, so the overlap is still the arm-bounded [7,9] x [-1,1] x [-1,1] box and
+        // the MESH answer is exact too (a mesh boolean of boxes is exact for
+        // polyhedra): the same 8, now carrying the mesh grade's NAME.
+        var rig = new Assembly("rig");
+        var ground = rig.Add(new Part("ground", Shape.Box(2, 2, 1).Translate(0, 0, -4)));
+        var arm = rig.Add(new Part("arm", Shape.Box(20, 2, 2)));
+        rig.Add(new Part("post", Shape.Box(2, 4, 6)) { Transform = Matrix4d.CreateScale((1, 1, 1.5)) },
+            At(8, 0, 0));
+        var pin2 = Joint.Revolute(
+            MateGeometry.Axis(ground, (0, 0, 0), Vector3d.UnitZ),
+            MateGeometry.Axis(arm, (0, 0, 0), Vector3d.UnitZ), "pin");
+        var scaled = new Mechanism(rig).Ground(ground).Add(pin2);
+        var scaledStudy = scaled.Sweep(MechanismDriver.Angle(pin2), 0, 2 * Math.PI, frames: 73);
+        var scaledReport = scaledStudy.CheckInterference(new InterferenceOptions { ExactVolumes = true });
+        var middle2 = Assert.Single(scaledReport.Pairs).Ranges
+            .Single(r => r.Start < Math.PI && Math.PI < r.End);
+        Assert.Equal(InterferenceVolumeSource.MeshBoolean, middle2.VolumeSource);
+        Assert.NotNull(middle2.Volume);
+        Assert.InRange(Math.Abs(middle2.Volume!.Value - 8), 0, 1e-9);
+    }
+
     // ---- swept volume ----
 
     [Fact]

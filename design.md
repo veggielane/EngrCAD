@@ -10099,6 +10099,32 @@ result (`libx264`/`yuv420p`), the dependency-free H.264 assessment staying filed
 docs figure renders portrait through DocsGen's new `renderSize` snippet variable — the
 one generator change, following the declared-variable convention `camera` set.
 
+**B-Rep-exact interference volumes landed as a routed grade with the estimator NAMED,
+and the test fixture found a mesh-boolean defect the feature then had to route around**
+(`InterferenceVolumeSource` on `InterferenceRange`; `MotionInterference.IntersectionVolume`):
+`CheckInterference`'s opt-in volumes now take `BrepBoolean.Intersection` of the POSED
+solids whenever both parts lower (`TryGetSolid`, the shared cached lowering), both
+placements are proper rigid motions (`BrepSolid.Transformed`'s own precondition — the
+guard is the kernel's, not a restatement), and the boolean accepts the configuration;
+every refusal falls back to the exact mesh boolean of the display tessellations, and
+the SOURCE rides the result because two estimators answering one question at two grades
+must both be nameable. The B-Rep answer is exact where the mesh one carries chord
+error: the closed-form fixture (a spinner whose crossing's middle frame is EXACTLY π,
+73 frames over [0, 2π] putting a frame value there, overlap the box [7,9]×[−1,1]×[−1,1])
+measures 8 to 1e-9 through a genuinely rotated pose. **Two fixture findings.** The
+coaxial equal-radius refusal cannot exercise the fallback: its two tessellations
+COINCIDE rather than cross, so the transversal narrow phase rightly reports no clash at
+all — a refusing configuration and a detectable clash are different properties. And the
+OTHER named refusal, the tangent bicylinder, turned out to be hostile to the MESH
+boolean too: `MeshBoolean.Intersection` of the Ø4 degenerate Steinmetz pair returns
+10.56 against the analytic 42.67 — almost exactly a quarter, whole lobes dropped by
+per-patch winding classification at the two tangent points where the intersection
+ellipses cross (the winding number sits at ½ there, the recorded hostile family, now
+MEASURED on a volume rather than suspected; filed in todo). So the fallback fixture is
+a NON-RIGID placement instead — a z-scaled post, which `Transformed` refuses while the
+mesh boolean of boxes stays exact — and the test asserts the same 8 through the mesh
+grade's name, the deliberate act of proving the two roads meet where both are exact.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

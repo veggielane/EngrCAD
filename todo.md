@@ -216,10 +216,22 @@ ordered in normal terms; and the helical pair's conjugate test as the
 transverse-section argument measured against a derived bound).
 Remaining follow-ups:
 
-- [ ] **B-Rep-exact interference volumes** — `CheckInterference`'s opt-in volumes use
-  the exact MESH boolean of the meshes that flagged the clash; for B-Rep-backed parts
-  a `BrepBoolean.Intersection` of the posed solids would report the exact volume, at
-  the cost of a boolean between arbitrarily-rotated solids per range.
+- [ ] **The exact MESH boolean misclassifies the tangent bicylinder, measured on the
+  volume** (found building the B-Rep-exact interference volumes, which ✅ landed —
+  `InterferenceVolumeSource`, the B-Rep intersection of the POSED solids where both
+  parts lower and the boolean accepts, named fallback to the mesh grade otherwise):
+  `MeshBoolean.Intersection` of two equal-radius perpendicular crossed cylinders
+  through one axis point (Ø4, the degenerate Steinmetz solid, analytic 16r³/3 = 42.67)
+  returns **10.56 — almost exactly ONE QUARTER**, i.e. whole patches dropped, not a
+  tolerance error. This is the recorded near-tangency hostile family (the winding
+  number sits at ½ along the two tangent points where the intersection ellipses cross,
+  and per-patch classification decides whole lobes by that coin flip) — the same
+  configuration the B-Rep boolean REFUSES BY NAME, so the mesh engine currently
+  answers it confidently and wrong where the B-Rep engine answers honestly. A fix
+  needs tangent-aware patch flooding or a multi-probe vote; until then the fixture is
+  pinned only as "the B-Rep tier refuses it", and any consumer measuring volumes near
+  a tangency should treat the mesh answer as suspect.
+
 - [ ] **Flexible sub-assemblies in mechanisms** — inherited from the mates layer: a
   deep occurrence whose owning sub-assembly is placed more than once is refused (one
   shared frame). A mechanism inside a twice-placed sub-assembly needs per-placement

@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Interop;
 using EngrCAD.Mesh;
 
 namespace EngrCAD.Modeling;
@@ -25,9 +26,29 @@ public sealed class InterferenceOptions
 /// <summary>One contiguous run of sampled frames over which a pair interpenetrates.</summary>
 /// <param name="Start">Driver value of the first clashing frame.</param>
 /// <param name="End">Driver value of the last clashing frame.</param>
-/// <param name="Volume">The mesh-boolean intersection volume at the middle of the
-/// range, when <see cref="InterferenceOptions.ExactVolumes"/> asked for it.</param>
-public sealed record InterferenceRange(double Start, double End, double? Volume);
+/// <param name="Volume">The intersection volume at the middle of the range, when
+/// <see cref="InterferenceOptions.ExactVolumes"/> asked for it — B-Rep-exact where both
+/// parts lower and the boolean accepts the pair, the exact mesh boolean of the display
+/// tessellations otherwise (see <see cref="VolumeSource"/>).</param>
+/// <param name="VolumeSource">WHICH estimator produced <paramref name="Volume"/> — the
+/// two answer at different grades (a B-Rep intersection is exact; a mesh one carries
+/// the tessellations' chord error), and two estimators answering one question must both
+/// be nameable. Null exactly when <paramref name="Volume"/> is.</param>
+public sealed record InterferenceRange(
+    double Start, double End, double? Volume, InterferenceVolumeSource? VolumeSource = null);
+
+/// <summary>Which boolean measured an <see cref="InterferenceRange.Volume"/>.</summary>
+public enum InterferenceVolumeSource
+{
+    /// <summary>The exact mesh boolean of the posed display tessellations — always
+    /// available, carrying the meshes' chord error.</summary>
+    MeshBoolean,
+
+    /// <summary>A <c>BrepBoolean.Intersection</c> of the posed exact solids — the
+    /// analytic answer, taken whenever both parts lower to B-Reps, both placements are
+    /// proper rigid motions, and the boolean accepts the configuration.</summary>
+    BrepBoolean,
+}
 
 /// <summary>Every clash range of one instance pair over the sweep.</summary>
 public sealed record InterferencePair(string PathA, string PathB, IReadOnlyList<InterferenceRange> Ranges);
@@ -243,14 +264,51 @@ public sealed partial class MotionStudy
     private InterferenceRange Range((string A, string B) key, int firstFrame, int lastFrame, InterferenceOptions options)
     {
         double? volume = null;
+        InterferenceVolumeSource? source = null;
         if (options.ExactVolumes)
         {
             var middle = Frames[(firstFrame + lastFrame) / 2].Instances;
             var a = middle.First(i => i.Path == key.A);
             var b = middle.First(i => i.Path == key.B);
-            volume = MeshBoolean.Intersection(WorldMesh(a, options), WorldMesh(b, options)).Volume();
+            (volume, source) = IntersectionVolume(a, b, options);
         }
-        return new InterferenceRange(Frames[firstFrame].Value, Frames[lastFrame].Value, volume);
+        return new InterferenceRange(Frames[firstFrame].Value, Frames[lastFrame].Value, volume, source);
+    }
+
+    /// <summary>
+    /// The pair's intersection volume at one pose, B-Rep-exact where the exact tier can
+    /// answer: both parts lower to solids (the same cached <c>TryGetSolid</c> every
+    /// other consumer shares), both placements are proper rigid motions
+    /// (<c>BrepSolid.Transformed</c>'s own precondition — a scaled or mirrored instance
+    /// refuses there), and <c>BrepBoolean.Intersection</c> accepts the configuration
+    /// (tangent and coincident curved pairs refuse by name). Every refusal falls back
+    /// to the exact MESH boolean of the display tessellations — always answerable, at
+    /// the chord-error grade — and the SOURCE rides the result so the two grades are
+    /// never mistaken for one another.
+    /// </summary>
+    private static (double Volume, InterferenceVolumeSource Source) IntersectionVolume(
+        in PartInstance a, in PartInstance b, InterferenceOptions options)
+    {
+        if (a.Part.TryGetSolid() is { } solidA && b.Part.TryGetSolid() is { } solidB)
+        {
+            try
+            {
+                // Transformed returns a fresh solid (never the cached lowering), which
+                // is what makes handing it to a boolean — which CONSUMES its inputs —
+                // safe for the parts' own cached solids.
+                var intersection = Interop.BrepBoolean.Intersection(
+                    solidA.Transformed(a.World), solidB.Transformed(b.World));
+                return (BrepMassProperties.Compute(intersection).Volume,
+                    InterferenceVolumeSource.BrepBoolean);
+            }
+            catch (Exception e) when (e is BrepBooleanException or NotSupportedException)
+            {
+                // A refusing configuration or a non-rigid placement: the mesh grade
+                // answers below.
+            }
+        }
+        return (MeshBoolean.Intersection(WorldMesh(a, options), WorldMesh(b, options)).Volume(),
+            InterferenceVolumeSource.MeshBoolean);
     }
 
     private static HalfEdgeMesh WorldMesh(in PartInstance instance, InterferenceOptions options) =>

@@ -291,8 +291,13 @@ if (Math.Abs(hinge.AngleDegrees - 45) > 0.5)
 
 `CheckInterference` runs per-frame clash detection over a study's sampled poses:
 instance bounds are the broad phase, transversal mesh crossing the narrow phase —
-so parts *resting* on each other are not clashes — with exact intersection
-volumes opt-in per confirmed range. `SweptVolume` turns the motion itself into a
+so parts *resting* on each other are not clashes — with intersection volumes
+opt-in per confirmed range. A volume is **B-Rep-exact** where both parts lower to
+solids and the boolean of the posed solids accepts the pair (a rotated-pose box
+overlap measures its closed form to 1e-9), falling back to the exact mesh boolean
+of the display tessellations otherwise — and `InterferenceRange.VolumeSource`
+names WHICH grade answered, because the two carry different error (exact against
+the meshes' chord error) and must never be mistaken for one another. `SweptVolume` turns the motion itself into a
 `Shape`: implicit-**native** (the part's field lowered once and placed per pose),
 mesh via Surface Nets, B-Rep honestly impossible.
 
