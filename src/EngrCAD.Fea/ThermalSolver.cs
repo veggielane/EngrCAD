@@ -914,8 +914,13 @@ public static class ThermalSolver
             var nodes = mesh.Element(e);
             for (int i = 0; i < perElement; i++)
                 positions[i] = mesh.Position(nodes[i]);
-            ThermalElement.Capacity(
-                mesh.Order, positions, model.MaterialOf(e).VolumetricHeatCapacity, rule, ce);
+            // NaN in the overlay means "this element keeps the model's own material"
+            // — the conductivity overlay's convention, so a c(T) law on one region
+            // leaves every other region's capacity untouched bit for bit.
+            double volumetric = model.OverlayCapacity is { } overlay && !double.IsNaN(overlay[e])
+                ? overlay[e]
+                : model.MaterialOf(e).VolumetricHeatCapacity;
+            ThermalElement.Capacity(mesh.Order, positions, volumetric, rule, ce);
 
             if (lumping == MassLumping.Consistent)
             {

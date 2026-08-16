@@ -570,10 +570,10 @@ quarter of `E·alpha·dT`). A statically determinate 3-2-1 restraint gives 1e-10
 
 ## Limitations
 
-- **Temperature-dependent conductivity is a separate solver** (`ThermalNonlinear.Solve`,
-  below); the LINEAR solve keeps constant properties by design — that is what makes it one
-  factorization. The heat capacity `c` and expansion `alpha` stay constant everywhere
-  (a c(T) belongs to the transient and is a different change).
+- **Temperature-dependent properties are a separate solver** (`ThermalNonlinear.Solve`
+  for steady k(T), `ThermalNonlinear.SolveTransient` for c(T) and per-step k(T),
+  below); the LINEAR solve keeps constant properties by design — that is what makes it
+  one factorization. The expansion `alpha` stays constant everywhere.
 - **A transient streams** when asked: `OnState` sees exactly the states a retained run
   stores (bit-identical, asserted against a retained twin) and `RetainStates = false` caps
   the returned list at the two ends — a run of any length writes each state to a `.vtu`
@@ -632,6 +632,44 @@ for (int e = 0; e < mesh.ElementCount; e++)
 flux /= mesh.ElementCount;
 Console.WriteLine($"flux {flux:0.0} vs Kirchhoff {exact:0.0} mW/mm2 "
     + $"in {run.Iterations} iterations");
+```
+
+### The property-nonlinear transient: c(T) and k(T) per step
+
+`ThermalNonlinear.SolveTransient(model, transient, conductivityByRegion?,
+capacityByRegion?)` steps a transient whose properties follow the temperature — a
+sequence of one-step constant-property transients, each evaluating the laws per element
+at the step's *start* temperatures and running the linear stepper seeded from the
+previous state. The composition reuses the stepping machinery verbatim (schemes,
+lumping, prescribed snapping, the per-step first-law identity), and it states the cost
+honestly: a property nonlinearity re-assembles and re-factors **every step**
+(`Factorizations` equals the step count by construction) — exactly the
+one-factorization amortisation the linear transient celebrates and this one necessarily
+gives up. The capacity law returns the *specific heat* `c(T)` (the datasheet quantity);
+laws returning the material's own constants reproduce the plain transient **bit for
+bit**, and time-varying load laws are refused by name (a sub-run's clock restarts, so
+composing them needs law re-basing — filed).
+
+The oracle is an identity, not a convergence claim: an insulated cube under uniform
+generation stays spatially uniform (the generation load and the capacity rows share the
+partition-of-unity weights), so the FE step reduces *exactly* to the scalar recurrence
+`T ← T + dt·g/(ρc(T))` — and as the step shrinks, that recurrence converges on the
+enthalpy closed form `ρ(c0·T + c0γT²/2) = g·t` at first order, matching backward
+Euler's own.
+
+```csharp run:fea-thermal-capacity-law
+var cube = Shape.Box(8, 8, 8).Translate(4, 4, 4);
+var mesh = AnalysisMesh.Of(TetMesher.Mesh(cube.ToMesh()));
+var model = new ThermalModel(mesh, Materials.Aluminium6061).Generation(2.0);
+double c0 = Materials.Aluminium6061.SpecificHeat;
+var run = ThermalNonlinear.SolveTransient(
+    model, new ThermalTransientOptions(0.5, 20),
+    capacityByRegion: new Dictionary<int, Func<double, double>>
+    {
+        [0] = t => c0 * (1 + 0.002 * t),   // c grows 0.2 %/K
+    });
+Console.WriteLine($"T(10 s) = {run.States[^1].Temperature[0]:0.000} K over "
+    + $"{run.Factorizations} factorizations (one per step, the honest cost)");
 ```
 
 ## Surface radiation

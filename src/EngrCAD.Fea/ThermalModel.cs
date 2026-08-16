@@ -208,6 +208,12 @@ public sealed class ThermalModel
     /// conditions.</summary>
     internal double[]? OverlayConductivity;
 
+    /// <summary>Per-element VOLUMETRIC heat capacity override (rho*c, the product
+    /// AssembleCapacity integrates), NaN = keep the model's own material — the
+    /// capacity twin of <see cref="OverlayConductivity"/>, set around each step of a
+    /// c(T) transient and cleared in a finally.</summary>
+    internal double[]? OverlayCapacity;
+
     /// <summary>The accumulated film coefficient on one boundary facet (0 = no
     /// convection).</summary>
     public double FilmCoefficientOf(int facet)

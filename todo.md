@@ -656,14 +656,13 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   consumer would be the fifth reason not to fork it.
 - [ ] **FEA thermal follow-ups** (v1 ✅ landed — `ThermalModel`/`ThermalSolver`/
   `ThermalResults` + `StructuralModel.ThermalLoad`, docs `examples/fea-thermal.md`):
-  - [ ] **Temperature-dependent heat CAPACITY, c(T)** — the transient's half of the
-    property nonlinearity. k(T) LANDED as `ThermalNonlinear.Solve` (the radiation
-    template with re-assembly per pass through a per-ELEMENT conductivity overlay, NaN =
-    keep the model's own law so a directional region elsewhere is untouched; the
-    Kirchhoff-transform slab as the closed-form oracle, the θ-profile asserted at every
-    node; the flux caveat stated on the result — accessors read the constant law, so the
-    converged per-element k rides on `ElementConductivity`). A c(T) changes the capacity
-    per STEP of a transient, a different loop.
+  - [ ] **Re-basing time laws through the property-nonlinear transient** —
+    `ThermalNonlinear.SolveTransient` ✅ landed c(T) AND per-step k(T) (one-step
+    constant-property sub-runs over a capacity overlay; the scalar-recurrence identity
+    and the bit-for-bit constant-law degeneration are the oracles), and it REFUSES
+    time-varying load/prescribed laws by name: each sub-run's clock restarts at zero,
+    so composing them needs the laws re-based per step (wrap `t => law(t0 + t)` at a
+    condition-rebuilding seam the model does not yet expose).
   - [ ] **Two-way coupling** (deformation feeding back into conduction) is a staggered or
     monolithic solver, not an extension of the one-way path. Filed for completeness; the
     one-way direction covers thermal stress, which is what is usually wanted.

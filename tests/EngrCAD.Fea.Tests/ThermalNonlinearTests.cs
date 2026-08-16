@@ -107,4 +107,145 @@ public class ThermalNonlinearTests(ITestOutputHelper output)
             ThermalNonlinear.Solve(directional,
                 new Dictionary<int, Func<double, double>> { [0] = t => 40.0 })).Message);
     }
+
+    // ---- the property-nonlinear TRANSIENT: c(T) (and k(T)) per step ----
+
+    /// <summary>An insulated cube under uniform generation: the field stays spatially
+    /// uniform (generation loads and capacity rows share the partition-of-unity
+    /// weights), so the FE step reduces EXACTLY to the scalar recurrence
+    /// T_next = T + dt·g/(ρc(T)) under backward Euler with start-of-step properties.</summary>
+    private static ThermalModel AdiabaticCube(double generation, out AnalysisMesh mesh)
+    {
+        var tets = StructuredTetMesh.Box(Vector3d.Zero, new Vector3d(8, 8, 8), 2, 2, 2);
+        mesh = AnalysisMesh.Of(tets);
+        return new ThermalModel(mesh, Metal).Generation(generation);
+    }
+
+    [Fact]
+    public void CapacityLaw_MatchesTheScalarRecurrenceExactly()
+    {
+        // c(T) = c0(1 + gamma·T): the uniform-field FE step IS the scalar recurrence,
+        // an identity rather than a convergence claim — a wrong evaluation point, a
+        // dropped density or a capacity assembled from the wrong temperature all break
+        // it at the first step.
+        const double c0 = 5e8, gamma = 0.002, g = 2.0, dt = 0.5;
+        const int steps = 20;
+        var model = AdiabaticCube(g, out var mesh);
+        var run = ThermalNonlinear.SolveTransient(
+            model, new ThermalTransientOptions(dt, steps),
+            capacityByRegion: new Dictionary<int, Func<double, double>>
+            {
+                [0] = t => c0 * (1 + gamma * t),
+            });
+
+        double rho = Metal.Density;
+        double expected = 0;
+        for (int n = 0; n < steps; n++)
+            expected += dt * g / (rho * c0 * (1 + gamma * expected));
+
+        var final = run.States[^1].Temperature;
+        for (int node = 0; node < mesh.NodeCount; node++)
+            Assert.Equal(expected, final[node], 6);
+        Assert.Equal(steps, run.Factorizations);
+        Assert.True(run.Converged);
+    }
+
+    [Fact]
+    public void CapacityLaw_ConvergesOnTheEnthalpyClosedForm()
+    {
+        // The physics check the recurrence identity cannot make: as dt shrinks, the
+        // run converges on the enthalpy closed form ρ(c0·T + c0γT²/2) = g·t — at first
+        // order, since the property is evaluated explicitly at the step's start
+        // (matching backward Euler's own order).
+        const double c0 = 5e8, gamma = 0.004, g = 4.0, duration = 40;
+        double rho = Metal.Density;
+        // g·t = ρc0(T + γT²/2)  →  T = (√(1 + 2γ·g·t/(ρc0)) − 1)/γ.
+        double exact = (Math.Sqrt(1 + 2 * gamma * g * duration / (rho * c0)) - 1) / gamma;
+
+        var errors = new List<double>();
+        foreach (int steps in new[] { 10, 20, 40 })
+        {
+            var model = AdiabaticCube(g, out _);
+            var run = ThermalNonlinear.SolveTransient(
+                model, new ThermalTransientOptions(duration / steps, steps),
+                capacityByRegion: new Dictionary<int, Func<double, double>>
+                {
+                    [0] = t => c0 * (1 + gamma * t),
+                });
+            errors.Add(Math.Abs(run.States[^1].Temperature[0] - exact));
+        }
+        output.WriteLine($"errors {string.Join(", ", errors.Select(e => e.ToString("E3")))}");
+        Assert.True(errors[0] > errors[1] && errors[1] > errors[2], "errors must fall with dt");
+        double order = Math.Log2(errors[0] / errors[2]) / 2;
+        Assert.InRange(order, 0.7, 1.5); // explicit-in-property backward Euler is first order
+    }
+
+    [Fact]
+    public void ConstantLaws_ReproduceThePlainTransientBitForBit()
+    {
+        // The degeneration with teeth: laws returning exactly the material's own
+        // constants overlay the SAME doubles the plain assembly reads (the wrapper
+        // multiplies Density by the returned c, the same product the material caches),
+        // so every stored state must match the plain run to the BIT.
+        const double dt = 0.4;
+        const int steps = 6;
+        var plainModel = Bar(out var mesh);
+        var plain = ThermalSolver.SolveTransient(
+            plainModel, new ThermalTransientOptions(dt, steps) { InitialTemperature = 50 });
+
+        var lawModel = Bar(out _);
+        var run = ThermalNonlinear.SolveTransient(
+            lawModel, new ThermalTransientOptions(dt, steps) { InitialTemperature = 50 },
+            conductivityByRegion: new Dictionary<int, Func<double, double>>
+            {
+                [0] = _ => Metal.ThermalConductivity,
+            },
+            capacityByRegion: new Dictionary<int, Func<double, double>>
+            {
+                [0] = _ => Metal.SpecificHeat,
+            });
+
+        Assert.Equal(plain.States.Count, run.States.Count);
+        for (int s = 0; s < plain.States.Count; s++)
+        {
+            var a = plain.States[s].Temperature;
+            var b = run.States[s].Temperature;
+            for (int node = 0; node < mesh.NodeCount; node++)
+                Assert.Equal(
+                    BitConverter.DoubleToInt64Bits(a[node]),
+                    BitConverter.DoubleToInt64Bits(b[node]));
+        }
+    }
+
+    [Fact]
+    public void TransientLawRefusals_AreByName()
+    {
+        // No laws at all.
+        var model = Bar(out _);
+        var ex = Assert.Throws<FeaException>(() => ThermalNonlinear.SolveTransient(
+            model, new ThermalTransientOptions(1, 2)));
+        Assert.Contains("At least one", ex.Message, StringComparison.Ordinal);
+
+        // A time-varying load law cannot compose with the per-step sub-runs yet.
+        var lawed = AdiabaticCube(1.0, out _).HeatFlux(
+            Facets.Tag(StructuredTetMesh.XMax), t => 10.0 * t);
+        ex = Assert.Throws<FeaException>(() => ThermalNonlinear.SolveTransient(
+            lawed, new ThermalTransientOptions(1, 2),
+            capacityByRegion: new Dictionary<int, Func<double, double>> { [0] = _ => 5e8 }));
+        Assert.Contains("time-varying", ex.Message, StringComparison.Ordinal);
+
+        // A non-positive specific heat is named at its own temperature.
+        var bad = AdiabaticCube(1.0, out _);
+        ex = Assert.Throws<FeaException>(() => ThermalNonlinear.SolveTransient(
+            bad, new ThermalTransientOptions(1, 2),
+            capacityByRegion: new Dictionary<int, Func<double, double>> { [0] = _ => -1 }));
+        Assert.Contains("capacity law returned", ex.Message, StringComparison.Ordinal);
+
+        // An unknown region has nothing to act on.
+        var unknown = AdiabaticCube(1.0, out _);
+        ex = Assert.Throws<FeaException>(() => ThermalNonlinear.SolveTransient(
+            unknown, new ThermalTransientOptions(1, 2),
+            capacityByRegion: new Dictionary<int, Func<double, double>> { [7] = _ => 5e8 }));
+        Assert.Contains("region id 7", ex.Message, StringComparison.Ordinal);
+    }
 }

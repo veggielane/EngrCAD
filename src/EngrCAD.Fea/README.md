@@ -1648,7 +1648,15 @@ surroundings). `ThermalNonlinear.Solve` is the template's second consumer for k(
 re-assembly per pass through a per-element overlay (NaN = keep the model's law, so a
 directional region elsewhere is untouched), the Kirchhoff-transform slab as the oracle
 (θ linear in x at every node), and the flux caveat stated on the result (the converged
-per-element k rides as `ElementConductivity`). Transients stream: `OnState` sees exactly the states a retained run stores
+per-element k rides as `ElementConductivity`). `ThermalNonlinear.SolveTransient` is the
+property-nonlinear TRANSIENT — c(T) and/or per-step k(T) as one-step constant-property
+sub-runs over a new per-element capacity overlay (rho·c, NaN = keep the material), the
+stepping machinery reused verbatim and the cost stated (`Factorizations` = the step
+count); the oracle is an identity — an insulated cube under uniform generation stays
+spatially uniform, so the FE step IS the scalar recurrence T ← T + dt·g/(ρc(T)) —
+beside first-order convergence onto the enthalpy closed form and a bit-for-bit
+constant-law degeneration; time-varying laws refuse by name (re-basing filed).
+Transients stream: `OnState` sees exactly the states a retained run stores
 (bit-identical, asserted) and `RetainStates = false` caps memory at the two ends — and
 the STRUCTURAL transient streams the same way (`TransientSolveOptions.OnState`, the
 heaviest states of all), with the summary peaks/energies tracked from every streamed

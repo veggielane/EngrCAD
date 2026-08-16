@@ -10304,6 +10304,35 @@ at factor 1 by the same ray. Both hover funnels simply pass the factor now;
 longer arises. What deliberately did NOT change: the index is never rebuilt (the cost
 the design exists to avoid), and the ghost/legend/uniform machinery is untouched.
 
+**The property-nonlinear transient landed as a COMPOSITION, and the composition is the
+design** (`ThermalNonlinear.SolveTransient` — c(T), and k(T) per step, closing the
+thermal follow-ups' capacity item): a temperature-dependent property makes every step's
+matrices functions of the state, so the honest structure is a sequence of ONE-STEP
+constant-property transients — per step, evaluate the laws per element at the step's
+START temperatures, set the internal overlays (a new `OverlayCapacity` carrying rho·c
+beside the conductivity overlay, NaN = keep the model's own material), and run
+`ThermalSolver.SolveTransient` for one step seeded from the previous end state through
+`InitialField`. Nothing of the stepping machinery is restated — the theta schemes,
+lumping, prescribed snapping and the per-step first-law identity all apply verbatim,
+each sub-run being internally a constant-property step — and the cost is stated rather
+than absorbed: `Factorizations` equals the step count BY CONSTRUCTION, the
+one-factorization amortisation being exactly what a property nonlinearity necessarily
+gives up. Property evaluation is EXPLICIT in the step (start-of-step temperatures),
+first order in the property and so matched to backward Euler's own order; the one
+refusal is time-varying load/prescribed laws, because a sub-run's clock restarts at
+zero and the laws would be sampled at the wrong instants (re-basing them per step needs
+a condition-rebuilding seam — filed with that name). The oracle is an IDENTITY rather
+than a convergence claim: an insulated cube under uniform generation keeps a spatially
+uniform field (the generation load vector and the capacity matrix's row action share
+the partition-of-unity weights, so the uniform increment solves the step exactly), and
+the FE run therefore matches the three-line scalar recurrence T ← T + dt·g/(ρc(T)) to
+round-off at ANY step size — beside it, first-order convergence onto the enthalpy
+closed form ρ(c0·T + c0·γ·T²/2) = g·t supplies the physics check, and laws returning
+exactly the material's own constants reproduce the plain transient BIT FOR BIT (the
+wrapper multiplies `Density` by the returned c — the same product the material caches —
+and the overlay branch feeds `ThermalElement.Capacity` the same double, so the
+degeneration is arithmetic, not tolerance).
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
