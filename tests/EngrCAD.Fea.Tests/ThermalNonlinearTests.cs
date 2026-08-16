@@ -218,6 +218,46 @@ public class ThermalNonlinearTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void TimeLaws_ComposeThroughTheSubRuns_BitForBit()
+    {
+        // The re-basing oracle: with constant-property laws the sub-runs' matrices are
+        // the plain run's, so any state difference can only come from a law sampled at
+        // the wrong instant — a sub-run's clock restarts at zero, and the model's law
+        // time offset is what re-bases it. A ramped flux AND a ramped prescribed
+        // temperature cover both law kinds; every stored state must match to the bit.
+        // The step is DYADIC on purpose: the re-based instant is (n−1)·dt + dt against
+        // the plain run's n·dt, exactly equal only when dt's products are exact — at a
+        // general step the two spellings differ by their own ulp, which is the honest
+        // boundary of the bit claim (a WRONG offset shifts the ramp by whole steps,
+        // which this would catch at any dt).
+        const double dt = 0.5;
+        const int steps = 6;
+        ThermalModel Lawed() => Bar(out _)
+            .HeatFlux(Facets.Tag(StructuredTetMesh.YMax), t => 3.0 * t)
+            .Temperature(Facets.Tag(StructuredTetMesh.XMax), t => 100.0 + 5.0 * t);
+
+        var plain = ThermalSolver.SolveTransient(
+            Lawed(), new ThermalTransientOptions(dt, steps) { InitialTemperature = 20 });
+        var run = ThermalNonlinear.SolveTransient(
+            Lawed(), new ThermalTransientOptions(dt, steps) { InitialTemperature = 20 },
+            capacityByRegion: new Dictionary<int, Func<double, double>>
+            {
+                [0] = _ => Metal.SpecificHeat,
+            });
+
+        Assert.Equal(plain.States.Count, run.States.Count);
+        for (int s = 0; s < plain.States.Count; s++)
+        {
+            var a = plain.States[s].Temperature;
+            var b = run.States[s].Temperature;
+            for (int node = 0; node < a.Count; node++)
+                Assert.Equal(
+                    BitConverter.DoubleToInt64Bits(a[node]),
+                    BitConverter.DoubleToInt64Bits(b[node]));
+        }
+    }
+
+    [Fact]
     public void TransientLawRefusals_AreByName()
     {
         // No laws at all.
@@ -225,14 +265,6 @@ public class ThermalNonlinearTests(ITestOutputHelper output)
         var ex = Assert.Throws<FeaException>(() => ThermalNonlinear.SolveTransient(
             model, new ThermalTransientOptions(1, 2)));
         Assert.Contains("At least one", ex.Message, StringComparison.Ordinal);
-
-        // A time-varying load law cannot compose with the per-step sub-runs yet.
-        var lawed = AdiabaticCube(1.0, out _).HeatFlux(
-            Facets.Tag(StructuredTetMesh.XMax), t => 10.0 * t);
-        ex = Assert.Throws<FeaException>(() => ThermalNonlinear.SolveTransient(
-            lawed, new ThermalTransientOptions(1, 2),
-            capacityByRegion: new Dictionary<int, Func<double, double>> { [0] = _ => 5e8 }));
-        Assert.Contains("time-varying", ex.Message, StringComparison.Ordinal);
 
         // A non-positive specific heat is named at its own temperature.
         var bad = AdiabaticCube(1.0, out _);

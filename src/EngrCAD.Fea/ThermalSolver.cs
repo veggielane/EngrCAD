@@ -587,7 +587,7 @@ public static class ThermalSolver
         for (int j = 0; j < lawCount; j++)
         {
             var (pattern, law, _) = model.LoadLaws[j];
-            lawNow[j] = law(0);
+            lawNow[j] = law(model.LawTimeOffset);
             foreach (double w in pattern)
             {
                 patternSum[j] += w;
@@ -719,7 +719,7 @@ public static class ThermalSolver
                 double tNext = step * dt;
                 var loadNext = AssembleLoad(model, tNext);
                 for (int j = 0; j < lawCount; j++)
-                    lawNext[j] = model.LoadLaws[j].Law(tNext);
+                    lawNext[j] = model.LoadLaws[j].Law(model.LawTimeOffset + tNext);
                 if (model.HasPrescribedLaws)
                 {
                     prescribed = PrescribedVector(model, tNext);
@@ -1033,7 +1033,7 @@ public static class ThermalSolver
         var load = AssembleLoad(model);
         foreach (var (pattern, law, _) in model.LoadLaws)
         {
-            double value = law(time);
+            double value = law(model.LawTimeOffset + time);
             if (!double.IsFinite(value))
                 throw new FeaException(
                     $"A time law returned {value:G4} at t = {time:G6}; a law must be "
@@ -1075,7 +1075,7 @@ public static class ThermalSolver
         {
             if (model.PrescribedLawOf(node) is { } law)
             {
-                double value = law(time);
+                double value = law(model.LawTimeOffset + time);
                 if (!double.IsFinite(value))
                     throw new FeaException(
                         $"A prescribed-temperature law returned {value:G4} at t = {time:G6}; "
@@ -1190,10 +1190,17 @@ public static class ThermalSolver
         // measured. Doing it HERE rather than only inside the stepping is what keeps the
         // stored t = 0 state and the arithmetic that steps away from it consistent, so the
         // whole-run first law closes at round-off instead of at 1.1e-2.
+        //
+        // The values come from PrescribedVector — the ONE rule for what a prescribed
+        // node holds at an instant — never from the stored constants: a lawed node's
+        // constant is its law at GLOBAL zero, so a re-based sub-run (LawTimeOffset ≠ 0)
+        // snapping to it would rewrite the node to the wrong instant's value. Law-free
+        // models read the same constants either way, bit for bit.
+        var prescribed = PrescribedVector(model, 0.0);
         for (int i = 0; i < n; i++)
         {
             if (model.IsPrescribed(i))
-                state[i] = model.PrescribedTemperature(i);
+                state[i] = prescribed[i];
         }
         return state;
     }

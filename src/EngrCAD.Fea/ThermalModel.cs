@@ -214,6 +214,13 @@ public sealed class ThermalModel
     /// c(T) transient and cleared in a finally.</summary>
     internal double[]? OverlayCapacity;
 
+    /// <summary>Added to every local instant a time law is asked at — how the
+    /// property-nonlinear transient's one-step sub-runs (whose clocks restart at zero)
+    /// sample their laws at the RUN's own instants. Zero (the default) is the incumbent
+    /// arithmetic bit for bit (adding 0.0 to a non-negative t changes no bits); set
+    /// around a sub-run and cleared in a finally, the overlay convention.</summary>
+    internal double LawTimeOffset;
+
     /// <summary>The accumulated film coefficient on one boundary facet (0 = no
     /// convection).</summary>
     public double FilmCoefficientOf(int facet)

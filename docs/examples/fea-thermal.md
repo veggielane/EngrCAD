@@ -647,8 +647,13 @@ honestly: a property nonlinearity re-assembles and re-factors **every step**
 one-factorization amortisation the linear transient celebrates and this one necessarily
 gives up. The capacity law returns the *specific heat* `c(T)` (the datasheet quantity);
 laws returning the material's own constants reproduce the plain transient **bit for
-bit**, and time-varying load laws are refused by name (a sub-run's clock restarts, so
-composing them needs law re-basing — filed).
+bit** — and time-varying load and prescribed laws compose too: a sub-run's clock
+restarts at zero, so its laws are re-based to the run's own instants internally, and a
+constant-property run carrying a ramped flux and a ramped prescribed temperature
+reproduces the plain lawed transient bit for bit at a dyadic step (the re-based
+instant `(n−1)·dt + dt` and the plain run's `n·dt` agree exactly only where `dt`'s
+products are exact; a general step differs by its own ulp — a *wrong* offset would
+shift the ramp by whole steps).
 
 The oracle is an identity, not a convergence claim: an insulated cube under uniform
 generation stays spatially uniform (the generation load and the capacity rows share the

@@ -181,9 +181,11 @@ public static class ThermalNonlinear
     /// <para><b>Property evaluation is explicit in the step</b> (start-of-step
     /// temperatures), which is first-order in the property — matching backward Euler's
     /// own order; under Crank–Nicolson the property term still limits the run to first
-    /// order, stated rather than discovered. Time-varying LOAD or prescribed laws are
-    /// refused by name: a sub-run's clock restarts at zero, so composing them needs
-    /// law re-basing, a filed follow-up.</para>
+    /// order, stated rather than discovered. Time-varying load and prescribed laws
+    /// COMPOSE: each sub-run's clock restarts at zero, so its laws are re-based to the
+    /// run's own instants through the model's internal law time offset (set around the
+    /// sub-run, cleared in a finally — the overlay convention), and a constant-property
+    /// run with laws reproduces the plain lawed transient bit for bit.</para>
     /// <para>The capacity law returns the SPECIFIC heat c(T) in the material's own
     /// units (the datasheet quantity); the overlay carries rho·c, so a law returning
     /// exactly the material's constant reproduces the plain transient bit for bit —
@@ -202,13 +204,6 @@ public static class ThermalNonlinear
             throw new FeaException(
                 "At least one conductivity or capacity law is required; with neither, "
                 + "use ThermalSolver.SolveTransient.");
-        if (model.HasTimeLaws)
-            throw new FeaException(
-                "A property-nonlinear transient cannot carry time-varying load or "
-                + "prescribed laws yet: each step runs as its own one-step transient "
-                + "whose clock restarts at zero, so the laws would be evaluated at the "
-                + "wrong instants. Re-basing the laws per step is a filed follow-up.");
-
         var mesh = model.Mesh;
         var conductivityLaws = new Func<double, double>?[mesh.ElementCount];
         if (conductivityByRegion is not null)
@@ -286,6 +281,10 @@ public static class ThermalNonlinear
                     Lumping = transient.Lumping,
                     InitialField = current,
                 };
+                // A sub-run's clock restarts at zero, so its laws are re-based to the
+                // RUN's own instants through the model's law time offset — set here,
+                // cleared with the overlays in the finally below.
+                model.LawTimeOffset = (step - 1) * transient.TimeStep;
                 var run = ThermalSolver.SolveTransient(model, subOptions, solve);
                 worstEnergy = Math.Max(worstEnergy, run.Report.EnergyBalanceResidual);
                 worstResidual = Math.Max(worstResidual, run.Report.WorstRelativeResidual);
@@ -313,6 +312,7 @@ public static class ThermalNonlinear
         {
             model.OverlayConductivity = null;
             model.OverlayCapacity = null;
+            model.LawTimeOffset = 0;
         }
 
         if (!transient.RetainStates && states.Count > 2)

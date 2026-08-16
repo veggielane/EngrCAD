@@ -1655,7 +1655,7 @@ stepping machinery reused verbatim and the cost stated (`Factorizations` = the s
 count); the oracle is an identity — an insulated cube under uniform generation stays
 spatially uniform, so the FE step IS the scalar recurrence T ← T + dt·g/(ρc(T)) —
 beside first-order convergence onto the enthalpy closed form and a bit-for-bit
-constant-law degeneration; time-varying laws refuse by name (re-basing filed).
+constant-law degeneration — and time-varying laws COMPOSE (each sub-run's clock re-based through the model's internal law time offset; the degeneration-with-laws test holds the plain lawed transient bit for bit at a dyadic step — the honest boundary, a general step's instants differing by their own ulp).
 Transients stream: `OnState` sees exactly the states a retained run stores
 (bit-identical, asserted) and `RetainStates = false` caps memory at the two ends — and
 the STRUCTURAL transient streams the same way (`TransientSolveOptions.OnState`, the

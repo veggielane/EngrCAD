@@ -10357,6 +10357,33 @@ integer-ratio counts split, circles convert against NURBS partners, and what rem
 refused (non-integer ratios, mixed chain/closed families) is refused because no
 canonical correspondence exists, not because machinery is missing.
 
+**Time laws compose through the property-nonlinear transient now, and the seam is one
+field where the filed shape guessed a rebuild**: the follow-up was filed as "wrap
+`t => law(t0 + t)` at a condition-rebuilding seam the model does not yet expose" —
+but the laws are only ever INVOKED at four sites (the transient's setup and per-step
+evaluations, `AssembleLoad`'s instant form, `PrescribedVector`'s), so the seam is an
+internal `ThermalModel.LawTimeOffset` added at exactly those invocations: a sub-run's
+restarted clock is re-based to the run's own instants by setting the offset before
+each one-step sub-run and clearing it in the finally, the overlay convention verbatim
+and no condition is rebuilt. Offset zero is the incumbent arithmetic bit for bit
+(adding 0.0 to a non-negative instant changes no bits), and the oracle is the
+degeneration WITH laws: a constant-property nonlinear run carrying a ramped flux AND a
+ramped prescribed temperature reproduces the plain lawed transient bit for bit at
+every stored state — asserted at a DYADIC step, which is the claim's honest boundary:
+the re-based instant is (n−1)·dt + dt against the plain run's n·dt, two spellings that
+agree exactly only where dt's products are exact and differ by their own ulp at a
+general step (measured: dt = 0.4 differs at ~1e-11 relative after the solve, dt = 0.5
+to the bit). A WRONG offset shifts the ramp by whole steps and fails at any dt, which
+is what the assertion exists to catch. **Landing it caught a real defect of the
+restating-the-rule family**: `InitialState`'s prescribed-wins-at-t=0 snap read the
+model's stored CONSTANTS, and a lawed node's constant is its law at GLOBAL zero — so a
+re-based sub-run's initial snap silently rewrote every lawed prescribed node to the
+run-start value (measured: the composed prescribed-law run diverged from state 2 by a
+tenth of a kelvin per step, while the flux law composed bit-for-bit — the isolation
+that named the path). The fix asks the ONE rule instead: the snap reads
+`PrescribedVector(model, 0.0)`, which is law-aware and offset-aware, and a law-free
+model reads the same constants through it bit for bit.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
