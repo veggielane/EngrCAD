@@ -245,9 +245,17 @@ the shape's own SDF instead of approximating an offset mesh.
 - **Scallop arithmetic is a chord identity**: `h = r − √(r² − (s/2)²)` with
   `StepoverForScallop` its exact inverse; the classic `s²/8r` is its measured small-stepover
   expansion. Passes are in the shape's own coordinates (G-code z = the TIP) and the stage-2
-  `CncGcodeWriter` carries them unchanged. Ball-nose assumed; flat/bull-nose CL surfaces,
-  raster angle, no-retract row linking, holder collision and rest machining are filed.
+  `CncGcodeWriter` carries them unchanged. Flat/bull-nose cutters, raster angle, no-retract
+  row linking and rest machining have since landed; adaptive stepover stays filed.
   Docs: `docs/examples/cam-surfacing.md`.
+- **`CncHolder.Check`**: holder collision over finished geometry. The holder is a
+  conservative flat disc riding `StickoutLength` above the tip, so a pass point collides
+  exactly when the flat drop-cutter height at the holder's own radius exceeds
+  `cl.z + stickout` — the same `DropProbe` contact arithmetic the flat cutter rides, so the
+  two cannot disagree about what a disc touches. The report carries every colliding point
+  and `MinimumStickout` (the smallest stickout that clears; at it the setup passes, since
+  zero clearance is resting contact). Exact for finishing passes, a lower bound for
+  roughing — in-process stock is the caller's margin.
 
 ## HSM: trochoidal slotting (`CncHsm`)
 

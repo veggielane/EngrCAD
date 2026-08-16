@@ -2518,8 +2518,17 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     (`linkRows:` — rows merge into one pass with connectors sampled ON the CL surface
     via the same tipAt, one plunge instead of one per row, both cutter routes through
     the one serpentine rule, default off byte-identical). **Stage-3 residuals, open**:
-    adaptive stepover from local curvature, holder/shank collision checking, and
-    rest machining (shared with stage 2's entry).
+    adaptive stepover from local curvature. Holder/shank collision LANDED
+    (`CncHolder.Check` — the holder as a conservative flat disc riding stickout
+    above the tip, so collision is the FLAT drop-cutter question at the holder's
+    own radius through the shared `DropProbe`; the report carries every colliding
+    point and `MinimumStickout` = max(required − cl.z), at which the setup passes
+    since zero clearance is resting contact; checked against the FINISHED part
+    with the roughing lower-bound stated; the fixture finding: the raster runs one
+    grid step past the part bounds where the ball's CL dips below the top wrapping
+    the outer edge — exactly √(r²−d²)−r, −1 at a corner — so a boss a rim disc can
+    reach adds that dip and the closed form is not the obstacle height). Rest
+    machining landed with stage 2's entry.
   - **Stage 4 — HSM adaptive clearing** (the research-grade centrepiece, flagged as
     such: Kiri:Moto does not attempt it; Fusion/HSMWorks is the reference).
     **Trochoidal SLOTTING has LANDED** (`CncHsm.TrochoidalSlot`; design.md §6e, docs

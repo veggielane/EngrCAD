@@ -9252,9 +9252,9 @@ r-isolevel lies FARTHER out than the true offset — stock left, never a gouge, 
 direction inherited from the field contract. The stage-2 `CncGcodeWriter` carries surfacing
 passes UNCHANGED — a move's meaning is its shape, so an XYZ-combined raster move cuts at the
 feed rate with nothing new — which is the payoff of classifying moves rather than annotating
-them. Filed by name: flat/bull-nose cutter-location surfaces (v1 assumes a ball of the tool's
-radius), a raster direction other than X, no-retract row linking, adaptive stepover from local
-curvature, holder/shank collision, rest machining.
+them. Filed by name at the time — and since landed with their own records: flat/bull-nose
+cutter-location surfaces, a raster direction other than X, no-retract row linking, rest
+machining, and holder/shank collision; still open: adaptive stepover from local curvature.
 
 **The material-removal record and the toolpath animation landed as the PAIR the animation
 system's own rule splits them into** (`CncStock.Simulate` in Cam; `PathTracks.Follow` in
@@ -9478,6 +9478,40 @@ a statement about the decoder's own 5° re-chording, not about the fit — the 5
 a true arc is SHORTER than the 1° source chords it replaced, so "fitted length exceeds
 chorded length" is false through that instrument even when the fit is perfect, which is why
 the length assertion is against the closed form.
+
+**Holder collision landed as the flat drop-cutter's question asked at the holder's radius**
+(`CncHolder.Check`/`ToolHolder`/`HolderReport`; docs `examples/cam-surfacing.md`): the
+holder is a flat disc of the holder diameter whose bottom rides `StickoutLength` above the
+tip — the CONSERVATIVE envelope of any real tapered holder — so a pass point collides
+exactly when the surface under the disc reaches above `cl.z + stickout`, which is the FLAT
+drop-cutter height at the holder's own radius. The check rides the same vertex/edge/face
+contact arithmetic the flat cutter rides (`DropProbe`, the bucket grid extracted from
+`DropCutter.Raster` as a pure move — the raster is byte-identical — because the bucket cell
+is sized to the REACH and a holder's disc is wider than its cutter's, so each consumer
+builds its own probe), which is what makes it impossible for the holder check and the flat
+cutter to disagree about what a disc touches. **The deliverable is `MinimumStickout` =
+max(required − cl.z) — the number that turns a failing setup into a passing one — and at
+exactly that stickout the setup PASSES**, because zero clearance is resting contact rather
+than a collision (the interference checker's own rule; a report whose own minimum the check
+then refuses would be a useless number). Checked against the FINISHED part with the
+boundary stated: in-process stock is more material, so the check is exact for finishing
+passes — where holder collisions live — and a lower bound for roughing. **The fixture
+finding is that the obstacle height is NOT the closed form**: the raster runs one grid step
+past the part bounds, and there the ball's CL dips BELOW the top face wrapping the outer
+edge — tip = √(r² − d²) − r exactly, −1 at a corner sampled √5 away in XY — so a boss
+that a RIM point's disc can reach adds that dip, and the first fixture's honest minimum was
+13, not the boss's 12. The fixture moved (a small boss centred in a large plate, out of
+every rim disc's reach) rather than the tolerance, and the dip is recorded because it is
+real setup arithmetic a machinist estimating "obstacle height plus a bit" misses the same
+way. Verified: the minimum stickout exactly the boss height at the field-trace grade;
+collisions LOCAL — no colliding point farther than the holder radius from the boss
+footprint, which is what separates a disc query from a bounds test; a narrower holder
+shrinking the collision band by exactly the radius difference while the minimum stays the
+boss height (reach decides WHICH points collide, not how tall the obstacle is); a drill
+operation needing depth-plus-rise; determinism; and refusals by name, including a holder no
+wider than its cutter refused as VACUOUS — such a disc cannot collide before the cutter's
+own flank engages, and the number to verify there is the flute length, which the check does
+not model.
 
 ## 7. Query layer
 

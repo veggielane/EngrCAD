@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Mesh;
 using EngrCAD.Modeling;
 
 namespace EngrCAD.Cam;
@@ -100,64 +101,10 @@ internal static class DropCutter
         double angleDegrees = 0, bool linkRows = false)
     {
         var mesh = shape.ToMesh().Triangulated();
-        var (positions, faces) = mesh.ToIndexed();
         var bounds = shape.Bounds();
-        double floor = bounds.Min.Z;
-        double reach = cutter.Radius;
-
-        // Bucket triangles by XY bounding box on a tool-radius grid; a query collects the
-        // cells the tool's footprint overlaps.
-        double cell = Math.Max(reach, 1e-6);
-        var buckets = new Dictionary<(int, int), List<int>>();
-        for (int f = 0; f < faces.Count; f++)
-        {
-            var tri = faces[f];
-            double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
-            double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
-            foreach (int i in tri)
-            {
-                var p = positions[i];
-                minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
-                minY = Math.Min(minY, p.Y); maxY = Math.Max(maxY, p.Y);
-            }
-            for (int gx = (int)Math.Floor(minX / cell); gx <= (int)Math.Floor(maxX / cell); gx++)
-                for (int gy = (int)Math.Floor(minY / cell); gy <= (int)Math.Floor(maxY / cell); gy++)
-                {
-                    if (!buckets.TryGetValue((gx, gy), out var list))
-                        buckets[(gx, gy)] = list = [];
-                    list.Add(f);
-                }
-        }
-
-        var seen = new int[faces.Count];
-        int stamp = 0;
-        double TipAt(double x, double y)
-        {
-            double best = floor;
-            stamp++;
-            for (int gx = (int)Math.Floor((x - reach) / cell); gx <= (int)Math.Floor((x + reach) / cell); gx++)
-                for (int gy = (int)Math.Floor((y - reach) / cell); gy <= (int)Math.Floor((y + reach) / cell); gy++)
-                {
-                    if (!buckets.TryGetValue((gx, gy), out var list))
-                        continue;
-                    foreach (int f in list)
-                    {
-                        if (seen[f] == stamp)
-                            continue;
-                        seen[f] = stamp;
-                        var tri = faces[f];
-                        double z = TriangleDrop(
-                            positions[tri[0]], positions[tri[1]], positions[tri[2]],
-                            x, y, cutter);
-                        if (z > best)
-                            best = z;
-                    }
-                }
-            return best;
-        }
-
-        return CncSurfacing.SerpentineRaster(tool, bounds, sampleStep, name, TipAt,
-            angleDegrees, linkRows);
+        var probe = new DropProbe(mesh, cutter.Radius, bounds.Min.Z);
+        return CncSurfacing.SerpentineRaster(tool, bounds, sampleStep, name,
+            (x, y) => probe.TipAt(x, y, cutter), angleDegrees, linkRows);
     }
 
     /// <summary>The tip height at which the cutter, axis at (x, y), first touches this
@@ -279,4 +226,77 @@ internal static class DropCutter
     }
 
     private static double Hypot(double dx, double dy) => Math.Sqrt(dx * dx + dy * dy);
+}
+
+/// <summary>The reusable half of the drop-cutter: triangles bucketed by XY bounding box on a
+/// reach-sized grid, answering "the tip height at which a cutter axis at (x, y) first touches
+/// the surface" as the max <see cref="DropCutter.TriangleDrop"/> over the nearby triangles,
+/// clamped below to the part's own floor. Built once per (mesh, reach) — the raster and the
+/// holder-collision check each build their own, because the bucket cell is sized to the
+/// reach and a holder's disc is wider than its cutter's. Sequential use only (the visited
+/// stamp is shared state).</summary>
+internal sealed class DropProbe
+{
+    private readonly List<(Vector3d A, Vector3d B, Vector3d C)> _triangles = [];
+    private readonly Dictionary<(int, int), List<int>> _buckets = [];
+    private readonly int[] _seen;
+    private readonly double _cell;
+    private readonly double _reach;
+    private readonly double _floor;
+    private int _stamp;
+
+    public DropProbe(HalfEdgeMesh mesh, double reach, double floor)
+    {
+        var (positions, faces) = mesh.ToIndexed();
+        _reach = reach;
+        _floor = floor;
+        _cell = Math.Max(reach, 1e-6);
+        for (int f = 0; f < faces.Count; f++)
+        {
+            var tri = faces[f];
+            _triangles.Add((positions[tri[0]], positions[tri[1]], positions[tri[2]]));
+            double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+            double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+            foreach (int i in tri)
+            {
+                var p = positions[i];
+                minX = Math.Min(minX, p.X); maxX = Math.Max(maxX, p.X);
+                minY = Math.Min(minY, p.Y); maxY = Math.Max(maxY, p.Y);
+            }
+            for (int gx = (int)Math.Floor(minX / _cell); gx <= (int)Math.Floor(maxX / _cell); gx++)
+                for (int gy = (int)Math.Floor(minY / _cell); gy <= (int)Math.Floor(maxY / _cell); gy++)
+                {
+                    if (!_buckets.TryGetValue((gx, gy), out var list))
+                        _buckets[(gx, gy)] = list = [];
+                    list.Add(f);
+                }
+        }
+        _seen = new int[faces.Count];
+    }
+
+    /// <summary>Max contact height over the triangles within reach of (x, y), or the floor
+    /// when nothing is. The cutter's radius must not exceed the reach the probe was built
+    /// with, or the bucket query misses triangles the disc can touch.</summary>
+    public double TipAt(double x, double y, MillCutter cutter)
+    {
+        double best = _floor;
+        _stamp++;
+        for (int gx = (int)Math.Floor((x - _reach) / _cell); gx <= (int)Math.Floor((x + _reach) / _cell); gx++)
+            for (int gy = (int)Math.Floor((y - _reach) / _cell); gy <= (int)Math.Floor((y + _reach) / _cell); gy++)
+            {
+                if (!_buckets.TryGetValue((gx, gy), out var list))
+                    continue;
+                foreach (int f in list)
+                {
+                    if (_seen[f] == _stamp)
+                        continue;
+                    _seen[f] = _stamp;
+                    var (a, b, c) = _triangles[f];
+                    double z = DropCutter.TriangleDrop(a, b, c, x, y, cutter);
+                    if (z > best)
+                        best = z;
+                }
+            }
+        return best;
+    }
 }

@@ -173,7 +173,41 @@ end and the next row's start sampled *on* the cutter-location surface through th
 drop — the link carries exactly the fidelity a within-row chord does, and one plunge
 replaces one per row.
 
+## Holder collision (`CncHolder`)
+
+The holder is modelled as a **flat disc** of the holder diameter whose bottom rides
+`StickoutLength` above the tool tip — the conservative envelope of any real tapered holder
+— so a pass point collides exactly when the surface under the disc reaches above
+`cl.z + stickout`, which is the *flat drop-cutter question at the holder's own radius*:
+the check rides the same vertex/edge/face contact arithmetic the flat cutter rides, so the
+holder check and the flat cutter cannot disagree about what a disc touches.
+
+The deliverable is `MinimumStickout` — the smallest stickout that clears every pass point
+— and at exactly that stickout the setup **passes** (zero clearance is resting contact,
+not a collision). The check runs against the *finished* part, stated rather than hidden:
+in-process stock is more material, so it is exact for finishing passes (where holder
+collisions live) and a lower bound for roughing.
+
+```csharp run:cam-holder
+var part = Shape.Box(100, 60, 6).Translate(0, 0, -3)
+    .Union(Shape.Box(10, 10, 12).Translate(20, 0, 6));
+var finish = CncSurfacing.Raster(part, new MillTool(6), sampleStep: 2);
+var report = CncHolder.Check(part, finish, new ToolHolder(Diameter: 20, StickoutLength: 8));
+Console.WriteLine($"stickout 8: {report.Collisions.Count} collisions, "
+    + $"minimum stickout {report.MinimumStickout:0.######}");
+Console.WriteLine($"worst deficit {report.Collisions.Max(c => c.Deficit):0.###} "
+    + "(how far the disc reaches into the part)");
+var fixedUp = CncHolder.Check(part, finish, new ToolHolder(20, report.MinimumStickout));
+Console.WriteLine($"at the reported minimum: {(fixedUp.Ok ? "clear" : "still colliding")}");
+```
+
+One number in that fixture is worth knowing about: the raster runs one grid step past the
+part bounds, and there the ball's CL dips *below* the top face as it wraps the outer edge
+(exactly `√(r² − d²) − r`, −1 at a corner sampled √5 away in XY) — so a boss that a rim
+point's disc can reach adds that dip to the minimum stickout, and the honest closed form
+stops being the obstacle height. Real setup arithmetic, and exactly the kind a machinist
+eyeballing "boss height plus a bit" misses the same way.
+
 **Not in stage 3** (each filed in the campaign): adaptive stepover from local curvature,
-holder/shank collision checking, and HSM adaptive clearing (stage 4). Rest machining landed
-on the milling page; the flat/bull waterline above landed as the silhouette-dilation
-contour.
+and HSM adaptive clearing (stage 4). Rest machining landed on the milling page; the
+flat/bull waterline above landed as the silhouette-dilation contour.
