@@ -1644,7 +1644,8 @@ iteration (per-facet linearization exact at its own point through the model's in
 film overlay — a radiating facet counts as driven; the plain Picard map measurably
 oscillates); the oracle is the lumped Stefan-Boltzmann equilibrium solved independently
 by bisection, and temperatures must be ABSOLUTE (a celsius model refuses by name at the
-surroundings).
+surroundings). Transients stream: `OnState` sees exactly the states a retained run stores
+(bit-identical, asserted) and `RetainStates = false` caps memory at the two ends.
 
 ## Verification
 

@@ -186,6 +186,21 @@ public sealed record ThermalTransientOptions
             field = value;
         }
     } = 1;
+
+    /// <summary>Streams each state the run would store — the same states, in the same
+    /// order, that <see cref="ThermalTransientResults.States"/> would hold (step 0 and the
+    /// final step included, <see cref="StoreEvery"/> honoured) — so a run of any length
+    /// can write each state to a `.vtu` and discard it. Combine with
+    /// <see cref="RetainStates"/> = false to cap the run's memory: the returned results
+    /// then keep only the initial and final states, and the callback is the record.</summary>
+    public Action<ThermalResults>? OnState { get; init; }
+
+    /// <summary>False drops every intermediate state from the returned
+    /// <see cref="ThermalTransientResults.States"/> (the initial and final states are
+    /// always kept — the ends are what every summary reads); the per-state record is then
+    /// <see cref="OnState"/>'s to keep. True (the default) retains everything StoreEvery
+    /// says, as ever.</summary>
+    public bool RetainStates { get; init; } = true;
 }
 
 /// <summary>
@@ -666,15 +681,17 @@ public static class ThermalSolver
         // evaluated with no storage rate and reports how far that condition is from steady
         // — informative rather than a correctness check, and documented as such on
         // ThermalTransientResults.Initial.
-        states.Add(new ThermalResults(
+        var initial = new ThermalResults(
             model, (double[])current.Clone(),
             StepReport(
                 model, current,
                 EnergyBalance(model, conduction, load, current, null,
                     LawApplied(lawNow), LawAppliedScale(lawNow), SupplyAt(lawNow)),
                 options, a, 0, true),
-            0));
+            0);
+        states.Add(initial);
         times.Add(0);
+        transient.OnState?.Invoke(initial);
 
         var freeCurrent = new double[freeCount];
         var freeNext = new double[freeCount];
@@ -765,11 +782,16 @@ public static class ThermalSolver
             bool store = step % transient.StoreEvery == 0 || step == transient.Steps;
             if (store)
             {
-                states.Add(new ThermalResults(
+                var state = new ThermalResults(
                     model, (double[])current.Clone(),
                     StepReport(model, current, stepBalance, options, a, worstResidual, converged),
-                    step * dt));
-                times.Add(step * dt);
+                    step * dt);
+                transient.OnState?.Invoke(state);
+                if (transient.RetainStates || step == transient.Steps)
+                {
+                    states.Add(state);
+                    times.Add(step * dt);
+                }
             }
         }
         progress?.Report(1);

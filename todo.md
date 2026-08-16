@@ -696,9 +696,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   - [ ] **Two-way coupling** (deformation feeding back into conduction) is a staggered or
     monolithic solver, not an extension of the one-way path. Filed for completeness; the
     one-way direction covers thermal stress, which is what is usually wanted.
-  - [ ] **A transient stores every state's full field**, so a long run at `StoreEvery = 1`
-    is O(steps × nodes) doubles. `StoreEvery` is the current answer; a callback per step
-    (write to `.vtu` and discard) would let a run of any length stream.
   - [ ] **`Part.Results` has no time axis**, so publishing a transient means choosing one
     state. That is the "time-varying results (a load step / frequency slider driving
     `Part.Results`)" item already filed under results follow-ups; the thermal solver is

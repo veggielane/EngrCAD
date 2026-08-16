@@ -9702,6 +9702,15 @@ lumped Stefan–Boltzmann closed form solved INDEPENDENTLY by bisection on the b
 (2e-3, the radiative-Biot grade); the small-signal limit degenerating to a convective film
 at 4σεTs³ within the quadratic correction; determinism to the bit; refusals by name.
 
+**The thermal transient streams** (`ThermalTransientOptions.OnState` +
+`RetainStates`): a long run at `StoreEvery = 1` held O(steps × nodes) doubles, and the
+filed answer was the right one — a callback per stored state, invoked with EXACTLY the
+states a retained run stores (same times, fields bit-identical, StoreEvery honoured, the
+initial and final states included), with `RetainStates = false` capping the returned list
+at the two ends so the callback is the record and the run's memory is O(nodes). The
+assertion is the bit-for-bit correspondence against a retained twin, which is what stops a
+streaming path from quietly seeing different states than the list holds.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

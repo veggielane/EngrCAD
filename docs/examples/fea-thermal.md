@@ -573,6 +573,10 @@ quarter of `E·alpha·dT`). A statically determinate 3-2-1 restraint gives 1e-10
 - **Constant material properties.** `k`, `c` and `alpha` do not vary with temperature, so
   the problem stays linear and the solve is one factorization. Temperature-dependent
   properties make it nonlinear and are a different solver wrapping this one.
+- **A transient streams** when asked: `OnState` sees exactly the states a retained run
+  stores (bit-identical, asserted against a retained twin) and `RetainStates = false` caps
+  the returned list at the two ends — a run of any length writes each state to a `.vtu`
+  and discards it.
 - **The time STEP is constant**, deliberately: it is what makes one factorization serve
   the whole run. Time-varying boundary *values* are first-class (the law overloads above);
   a time-varying step is the different, much larger change.
