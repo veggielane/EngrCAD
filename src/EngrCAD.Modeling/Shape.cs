@@ -239,7 +239,10 @@ public abstract class Shape
     /// <summary>
     /// Skins a solid through two or more planar cross-sections — OCCT's
     /// <c>BRepOffsetAPI_ThruSections</c>, via <see cref="SolidFactory.Loft"/>. Sections
-    /// must have matching segment counts (they correspond by segment index); winding
+    /// correspond by segment index; matching counts loft directly, an INTEGER-ratio
+    /// count splits the coarser section's segments into equal-parameter pieces at
+    /// lowering (no geometry moves — a square lofting to an octagon splits each side
+    /// once), and a non-integer ratio fails at the call; winding
     /// and starting segment are aligned automatically to the least-twist match, and the
     /// first and last sections are capped, so the result is always a closed solid.
     /// <para>Representation support: <b>B-Rep-Native</b> under any similarity, MIRRORED
@@ -403,7 +406,7 @@ public abstract class Shape
                 throw new ArgumentException("Loft sections must not be null.", nameof(sections));
         }
         bool singleClosed = sections[0].IsSingleClosedCurve;
-        int segmentCount = sections[0].Segments.Count;
+        int largest = sections[0].Segments.Count;
         for (int k = 1; k < sections.Count; k++)
         {
             if (sections[k].IsSingleClosedCurve != singleClosed)
@@ -411,11 +414,19 @@ public abstract class Shape
                     "Loft sections must be all single closed curves or all segment chains; " +
                     $"section 0 is {(singleClosed ? "a closed curve" : "a chain")} but section {k} is not.",
                     nameof(sections));
-            if (sections[k].Segments.Count != segmentCount)
+            largest = Math.Max(largest, sections[k].Segments.Count);
+        }
+        for (int k = 0; k < sections.Count; k++)
+        {
+            // Integer-ratio counts split at lowering (the coarser section's segments
+            // become equal-parameter CurveSegment pieces); a non-integer ratio has no
+            // canonical correspondence and fails here, at the call that built it.
+            if (largest % sections[k].Segments.Count != 0)
                 throw new ArgumentException(
-                    $"Loft sections must have the same segment count: section 0 has {segmentCount}, " +
-                    $"section {k} has {sections[k].Segments.Count}. Split the coarser section so the " +
-                    "segments correspond (sections match by segment index).", nameof(sections));
+                    $"Loft sections have segment counts {sections[k].Segments.Count} (section {k}) " +
+                    $"and {largest} whose ratio is not an integer, so there is no canonical " +
+                    "correspondence to split into. Rebuild the sections with matching or " +
+                    "integer-ratio segment counts (sections match by segment index).", nameof(sections));
         }
     }
 

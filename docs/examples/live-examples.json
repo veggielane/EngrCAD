@@ -554,6 +554,11 @@
       "live": true
     },
     {
+      "id": "loft-split",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
       "id": "loft-transition",
       "page": "examples/loft-draft-shell.md",
       "live": true

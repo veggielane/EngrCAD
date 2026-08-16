@@ -314,10 +314,30 @@ public class LoftTests
     }
 
     [Fact]
+    public void Loft_IntegerRatioCounts_SplitTheCoarserSection()
+    {
+        // A 4-segment square against an 8-point description of its half-scale copy:
+        // the coarser section's sides split once each (equal-parameter CurveSegment
+        // pieces, no geometry moved), so the loft builds with 8 wall strips.
+        var top = Profile.FromPoints(
+        [
+            (-0.5, -0.5, 3), (0, -0.5, 3), (0.5, -0.5, 3), (0.5, 0, 3),
+            (0.5, 0.5, 3), (0, 0.5, 3), (-0.5, 0.5, 3), (-0.5, 0, 3),
+        ]);
+        var solid = SolidFactory.Loft(Square(1, 0), top);
+        solid.Validate();
+        Assert.Equal(16, solid.Vertices.Count());
+        Assert.Equal(24, solid.Edges.Count());
+        Assert.Equal(10, solid.Faces.Count()); // 8 wall strips + 2 caps
+        Assert.True(solid.SatisfiesEulerFormula(genus: 0));
+    }
+
+    [Fact]
     public void Loft_Validations()
     {
         Assert.Throws<ArgumentException>(() => SolidFactory.Loft([Square(1, 0)]));
-        // Mismatched segment counts.
+        // NON-INTEGER-ratio segment counts (4 against 3) have no canonical
+        // correspondence to split into and stay refused.
         Assert.Throws<ArgumentException>(() => SolidFactory.Loft(
             Square(1, 0), Profile.FromPoints([(-1, -1, 2), (1, -1, 2), (0, 1, 2)])));
         // Chain against single closed curve.

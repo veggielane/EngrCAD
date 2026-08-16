@@ -32,14 +32,16 @@ public static partial class SolidFactory
     /// two-manifold edge use).
     ///
     /// <para><b>Compatibility.</b> Sections are matched by <i>segment index</i> and by
-    /// <i>normalized curve parameter</i>, so they must already have the same number of
-    /// segments — this factory does not degree-elevate or merge knot vectors, it rejects
-    /// mismatched sections with a message saying so. (A section with too few segments can
-    /// be split with <c>Sketch</c> or by <see cref="CurveSegment"/>.) The one automatic
-    /// compatibility fix is representational, not geometric: where one section's segment is
-    /// straight and another's is curved, the straight one is re-expressed as an exact
-    /// degree-1 <see cref="NurbsCurve"/> so both sides sample at the same density and the
-    /// tessellation welds.</para>
+    /// <i>normalized curve parameter</i>. Where segment counts differ by an INTEGER
+    /// ratio, the coarser section's segments split into equal-parameter
+    /// <see cref="CurveSegment"/> pieces automatically — no geometry moves and the
+    /// correspondence stays natural (a square lofting to an octagon splits each side
+    /// once). A non-integer ratio has no canonical correspondence and is rejected with
+    /// a message saying so; this factory does not degree-elevate or merge knot vectors.
+    /// The other automatic compatibility fix is representational, not geometric: where
+    /// one section's segment is straight and another's is curved, the straight one is
+    /// re-expressed as an exact degree-1 <see cref="NurbsCurve"/> so both sides sample
+    /// at the same density and the tessellation welds.</para>
     ///
     /// <para><b>Alignment.</b> Sections are aligned before skinning, so the caller need not
     /// wind or start them consistently: (1) any section wound against the loft direction is
@@ -83,7 +85,7 @@ public static partial class SolidFactory
             if (section is null)
                 throw new ArgumentException("Loft sections must not be null.", nameof(sections));
         }
-        ValidateLoftFamily(sections, "sections", nameof(sections));
+        var compatibleSections = MakeLoftFamilyCompatible(sections, "sections", nameof(sections));
 
         int holeCount = 0;
         if (holesPerSection is { Count: > 0 })
@@ -104,7 +106,7 @@ public static partial class SolidFactory
             }
         }
 
-        var aligned = AlignLoftSections(sections);
+        var aligned = AlignLoftSections(compatibleSections);
         aligned = UnifyLoftSectionSampling(aligned);
         var parameters = LoftSectionParameters(aligned);
 
@@ -116,8 +118,9 @@ public static partial class SolidFactory
                 family[k] = holesPerSection![k][j]
                     ?? throw new ArgumentException(
                         $"Hole {j} of section {k} is null.", nameof(holesPerSection));
-            ValidateLoftFamily(family, $"hole {j}'s sections", nameof(holesPerSection));
-            var alignedFamily = AlignLoftSections(family);
+            var compatibleFamily = MakeLoftFamilyCompatible(
+                family, $"hole {j}'s sections", nameof(holesPerSection));
+            var alignedFamily = AlignLoftSections(compatibleFamily);
             alignedFamily = UnifyLoftSectionSampling(alignedFamily);
             for (int k = 0; k < alignedFamily.Length; k++)
                 alignedFamily[k] = alignedFamily[k].Reversed();
@@ -127,13 +130,23 @@ public static partial class SolidFactory
         return BuildLoftedSolid(aligned, holeFamilies, parameters, style == LoftStyle.Ruled);
     }
 
-    /// <summary>The compatibility rule one loop family must satisfy — the outer
-    /// sections and each hole family alike: consistent single-closed-ness and equal
-    /// segment counts, matched by index.</summary>
-    private static void ValidateLoftFamily(IReadOnlyList<Profile> family, string what, string parameter)
+    /// <summary>
+    /// The compatibility preprocessing one loop family gets — the outer sections and
+    /// each hole family alike: consistent single-closed-ness (refused otherwise), then
+    /// segment counts unified by splitting each coarser member's segments into
+    /// equal-parameter <see cref="CurveSegment"/> pieces. No geometry moves and the
+    /// correspondence stays natural (a square lofting to an octagon splits each side
+    /// once); legal only when every count divides the largest, since a non-integer
+    /// ratio has no canonical correspondence and refuses by name. Breakpoints are
+    /// computed ONCE per segment so consecutive pieces share their joint parameter
+    /// bit-for-bit (the canonical-crossing rule), and the extreme breaks take the
+    /// segment's own domain values verbatim so the chain's corners are untouched.
+    /// </summary>
+    private static Profile[] MakeLoftFamilyCompatible(
+        IReadOnlyList<Profile> family, string what, string parameter)
     {
         bool singleClosed = family[0].IsSingleClosedCurve;
-        int segmentCount = family[0].Segments.Count;
+        int target = family[0].Segments.Count;
         for (int k = 1; k < family.Count; k++)
         {
             if (family[k].IsSingleClosedCurve != singleClosed)
@@ -141,14 +154,44 @@ public static partial class SolidFactory
                     $"Loft {what} must be all single closed curves or all segment chains; " +
                     $"member 0 is {(singleClosed ? "a closed curve" : "a chain")} but member {k} is not.",
                     parameter);
-            if (family[k].Segments.Count != segmentCount)
-                throw new ArgumentException(
-                    $"Loft {what} must have the same segment count: member 0 has {segmentCount}, " +
-                    $"member {k} has {family[k].Segments.Count}. Split the coarser one so the " +
-                    "segments correspond (this factory matches by segment index, it does not " +
-                    "re-parameterize sections to make them compatible).",
-                    parameter);
+            target = Math.Max(target, family[k].Segments.Count);
         }
+
+        var result = new Profile[family.Count];
+        for (int k = 0; k < family.Count; k++)
+        {
+            int count = family[k].Segments.Count;
+            if (count == target)
+            {
+                result[k] = family[k];
+                continue;
+            }
+            if (target % count != 0)
+                throw new ArgumentException(
+                    $"Loft {what} have segment counts {count} (member {k}) and {target} whose " +
+                    "ratio is not an integer, so there is no canonical correspondence to split " +
+                    "into. Rebuild the sections with matching or integer-ratio segment counts " +
+                    "(this factory matches by segment index, it does not re-parameterize " +
+                    "sections to make them compatible).",
+                    parameter);
+
+            int ratio = target / count;
+            var split = new Curve3d[target];
+            for (int i = 0; i < count; i++)
+            {
+                var segment = family[k].Segments[i];
+                var domain = segment.Domain;
+                var breaks = new double[ratio + 1];
+                breaks[0] = domain.Start;
+                breaks[ratio] = domain.End;
+                for (int j = 1; j < ratio; j++)
+                    breaks[j] = domain.Start + domain.Length * j / ratio;
+                for (int j = 0; j < ratio; j++)
+                    split[i * ratio + j] = new CurveSegment(segment, breaks[j], breaks[j + 1]);
+            }
+            result[k] = new Profile(split);
+        }
+        return result;
     }
 
     /// <summary>Two-section convenience overload.</summary>

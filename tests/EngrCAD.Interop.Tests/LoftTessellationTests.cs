@@ -224,6 +224,47 @@ public class LoftTessellationTests
         [(cx - half, -half, z), (cx + half, -half, z), (cx + half, half, z), (cx - half, half, z)]);
 
     [Fact]
+    public void Loft_IntegerRatioCounts_KeepTheExactFrustumVolume()
+    {
+        // The 4-segment square lofts to its half-scale copy described as 8 points:
+        // after the split the correspondence pairs corners with corners and midpoints
+        // with midpoints, every strip is half of the unsplit frustum's planar wall,
+        // and the frustum closed form stays an identity of the tessellation.
+        var top = Profile.FromPoints(
+        [
+            (-0.5, -0.5, 3), (0, -0.5, 3), (0.5, -0.5, 3), (0.5, 0, 3),
+            (0.5, 0.5, 3), (0, 0.5, 3), (-0.5, 0.5, 3), (-0.5, 0, 3),
+        ]);
+        var mesh = BRepTessellator.Tessellate(SolidFactory.Loft(Square(1, 0), top));
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(Frustum(2 * 2, 1 * 1, 3), mesh.Volume(), 9);
+    }
+
+    [Fact]
+    public void Loft_SquareToRegularOctagon_SplitsClosedAndManifold()
+    {
+        // A genuinely different top shape: the square's sides split once and the
+        // strips are non-planar ruled quads, so the volume is only sandwiched between
+        // the two sections' prisms — the closed manifold weld through the split path
+        // is the content here.
+        var octagon = Profile.FromPoints(
+        [
+            .. Enumerable.Range(0, 8).Select(i =>
+            {
+                double a = Math.PI / 8 + i * Math.PI / 4;
+                return ((Vector3d)(1.5 * Math.Cos(a), 1.5 * Math.Sin(a), 4));
+            }),
+        ]);
+        var mesh = BRepTessellator.Tessellate(SolidFactory.Loft(Square(2, 0), octagon));
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+        double octagonArea = 2 * Math.Sqrt(2) * 1.5 * 1.5;
+        Assert.InRange(mesh.Volume(), octagonArea * 4, 16 * 4);
+    }
+
+    [Fact]
     public void Loft_TwistAlignedSections_WeldAndKeepTheirVolume()
     {
         // Sections listed from different corners and wound oppositely: alignment must

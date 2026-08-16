@@ -1624,8 +1624,10 @@ sample the same points.
 Loft sections carry HOLES (`Loft(sections, holesPerSection, style)` — hole j of every
 section lofts into its own inner skin, aligned by the outer's least-twist rules then
 reversed so winding carries orientation, sharing the outer's global v; the caps gain
-hole loops). Remaining loft gaps: sections must already be segment-compatible (no degree
-elevation / knot merging), open (uncapped) skins, periodic lofts that
+hole loops). Integer-ratio segment counts split the coarser section automatically (equal-parameter
+`CurveSegment` pieces, per family — holes included; non-integer ratios refuse by name).
+Remaining loft gaps: single-NURBS sections need degree elevation / knot merging,
+open (uncapped) skins, periodic lofts that
 close back on the first section, guide curves / spine, and the "pipe shell with evolution
 law" generalization (a section scaled and twisted along a spine — which is a loft whose
 sections are generated rather than given, so it lands on `LoftedSurface` once a law

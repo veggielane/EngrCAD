@@ -13,10 +13,13 @@ mesh through the exact B-Rep, and refuses what it cannot do exactly by name —
 ## Loft: skin through sections
 
 `Shape.Loft` takes two or more sketches, each placed by its own `SketchPlane`, and
-skins a closed solid through them. Sections must have the same segment count (they
-correspond by segment index); winding and starting segment are aligned automatically to
-the least-twist match, and the ends are capped. Here a rectangle (four lines) becomes a
-slot (two lines, two arcs):
+skins a closed solid through them. Sections correspond by segment index: matching
+counts loft directly, and an *integer-ratio* count splits the coarser section's
+segments automatically (equal-parameter pieces, no geometry moved — a square lofting
+to an octagon splits each side once), while a non-integer ratio fails at the call.
+Winding and starting segment are aligned automatically to the least-twist match, and
+the ends are capped. Here a rectangle (four lines) becomes a slot (two lines, two
+arcs):
 
 ```csharp render:loft-transition
 var transition = Shape.Loft(
@@ -52,6 +55,23 @@ scene.Add(new Part("funnel", funnel));
 Ruled lofts of polygonal sections are exact prismatoids — the two-rectangle loft above
 has the closed-form volume `h·(A₀/3 + Aₘᵢₓ/6·2 + A₁/3)`, and the tests hold the
 tessellated solid to it at nine digits.
+
+The split is what lets a four-sided rectangle loft straight into an eight-segment
+rounded rectangle:
+
+```csharp render:loft-split
+var transition = Shape.Loft(
+[
+    (Sketch.Rectangle(26, 16), SketchPlane.XY),
+    (Sketch.RoundedRectangle(20, 12, 4),
+        SketchPlane.At((0, 0, 12), Vector3d.UnitX, Vector3d.UnitY)),
+]);
+
+var scene = new Scene();
+scene.Add(new Part("transition", transition, Palette.Brass));
+```
+
+![A rectangle lofting to a rounded rectangle: the coarser section splits automatically](images/loft-split.png)
 
 ### Sections with holes
 

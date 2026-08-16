@@ -10256,6 +10256,28 @@ six decimals on the same closed form. The consequence stated in the API: a pure 
 of a holed sketch is B-Rep-Native, so a washer tapers with its bore about the same
 scaling centre instead of refusing toward a boolean.
 
+**Integer-ratio loft section counts split automatically now** (the loft follow-ups'
+first compatibility route; `SolidFactory.MakeLoftFamilyCompatible`): where a family's
+segment counts differ by an integer ratio, the coarser member's segments split into
+equal-parameter `CurveSegment` pieces before alignment — no geometry moves, and the
+correspondence stays natural (a square lofting to an octagon splits each side once,
+its corners AND midpoints pairing with the octagon's corners). It is per FAMILY, so
+holes inherit it, and a non-integer ratio still refuses by name at both the kernel and
+the `Shape.Loft` construction check, since it has no canonical correspondence. Two
+details carry the exactness: breakpoints are computed ONCE per segment so consecutive
+pieces share their joint parameter bit-for-bit (the canonical-crossing rule), and the
+extreme breaks take the segment's own domain values verbatim so the chain's corners
+are untouched. The pieces compose with everything downstream because `CurveSegment`
+already speaks the vocabulary — `Underlying` forwards, so the sampling unification
+still recognises a split straight piece and re-expresses it as a degree-1 NURBS from
+the PIECE's own endpoints where its partner strip is curved (which is what makes the
+old refusal fixture, Rectangle to RoundedRectangle at ratio 2, loft and weld). The
+oracle with teeth is the identity case: a 4-segment square lofting to its half-scale
+copy described as 8 points pairs corners with corners and midpoints with midpoints, so
+every strip is half of the unsplit frustum's planar wall and Frustum(4, 1, 3) stays a
+nine-decimal identity of the tessellation — a split placed wrongly by even one index
+breaks it. The NURBS degree-elevation route (A5.9) stays filed as the remaining half.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

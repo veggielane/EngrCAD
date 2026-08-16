@@ -165,10 +165,14 @@ public class LoftShapeTests
         Assert.Throws<ArgumentException>(() =>
             Shape.Loft([(Sketch.Rectangle(4, 4), PlaneAt(0))]));
 
-        // Mismatched segment counts (rectangle = 4, rounded rectangle = 8) fail at the
-        // CALL, not deep inside a lowering.
+        // NON-INTEGER-ratio segment counts (rectangle = 4, pentagon = 5) fail at the
+        // CALL, not deep inside a lowering. (Rectangle against rounded rectangle is an
+        // integer ratio now and lofts — see the split test below.)
         Assert.Throws<ArgumentException>(() => Shape.Loft(
-            [(Sketch.Rectangle(6, 4), PlaneAt(0)), (Sketch.RoundedRectangle(6, 4, 1), PlaneAt(5))]));
+        [
+            (Sketch.Rectangle(6, 4), PlaneAt(0)),
+            (Sketch.Polygon([(3, 0), (0.9, 2.9), (-2.4, 1.8), (-2.4, -1.8), (0.9, -2.9)]), PlaneAt(5)),
+        ]));
 
         // Hole counts must match across sections (holes correspond by declaration order).
         var holed = Sketch.Rectangle(8, 8).WithHole(Sketch.Circle(2));
@@ -222,6 +226,25 @@ public class LoftShapeTests
         Assert.Equal(
             RuledRectVolume(6, 4, 3, 2, H) - RuledRectVolume(2, 1, 1, 0.5, H),
             taperedMesh.Volume(), 9);
+    }
+
+    [Fact]
+    public void Loft_RectangleToRoundedRectangle_SplitsTheCoarserSection()
+    {
+        // The old refusal fixture pair: 4 segments against 8 is an INTEGER ratio, so
+        // the rectangle's sides split once each at lowering and the transition lofts —
+        // with the sampling unification promoting the split straight pieces to
+        // degree-1 NURBS where their partner strip is an arc, so the skin welds.
+        var loft = Shape.Loft(
+            [(Sketch.Rectangle(6, 4), PlaneAt(0)), (Sketch.RoundedRectangle(6, 4, 1), PlaneAt(5))]);
+        var brep = loft.ToBrep();
+        brep.Validate();
+        var mesh = BRepTessellator.Tessellate(brep);
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+        // Sandwiched between the rounded section's prism and the rectangle's.
+        double roundedArea = 6 * 4 - (4 - Math.PI);
+        Assert.InRange(mesh.Volume(), roundedArea * 5 * 0.98, 6 * 4 * 5);
     }
 
     // ---- LoftAlong: the evolution-law loft (pipe shell with a law) ----
