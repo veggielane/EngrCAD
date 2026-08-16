@@ -755,12 +755,10 @@ export — is recorded in CLAUDE.md):
   `Heightmap.Mesh/ReadDat/ReadPng`; **colour-PNG luminance ✅ landed** — truecolor RGB/RGBA
   → Rec. 709 relative luminance `0.2126 R + 0.7152 G + 0.0722 B`, a documented rule, alpha
   ignored, palette still refused by name; **chunk CRC verification ✅ landed** — CRC-32/
-  ISO-HDLC checked on critical chunks, a corrupt IHDR/IDAT named): **Adam7 interlaced PNGs**
-  remain (rejected by name today — needs the seven-pass de-interlace, each pass its own
-  scanline-filter stream at reduced dimensions).
-- [ ] `BrepSolid` one-call transform story (`TransformedCurve` exists; add
-  `TransformedSurface` or per-type transforms; `HalfEdgeMesh.Transformed(m)` ✅ landed
-  with winding flip)
+  ISO-HDLC checked on critical chunks, a corrupt IHDR/IDAT named): Adam7 interlace
+  ✅ landed (seven per-pass filter streams, empty passes contributing no bytes,
+  twin-encoder-verified bit-identical to the straight spelling across gray-8/16,
+  truecolor and empty-pass sizes); nothing remains open here.
 - [x] ~~mirror B-Rep completion, remaining nodes~~ ✅ **landed in full** — revolve/sweep/
   rim/drill earlier (axis negation `F∘R(d,θ)∘F = R(−F·d, θ)` for revolves, intrinsic RMF
   for sweeps, isometry-commuting surgery for rims/drills), and now `Draft` /

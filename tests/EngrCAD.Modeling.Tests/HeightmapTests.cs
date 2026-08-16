@@ -291,7 +291,53 @@ public class HeightmapTests
     // ---- a minimal PNG encoder (test-side, REAL CRC-32s — the reader verifies
     // them for critical chunks, and a real file from disk parses identically) --
 
-    private static byte[] BuildPng(int width, int height, int bitDepth, int colorType, byte[][] rawRows, byte[] filters)
+    [Theory]
+    [InlineData(8, 8, 8, 0)]      // every pass non-empty, gray 8
+    [InlineData(9, 5, 16, 0)]     // odd sizes, gray 16
+    [InlineData(3, 3, 8, 2)]      // truecolor, several passes empty
+    [InlineData(1, 1, 8, 0)]      // one pixel: passes 2..7 empty
+    [InlineData(2, 2, 8, 0)]      // passes 1, 6, 7 only
+    public void ReadPng_Adam7_RecoversExactlyWhatTheNonInterlacedTwinReads(
+        int width, int height, int bitDepth, int colorType)
+    {
+        // The twin oracle: the SAME raster written straight and interlaced must read
+        // back as the SAME heights, bit for bit — and the interlaced encoder cycles
+        // Up/Sub/Paeth filters WITHIN each pass, so a reader whose previous-row buffer
+        // crossed pass boundaries (or read the image's own rows) fails loudly.
+        int channels = colorType == 2 ? 3 : 1;
+        int stride = width * (bitDepth / 8) * channels;
+        var raw = new byte[height][];
+        for (int y = 0; y < height; y++)
+        {
+            raw[y] = new byte[stride];
+            for (int i = 0; i < stride; i++)
+                raw[y][i] = (byte)(17 + 31 * y + 7 * i);   // deterministic, non-constant
+        }
+
+        var straightFilters = new byte[height];
+        for (int y = 0; y < height; y++)
+            straightFilters[y] = (byte)(y % 5);
+        var straight = Heightmap.ReadPng(BuildPng(width, height, bitDepth, colorType, raw, straightFilters));
+        var interlaced = Heightmap.ReadPng(BuildInterlacedPng(
+            width, height, bitDepth, colorType, raw, filterCycle: [2, 1, 0, 4, 3]));
+
+        Assert.Equal(straight.GetLength(0), interlaced.GetLength(0));
+        Assert.Equal(straight.GetLength(1), interlaced.GetLength(1));
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+                Assert.Equal(straight[y, x], interlaced[y, x]);
+    }
+
+    [Fact]
+    public void ReadPng_AnUndefinedInterlaceMethod_IsRefusedByName()
+    {
+        // 0 and 1 exist; 2 is nothing, and guessing would decode garbage confidently.
+        var png = BuildPng(2, 2, 8, colorType: 0, [[1, 2], [3, 4]], [0, 0], interlace: 2);
+        var thrown = Assert.Throws<FormatException>(() => Heightmap.ReadPng(png));
+        Assert.Contains("interlace", thrown.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static byte[] BuildPng(int width, int height, int bitDepth, int colorType, byte[][] rawRows, byte[] filters, byte interlace = 0)
     {
         int channels = colorType switch { 2 => 3, 6 => 4, 4 => 2, _ => 1 };
         int bpp = (bitDepth / 8) * channels;
@@ -299,6 +345,35 @@ public class HeightmapTests
 
         // Filter each row per the spec (the encoder side of what the reader undoes).
         using var image = new MemoryStream();
+        FilterRows(image, rawRows, filters, bpp, stride);
+
+        using var idat = new MemoryStream();
+        using (var deflate = new ZLibStream(idat, CompressionLevel.Fastest, leaveOpen: true))
+            deflate.Write(image.ToArray());
+
+        using var png = new MemoryStream();
+        png.Write([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        WriteChunk(png, "IHDR", header =>
+        {
+            WriteInt(header, width);
+            WriteInt(header, height);
+            header.WriteByte((byte)bitDepth);
+            header.WriteByte((byte)colorType);
+            header.WriteByte(0);
+            header.WriteByte(0);
+            header.WriteByte(interlace);
+        });
+        WriteChunk(png, "IDAT", chunk => idat.WriteTo(chunk));
+        WriteChunk(png, "IEND", _ => { });
+        return png.ToArray();
+    }
+
+    /// <summary>The encoder side of the reader's per-row unfilter, over ONE scanline
+    /// stream: each row filtered against the previous row OF THIS STREAM — which for an
+    /// Adam7 pass is the pass's own previous row, the property the interlace tests
+    /// exist to prove the reader honours.</summary>
+    private static void FilterRows(MemoryStream image, byte[][] rawRows, byte[] filters, int bpp, int stride)
+    {
         var previous = new byte[stride];
         for (int r = 0; r < rawRows.Length; r++)
         {
@@ -324,11 +399,51 @@ public class HeightmapTests
             if (raw.Length == stride)
                 previous = raw;
         }
+    }
+
+    /// <summary>
+    /// The Adam7 TWIN encoder: splits a full raster into the seven passes, filters each
+    /// pass as its own scanline stream (cycling the stated filters within each pass, so
+    /// Up/Sub rows prove the reader keeps pass streams separate), and writes one
+    /// interlaced PNG. An empty pass — a small image — contributes no bytes at all,
+    /// which is the other property the reader must honour.
+    /// </summary>
+    private static byte[] BuildInterlacedPng(
+        int width, int height, int bitDepth, int colorType, byte[][] rawRows, byte[] filterCycle)
+    {
+        int channels = colorType switch { 2 => 3, 6 => 4, 4 => 2, _ => 1 };
+        int bpp = (bitDepth / 8) * channels;
+        (int X0, int Y0, int Dx, int Dy)[] passes =
+        [
+            (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+            (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2),
+        ];
+        using var image = new MemoryStream();
+        foreach (var (x0, y0, dx, dy) in passes)
+        {
+            int passWidth = width > x0 ? (width - x0 + dx - 1) / dx : 0;
+            int passHeight = height > y0 ? (height - y0 + dy - 1) / dy : 0;
+            if (passWidth == 0 || passHeight == 0)
+                continue;
+            var passRows = new byte[passHeight][];
+            var passFilters = new byte[passHeight];
+            for (int row = 0; row < passHeight; row++)
+            {
+                var line = new byte[passWidth * bpp];
+                for (int col = 0; col < passWidth; col++)
+                {
+                    int sy = y0 + row * dy, sx = x0 + col * dx;
+                    Array.Copy(rawRows[sy], sx * bpp, line, col * bpp, bpp);
+                }
+                passRows[row] = line;
+                passFilters[row] = filterCycle[row % filterCycle.Length];
+            }
+            FilterRows(image, passRows, passFilters, bpp, passWidth * bpp);
+        }
 
         using var idat = new MemoryStream();
         using (var deflate = new ZLibStream(idat, CompressionLevel.Fastest, leaveOpen: true))
             deflate.Write(image.ToArray());
-
         using var png = new MemoryStream();
         png.Write([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
         WriteChunk(png, "IHDR", header =>
@@ -339,7 +454,7 @@ public class HeightmapTests
             header.WriteByte((byte)colorType);
             header.WriteByte(0);
             header.WriteByte(0);
-            header.WriteByte(0);                           // not interlaced
+            header.WriteByte(1);                           // Adam7
         });
         WriteChunk(png, "IDAT", chunk => idat.WriteTo(chunk));
         WriteChunk(png, "IEND", _ => { });

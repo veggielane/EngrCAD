@@ -38,9 +38,12 @@ scene.Add(new Part("terrain", terrain, Palette.Sage));
   reads its **Rec. 709 relative luminance** `0.2126·R + 0.7152·G + 0.0722·B` — the
   physically-correct luminance from the sRGB primaries, a *documented* rule rather than an
   inferred one (a grey pixel reads its own value, since the weights sum to 1). The reader
-  is hand-rolled and dependency-free, like the TrueType reader; palette (indexed-colour)
-  and interlaced PNGs are **rejected with a clear message** rather than mis-read, and a
-  corrupt critical chunk is named by its CRC-32. Pair it with `heightScale` to give
+  is hand-rolled and dependency-free, like the TrueType reader; **Adam7-interlaced files
+  decode too** (each of the seven passes is its own scanline-filter stream at reduced
+  dimensions, verified against a twin encoder — the interlaced and straight spellings of
+  one raster must read back bit-identically), palette (indexed-colour) PNGs are
+  **rejected with a clear message** rather than mis-read, and a corrupt critical chunk
+  is named by its CRC-32. Pair it with `heightScale` to give
   normalized data its real peak height:
 
 ```csharp
