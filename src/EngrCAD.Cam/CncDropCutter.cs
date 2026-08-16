@@ -279,6 +279,11 @@ internal sealed class DropProbe
     /// with, or the bucket query misses triangles the disc can touch.</summary>
     public double TipAt(double x, double y, MillCutter cutter)
     {
+        if (cutter.Radius > _reach)
+            throw new ArgumentException(
+                $"The probe was built for a reach of {_reach:0.###} and the cutter's radius "
+                + $"is {cutter.Radius:0.###} — the bucket query would silently miss triangles "
+                + "the disc can touch. Build the probe with the widest consumer's reach.");
         double best = _floor;
         _stamp++;
         for (int gx = (int)Math.Floor((x - _reach) / _cell); gx <= (int)Math.Floor((x + _reach) / _cell); gx++)
