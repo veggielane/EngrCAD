@@ -9037,9 +9037,10 @@ the no-gouge claim is exact and point-by-point (every pass point ≥ r from the 
 including an island's), depth levels are arithmetic (`5 @ 2 → −2, −4, −5`), the tabbed pass
 lifts exactly `tabs` times to exactly `−depth + tabHeight`, the decoded cut length equals the
 operations' own within formatting precision, and the program is byte-deterministic. Filed with
-the campaign: G2/G3 arcs from the exact curved-profile tier, climb/conventional selection,
-helical/ramp entry, canned cycles, the ⚠ feeds/speeds catalogue, rest machining, and the
-material-removal animation over recorded stock states.
+the campaign at the time — and since landed with their own records below: climb/conventional
+selection, helical/ramp entry, canned cycles, the ⚠ feeds/speeds catalogue, rest machining,
+and writer-side G2/G3 arc fitting; still open: native arcs carried end to end from the exact
+curved-profile tier, and the material-removal animation over recorded stock states.
 
 **FDM supports — columns under the measured overhang field** (`PrinterProfile.SupportOverhangAngle`,
 0 = off — the write-only-when-stated path, so a profile stating nothing slices byte-identically).
@@ -9446,6 +9447,37 @@ stadium `L·W + π(W/2)²` within 2%, no-overcut point-by-point, depth levels ar
 byte determinism. Filed: general adaptive (constant-engagement) pocketing over the evolving
 stock region — of which this closed-form cycloid family is the honest first step — helical z
 entry, and trochoidal linking of `Region2dThickness` necks.
+
+**G2/G3 arc output landed as writer-side RECOVERY, and the guard is the finding**
+(`CncGcodeWriter.Write(..., arcFitting: true)` + `GcodeReader`'s arc expansion; docs
+`examples/cam-milling.md` §Arc output). The offset machinery places its corner vertices
+INSCRIBED on the true tool-compensated arc (measured: a rounded plate's corner points sit on
+one circle about the corner centre to 3.6e-14), so fitting the circumcircle of a run and
+extending it while points stay on-circle at the weld tier RECOVERS the arc the chording
+lost — a 40×24 r6 plate profiled outside by a Ø6 tool emits exactly four arcs at the
+compensated radius 9. **The on-circle test alone shipped a gouge, and the failing case is
+the recorded mirror-symmetric-fixture trap arriving LIVE in production**: IEEE negation is
+exact, so two points and their y-mirrors are EXACTLY concyclic, and the symmetric part's
+straight side flanked by its two corner tangency vertices read as four points genuinely on a
+675 mm circle — on it to the bit, so no tolerance on the residual can see the defect,
+because what is wrong is the chord BETWEEN the points: the fitted arc bulged 0.027 mm across
+the 12 mm straight side, into the part. The repair is a **sagitta cap per accepted chord**
+at the file's own 1e-3 coordinate quantum (`radius·(1 − cos(step/2)) ≤ 1e-3`): under it the
+substitution is invisible at the resolution the file can state (a genuine inscribed corner
+chord measures ~3e-4 here, the phantom 27×), and the cap is DERIVED from the writer's
+three-decimal format rather than tuned. The test oracle is therefore the no-gouge form, not
+a radius check — every decoded point of the fitted program within 2e-3 of the chorded
+polyline — beside the closed-form length (2·(28+12) + 2π·9) and the byte-identical off
+path. The decoder half expands I/J-form arcs into 5°-sampled sub-moves (so every downstream
+identity — cut length, kinds, E conservation — reads the arc as the fine polyline it
+machines as, with the extrusion distributed evenly, exact for a constant-flow arc) and
+refuses BY NAME the ambiguous `R` form (two centres past 180°), a missing centre (a guessed
+arc is confidently wrong geometry) and endpoints disagreeing about the radius (a mis-stated
+centre cuts a spiral). One measurement kept honest: comparing lengths THROUGH the decoder is
+a statement about the decoder's own 5° re-chording, not about the fit — the 5° expansion of
+a true arc is SHORTER than the 1° source chords it replaced, so "fitted length exceeds
+chorded length" is false through that instrument even when the fit is perfect, which is why
+the length assertion is against the closed form.
 
 ## 7. Query layer
 

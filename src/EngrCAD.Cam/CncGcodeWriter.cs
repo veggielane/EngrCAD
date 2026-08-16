@@ -8,7 +8,7 @@ namespace EngrCAD.Cam;
 /// The CNC G-code writer (GRBL/LinuxCNC-style words) — the FDM writer's milling sibling over the
 /// same conventions: modes STATED (G21/G90), plain G0/G1 by default (drilling ships EXPANDED
 /// peck moves, so the twin decoder <see cref="GcodeReader"/> reads every program this writer
-/// emits; G2/G3 arcs stay filed with the campaign), deterministic byte-for-byte.
+/// emits), with opt-in canned drilling cycles and opt-in G2/G3 arc fitting, deterministic byte-for-byte.
 ///
 /// <para><b>A move's meaning is its SHAPE</b>, classified from the pass geometry rather than
 /// annotated per move: an XY move cuts at the tool's feed rate, a straight-DOWN move plunges at
@@ -27,9 +27,16 @@ namespace EngrCAD.Cam;
 /// </summary>
 public static class CncGcodeWriter
 {
-    /// <summary>Writes the operations as G-code, rapids above <paramref name="safeZ"/>.</summary>
+    /// <summary>Writes the operations as G-code, rapids above <paramref name="safeZ"/>.
+    /// <para><b>Arc fitting is opt-in</b> (<paramref name="arcFitting"/>): runs of four or
+    /// more consecutive constant-z points EQUIDISTANT from a common centre are emitted as
+    /// one <c>G2</c>/<c>G3</c> (I/J centre-offset form) instead of the chord run — and this
+    /// RECOVERS geometry rather than approximating it, because the offset machinery's round
+    /// joins place their polyline vertices INSCRIBED on the true tool-compensated arc, so
+    /// the circle through them IS the arc the chording lost. Off is byte-identical.</para></summary>
     public static string Write(
-        IReadOnlyList<MillOperation> operations, double safeZ = 5, bool cannedDrilling = false)
+        IReadOnlyList<MillOperation> operations, double safeZ = 5, bool cannedDrilling = false,
+        bool arcFitting = false)
     {
         ArgumentNullException.ThrowIfNull(operations);
         if (!(safeZ > 0) || !double.IsFinite(safeZ))
@@ -76,13 +83,20 @@ public static class CncGcodeWriter
                 b.Append($"G0 X{Num(start.X)} Y{Num(start.Y)}\n");
                 Move(b, new Vector3d(start.X, start.Y, safeZ), start, op.Tool, ref lastFeed);
 
-                var previous = start;
-                int count = pass.Points.Count + (pass.IsClosed ? 1 : 0);
-                for (int i = 1; i < count; i++)
+                if (arcFitting)
                 {
-                    var point = pass.Points[i % pass.Points.Count];
-                    Move(b, previous, point, op.Tool, ref lastFeed);
-                    previous = point;
+                    EmitFitted(b, pass, op.Tool, ref lastFeed);
+                }
+                else
+                {
+                    var previous = start;
+                    int count = pass.Points.Count + (pass.IsClosed ? 1 : 0);
+                    for (int i = 1; i < count; i++)
+                    {
+                        var point = pass.Points[i % pass.Points.Count];
+                        Move(b, previous, point, op.Tool, ref lastFeed);
+                        previous = point;
+                    }
                 }
             }
             if (inCycle)
@@ -102,6 +116,126 @@ public static class CncGcodeWriter
         ArgumentNullException.ThrowIfNull(path);
         File.WriteAllText(path, Write(operations, safeZ, cannedDrilling));
     }
+
+    /// <summary>Emits a pass with arc fitting: greedy maximal runs of constant-z points on
+    /// one circle become a single G2/G3, everything else stays the classified line move.
+    /// The on-circle test is the weld tier (relative in the radius), because the candidate
+    /// points come from geometry that placed them on the circle EXACTLY up to rounding — a
+    /// looser tolerance would start inventing arcs through genuinely polygonal corners.</summary>
+    private static void EmitFitted(
+        StringBuilder b, MillPass pass, MillTool tool, ref double lastFeed)
+    {
+        int count = pass.Points.Count + (pass.IsClosed ? 1 : 0);
+        var points = new Vector3d[count];
+        for (int i = 0; i < count; i++)
+            points[i] = pass.Points[i % pass.Points.Count];
+
+        int index = 1;
+        while (index < count)
+        {
+            // Try an arc starting at points[index − 1]: needs at least three chords ahead,
+            // all at one z, whose circumcircle the run stays on.
+            if (TryFitArc(points, index - 1, out int end, out double cx, out double cy,
+                out bool clockwise))
+            {
+                var from = points[index - 1];
+                var to = points[end];
+                double feed = tool.FeedRate;
+                b.Append(clockwise ? "G2" : "G3");
+                b.Append($" X{Num(to.X)} Y{Num(to.Y)}");
+                b.Append($" I{NumIj(cx - from.X)} J{NumIj(cy - from.Y)}");
+                if (feed != lastFeed)
+                {
+                    b.Append($" F{(int)Math.Round(feed)}");
+                    lastFeed = feed;
+                }
+                b.Append('\n');
+                index = end + 1;
+                continue;
+            }
+            Move(b, points[index - 1], points[index], tool, ref lastFeed);
+            index++;
+        }
+    }
+
+    /// <summary>Fits the longest arc starting at <paramref name="start"/>: the circumcircle
+    /// of the first three points, extended while further points stay ON it (weld tier,
+    /// relative in the radius), keep one z, keep one turn direction, accumulate under a full
+    /// sweep AND keep each chord's sagitta under the file's own coordinate quantum. True only
+    /// when at least three chords fit (four points) — shorter runs are not evidence of an arc.
+    /// <para><b>The sagitta cap is what the on-circle test cannot supply</b>, and the failing
+    /// case is the recorded mirror-symmetric-fixture trap live in production: IEEE negation
+    /// is exact, so two points and their y-mirrors are EXACTLY concyclic, and a symmetric
+    /// part's straight side flanked by its two tangency vertices reads as four points on a
+    /// 675 mm circle — genuinely on it, to the bit. What is wrong is the chord BETWEEN them:
+    /// the fitted arc bulges 0.027 mm across the 12 mm straight side, a real gouge. So each
+    /// accepted step also caps the arc's rise over its own chord at 1e-3 — the writer states
+    /// coordinates at three decimals, so under that cap the substitution is invisible at the
+    /// file's own resolution, and over it the fit is inventing geometry the polyline never
+    /// stated (a genuine inscribed corner arc measures ~3e-4 here, the phantom 27×).</para></summary>
+    private static bool TryFitArc(
+        Vector3d[] points, int start, out int end, out double cx, out double cy,
+        out bool clockwise)
+    {
+        end = start;
+        cx = cy = 0;
+        clockwise = false;
+        if (start + 3 >= points.Length)
+            return false;
+        var a = points[start];
+        var m = points[start + 1];
+        var c = points[start + 2];
+        if (m.Z != a.Z || c.Z != a.Z)
+            return false;
+        // Circumcentre; a collinear triple (the sine guard, dimensionless) is not an arc.
+        double abx = m.X - a.X, aby = m.Y - a.Y;
+        double acx = c.X - a.X, acy = c.Y - a.Y;
+        double cross = abx * acy - aby * acx;
+        double scale = Math.Sqrt((abx * abx + aby * aby) * (acx * acx + acy * acy));
+        if (scale <= 0 || Math.Abs(cross) <= 1e-9 * scale)
+            return false;
+        double ab2 = abx * abx + aby * aby;
+        double ac2 = acx * acx + acy * acy;
+        double inv = 0.5 / cross;
+        cx = a.X + (acy * ab2 - aby * ac2) * inv;
+        cy = a.Y + (abx * ac2 - acx * ab2) * inv;
+        double radius = Math.Sqrt((a.X - cx) * (a.X - cx) + (a.Y - cy) * (a.Y - cy));
+        double tolerance = Math.Max(1e-9, 1e-9 * radius);
+        clockwise = cross < 0;
+
+        double sweep = 0;
+        double previousAngle = Math.Atan2(a.Y - cy, a.X - cx);
+        int k = start + 1;
+        for (; k < points.Length; k++)
+        {
+            var p = points[k];
+            if (p.Z != a.Z)
+                break;
+            double d = Math.Sqrt((p.X - cx) * (p.X - cx) + (p.Y - cy) * (p.Y - cy));
+            if (Math.Abs(d - radius) > tolerance)
+                break;
+            double angle = Math.Atan2(p.Y - cy, p.X - cx);
+            double step = angle - previousAngle;
+            while (step > Math.PI) step -= 2 * Math.PI;
+            while (step < -Math.PI) step += 2 * Math.PI;
+            if (clockwise ? step >= 0 : step <= 0)
+                break;                                       // the turn direction flipped
+            if (Math.Abs(sweep + step) >= 2 * Math.PI - 1e-9)
+                break;                                       // never a full ambiguous circle
+            if (radius * (1 - Math.Cos(step / 2)) > 1e-3)
+                break;                                       // the sagitta cap (see above)
+            sweep += step;
+            previousAngle = angle;
+        }
+        end = k - 1;
+        return end - start >= 3;
+    }
+
+    /// <summary>I/J at five decimals — the centre offset must reproduce the radius the
+    /// controller recomputes from both endpoints, so it carries more precision than the
+    /// micron coordinate words.</summary>
+    private static string NumIj(double value) =>
+        value.ToString("0.#####", CultureInfo.InvariantCulture);
 
     /// <summary>Recognizes a drill pass and reconstructs its cycle parameters from the moves
     /// themselves: every point at ONE XY, bites descending by a uniform peck (retracting to one

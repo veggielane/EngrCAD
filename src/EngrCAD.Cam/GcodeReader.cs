@@ -75,8 +75,10 @@ public sealed record GcodeProgram(IReadOnlyList<GcodeMove> Moves, IReadOnlyList<
 /// <para>Scoped to what the writer emits, with the traps refused BY NAME rather than mis-read:
 /// <c>G20</c> (inches — the unit trap), <c>G91</c> (relative coordinates) and <c>M83</c>
 /// (relative extrusion) each refuse, because decoding them as their absolute siblings would
-/// produce confidently wrong geometry; <c>G2</c>/<c>G3</c> arcs refuse by name (the FDM writer
-/// emits line moves; arcs join with the CNC stages). Unknown M-codes and comments are dirt,
+/// produce confidently wrong geometry; <c>G2</c>/<c>G3</c> arcs DECODE
+/// in the I/J centre-offset form (expanded into 5-degree sampled sub-moves so every
+/// downstream identity reads the arc as the fine polyline it machines as); the ambiguous
+/// R form, a missing centre, and endpoints disagreeing about the radius refuse by name. Unknown M-codes and comments are dirt,
 /// noted or skipped, never thrown.</para>
 ///
 /// <para><b>Canned drilling cycles decode</b> (<c>G81</c> plunge, <c>G83</c> peck) with the
@@ -203,9 +205,76 @@ public static class GcodeReader
                         break;
                     }
                     case 2 or 3:
-                        throw new FormatException(
-                            "G2/G3 arc moves are not decoded (the FDM writer emits line moves; "
-                            + "arcs join with the CNC stages). Refused by name.");
+                    {
+                        cannedActive = false;                // a plain motion cancels the cycle
+                        double nx = x, ny = y, nz = z, ne = e, ci = 0, cj = 0;
+                        bool hasOffset = false;
+                        foreach (var (w, v) in words.Skip(1))
+                            switch (w)
+                            {
+                                case 'X': nx = v; break;
+                                case 'Y': ny = v; break;
+                                case 'Z': nz = v; break;
+                                case 'E': ne = v; break;
+                                case 'F': feed = v; break;
+                                case 'I': ci = v; hasOffset = true; break;
+                                case 'J': cj = v; hasOffset = true; break;
+                                case 'R':
+                                    throw new FormatException(
+                                        "R-form arcs are refused by name: R is ambiguous past "
+                                        + "180 degrees, so this decoder reads the I/J "
+                                        + "centre-offset form its own writer emits.");
+                                default:
+                                    Note($"Word '{w}' on a G2/G3 was ignored.");
+                                    break;
+                            }
+                        if (!hasOffset)
+                            throw new FormatException(
+                                "A G2/G3 without I/J has no centre — a guessed arc is "
+                                + "confidently wrong geometry. Refused by name.");
+                        double centreX = x + ci, centreY = y + cj;
+                        double r0 = Math.Sqrt((x - centreX) * (x - centreX) + (y - centreY) * (y - centreY));
+                        double r1 = Math.Sqrt((nx - centreX) * (nx - centreX) + (ny - centreY) * (ny - centreY));
+                        if (Math.Abs(r0 - r1) > Math.Max(0.01, 1e-3 * r0))
+                            throw new FormatException(
+                                $"The arc's endpoints disagree about its radius ({r0:0.####} vs "
+                                + $"{r1:0.####}) — a mis-stated centre cuts a spiral, not an "
+                                + "arc. Refused by name.");
+                        double a0 = Math.Atan2(y - centreY, x - centreX);
+                        double a1 = Math.Atan2(ny - centreY, nx - centreX);
+                        double sweep = a1 - a0;
+                        bool cw = (int)code == 2;
+                        if (cw)
+                        {
+                            while (sweep >= -1e-12) sweep -= 2 * Math.PI;
+                        }
+                        else
+                        {
+                            while (sweep <= 1e-12) sweep += 2 * Math.PI;
+                        }
+                        // Expand into sampled sub-moves (5 degrees each) so every downstream
+                        // identity — cut length, kinds, E conservation — reads the arc as the
+                        // fine polyline it machines as; the extrusion, if any, distributes
+                        // evenly, which is exact for a constant-flow arc.
+                        int steps = Math.Max(2, (int)Math.Ceiling(Math.Abs(sweep) / (Math.PI / 36)));
+                        double px = x, py = y, pz = z, pe = e;
+                        for (int s = 1; s <= steps; s++)
+                        {
+                            double angle = a0 + sweep * s / steps;
+                            double sx = s == steps ? nx : centreX + r0 * Math.Cos(angle);
+                            double sy = s == steps ? ny : centreY + r0 * Math.Sin(angle);
+                            double sz = z + (nz - z) * s / steps;
+                            double se = e + (ne - e) * s / steps;
+                            double deltaE = se - pe;
+                            var kind = deltaE > 0 ? GcodeMoveKind.Deposition : GcodeMoveKind.Travel;
+                            moves.Add(new GcodeMove(
+                                new Vector3d(px, py, pz), new Vector3d(sx, sy, sz),
+                                deltaE, feed, kind));
+                            (px, py, pz, pe) = (sx, sy, sz, se);
+                        }
+                        (x, y, z, e) = (nx, ny, nz, ne);
+                        break;
+                    }
                     case 20:
                         throw new FormatException(
                             "G20 declares INCHES — the unit trap. This decoder reads millimetre "

@@ -402,9 +402,49 @@ Console.WriteLine($"decoded cut length {decoded.Moves.Where(m => !m.Rapid).Sum(m
     + "= 2 passes of every path");
 ```
 
-Still filed with the campaign: `G2`/`G3` arcs from the exact curved-profile tier, helical
-entry, rest machining, the 3-axis (surfacing) stock simulation — a raster row's swept volume
-is not a prism, so `Simulate` refuses it by name today — and the trochoid × stock-record
-composition (the swept union's scallop cusps are near-tangent crossings, the mesh imprint
-boolean's hostile family), plus general adaptive (constant-engagement) pocket clearing, of
-which the closed-form cycloid family above is the honest first step.
+## Arc output (`G2`/`G3`)
+
+`CncGcodeWriter.Write(operations, arcFitting: true)` emits maximal runs of constant-z
+points that lie on one circle as a single `G2`/`G3` in the I/J centre-offset form instead
+of the chord run — and this is **recovery, not approximation**: the offset machinery
+places its corner vertices *inscribed* on the true tool-compensated arc, so the circle
+fitted through them is the arc the chording lost. A 40×24 plate with r6 corners profiled
+outside by a Ø6 tool emits exactly four arcs whose I/J radius is the compensated
+6 + 3 = 9.
+
+The guard that earns its keep is the **sagitta cap**: each accepted chord's rise under the
+fitted arc must stay below the file's own 1e-3 coordinate quantum. An on-circle test alone
+cannot protect the path, and the failing case is not hypothetical — IEEE negation is
+exact, so two points and their mirrors are *exactly* concyclic, and a symmetric part's
+straight side flanked by its two corner tangency vertices reads as four points genuinely
+on a 675 mm circle whose arc would bulge 0.027 mm across the 12 mm side: a real gouge that
+every sample-based test waves through. Under the cap the substitution is invisible at the
+file's own resolution, and the tests assert the no-gouge form directly (every decoded
+fitted point within 2e-3 of the source polyline).
+
+`GcodeReader` decodes `G2`/`G3` (I/J form) by expanding each arc into 5°-sampled
+sub-moves, so every downstream identity — cut length, move kinds, extrusion conservation —
+reads the arc as the fine polyline it machines as; the ambiguous `R` form, a missing
+centre and endpoints that disagree about the radius refuse by name. Off is
+byte-identical.
+
+```csharp run:cam-arcs
+var region = Sketch.RoundedRectangle(40, 24, 6).ToRegions()[0];
+var op = CncMill.Profile(region, new MillTool(6), depth: 2, ProfileSide.Outside);
+string chords = CncGcodeWriter.Write([op]);
+string arcs = CncGcodeWriter.Write([op], arcFitting: true);
+Console.WriteLine($"chorded {chords.Split('\n').Length} lines -> fitted {arcs.Split('\n').Length}");
+foreach (var line in arcs.Split('\n').Where(l => l.StartsWith("G2 ") || l.StartsWith("G3 ")))
+    Console.WriteLine(line);
+double length = GcodeReader.Read(arcs).Moves.Where(m => !m.Rapid).Sum(m => m.XyLength);
+Console.WriteLine($"decoded cut length {length:0.00} vs closed form "
+    + $"2(28+12) + 2*pi*9 = {2 * (28 + 12.0) + 2 * Math.PI * 9:0.00}");
+```
+
+Still filed with the campaign: native arcs carried end to end from the exact
+curved-profile tier (a `MillPass` whose segments ARE arcs — the fitter above recovers them
+from the polyline instead), the 3-axis (surfacing) stock simulation — a raster row's swept
+volume is not a prism, so `Simulate` refuses it by name today — and the trochoid ×
+stock-record composition (the swept union's scallop cusps are near-tangent crossings, the
+mesh imprint boolean's hostile family), plus general adaptive (constant-engagement) pocket
+clearing, of which the closed-form cycloid family above is the honest first step.

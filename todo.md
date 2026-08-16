@@ -2474,10 +2474,17 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     started a level at its boundary ring). NOTE for the stock-sim composition: a
     helix retraces one polygon per turn, so its footprint has EXACTLY-coincident
     repeated segments — dedupe before stroking (the ramp coverage test does).
-    **Stage-2 residuals, open**: G2/G3 arcs from the exact curved-profile tier
-    (`SectionExact`/`CurvedRegion2dOffset` — a bore rim as ONE arc in the G-code),
-    lead-in/out arcs, and the material-removal animation over recorded stock
-    states. The LASER/drag-knife mode LANDED
+    **Stage-2 residuals, open**: native arcs carried end to end from the exact
+    curved-profile tier (`SectionExact`/`CurvedRegion2dOffset` — a `MillPass` whose
+    segments ARE arcs; the WRITER/DECODER half landed — opt-in `arcFitting` on
+    `CncGcodeWriter.Write` fits co-circular constant-z runs into I/J-form G2/G3
+    with each chord's sagitta capped at the file's own 1e-3 coordinate quantum,
+    the cap being what the on-circle test cannot supply: IEEE negation is exact,
+    so a symmetric part's straight side flanked by its two tangency vertices puts
+    four points EXACTLY on a 675 mm phantom circle bulging 0.027 mm across the
+    side; `GcodeReader` expands I/J arcs at 5° and refuses R-form/missing-centre/
+    radius-disagreement by name), lead-in/out arcs, and the material-removal
+    animation over recorded stock states. The LASER/drag-knife mode LANDED
     (`CncLaser` — one outward kerf/2 offset gives outer AND hole beam paths with the
     compensation right, holes first per the release rule, GRBL M4 flavour with no Z
     word anywhere, decoder-verified at the micron quantization grade).

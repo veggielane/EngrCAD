@@ -177,7 +177,10 @@ are byte-identical.
 The decoder is scoped to what the writer emits, with the traps refused BY NAME rather than
 mis-read: `G20` (inches — the unit trap), `G91` (relative coordinates) and `M83` (relative
 extrusion) each refuse, because decoding them as their absolute siblings would produce
-confidently wrong geometry; `G2`/`G3` arcs refuse by name (they join with the CNC stages).
+confidently wrong geometry; `G2`/`G3` arcs DECODE in the I/J centre-offset form (expanded
+into 5°-sampled sub-moves so every downstream identity reads the arc as the fine polyline it
+machines as), while the ambiguous `R` form, a missing centre and endpoints that disagree
+about the radius refuse by name.
 Unknown M-codes and comments are dirt — noted, never thrown.
 
 ## 2.5D CNC milling (`CncMill`, `MillTool`, `CncGcodeWriter`)
@@ -193,11 +196,17 @@ Stage 2 — pocket, profile and drill over the same landed machinery:
   spaced by arc length, each a vertical rise at the tab's own edge — never a diagonal ramp that
   would leave the closing stretch part-cut.
 - **Drill** ships EXPANDED peck moves (plain G0/G1), so the same twin decoder reads a drill
-  cycle with nothing new; canned G81/G83 cycles are filed.
+  cycle with nothing new; opt-in canned `G81`/`G83` cycles via
+  `CncGcodeWriter.Write(..., cannedDrilling: true)`.
 - **`CncGcodeWriter`**: a move's meaning is its SHAPE — an XY move cuts at the feed rate, a
   straight-down move plunges, a straight-up move retracts as a rapid — so one `MillPass`
   vocabulary carries all three operations. The decoder gained a `Rapid` flag (G0 vs G1),
-  because feed state persists across both and cannot separate them on its own.
+  because feed state persists across both and cannot separate them on its own. Opt-in
+  `arcFitting` emits co-circular constant-z runs as one `G2`/`G3` (I/J form) with each
+  chord's sagitta capped at the file's own 1e-3 coordinate quantum — the cap, not the
+  on-circle test, is what rejects the mirror-symmetry phantom (IEEE negation is exact, so
+  four points spanning a straight side can be EXACTLY concyclic on a 675 mm circle whose
+  arc would gouge 0.027 mm).
 - **The oracle is the morphological OPENING**: a radius-r tool reaches exactly
   `grow_r(shrink_r(region))`, the passes' stroked-and-unioned footprints (the machined-stock
   simulation) must equal it, and a rectangular pocket's unreachable corner residue is CLOSED
