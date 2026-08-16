@@ -108,7 +108,7 @@ public class DxfTests
             2
             ENTITIES
             0
-            MTEXT
+            HATCH
             8
             notes
             1
@@ -130,7 +130,9 @@ public class DxfTests
             """;
         var document = DxfDocument.Load(new StringReader(dxf));
         Assert.Single(document.Entities);
-        Assert.Contains(document.Diagnostics, d => d.Contains("MTEXT"));
+        // HATCH is genuinely unread here (the fixture was MTEXT until the reader
+        // learned it — an unknown-entity fixture must stay unknown to keep testing).
+        Assert.Contains(document.Diagnostics, d => d.Contains("HATCH"));
     }
 
     [Fact]
