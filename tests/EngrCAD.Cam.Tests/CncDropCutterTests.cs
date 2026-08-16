@@ -147,8 +147,8 @@ public class CncDropCutterTests
         Assert.Contains("different diameters", Assert.Throws<ArgumentException>(() =>
             CncSurfacing.Raster(Shape.Sphere(5), new MillTool(8),
                 cutter: MillCutter.FlatEnd(6))).Message);
-        Assert.Contains("ball-nose only", Assert.Throws<ArgumentException>(() =>
+        Assert.Contains("different diameters", Assert.Throws<ArgumentException>(() =>
             CncSurfacing.Waterline(Shape.Sphere(5), new MillTool(8),
-                cutter: MillCutter.FlatEnd(8))).Message);
+                cutter: MillCutter.FlatEnd(6))).Message);
     }
 }

@@ -1,5 +1,7 @@
 using EngrCAD.Core;
+using EngrCAD.Core.Geometry2;
 using EngrCAD.Implicit;
+using EngrCAD.Mesh;
 using EngrCAD.Interop;
 using EngrCAD.Modeling;
 
@@ -25,8 +27,9 @@ namespace EngrCAD.Cam;
 /// z word is the TIP, the machining convention). The default cutter is a BALL-NOSE of the
 /// tool's own radius; a <see cref="MillCutter"/> selects flat or bull-nose, which RASTER
 /// carries over the tessellation (see <see cref="DropCutter"/> for why the field route does
-/// not survive a flat bottom) while waterline refuses them by name. Still filed: a raster
-/// direction other than X, holder/shank collision checking and rest machining. Where the
+/// not survive a flat bottom) and WATERLINE as the silhouette-dilation contour (exact for a
+/// flat cutter, a banded conservative ladder for a bull-nose). Still filed:
+/// holder/shank collision checking and no-retract row linking. Where the
 /// field is a correct-sign LOWER BOUND (a CSG difference near its tool's fictitious faces), the
 /// r-isolevel lies FARTHER from the part than the true offset — stock left, never a gouge: the
 /// conservative direction, inherited from the field contract rather than arranged.</para>
@@ -165,13 +168,20 @@ public static class CncSurfacing
         ArgumentNullException.ThrowIfNull(shape);
         ArgumentNullException.ThrowIfNull(tool);
         tool.Validate();
-        if (cutter is not null && !cutter.IsBallNose)
-            throw new ArgumentException(
-                "Waterline contouring supports the ball-nose only: a flat or bull-nose "
-                + "waterline is the contour of the mesh dilated by the tool's bottom disc — a "
-                + "2D arrangement the field identity does not reach (certifying a min over the "
-                + "disc through a 1-Lipschitz oracle is quadratic in the flatness, and flat is "
-                + "the common case). Filed; Raster carries those cutters.", nameof(cutter));
+        if (cutter is not null)
+        {
+            cutter.Validate();
+            if (cutter.Diameter != tool.Diameter)
+                throw new ArgumentException(
+                    $"The cutter (Ø{cutter.Diameter:0.###}) and the tool (Ø{tool.Diameter:0.###}) "
+                    + "state different diameters — two stated diameters disagreeing is a "
+                    + "modelling error, not a preference.", nameof(cutter));
+            // A flat or bull-nose waterline is the contour of the part's SILHOUETTE above
+            // the tip plane dilated by the tool — the 2D arrangement route, since the field
+            // identity does not reach a disc-bottomed tool.
+            if (!cutter.IsBallNose)
+                return SilhouetteWaterline(shape, tool, cutter, name);
+        }
         double r = tool.Radius;
         double step = sampleStep ?? r / 2;
         if (!(step > 0) || !double.IsFinite(step))
@@ -216,6 +226,71 @@ public static class CncSurfacing
             }
         }
         return new MillOperation(name, tool, passes);
+    }
+
+    /// <summary>
+    /// The flat/bull-nose waterline: at each tip level the COLLISION region is the part's
+    /// XY silhouette above the tip plane dilated by the tool's reach, and its boundary is
+    /// the cutter-location contour — exact against the mesh for a FLAT cutter (the disc
+    /// collides with exactly the material above its own plane within R), and a BANDED
+    /// CONSERVATIVE ladder for a bull-nose: the corner torus's reach grows with height above
+    /// the tip, so band k clips the mesh above <c>z + r·k/K</c> and grows by the band's
+    /// OUTER reach <c>a + √(r² − (r − r(k+1)/K)²)</c> — each band over-covers its own slice,
+    /// so the contour stands off at least the true cutter-location distance: stock left,
+    /// never a gouge (measured on a 45° cone: banded 3.661 above the exact 3.414 and under
+    /// the sharp envelope's 4.0, for a Ø8 r1 tool). K is 4; K = 1 is the sharp envelope.
+    /// </summary>
+    private static MillOperation SilhouetteWaterline(
+        Shape shape, MillTool tool, MillCutter cutter, string name)
+    {
+        const int bands = 4;
+        var mesh = shape.ToMesh().Triangulated();
+        var bounds = shape.Bounds();
+        double r = cutter.CornerRadius;
+        double a = cutter.DiscRadius;
+        int bandCount = r > 0 ? bands : 1;
+
+        var passes = new List<MillPass>();
+        foreach (double level in CncMill.DepthLevels(bounds.Max.Z - bounds.Min.Z, tool.StepDown))
+        {
+            double tipZ = bounds.Max.Z + level;
+            var grown = new List<Region2d>();
+            for (int k = 0; k < bandCount; k++)
+            {
+                double clipZ = tipZ + r * k / bandCount;
+                double reach = r > 0
+                    ? a + Math.Sqrt(r * r - Math.Pow(r - r * (k + 1) / bandCount, 2))
+                    : cutter.Radius;
+                if (clipZ >= bounds.Max.Z - 1e-9)
+                    continue;                                // the band clips above the part
+                var above = clipZ <= bounds.Min.Z + 1e-9
+                    ? mesh
+                    : MeshPlaneCut.Cut(mesh, new Vector3d(0, 0, clipZ),
+                        new Vector3d(0, 0, -1), cap: true).Mesh;
+                if (above.FaceCount == 0)
+                    continue;
+                foreach (var silhouette in PlanarSection.SilhouetteOfMesh(
+                    above, Frame3d.FromXY(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY)))
+                    grown.AddRange(Region2dOffset.Offset(silhouette, reach));
+            }
+            foreach (var region in Region2dBoolean.UnionAll(grown))
+            {
+                Emit(region.Outer, tipZ);
+                foreach (var hole in region.Holes)
+                    Emit(hole, tipZ);
+            }
+        }
+        return new MillOperation(name, tool, passes);
+
+        void Emit(IReadOnlyList<Vector2d> loop, double z)
+        {
+            if (loop.Count < 3)
+                return;
+            var points = new Vector3d[loop.Count];
+            for (int i = 0; i < loop.Count; i++)
+                points[i] = new Vector3d(loop[i].X, loop[i].Y, z);
+            passes.Add(new MillPass(points, IsClosed: true));
+        }
     }
 
     /// <summary>The cusp a ball of radius <paramref name="toolRadius"/> leaves between rows

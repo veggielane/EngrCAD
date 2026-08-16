@@ -9325,6 +9325,24 @@ polygon per turn, so its footprint contains EXACTLY-coincident repeated segments
 arrangement's hostile case — and a repeated segment adds no footprint, so any stroke-union
 consumer (the coverage oracle, a future stock-sim composition) dedupes segments first.
 
+**The flat/bull waterline landed as the silhouette-dilation contour, with the bull corner
+a certified band ladder.** A flat cutter at tip z collides with exactly the material above
+its own plane within R, so the collision region IS the part's XY silhouette above z grown
+by R (the landed `MeshPlaneCut` keep-above + `PlanarSection.SilhouetteOfMesh` +
+`Region2dOffset` machinery, nothing new), and its boundary is the cutter-location contour —
+exact against the mesh. The bull-nose corner's reach grows with height above the tip
+(f(ρ) inverted), and the honest discretisation direction was chosen the way the drop-cutter
+work chose against the field: a SAMPLED stack under-covers between samples, which is the
+gouge direction, so each band k clips the mesh above z + r·k/K and grows by the band's
+OUTER reach a + √(r² − (r − r(k+1)/K)²) — every band over-covers its own slice, the contour
+stands off AT LEAST the true CL distance, and K = 1 degenerates to the sharp envelope. The
+45°-cone oracle separates all three answers on one fixture: the banded standoff addend
+equals its own closed form max_k(reach_k − h_k) = 3.661 for Ø8 r1 at K = 4, bracketed
+between the exact a + r(√2 − 1) = 3.414 (never gouged below) and the sharp envelope's 4.0
+(measurably beaten), while a vertical wall reads exactly R for every cutter kind (the
+corner never engages a wall except at its equator) and a flat cutter on the cone reads the
+cone radius + R exactly, one-sided against the inscribed tessellation.
+
 **Stage 4 opened with trochoidal slotting** (`CncHsm.TrochoidalSlot`; docs
 `examples/cam-milling.md` §HSM), and the finding that justifies the campaign's whole framing —
 "the engagement angle computed from the evolving stock and BOUNDED by the stated maximum,

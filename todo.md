@@ -2502,8 +2502,11 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     special because its disc is a point, and it keeps the exact field route
     byte-for-byte. The raster ANGLE landed (grid anchored in
     the rotated frame, quarter turns exact sign swaps, one `SerpentineRaster` rule for
-    both cutter routes). **Stage-3 residuals, open**: the flat/bull WATERLINE (the
-    contour of the mesh dilated by the disc — a 2D arrangement),
+    both cutter routes). The flat/bull WATERLINE landed as the
+    silhouette-dilation contour (exact for flat; a banded conservative ladder for the
+    bull corner — each band clips above z + r·k/K and grows the band's OUTER reach, so
+    it over-covers: stock never gouge; the 45°-cone oracle brackets the banded 3.661
+    between the exact 3.414 and the sharp 4.0). **Stage-3 residuals, open**:
     linking rows without a retract,
     adaptive stepover from local curvature, holder/shank collision checking, and
     rest machining (shared with stage 2's entry).

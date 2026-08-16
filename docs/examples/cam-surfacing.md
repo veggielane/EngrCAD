@@ -151,9 +151,16 @@ the flat disc where the bottom profile is exactly zero, so the flat spot is `z =
 *exactly*; a flat plate reads its own top exactly out to one disc radius past the edge (the
 edge mode); and a ball pushed through the **mesh** route agrees with the exact field route to
 the chord error — two constructions of one surface checking each other, with the band
-honestly slope-amplified near the silhouette (`dz/dd` diverges there). Waterline stays
-ball-only and refuses the others by name: a flat waterline is the contour of the mesh dilated
-by the disc, a 2D arrangement, filed.
+honestly slope-amplified near the silhouette (`dz/dd` diverges there). Waterline carries them
+too, as the **silhouette-dilation contour**: at each tip level the collision region is the
+part's XY silhouette above the tip plane dilated by the tool — exact against the mesh for a
+flat cutter (the disc collides with exactly the material above its own plane within R) — and
+for a bull-nose a **banded conservative ladder**: the corner torus's reach grows with height
+above the tip, so band k clips the mesh above `z + r·k/K` and grows by the band's *outer*
+reach, over-covering its own slice — the contour stands off at least the true CL distance,
+stock never gouge. On a 45° cone the three-sided oracle separates the answers: the banded
+standoff addend measures its own closed form 3.661 (Ø8 r1, K = 4), above the exact
+`a + r(√2 − 1) = 3.414` and measurably under the sharp envelope's 4.0.
 
 Raster rows run along a stated `rasterAngleDegrees` (both cutter routes, one grid rule):
 the grid anchors in the **rotated frame** — the phase rule, a pattern being a function of
@@ -161,5 +168,6 @@ the stated spacing and angle, never of where the part sits — and a quarter tur
 (a sign swap, never a `cos`), so a 90° raster is the transposed grid to the last bit.
 
 **Not in stage 3** (each filed in the campaign): linking rows without a retract, adaptive
-stepover from local curvature, holder/shank collision checking, rest machining, the
-flat/bull waterline above, and HSM adaptive clearing (stage 4).
+stepover from local curvature, holder/shank collision checking, and HSM adaptive clearing
+(stage 4). Rest machining landed on the milling page; the flat/bull waterline above landed
+as the silhouette-dilation contour.

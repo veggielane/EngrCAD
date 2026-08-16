@@ -144,6 +144,12 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   moves XY BEFORE descending at each handover, resets E with G92 E0 — the decoder reads the
   whole file and the filament total is the sum of the parts' own.
 
+- **Flat/bull-nose waterline** (silhouette-dilation): the collision region at each tip
+  level is the XY silhouette of the part above the tip plane grown by the tool's reach —
+  exact vs the mesh for flat, a banded conservative ladder for the bull corner (band k
+  clips above z + r·k/K, grows by the band's OUTER reach: over-covers, stock never gouge);
+  the 45°-cone oracle brackets the banded 3.661 between the exact 3.414 and the sharp 4.0.
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that
