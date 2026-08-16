@@ -9569,6 +9569,25 @@ in its doc (a cold face looking down IS the up case), and the fin-array SIZING s
 vertical-only by name — horizontal fin CHANNELS are a different correlation family, not a
 parameter on this one.
 
+**Lead-in/out arcs landed on the profile, and the design is one derived normal**
+(`CncMill.Profile(..., leadRadius:)`; docs `examples/cam-milling.md`): each loop is entered
+and left on a quarter arc TANGENT to the path at its seam, on the side away from the
+material, and the reason no per-loop bookkeeping exists is that `Orient`'s winding contract
+already made the material side a TRAVEL-relative fact — climb cuts with material left of
+travel (the M3 cross-product derivation), so away is the RIGHT normal for every loop, outer
+or hole, whichever way the polygon happens to wind. What the feature is FOR is the plunge:
+the writer always plunges at a pass's first point, so prepending the lead moves the plunge
+to the arc's start, off the wall, with no writer change at all — a plunge ON the profile
+dwells and marks it, which is the defect the arc exists to remove. The construction is
+exact and asserted as its own identity (the arc start is `P0 + n̂R − d̂R` to 1e-9, the
+approach tangent to the cut direction at the chord sampling's own grade); a lead that
+cannot fit — a small hole whose far wall lies inside the arc's reach — is refused by name
+with the measured shortfall against the same `DistanceToBoundary` the no-gouge tests read;
+leads compose with holding tabs and apply at every depth level; zero is byte-identical.
+One pairing subtlety worth the comment it carries: the travel linker PERMUTES the loop
+order, so the lead is matched to its loop by REFERENCE — the linker reorders, it never
+rebuilds, which is what makes `IndexOf` sound there.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

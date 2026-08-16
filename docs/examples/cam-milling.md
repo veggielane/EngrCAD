@@ -103,6 +103,15 @@ annotations. Holding tabs live on the **final** profile pass only, evenly spaced
 stated convention, not rounding luck), each a vertical rise at the tab's own edge — never a
 diagonal ramp that would leave the closing stretch part-cut.
 
+**Lead-in/out arcs** are opt-in on `Profile` (`leadRadius:`): each loop is entered and left
+on a quarter arc *tangent* to the path at the seam, on the side away from the material —
+which the climb/conventional winding contract has already made a travel-relative fact
+(climb puts material left of travel, so away is right), so no per-loop kind flag exists to
+get wrong. The point is the **plunge**: the writer always plunges at a pass's first point,
+and with the lead prepended that point is the arc's start, off the wall — a plunge on the
+profile dwells and marks it. A lead that cannot fit (a small hole's far wall inside the
+arc's reach) refuses by name with the measured shortfall; zero is byte-identical.
+
 `MillTool` carries the process numbers (feeds in mm/min — G-code's `F` verbatim), and its
 `Stepover ≤ 0.5` is the value that **provably** covers the whole reachable area (each ring clears
 ± a radius about its centreline).

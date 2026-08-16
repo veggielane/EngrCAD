@@ -194,7 +194,10 @@ Stage 2 — pocket, profile and drill over the same landed machinery:
 - **Profile** is one outline offset by the tool radius (round joins — the path a tool centre
   physically rolls around an outside corner), with holding TABS on the final pass only, evenly
   spaced by arc length, each a vertical rise at the tab's own edge — never a diagonal ramp that
-  would leave the closing stretch part-cut.
+  would leave the closing stretch part-cut. Opt-in `leadRadius:` enters and leaves each loop
+  on a quarter arc tangent at the seam, away from the material (travel-relative by the
+  climb/conventional winding contract), so the plunge lands off the wall; a lead that cannot
+  fit a small hole refuses by name.
 - **Drill** ships EXPANDED peck moves (plain G0/G1), so the same twin decoder reads a drill
   cycle with nothing new; opt-in canned `G81`/`G83` cycles via
   `CncGcodeWriter.Write(..., cannedDrilling: true)`.

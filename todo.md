@@ -2483,8 +2483,12 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     so a symmetric part's straight side flanked by its two tangency vertices puts
     four points EXACTLY on a 675 mm phantom circle bulging 0.027 mm across the
     side; `GcodeReader` expands I/J arcs at 5° and refuses R-form/missing-centre/
-    radius-disagreement by name), lead-in/out arcs, and the material-removal
-    animation over recorded stock states. The LASER/drag-knife mode LANDED
+    radius-disagreement by name), and the material-removal animation over recorded
+    stock states. Lead-in/out arcs LANDED (`Profile(leadRadius:)` — quarter arcs
+    tangent at the seam on the away-from-material side, a travel-relative fact by
+    Orient's winding contract so no per-loop kind flag exists; the plunge lands at
+    the arc start, off the wall; a lead that cannot fit a small hole refuses by
+    name with the shortfall; composes with tabs and depth levels, 0 byte-identical). The LASER/drag-knife mode LANDED
     (`CncLaser` — one outward kerf/2 offset gives outer AND hole beam paths with the
     compensation right, holes first per the release rule, GRBL M4 flavour with no Z
     word anywhere, decoder-verified at the micron quantization grade).

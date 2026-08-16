@@ -373,11 +373,19 @@ public static class CncMill
     /// leaving <paramref name="tabs"/> holding tabs on the FINAL pass (evenly spaced by arc
     /// length — a stated convention, not rounding luck — each <paramref name="tabWidth"/> long
     /// and <paramref name="tabHeight"/> tall).
+    /// <para><b>Lead-in/out arcs are opt-in</b> (<paramref name="leadRadius"/> &gt; 0, 0 is
+    /// byte-identical): each loop is entered and left on a quarter arc TANGENT to the path at
+    /// the seam, placed on the side AWAY from the material — which <see cref="Orient"/> has
+    /// already made a travel-relative fact (climb puts material left of travel, so away is
+    /// RIGHT; conventional the mirror), so no per-loop kind flag exists to get wrong. The
+    /// plunge then happens at the arc's start, off the wall, which is the point: a plunge ON
+    /// the profile dwells and marks it. A lead that does not fit (a small hole's far wall
+    /// inside the arc's reach) is refused by name with the measured shortfall.</para>
     /// </summary>
     public static MillOperation Profile(
         Region2d region, MillTool tool, double depth, ProfileSide side,
         int tabs = 0, double tabHeight = 0, double tabWidth = 0, string name = "profile",
-        MillDirection direction = MillDirection.Climb)
+        MillDirection direction = MillDirection.Climb, double leadRadius = 0)
     {
         ArgumentNullException.ThrowIfNull(region);
         ArgumentNullException.ThrowIfNull(tool);
@@ -413,6 +421,28 @@ public static class CncMill
                 loops.Add(Orient([.. hole], direction, materialInside: !outside));
         }
 
+        if (!(leadRadius >= 0) || !double.IsFinite(leadRadius))
+            throw new ArgumentException(
+                $"'{name}': leadRadius must be finite and non-negative; got {leadRadius:0.###}.");
+        (Vector2d[] In, Vector2d[] Out)[]? leads = null;
+        if (leadRadius > 0)
+        {
+            leads = new (Vector2d[], Vector2d[])[loops.Count];
+            for (int i = 0; i < loops.Count; i++)
+            {
+                leads[i] = LeadArcs(loops[i], direction, leadRadius);
+                foreach (var q in leads[i].In.Concat(leads[i].Out))
+                {
+                    double room = DistanceToBoundary(region, q) - tool.Radius;
+                    if (room < -1e-9)
+                        throw new ArgumentException(
+                            $"'{name}': a lead radius of {leadRadius:0.###} does not fit "
+                            + $"loop {i} — a lead point comes {-room:0.###} closer to the "
+                            + "outline than the tool radius allows. Reduce the lead radius.");
+                }
+            }
+        }
+
         var levels = DepthLevels(depth, tool.StepDown);
         var passes = new List<MillPass>();
         var pen = new Vector2d(region.Bounds.Min.X, region.Bounds.Min.Y);
@@ -421,17 +451,77 @@ public static class CncMill
             bool final = i == levels.Count - 1;
             if (final && tabs > 0)
             {
-                foreach (var loop in loops)
-                    passes.Add(WithTabs(loop, levels[i], tabs, -depth + tabHeight, tabWidth, name));
+                for (int k = 0; k < loops.Count; k++)
+                {
+                    var pass = WithTabs(loops[k], levels[i], tabs, -depth + tabHeight, tabWidth, name);
+                    passes.Add(leads is null ? pass : WithLeads(pass, leads[k], levels[i]));
+                }
                 if (loops.Count > 0)
                     pen = new Vector2d(loops[^1][0].X, loops[^1][0].Y);
             }
             else
             {
-                AppendLinkedLoops(passes, loops, levels[i], ref pen);
+                AppendLinkedLoops(passes, loops, levels[i], ref pen, leads);
             }
         }
         return new MillOperation(name, tool, passes);
+    }
+
+    /// <summary>The two quarter arcs a loop is entered and left on: tangent to the path at
+    /// the seam (loop[0]), curving to the side away from the material — RIGHT of travel for
+    /// climb, LEFT for conventional, the fact <see cref="Orient"/>'s winding contract makes
+    /// travel-relative so it needs no per-loop kind. Sixteen chords per quarter (sagitta
+    /// R·0.0012, visually an arc; the writer's G2/G3 fitter may decline them at large radii
+    /// under its own sagitta cap, which is its call to make).</summary>
+    private static (Vector2d[] In, Vector2d[] Out) LeadArcs(
+        Vector2d[] loop, MillDirection direction, double radius)
+    {
+        var p0 = loop[0];
+        var d = (loop[1] - p0).Normalized();
+        var e = (p0 - loop[^1]).Normalized();
+        // Away from material: climb cuts with material LEFT of travel (the M3 cross-product
+        // derivation), so away is the RIGHT normal; conventional is the mirror.
+        Vector2d Away(Vector2d t) => direction == MillDirection.Climb
+            ? new Vector2d(t.Y, -t.X)
+            : new Vector2d(-t.Y, t.X);
+        const int segments = 16;
+
+        var nIn = Away(d);
+        var cIn = p0 + nIn * radius;
+        var lead = new Vector2d[segments];
+        for (int i = 0; i < segments; i++)
+        {
+            double a = i * (Math.PI / 2) / segments;
+            lead[i] = cIn - d * (radius * Math.Cos(a)) - nIn * (radius * Math.Sin(a));
+        }
+
+        var nOut = Away(e);
+        var cOut = p0 + nOut * radius;
+        var leave = new Vector2d[segments];
+        for (int i = 1; i <= segments; i++)
+        {
+            double a = i * (Math.PI / 2) / segments;
+            leave[i - 1] = cOut - nOut * (radius * Math.Cos(a)) + e * (radius * Math.Sin(a));
+        }
+        return (lead, leave);
+    }
+
+    /// <summary>Rewrites a closed (or tabbed) loop pass as an OPEN pass carrying its lead
+    /// arcs: the lead-in, the loop's own points, the closing point, the lead-out — so the
+    /// writer's plunge (always at the pass's first point) lands at the arc's start, off the
+    /// wall, with no writer change at all.</summary>
+    private static MillPass WithLeads(
+        MillPass pass, (Vector2d[] In, Vector2d[] Out) leads, double z)
+    {
+        var points = new List<Vector3d>(pass.Points.Count + 33);
+        foreach (var q in leads.In)
+            points.Add(new Vector3d(q.X, q.Y, z));
+        points.AddRange(pass.Points);
+        if (pass.IsClosed)
+            points.Add(pass.Points[0]);
+        foreach (var q in leads.Out)
+            points.Add(new Vector3d(q.X, q.Y, z));
+        return new MillPass(points, IsClosed: false);
     }
 
     /// <summary>
@@ -529,14 +619,23 @@ public static class CncMill
     /// <summary>Greedy-links the level's loops from the pen (the shared <see cref="RunLinker"/>)
     /// and appends them at <paramref name="z"/>.</summary>
     private static void AppendLinkedLoops(
-        List<MillPass> passes, List<Vector2d[]> loops, double z, ref Vector2d pen)
+        List<MillPass> passes, List<Vector2d[]> loops, double z, ref Vector2d pen,
+        (Vector2d[] In, Vector2d[] Out)[]? leads = null)
     {
         foreach (var loop in LinkLoops(loops, ref pen))
         {
             var points = new Vector3d[loop.Length];
             for (int i = 0; i < loop.Length; i++)
                 points[i] = new Vector3d(loop[i].X, loop[i].Y, z);
-            passes.Add(new MillPass(points, IsClosed: true));
+            var pass = new MillPass(points, IsClosed: true);
+            if (leads is not null)
+            {
+                // LinkLoops permutes the travel order; the lead belongs to the LOOP, so
+                // match by reference — the linker reorders, it never rebuilds.
+                int k = loops.IndexOf(loop);
+                pass = WithLeads(pass, leads[k], z);
+            }
+            passes.Add(pass);
         }
     }
 
