@@ -15,9 +15,10 @@ namespace EngrCAD.Fea;
 /// discipline): a correlation's inputs are metres and kelvin because that is the form a
 /// datasheet states and a human checks; the callers that feed the mm-world (the FEA
 /// cross-check's film coefficient, the sizing over a mm envelope) convert once, visibly.
-/// Orientation is VERTICAL plates only — the one case transcribed — offered by name;
-/// horizontal orientations and forced convection want their own correlations or a stated
-/// film coefficient.</para>
+/// The transcribed cases are vertical fin CHANNELS (Bar-Cohen &amp; Rohsenow) and
+/// horizontal flat PLATES (the McAdams family below); horizontal fin channels and forced
+/// convection want their own correlations or a stated film coefficient, and the fin-array
+/// SIZING stays vertical-only by name.</para>
 /// </summary>
 public static class NaturalConvection
 {
@@ -78,6 +79,97 @@ public static class NaturalConvection
     {
         double spacing = OptimumSpacing(channelLengthMetres, riseKelvin, ambientKelvin);
         return Nusselt(ElenbaasOptimum) * AirConductivity / spacing;
+    }
+
+    /// <summary>Which way a horizontal plate's heated face looks. Buoyancy makes them
+    /// different problems: a heated face looking UP feeds its plume freely, one looking
+    /// DOWN traps it against the plate — which is why the two correlations differ by a
+    /// factor of two in the laminar range. A COLD plate swaps the roles (a cold face
+    /// looking down is the "up" case), the standard equivalence.</summary>
+    public enum PlateFacing
+    {
+        /// <summary>The heated surface looks upward (or a cooled surface downward).</summary>
+        HeatedFacingUp,
+
+        /// <summary>The heated surface looks downward (or a cooled surface upward).</summary>
+        HeatedFacingDown,
+    }
+
+    /// <summary>The horizontal-plate characteristic length, <c>L* = A/P</c> (area over
+    /// perimeter — the Lloyd &amp; Moran convention the McAdams correlations are quoted
+    /// with; a square plate's is a quarter of its side).</summary>
+    public static double PlateCharacteristicLength(double areaM2, double perimeterM)
+    {
+        Require(areaM2, nameof(areaM2));
+        Require(perimeterM, nameof(perimeterM));
+        return areaM2 / perimeterM;
+    }
+
+    /// <summary>The Rayleigh number of a horizontal plate at
+    /// <paramref name="riseKelvin"/> above ambient over characteristic length
+    /// <paramref name="characteristicLengthM"/>: <c>Ra = gβΔT·L³/(να)</c>, β the
+    /// ideal-gas expansion coefficient at the film temperature (the
+    /// <see cref="OptimumSpacing"/> convention).</summary>
+    public static double PlateRayleigh(
+        double riseKelvin, double characteristicLengthM, double ambientKelvin = 300)
+    {
+        Require(riseKelvin, nameof(riseKelvin));
+        Require(characteristicLengthM, nameof(characteristicLengthM));
+        Require(ambientKelvin, nameof(ambientKelvin));
+        double beta = 1.0 / (ambientKelvin + riseKelvin / 2);
+        return Gravity * beta * riseKelvin
+            * characteristicLengthM * characteristicLengthM * characteristicLengthM
+            / (AirKinematicViscosity * AirThermalDiffusivity);
+    }
+
+    /// <summary>The McAdams horizontal-plate Nusselt number. ⚠ transcribed:
+    /// heated-facing-up <c>Nu = 0.54·Ra^(1/4)</c> for 10⁴ ≤ Ra ≤ 10⁷ (laminar) and
+    /// <c>Nu = 0.15·Ra^(1/3)</c> for 10⁷ &lt; Ra ≤ 10¹¹ (turbulent — whose ⅓ power makes
+    /// the film coefficient SIZE-independent, since Ra carries L³);
+    /// heated-facing-down <c>Nu = 0.27·Ra^(1/4)</c> for 10⁵ ≤ Ra ≤ 10¹⁰. A Rayleigh
+    /// number outside the correlation's own validity range is REFUSED by name rather
+    /// than extrapolated — a correlation is a fit, and outside its data it is a guess
+    /// wearing four significant figures.</summary>
+    public static double PlateNusselt(double rayleigh, PlateFacing facing)
+    {
+        if (!(rayleigh > 0) || !double.IsFinite(rayleigh))
+            throw new ArgumentException(
+                $"The Rayleigh number must be finite and positive; got {rayleigh:G4}.");
+        switch (facing)
+        {
+            case PlateFacing.HeatedFacingUp when rayleigh is >= 1e4 and <= 1e7:
+                return 0.54 * Math.Pow(rayleigh, 0.25);
+            case PlateFacing.HeatedFacingUp when rayleigh is > 1e7 and <= 1e11:
+                return 0.15 * Math.Pow(rayleigh, 1.0 / 3);
+            case PlateFacing.HeatedFacingUp:
+                throw new ArgumentException(
+                    $"Ra = {rayleigh:G4} is outside the heated-facing-up correlation's "
+                    + "validity (10^4 … 10^11). Outside its data a correlation is a guess; "
+                    + "state a film coefficient instead.");
+            case PlateFacing.HeatedFacingDown when rayleigh is >= 1e5 and <= 1e10:
+                return 0.27 * Math.Pow(rayleigh, 0.25);
+            case PlateFacing.HeatedFacingDown:
+                throw new ArgumentException(
+                    $"Ra = {rayleigh:G4} is outside the heated-facing-down correlation's "
+                    + "validity (10^5 … 10^10). Outside its data a correlation is a guess; "
+                    + "state a film coefficient instead.");
+            default:
+                throw new ArgumentException($"Unknown facing {facing}.");
+        }
+    }
+
+    /// <summary>The film coefficient (W/(m²·K)) of a horizontal plate of the given area
+    /// and perimeter: <c>h = Nu·k/L*</c> over the McAdams correlation. In the turbulent
+    /// facing-up range h is independent of the plate's size — the ⅓ power cancels the L³
+    /// in Ra — which the tests assert as two different plates reading ONE film
+    /// coefficient.</summary>
+    public static double PlateFilmCoefficient(
+        double riseKelvin, double areaM2, double perimeterM, PlateFacing facing,
+        double ambientKelvin = 300)
+    {
+        double length = PlateCharacteristicLength(areaM2, perimeterM);
+        double rayleigh = PlateRayleigh(riseKelvin, length, ambientKelvin);
+        return PlateNusselt(rayleigh, facing) * AirConductivity / length;
     }
 
     /// <summary>The efficiency of a thin rectangular fin with an ADIABATIC tip:

@@ -9547,6 +9547,28 @@ bisection's own tolerance grade, admitting nothing coarser than the search alrea
 (the `PolygonFan` tie-guard family: a predicate whose two sides are mathematically equal at
 the boundary needs a stated tie rule, or the last bits decide).
 
+**Horizontal-plate convection landed as the McAdams transcription beside the vertical
+channels** (`NaturalConvection.PlateFacing`/`PlateCharacteristicLength`/`PlateRayleigh`/
+`PlateNusselt`/`PlateFilmCoefficient`; docs `examples/fea-thermal.md`): heated-facing-up
+`Nu = 0.54·Ra^(1/4)` (10⁴…10⁷) and `0.15·Ra^(1/3)` (10⁷…10¹¹), heated-facing-down
+`0.27·Ra^(1/4)` (10⁵…10¹⁰), over the `A/P` characteristic length (Lloyd &amp; Moran) with
+β at the film temperature — the `OptimumSpacing` convention, so one rule. **A Rayleigh
+number outside a correlation's own validity range is REFUSED by name rather than
+extrapolated**: a correlation is a fit, and outside its data it is a guess wearing four
+significant figures — the honest-range rule the vertical family never needed because the
+composite blends its two limits. Two identities carry the verification past transcription:
+**facing-up is exactly TWICE facing-down in the shared laminar range to the bit** (0.54 =
+2 × 0.27, and multiplication by an exact power of two commutes with rounding, so the two
+literals' nearest doubles keep the ratio exactly); and **the turbulent ⅓ power makes the
+film coefficient SIZE-independent** — Ra carries L³, so `h = 0.15·k·(gβΔT/να)^(1/3)` with
+no L in it, asserted as a 1 m and a 2 m plate reading ONE h to 1e-12 relative — the
+identity a transcription error in either the exponent or the constant structurally cannot
+pass, where a spot value would only catch the constant. The facing enum is named by the
+BUOYANCY case (`HeatedFacingUp`/`HeatedFacingDown`) with the cold-plate equivalence stated
+in its doc (a cold face looking down IS the up case), and the fin-array SIZING stays
+vertical-only by name — horizontal fin CHANNELS are a different correlation family, not a
+parameter on this one.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

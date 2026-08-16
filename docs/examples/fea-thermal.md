@@ -592,8 +592,34 @@ thermal FEA. The sizing side is closed form — the Bar-Cohen & Rohsenow composi
 correlation with the Elenbaas optimum spacing (`El = 54.3`; the classic `Nu = 1.31` is
 *derived* from the composite rather than stored), fin efficiency `tanh(mH)/(mH)`, dry-air
 properties at 300 K — every constant a ⚠ verify-against-datasheet transcription asserted in
-datasheet form. Orientation is **vertical fins only** (the transcribed case, offered by
-name); forced convection wants a stated film coefficient.
+datasheet form. Fin-array sizing is **vertical fins only** (the transcribed case, offered
+by name); forced convection wants a stated film coefficient.
+
+**Horizontal flat plates** are transcribed too — the McAdams family over the `A/P`
+characteristic length: heated-facing-up `Nu = 0.54·Ra^(1/4)` (laminar) and
+`0.15·Ra^(1/3)` (turbulent), heated-facing-down `0.27·Ra^(1/4)`, each valid only in its
+own Rayleigh range and **refused by name outside it** (a correlation is a fit; outside its
+data it is a guess wearing four significant figures). Two identities carry the
+verification: facing-up is exactly *twice* facing-down in the shared laminar range (0.54 =
+2 × 0.27, and doubling commutes with rounding, so the ratio is bit-exact), and the
+turbulent ⅓ power cancels the L³ inside Ra, so the film coefficient is **independent of
+the plate's size** — two different plates read one `h`, the identity a wrong exponent
+cannot fake.
+
+```csharp run:fea-plate-convection
+var up = NaturalConvection.PlateFacing.HeatedFacingUp;
+var down = NaturalConvection.PlateFacing.HeatedFacingDown;
+// A 150 mm square plate 50 K above ambient (SI at the correlation boundary; large
+// enough that its Rayleigh number ~2e5 sits inside BOTH quarter-power ranges — a
+// 100 mm plate's 7e4 is refused by the facing-down correlation's own 1e5 floor).
+double h = NaturalConvection.PlateFilmCoefficient(50, 0.0225, 0.6, up);
+Console.WriteLine($"150 mm plate, heated face up:  h = {h:0.00} W/(m2 K)");
+Console.WriteLine($"same plate, heated face down:  h = "
+    + $"{NaturalConvection.PlateFilmCoefficient(50, 0.0225, 0.6, down):0.00} (half)");
+Console.WriteLine($"1 m and 2 m plates, turbulent: "
+    + $"{NaturalConvection.PlateFilmCoefficient(50, 1, 4, up):0.000} vs "
+    + $"{NaturalConvection.PlateFilmCoefficient(50, 4, 8, up):0.000} (size cancels)");
+```
 
 ```csharp run:fea-heatsink
 var spec = new HeatsinkSpec(

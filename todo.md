@@ -2696,10 +2696,17 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   El = 54.3 and air constants ⚠ datasheet-form; fin efficiency held against an
   independent FD solve (8 digits) AND a real 3D conduction solve of the same fin
   (ratio 1.0001 — the discriminating row); S(16L) = 2·S(L) to twelve digits; impossible
-  envelopes refuse naming asked vs achievable watts. Still open below: the design-study
-  loop over a generated `Feature` and horizontal-orientation correlations.
-- [ ] **Heatsink follow-ups: the parametric `Feature` + design-study loop, and
-  horizontal-orientation correlations** (was part of the correlation-tool entry).** Given a power, an allowable rise, an orientation
+  envelopes refuse naming asked vs achievable watts. Horizontal-PLATE correlations have
+  since landed (the McAdams family on `NaturalConvection`: 0.54/0.27·Ra^(1/4) + the
+  0.15·Ra^(1/3) turbulent branch, validity ranges refused by name; facing-up exactly
+  2x facing-down bit-for-bit, and the turbulent film coefficient SIZE-independent —
+  the 1/3 power cancels Ra's L^3 — asserted as two plates reading one h). Still open
+  below: the design-study loop over a generated `Feature`.
+- [ ] **Heatsink follow-up: the parametric `Feature` + design-study loop** (was part
+  of the correlation-tool entry; the horizontal-plate correlations landed — see above.
+  LAYERING NOTE recorded when the Feature half was assessed: `EngrCAD.Modeling` cannot
+  reference `EngrCAD.Fea`, so a `Feature` cannot call `HeatsinkSizing` — the loop is
+  honestly a docs-example/app-layer composition, not a Modeling type).** Given a power, an allowable rise, an orientation
   and an envelope, size a natural-convection fin array and generate the solid — the
   geometry is trivial for this kernel (a base plate + a fin pattern is `Shape.Extrude` +
   `PatternLinear`/`LocationSet`, parametric through a `Feature` so a study can drive it),

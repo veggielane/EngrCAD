@@ -3147,4 +3147,8 @@ constants at 300 K, all datasheet-form transcriptions) + fin efficiency tanh(mH)
 SI at the correlation boundary, converted once and visibly. The two-route verification is
 the point: the closed form vs an independent FD solve of the 1D fin equation (8 digits) and
 vs a real 3D ThermalSolver conduction solve of the same fin (ratio 1.0001); an impossible
-envelope refuses naming asked vs achievable watts.
+envelope refuses naming asked vs achievable watts. Horizontal flat PLATES carry the McAdams
+family (`PlateFilmCoefficient` over the A/P characteristic length: 0.54/0.27 Ra^(1/4) +
+the 0.15 Ra^(1/3) turbulent branch, whose 1/3 power makes h size-independent — asserted as
+two plates reading one film coefficient; validity ranges refused by name); fin-array
+sizing stays vertical-only by name.
