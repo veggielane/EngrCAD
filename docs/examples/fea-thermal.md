@@ -642,6 +642,101 @@ Console.WriteLine($"solid: {sink.ToMesh().FaceCount} facets, "
     + $"volume {sink.ToMesh().Volume():0} mm^3");
 ```
 
+
+### Closing the loop: a parametric heatsink under a design study
+
+The follow-up the sizing tool invites: put the heatsink in a **feature history** and let a
+[design study](design-studies.md) drive it. The layering is deliberate — `EngrCAD.Modeling`
+cannot reference `EngrCAD.Fea`, so a `Feature` cannot call `HeatsinkSizing`; the
+composition lives at the *application* layer, where the objective and constraint read the
+correlations directly. And the loop is instant, because of a recorded design fact: **a
+`Shape` graph is lazy**, so regenerating a part costs nothing until something measures it —
+the study below runs ~380 evaluations in milliseconds, reading closed forms, and the
+geometry is measured **once**, at the winner, where the generated solid's mass must agree
+with the closed form the study reasoned with.
+
+```csharp run:fea-heatsink-study
+// Minimise mass subject to a thermal-resistance limit (12 W at a 35 K rise). The study
+// STARTS infeasible (the default design reads ~4 K/W) and climbs in, ending exactly ON
+// the constraint.
+sealed class FinnedSink : Feature
+{
+    public const double Width = 80, Depth = 80, FinThickness = 2, BaseThickness = 4;
+
+    [Param(Min = 8, Max = 40, Units = "mm")] public double FinHeight { get; init; } = 25;
+    [Param(Min = 4, Max = 14, Units = "mm")] public double FinSpacing { get; init; } = 6;
+
+    public int FinCount =>
+        (int)Math.Floor((Width - FinThickness) / (FinSpacing + FinThickness)) + 1;
+
+    public override Shape Apply(FeatureContext c)
+    {
+        double pitch = FinSpacing + FinThickness;
+        var plate = Shape.Box(Width, Depth, BaseThickness);
+        var fin = Shape.Box(FinThickness, Depth, FinHeight)
+            .Translate(-(FinCount - 1) * pitch / 2, 0, (BaseThickness + FinHeight) / 2);
+        return plate | fin.PatternLinear(FinCount, new Vector3d(pitch, 0, 0));
+    }
+}
+
+var sink = new FinnedSink();
+var history = new FeatureHistory();
+history.Add(sink);
+var part = history.ToPart("sink").Of(Materials.Aluminium6061);
+
+double ClosedFormMassGrams(FinnedSink f) =>
+    (FinnedSink.Width * FinnedSink.Depth * FinnedSink.BaseThickness
+        + f.FinCount * FinnedSink.FinThickness * FinnedSink.Depth * f.FinHeight)
+    * 2.70e-9 * 1e6;
+
+double Resistance(FinnedSink f)
+{
+    const double rise = 35, ambient = 300;
+    double s = f.FinSpacing / 1000, length = FinnedSink.Depth / 1000;
+    double el = 9.81 * (1 / (ambient + rise / 2)) * rise * s * s * s * s
+        / (NaturalConvection.AirKinematicViscosity
+            * NaturalConvection.AirThermalDiffusivity * length);
+    double h = NaturalConvection.Nusselt(el) * NaturalConvection.AirConductivity / s;
+    double eta = NaturalConvection.FinEfficiency(
+        h, 167, FinnedSink.FinThickness / 1000, f.FinHeight / 1000);
+    double area = f.FinCount * 2 * (f.FinHeight / 1000) * length * eta
+        + (FinnedSink.Width / 1000) * length;
+    return 1 / (h * area);
+}
+
+double Mass(Part p) => ClosedFormMassGrams((FinnedSink)p.History!.Features[0]);
+double R(Part p) => Resistance((FinnedSink)p.History!.Features[0]);
+
+var height = DesignVariable.On(sink, nameof(FinnedSink.FinHeight));
+var spacing = DesignVariable.On(sink, nameof(FinnedSink.FinSpacing));
+var result = DesignStudy.Minimize(
+    part, [height, spacing], Mass,
+    [StudyConstraint.AtMost("thermal resistance", R, 35.0 / 12)]);
+Console.WriteLine(result.Report());
+
+// The loop closure: the solid the winner describes, MEASURED, against the closed form
+// the study reasoned with — one mesh, at the answer only.
+var winner = new FinnedSink
+{
+    FinHeight = result.ValueOf(height),
+    FinSpacing = result.ValueOf(spacing),
+};
+var winnerHistory = new FeatureHistory();
+winnerHistory.Add(winner);
+double measured = winnerHistory.ToPart("winner").Of(Materials.Aluminium6061).MassGrams()!.Value;
+double closed = ClosedFormMassGrams(winner);
+Console.WriteLine($"winner {winner.FinCount} fins x {winner.FinHeight:0.0} mm: "
+    + $"measured {measured:0.0} g vs closed form {closed:0.0} g");
+
+if (Resistance(new FinnedSink()) <= 35.0 / 12)
+    throw new Exception("the default design should START infeasible");
+if (!result.Feasible)
+    throw new Exception("no feasible design found");
+if (result.Stop.BindingConstraints is not ["thermal resistance"])
+    throw new Exception("the resistance limit should be what stopped the search");
+if (Math.Abs(measured - closed) / closed > 0.01)
+    throw new Exception($"the generated solid disagrees with the study's closed form");
+```
 **The verification is the deliverable**: the fin-efficiency closed form is held against an
 *independent* finite-difference solve of the 1D fin equation (equal to eight digits), and —
 the discriminating row — against a real **3D conduction solve of the same fin** through

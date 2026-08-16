@@ -9588,6 +9588,25 @@ One pairing subtlety worth the comment it carries: the travel linker PERMUTES th
 order, so the lead is matched to its loop by REFERENCE — the linker reorders, it never
 rebuilds, which is what makes `IndexOf` sound there.
 
+**The heatsink design-study loop landed as the docs-example composition the layering makes
+it** (`fea-thermal.md` §Closing the loop): `EngrCAD.Modeling` cannot reference
+`EngrCAD.Fea`, so a `Feature` cannot call `HeatsinkSizing` — and rather than bending the
+dependency graph, the loop lives at the APPLICATION layer, where a snippet-defined
+`FinnedSink : Feature` carries `[Param]` height and spacing, and the study's objective and
+constraint read the convection correlations directly. **What makes it work is a recorded
+design fact doing new duty: a `Shape` graph is LAZY, so regenerating a part costs nothing
+until something measures it** — the study runs ~380 evaluations in milliseconds because
+mass and resistance are closed forms of the parameters, and the geometry is measured ONCE,
+at the winner, where the generated solid's `MassGrams()` agrees with the study's own closed
+form to 0.000% (the loop-closure assertion: the solid the study reasoned about IS the solid
+it generated). The fence self-verifies the narrative too: the default design STARTS
+infeasible (~4 K/W against the 12 W @ 35 K ask of 2.92), the search descends on violation
+alone into feasibility — the study machinery's own from-infeasible contract — and ends
+exactly ON the resistance constraint (margin 0.00%, named binding). The fin COUNT is
+derived (`floor` of the width over the pitch), so the objective is deliberately
+DISCONTINUOUS in the spacing — the topology-changes case derivative-free search exists for,
+here in its mildest form.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
