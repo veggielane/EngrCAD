@@ -1639,6 +1639,12 @@ round-off. The capacity is consistent by default with `MassLumping.Hrz` the name
 monotonicity option: at short steps the consistent matrix pushes the node next to a quench
 ABOVE the initial temperature (measured), and the lumped diagonal restores the discrete
 maximum principle; row-sum on 10-node elements refuses by name (a negative capacity).
+`ThermalRadiation.Solve` adds grey-body surface radiation as the under-relaxed outer
+iteration (per-facet linearization exact at its own point through the model's internal
+film overlay — a radiating facet counts as driven; the plain Picard map measurably
+oscillates); the oracle is the lumped Stefan-Boltzmann equilibrium solved independently
+by bisection, and temperatures must be ABSOLUTE (a celsius model refuses by name at the
+surroundings).
 
 ## Verification
 

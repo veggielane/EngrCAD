@@ -688,11 +688,11 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   consumer would be the fifth reason not to fork it.
 - [ ] **FEA thermal follow-ups** (v1 ✅ landed — `ThermalModel`/`ThermalSolver`/
   `ThermalResults` + `StructuralModel.ThermalLoad`, docs `examples/fea-thermal.md`):
-  - [ ] **Temperature-dependent properties and radiation.** Both make conduction
-    nonlinear in the unknown, so both are an outer iteration wrapping this solver rather
-    than a change to it. Radiation is the more commonly wanted;
-    `sigma·epsilon·(T⁴ − Tsurr⁴)` linearised about the current temperature reuses the
-    convection matrix's assembly exactly.
+  - [ ] **Temperature-dependent properties.** Nonlinear in the unknown; an outer
+    iteration wrapping this solver, exactly as radiation now does — `ThermalRadiation`
+    LANDED as that shape (per-facet linearization through the model's internal film
+    overlay, under-relaxed Picard after the plain map measured a limit cycle, the lumped
+    Stefan–Boltzmann equilibrium as the independent oracle) and is the template.
   - [ ] **Two-way coupling** (deformation feeding back into conduction) is a staggered or
     monolithic solver, not an extension of the one-way path. Filed for completeness; the
     one-way direction covers thermal stress, which is what is usually wanted.

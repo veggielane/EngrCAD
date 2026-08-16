@@ -193,12 +193,21 @@ public sealed class ThermalModel
         return _heat[node];
     }
 
+    /// <summary>Per-facet film/supply OVERLAY — solver-internal state
+    /// (<see cref="ThermalRadiation"/> sets it around each inner solve and clears it in a
+    /// finally), added into <see cref="FilmCoefficientOf"/>/<see cref="FilmSupplyOf"/> so
+    /// every consumer — the surface-matrix assembly, the load, the energy balance, the
+    /// driven check — picks it up with no threading. Never part of the model's own
+    /// conditions; single-threaded use assumed, as the solvers already are.</summary>
+    internal double[]? OverlayFilm;
+    internal double[]? OverlaySupply;
+
     /// <summary>The accumulated film coefficient on one boundary facet (0 = no
     /// convection).</summary>
     public double FilmCoefficientOf(int facet)
     {
         RequireFacet(facet);
-        return _filmCoefficient[facet];
+        return _filmCoefficient[facet] + (OverlayFilm?[facet] ?? 0);
     }
 
     /// <summary>The convective supply <c>sum(h · T_inf)</c> on one boundary facet. Divided
@@ -207,7 +216,7 @@ public sealed class ThermalModel
     public double FilmSupplyOf(int facet)
     {
         RequireFacet(facet);
-        return _filmSupply[facet];
+        return _filmSupply[facet] + (OverlaySupply?[facet] ?? 0);
     }
 
     /// <summary>Number of nodes with a prescribed temperature.</summary>

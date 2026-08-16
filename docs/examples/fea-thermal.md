@@ -573,8 +573,6 @@ quarter of `E·alpha·dT`). A statically determinate 3-2-1 restraint gives 1e-10
 - **Constant material properties.** `k`, `c` and `alpha` do not vary with temperature, so
   the problem stays linear and the solve is one factorization. Temperature-dependent
   properties make it nonlinear and are a different solver wrapping this one.
-- **No radiation.** `sigma·epsilon·(T⁴ − Tsurr⁴)` is nonlinear in the unknown for the same
-  reason; a linearised film coefficient is the usual workaround and `Convection` takes one.
 - **The time STEP is constant**, deliberately: it is what makes one factorization serve
   the whole run. Time-varying boundary *values* are first-class (the law overloads above);
   a time-varying step is the different, much larger change.
@@ -588,6 +586,45 @@ quarter of `E·alpha·dT`). A statically determinate 3-2-1 restraint gives 1e-10
   10-node elements is refused by name (−V/20 at every corner — a negative heat capacity).
 - **Sliver elements are the real constraint, and they belong to the mesher** — the same
   limitation the structural page records, refused by name here by the same shared guard.
+
+## Surface radiation
+
+`ThermalRadiation.Solve(model, surfaces)` adds grey-body radiation,
+`q = σ·ε·(T⁴ − Ts⁴)`, as the **outer iteration** the conduction model's own remarks
+reserve for it — the fourth power is nonlinear in the unknown and everything else here is
+one factorization. Each pass linearizes per facet about the previous answer's facet mean,
+`h_rad = σ·ε·(T̄² + Ts²)(T̄ + Ts)` with ambient `Ts` — exactly a convective film, assembled
+by the same surface quadrature — and the linearization is *exact at its own point*, so a
+converged answer satisfies the true Stefan–Boltzmann balance. The plain Picard map was
+measured oscillating in a limit cycle, so the linearization point is under-relaxed (half
+steps by default); a radiating facet counts as *driven*, so a model held by nothing but
+its own glow is solvable.
+
+**Temperatures must be absolute** (kelvin): a model built in celsius is silently wrong
+physics no solver can detect, which is why a non-positive surrounding refuses loudly.
+
+```csharp run:fea-thermal-radiation
+// A generating cube radiating to 300 K surroundings: the equilibrium is the lumped
+// Stefan-Boltzmann closed form, solved here independently by bisection on the balance.
+var cube = Shape.Box(10, 10, 10);
+var mesh = AnalysisMesh.Of(TetMesher.Mesh(cube.ToMesh()));
+const double emissivity = 0.8, surroundings = 300, power = 1500; // mW
+var model = new ThermalModel(mesh, Materials.Aluminium6061)
+    .Generation(power / 1000.0);
+var run = ThermalRadiation.Solve(model,
+    [new RadiationSurface(Facets.All, emissivity, surroundings)]);
+
+double sigmaEps = ThermalRadiation.StefanBoltzmann * emissivity;
+double lo = surroundings, hi = 3000;
+for (int i = 0; i < 200; i++)
+{
+    double mid = 0.5 * (lo + hi);
+    if (sigmaEps * 600 * (Math.Pow(mid, 4) - Math.Pow(surroundings, 4)) < power) lo = mid;
+    else hi = mid;
+}
+Console.WriteLine($"radiating equilibrium {run.Results.Temperature.Average():0.00} K "
+    + $"vs the closed form {0.5 * (lo + hi):0.00} K in {run.Iterations} iterations");
+```
 
 ## Time-varying boundary conditions
 

@@ -9677,6 +9677,31 @@ row-sum on 10-node elements refuses by name (−V/20 at every corner, a negative
 capacity). The arithmetic is the modal lumping transplanted verbatim with the same
 exact-zero division guard.
 
+**Surface radiation landed as the outer iteration the conduction remarks reserved for it**
+(`ThermalRadiation.Solve`/`RadiationSurface`; docs `examples/fea-thermal.md` §Surface
+radiation): grey-body `q = σε(T⁴ − Ts⁴)` is nonlinear in the unknown while everything
+else in the thermal stack is one factorization, so each pass linearizes per FACET about
+the previous answer's facet mean — `h_rad = σε(T̄² + Ts²)(T̄ + Ts)` with ambient Ts, which
+is EXACT at its own linearization point, so a converged fixed point satisfies the true
+Stefan–Boltzmann balance rather than an approximation of it. **The mechanism is a per-facet
+film OVERLAY on `ThermalModel`** (internal, set around each inner solve and cleared in a
+finally): `FilmCoefficientOf`/`FilmSupplyOf` add it in, so the surface-matrix assembly, the
+load supply, the energy balance and the driven check all pick it up with zero threading —
+a radiating facet counts as DRIVEN for the same reason a convective one does, so a model
+held by nothing but its own glow is solvable, and the user's model is never mutated
+(asserted: after a radiating solve, a plain steady solve of the same model still refuses
+as undriven). **The plain Picard map was measured OSCILLATING** — a 1.7e-4 relative limit
+cycle on the equilibrium fixture, stalled not diverging — so the linearization point is
+under-relaxed (`Relaxation = 0.5` default, validated in (0, 1]), which converges cleanly
+in ~30 passes to 1e-10. σ is stated in MODEL units (5.670374419e-11 mW/(mm²·K⁴) — the SI
+constant through the film coefficient's own ×1e-3, the `ModelUnits` discipline), and
+temperatures must be ABSOLUTE: the fourth power is a statement about absolute temperature,
+a celsius model is silently wrong physics no solver can detect, and the non-positive
+surroundings refusal says so loudly. Verified: a generating cube's equilibrium against the
+lumped Stefan–Boltzmann closed form solved INDEPENDENTLY by bisection on the balance
+(2e-3, the radiative-Biot grade); the small-signal limit degenerating to a convective film
+at 4σεTs³ within the quadratic correction; determinism to the bit; refusals by name.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
