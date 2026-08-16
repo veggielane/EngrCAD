@@ -227,6 +227,22 @@ public class DeformationAnimationTests
         Assert.Contains("12.5X", FieldLegend.Title(FieldRendering.AtFactor(display, 0.5)!.Value));
     }
 
+    [Fact]
+    public void HoverIsStale_ExactlyWhereThePickIndexDoesNotDescribeTheDrawnShape()
+    {
+        // The pick BVH is built at the part's own DeformScale (the factor-1
+        // configuration), so hover is exact at factor 1 and stale at any other factor —
+        // INDEPENDENT of whether an animation is running (a still scrubbed to factor
+        // 0.5 answers from the same stale index). Exact comparisons: the factor 1 and
+        // a scale of 0 are assigned values, never arithmetic that lands nearby.
+        Assert.False(FieldRendering.HoverIsStale(deformScale: 0, deformFactor: 0.5));
+        Assert.False(FieldRendering.HoverIsStale(deformScale: 0, deformFactor: 250));
+        Assert.False(FieldRendering.HoverIsStale(deformScale: 40, deformFactor: 1));
+        Assert.True(FieldRendering.HoverIsStale(deformScale: 40, deformFactor: 0));
+        Assert.True(FieldRendering.HoverIsStale(deformScale: 40, deformFactor: 0.5));
+        Assert.True(FieldRendering.HoverIsStale(deformScale: 40, deformFactor: 1 + 1e-12));
+    }
+
     [SkippableFact]
     public void ADeformedPartDrawsItsEdgeOverlay_AndTheOverlayFollowsTheFactor()
     {

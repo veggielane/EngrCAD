@@ -1193,6 +1193,11 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private void SetHovered(int index)
     {
+        // A displaced part mid-exaggeration is drawn where its pick BVH is not
+        // (FieldRendering.HoverIsStale states the whole rule) — refuse the affordance
+        // rather than highlight from stale geometry.
+        if (index >= 0 && FieldRendering.HoverIsStale(_meshes[index].DeformScale, _deformFactor))
+            index = -1;
         if (index == _hovered)
             return;
         _hovered = index;

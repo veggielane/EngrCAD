@@ -79,6 +79,21 @@ public static class FieldRendering
     /// </summary>
     public const float GhostAlpha = 0.18f;
 
+    /// <summary>
+    /// Whether a hover highlight would answer from STALE pick geometry: the pick BVH is
+    /// built once at the part's own <c>DeformScale</c> — the factor-1 configuration,
+    /// since a spatial index cannot be a uniform — so for a displaced part any other
+    /// effective factor draws a shape the index does not describe, and the hover
+    /// affordance refuses rather than silently answering from it. Exact comparisons
+    /// deliberately (the exact-zero family: the factor 1 and a scale of 0 are ASSIGNED,
+    /// never computed): at factor exactly 1 the index is exact and hover stays, and a
+    /// part with no displacement is never stale. Clicking still selects with the
+    /// documented staleness — a selection is a deliberate act where a hover is an
+    /// ambient claim about what is under the cursor.
+    /// </summary>
+    public static bool HoverIsStale(double deformScale, double deformFactor) =>
+        deformScale != 0 && deformFactor != 1;
+
     /// <summary>The colour every mesh vertex reads when no field-colour buffer is
     /// attached. White, because the shader multiplies nothing by it — the strength
     /// uniform is 0 there, so this only has to be a defined finite value; it is white

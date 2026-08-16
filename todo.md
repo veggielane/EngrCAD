@@ -678,15 +678,17 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   A→B→A pixel check — `fieldStepPixels > 0`, `fieldStepReturn == 0`):
   - **A frequency/load-step slider** driving `Part.Results` is the same shape of problem;
     result persistence beside `FeatureHistory.SaveParameters` is a third neighbour.
-- [ ] **Picking during a deformation animation** (the EDGES half of this item ✅ landed —
-  feature edges AND wireframe now carry per-endpoint displacement on the line program's
-  own `aDeformOffset`, following `uDeformScale` in all three front ends; the no-edges
-  rule is retired, design.md has the record): the pick BVH is built once at the part's
-  own `DeformScale`, so a click is exact at factor 1 and off by the difference in
-  exaggeration in between. A cheap fix is not obvious — rebuilding a spatial index per
-  frame is the cost the design avoids — but a *deformed-ray* trick may exist for small
-  displacements, and at minimum the viewer could refuse to hover-highlight while
-  playback is running rather than silently answering from stale geometry.
+- [ ] **Picking during a deformation animation** (the EDGES half ✅ landed — displaced
+  feature edges/wireframe on the line program's own attribute — and the stated MINIMUM
+  ✅ landed too, made precise: `FieldRendering.HoverIsStale` refuses the hover
+  affordance for a displaced part at any effective factor other than exactly 1, in the
+  window AND the browser — playback-independent, since a still scrubbed off factor 1
+  answers from the same stale index; clicking still selects, a deliberate act with the
+  staleness documented): what remains is the real fix — the pick BVH is built once at
+  the part's own `DeformScale`, and rebuilding a spatial index per frame is the cost
+  the design avoids. A *deformed-ray* trick may exist for small displacements
+  (iteratively pull the ray back through the displacement field, the
+  `SdfProjectionTarget` shape of idea).
 - [ ] **A dependency-free MP4 route is FLAGGED, not promised** (the Reel/Short presets
   ✅ landed — `ReelFormat`/`ReelFraming`/`ReelExport.RenderReel`/`RenderReelPoster`, safe-area
   framing as a geometric assertion, duration caps as refusals naming the platform, the

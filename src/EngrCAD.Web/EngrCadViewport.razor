@@ -1545,6 +1545,10 @@
 
     private Task SetHoveredAsync(int index)
     {
+        // The window's stale-hover rule, asked with the browser's own effective factor.
+        if (index >= 0 && index < _drawn.Count && FieldRendering.HoverIsStale(
+                _drawn[index].DeformScale, Animation?.At(AnimationTime).DeformFactor ?? 1))
+            index = -1;
         if (index == _hovered)
             return Task.CompletedTask;
         _hovered = index;

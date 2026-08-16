@@ -10063,7 +10063,15 @@ overlay's own pixel SET moving between factor 0 and factor 1, so the test sees t
 outline FOLLOW the shape rather than merely exist. What deliberately did NOT change:
 picking stays built once at the part's own scale (the spatial-index-cannot-be-a-uniform
 reason stands), and the factor-0 frame of an animation still differs from a scale-0
-still — by the ghost alone now, which is the difference that was always real.
+still — by the ghost alone now, which is the difference that was always real. **The
+hover affordance now refuses where that index is stale** (`FieldRendering.HoverIsStale`,
+asked by the window's and the browser's one hover funnel each): a displaced part at any
+effective factor other than exactly 1 is drawn where its pick BVH is not, so
+highlighting it would be an ambient claim answered from stale geometry — and the rule
+is deliberately playback-INDEPENDENT, since a still scrubbed to factor 0.5 answers from
+the same index the filed "while playback is running" framing would have exempted.
+Clicking still selects (a deliberate act, staleness documented); exact comparisons
+throughout, the factor 1 and a scale of 0 being assigned values.
 
 **Reel/Short export landed as the composition it was filed as, and both real findings
 came from the checks** (`ReelFormat`/`ReelFraming` in Viewer.Core, `ReelExport` in
