@@ -20,12 +20,6 @@ implementing. Ordered roughly by value-for-effort within each section.
     curve-ordered input its balanced fold wants. Note the constraint that makes this a job
     rather than a patch: the arrangement is bit-pinned by `Region2dGoldenTests` and drives
     `infill-hilbert.png`, so a re-association of the fold has to be shown not to move either.
-  - [ ] **Gosper's achieved spacing runs 2–2.6× finer than the request** (measured 0.51 / 0.38
-    / 0.77 / 0.58 of the ask at orders 5–7) where a square family's stays under 2×, because the
-    island is placed by a CONSERVATIVE inradius: the nearest unvisited site's distance from the
-    centroid, less the triangular lattice's covering radius. A true inradius of the island's
-    cell union would recover part of that; the conservative bound is sound and was chosen
-    because it is computable from the walk with no island geometry.
 
 ## B-Rep / sketching (EngrCAD.BRep)
 

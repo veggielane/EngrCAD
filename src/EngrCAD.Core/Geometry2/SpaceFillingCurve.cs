@@ -59,10 +59,14 @@ public enum SpaceFillingFamily
 ///
 /// <para><b>Gosper is measured, not assumed.</b> The square families tile the region's
 /// bounding square exactly, so coverage is structural. A Gosper island is a hexagonal blob, so
-/// it is placed by its own INRADIUS — the largest disc about its centroid that its visited
-/// cells contain, computed from the walk rather than tabulated — scaled to cover the region's
-/// bounding circle. That makes Gosper's achieved spacing markedly finer than a square family's
-/// at the same order, which is the honest price of a lattice that does not tile a rectangle.</para>
+/// it is placed by its own INRADIUS — the exact distance from its centroid to the nearest
+/// unvisited cell, computed from the walk rather than tabulated — scaled to cover the region's
+/// bounding circle. Gosper's achieved spacing still runs markedly finer than a square
+/// family's, and the cause is MEASURED rather than assumed: each order shrinks the cell by
+/// exactly 1/√7 ≈ 0.378 (the radix-7 subdivision), so the worst ask lands 2.6× finer, where a
+/// square family's radix-2 worst case is 2× — the exact inradius was built and buys only
+/// 0.04–0.9% over the earlier conservative bound (nearest unvisited site less the covering
+/// radius), so the fineness is quantization, which no placement can touch.</para>
 /// </summary>
 public sealed class SpaceFillingCurve
 {
@@ -416,10 +420,14 @@ public sealed class SpaceFillingCurve
 
     /// <summary>
     /// The centroid of a Gosper walk's sites and a SOUND inradius about it, both in lattice
-    /// units. The inradius is the distance to the nearest UNVISITED site less the lattice's
-    /// covering radius: a point closer than that to the centroid has its nearest site closer
-    /// than the nearest unvisited one, so that site is visited and the point is inside the
-    /// island. Measured from the walk rather than tabulated, so it cannot drift from it.
+    /// units. The inradius is the TRUE distance from the centroid to the nearest UNVISITED
+    /// site's hexagonal Voronoi cell — the exact form of the earlier conservative bound
+    /// (nearest unvisited site distance less the lattice's covering radius), which gave away
+    /// up to a whole covering radius and made Gosper's achieved spacing run much finer than
+    /// the ask. Soundness is the 1-Lipschitz argument (the <c>SurfaceCull</c> shape): a point
+    /// x with |x − c| &lt; inradius has dist(x, unvisited cell) &gt; 0 for EVERY unvisited
+    /// site, so x lies in no unvisited cell, and the lattice tiles the plane, so x is inside
+    /// the island. Measured from the walk rather than tabulated, so it cannot drift from it.
     /// </summary>
     private static (Vector2d Centroid, double Inradius) IslandPlacement(Vector2i[] lattice)
     {
@@ -440,20 +448,64 @@ public sealed class SpaceFillingCurve
         }
 
         // The box is grown by one so every unvisited site ADJACENT to the island is scanned;
-        // an unvisited site nearer the centroid than all of those would have to be enclosed by
-        // visited ones, which makes it adjacent to one and so already in the scan.
-        double nearestUnvisited = double.PositiveInfinity;
+        // the box's own +1 ring is a closed barrier of unvisited cells around the island, so
+        // any cell wholly outside the box lies behind a scanned one and cannot be nearer.
+        double inradius = double.PositiveInfinity;
         for (int a = minA - 1; a <= maxA + 1; a++)
         for (int b = minB - 1; b <= maxB + 1; b++)
         {
             var site = new Vector2i(a, b);
             if (visited.Contains(site))
                 continue;
-            nearestUnvisited = Math.Min(
-                nearestUnvisited,
-                ToPlane(SpaceFillingFamily.Gosper, site).DistanceTo(centroid));
+            inradius = Math.Min(
+                inradius,
+                HexCellDistance(centroid - ToPlane(SpaceFillingFamily.Gosper, site)));
         }
-        return (centroid, nearestUnvisited - TriangularCoveringRadius);
+        return (centroid, inradius);
+    }
+
+    // The Voronoi cell of a unit-triangular-lattice site under ToPlane's basis
+    // (u = (1, 0), v = (1/2, sqrt3/2)): the six unit neighbour directions sit at 60-degree
+    // steps starting from 0, so the cell is the regular hexagon { x : x·n_k <= 1/2 } with
+    // edge normals at 60k degrees and vertices at circumradius 1/sqrt(3) on 30 + 60k degrees.
+    private static readonly Vector2d[] HexNormals = BuildHexDirections(0.0, 1.0);
+    private static readonly Vector2d[] HexVertices = BuildHexDirections(Math.PI / 6, TriangularCoveringRadius);
+
+    private static Vector2d[] BuildHexDirections(double phase, double radius)
+    {
+        var directions = new Vector2d[6];
+        for (int k = 0; k < 6; k++)
+        {
+            double angle = phase + k * Math.PI / 3;
+            directions[k] = new Vector2d(radius * Math.Cos(angle), radius * Math.Sin(angle));
+        }
+        return directions;
+    }
+
+    /// <summary>
+    /// Exact distance from a point (relative to a lattice site) to that site's hexagonal
+    /// Voronoi cell — 0 inside, else the nearest point on the boundary. Convexity makes this
+    /// the plain minimum over the six edge segments; the inside test is the six half-plane
+    /// conditions the cell is defined by, so no epsilon enters.
+    /// </summary>
+    internal static double HexCellDistance(in Vector2d delta)
+    {
+        bool inside = true;
+        for (int k = 0; k < 6 && inside; k++)
+            inside = delta.Dot(HexNormals[k]) <= 0.5;
+        if (inside)
+            return 0;
+
+        double best = double.PositiveInfinity;
+        for (int k = 0; k < 6; k++)
+        {
+            var a = HexVertices[k];
+            var b = HexVertices[(k + 1) % 6];
+            var ab = b - a;
+            double s = Math.Clamp((delta - a).Dot(ab) / ab.Dot(ab), 0.0, 1.0);
+            best = Math.Min(best, delta.DistanceTo(a + ab * s));
+        }
+        return best;
     }
 
     // ---- family facts ----

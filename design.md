@@ -9832,6 +9832,25 @@ cell colour — the smooth-mesh-has-no-face-map reasoning one primitive down), a
 SELECTED or hovered part keeps the highlight, because with no fill behind them the
 line colour is the only channel selection has.
 
+**The Gosper island's TRUE inradius landed, and the measurement overturned the filed
+hypothesis** (`SpaceFillingCurve.IslandPlacement` + the internal `HexCellDistance`): the
+island had been placed by a conservative bound — nearest unvisited site less the
+lattice's covering radius — and the backlog attributed Gosper's 2–2.6×-finer-than-asked
+spacing to it, with "a true inradius of the island's cell union would recover part of
+that". The exact form is the distance from the centroid to the nearest unvisited site's
+hexagonal Voronoi cell (point-to-regular-hexagon, six half-plane tests then six edge
+segments, no epsilon; soundness is the 1-Lipschitz argument in the `SurfaceCull` shape —
+a point closer than the inradius is in no unvisited cell, and the lattice tiles the
+plane). Measured at orders 3–6 it buys **0.04–0.9%** — the conservative bound was nearly
+tight, because at island sizes the nearest unvisited cell's closest point lies almost on
+the centroid-to-site line. **The fineness is the RADIX**: each order shrinks the cell by
+exactly 1/√7 ≈ 0.378 (measured 0.377 between consecutive orders), so the worst ask lands
+2.6× finer structurally, against a square family's radix-2 worst case of 2× — a
+quantization no placement can touch. The exact tier is kept (strictly better, sound,
+self-contained, pinned by the existing coverage certificate plus closed-form
+`HexCellDistance` tests) and the docs now attribute the fineness to the radix rather
+than to the placement.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

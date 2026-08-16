@@ -237,6 +237,51 @@ public class SpaceFillingCurveTests
         Assert.Equal(3.125, curve.Spacing);
     }
 
+    [Fact]
+    public void HexCellDistance_MatchesItsClosedForms()
+    {
+        // The Voronoi cell of a unit-triangular-lattice site is the regular hexagon with
+        // inradius 1/2 (toward a neighbour) and circumradius 1/sqrt(3) (toward a vertex,
+        // 30 degrees off) — both exact by construction, so both are equalities.
+        Assert.Equal(0.0, SpaceFillingCurve.HexCellDistance(new Vector2d(0, 0)));
+        Assert.Equal(0.0, SpaceFillingCurve.HexCellDistance(new Vector2d(0.3, 0.1)));
+        // Along a neighbour direction the boundary sits at exactly 1/2.
+        Assert.Equal(0.25, SpaceFillingCurve.HexCellDistance(new Vector2d(0.75, 0)), 12);
+        // Along a vertex direction (30 degrees) it sits at the circumradius.
+        double r = 1.0 / Math.Sqrt(3.0);
+        var vertexDir = new Vector2d(Math.Cos(Math.PI / 6), Math.Sin(Math.PI / 6));
+        Assert.Equal(0.5, SpaceFillingCurve.HexCellDistance(vertexDir * (r + 0.5)), 12);
+        // From a NEIGHBOUR site's centre, the shared wall is half a step away.
+        Assert.Equal(0.5, SpaceFillingCurve.HexCellDistance(new Vector2d(1, 0)), 12);
+    }
+
+    [Fact]
+    public void TheGosperInradiusIsExact_AndTheFinenessIsTheRadix()
+    {
+        // The exact hex-cell inradius can only exceed the old conservative bound
+        // (nearest unvisited site less the covering radius) — measured, it does so by
+        // under 1%, which is the finding: Gosper's finer-than-asked spacing is the
+        // RADIX-7 quantization (each order shrinks the cell by exactly 1/sqrt(7)),
+        // not the placement. Both halves are pinned so the attribution cannot rot.
+        var bounds = new Aabb((0, 0, 0), (60, 40, 0));
+        double previous = double.NaN;
+        foreach (double ask in new[] { 8.0, 3.0, 1.2, 0.5 })
+        {
+            var curve = SpaceFillingCurve.Over(bounds, SpaceFillingFamily.Gosper, ask);
+            Assert.True(curve.Spacing <= ask);
+            if (!double.IsNaN(previous))
+            {
+                // Boundary effects keep successive islands only NEARLY self-similar, so
+                // the per-order shrink sits within about a percent of 1/sqrt(7) rather
+                // than exactly on it (measured 0.374..0.382 against 0.378) — a band,
+                // because xUnit's decimal-places Equal rounds each side first and 0.374
+                // versus 0.378 straddle a rounding boundary.
+                Assert.InRange(curve.Spacing / previous, 0.370, 0.386);
+            }
+            previous = curve.Spacing;
+        }
+    }
+
     // ---- coverage: the one measurement, against a derived bound ----
 
     [Fact]

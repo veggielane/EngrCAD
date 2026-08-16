@@ -249,10 +249,14 @@ for (int i = 1; i < sites.Count; i++)
 
 `Gosper` is the one family placed differently, and it is stated rather than hidden: its cells
 are hexagons, so it fills a hexagonal *island* rather than a rectangle. It is scaled by its own
-**measured** inradius — the largest disc about the island's centroid that its cells contain,
-computed from the walk rather than tabulated — so that the island covers the region's bounding
-circle. That makes its achieved spacing markedly finer than a square family's at the same
-order, which is the honest price of a lattice that does not tile a rectangle.
+**measured** inradius — the exact distance from the island's centroid to the nearest unvisited
+cell, computed from the walk rather than tabulated — so that the island covers the region's
+bounding circle. Its achieved spacing still runs markedly finer than a square family's, and
+the cause is the **radix**: each Gosper order shrinks the cell by exactly `1/√7 ≈ 0.378`, so
+the worst ask lands 2.6× finer where a square family's radix-2 worst case is 2× — measured
+rather than assumed, since the exact inradius was built and bought only 0.04–0.9% over the
+earlier conservative bound. The fineness is quantization, the honest price of a lattice that
+does not tile a rectangle.
 
 ## A tight fit on a long thin region
 
