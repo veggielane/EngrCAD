@@ -688,11 +688,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   consumer would be the fifth reason not to fork it.
 - [ ] **FEA thermal follow-ups** (v1 ✅ landed — `ThermalModel`/`ThermalSolver`/
   `ThermalResults` + `StructuralModel.ThermalLoad`, docs `examples/fea-thermal.md`):
-  - [ ] **Lumped capacity**, for monotonicity under backward Euler at short steps and for
-    a future explicit scheme. Row-sum lumping is unavailable for 10-node elements (it
-    gives −V/20 at every corner, a negative capacity), so this means a scaled-diagonal
-    (HRZ) scheme — a different approximation with its own error, which is why it is a
-    named option rather than a quiet default.
   - [ ] **Temperature-dependent properties and radiation.** Both make conduction
     nonlinear in the unknown, so both are an outer iteration wrapping this solver rather
     than a change to it. Radiation is the more commonly wanted;

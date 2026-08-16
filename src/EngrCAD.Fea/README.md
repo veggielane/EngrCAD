@@ -1635,7 +1635,10 @@ survives (h stays constant by statement; a steady solve refuses a law by name; t
 balance splits applied laws from ambient-supply laws exactly as the constant conditions
 do). The oracle is discrete exactness: a prescribed ramp's particular solution a·t + b has
 b = the steady solve of Generation(−ρc·R), and every theta scheme integrates it to
-round-off.
+round-off. The capacity is consistent by default with `MassLumping.Hrz` the named
+monotonicity option: at short steps the consistent matrix pushes the node next to a quench
+ABOVE the initial temperature (measured), and the lumped diagonal restores the discrete
+maximum principle; row-sum on 10-node elements refuses by name (a negative capacity).
 
 ## Verification
 

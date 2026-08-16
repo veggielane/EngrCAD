@@ -575,12 +575,17 @@ quarter of `E·alpha·dT`). A statically determinate 3-2-1 restraint gives 1e-10
   properties make it nonlinear and are a different solver wrapping this one.
 - **No radiation.** `sigma·epsilon·(T⁴ − Tsurr⁴)` is nonlinear in the unknown for the same
   reason; a linearised film coefficient is the usual workaround and `Convection` takes one.
-- **Time-varying boundary conditions are not exposed**, though the stepping is written for
-  them (the previous state is carried whole rather than collapsed, so a per-step boundary
-  value is one line). The step is constant, deliberately: it is what makes one factorization
-  serve the whole run.
-- **The capacity matrix is consistent only**; see above for what lumping would change and
-  why row-sum lumping is not available for 10-node elements.
+- **The time STEP is constant**, deliberately: it is what makes one factorization serve
+  the whole run. Time-varying boundary *values* are first-class (the law overloads above);
+  a time-varying step is the different, much larger change.
+- **The capacity matrix is consistent by default, with lumping a named option**
+  (`ThermalTransientOptions.Lumping = MassLumping.Hrz`): at steps short against the
+  element diffusion time the consistent capacity violates the discrete maximum principle —
+  measured on the quench fixture, the node next to the quenched face is pushed *above* the
+  initial temperature — and the lumped diagonal restores it (backward Euler becomes an
+  M-matrix step; nothing leaves `[surface, initial]`). HRZ preserves each element's
+  capacity exactly and coincides with row-sum on 4-node elements to round-off; row-sum on
+  10-node elements is refused by name (−V/20 at every corner — a negative heat capacity).
 - **Sliver elements are the real constraint, and they belong to the mesher** — the same
   limitation the structural page records, refused by name here by the same shared guard.
 

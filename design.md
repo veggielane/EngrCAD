@@ -9656,6 +9656,27 @@ heat while a convective-ambient law belongs to the SUPPLY the convective loss is
 against, the same split the constant conditions already live by; one law evaluation per
 step now serves the load and the balance both.
 
+**Lumped (HRZ) capacity landed as the monotonicity option the transient's own record
+measured the need for** (`ThermalTransientOptions.Lumping`, the modal solver's
+`MassLumping` vocabulary — the capacity IS the mass matrix's integral under another name,
+so a second enum would be two spellings of one rule): the recorded finding was that at
+steps short against the element diffusion time BOTH schemes undershoot a quench "because
+that is the consistent capacity matrix, not the scheme", and the option is its remedy —
+with a lumped diagonal, backward Euler is an M-matrix step and the discrete maximum
+principle holds. **The fixture had to show the disease before the cure means anything**:
+the consistent run genuinely leaves the physical bounds, and the measured DIRECTION is the
+finding worth keeping — the artifact pushes the node NEXT to the quenched face ABOVE the
+initial temperature (the min stays pinned at the surface value, so a min-only assertion
+reads a healthy run; the violation lives on the MAX side). The lumped run leaves nothing
+outside [surface, initial] to 1e-9. HRZ scales the strictly positive consistent diagonal
+to preserve each element's capacity exactly — asserted through the run's own first law
+against the SAME lumped matrix — and coincides with row-sum on 4-node elements to
+round-off, NOT to the bit (a row summed and a diagonal scaled are different arithmetic,
+measured 1.4e-13 apart on a magnitude of 86, which is why the assertion is relative);
+row-sum on 10-node elements refuses by name (−V/20 at every corner, a negative heat
+capacity). The arithmetic is the modal lumping transplanted verbatim with the same
+exact-zero division guard.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

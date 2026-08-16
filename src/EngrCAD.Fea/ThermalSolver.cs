@@ -138,6 +138,19 @@ public sealed record ThermalTransientOptions
     /// <summary>Which implicit scheme (default <see cref="ThermalTimeScheme.BackwardEuler"/>).</summary>
     public ThermalTimeScheme Scheme { get; init; } = ThermalTimeScheme.BackwardEuler;
 
+    /// <summary>How the capacity matrix is built (default
+    /// <see cref="MassLumping.Consistent"/> — the exact integral). <b>Lumping is the
+    /// MONOTONICITY option</b>: at steps short against the element diffusion time the
+    /// CONSISTENT capacity lets backward Euler undershoot a quench (measured 5.8% on the
+    /// recorded fixture — the matrix, not the scheme), while a lumped diagonal restores
+    /// the discrete maximum principle. The capacity is the mass matrix's integral under
+    /// another name, so the vocabulary is the modal solver's own <see cref="MassLumping"/>:
+    /// <see cref="MassLumping.RowSum"/> is refused for 10-node elements (row sums are
+    /// −V/20 at every corner — a NEGATIVE heat capacity) and <see cref="MassLumping.Hrz"/>
+    /// scales the strictly positive consistent diagonal to preserve each element's
+    /// capacity exactly, coinciding with row-sum on 4-node elements bit for bit.</summary>
+    public MassLumping Lumping { get; init; } = MassLumping.Consistent;
+
     /// <summary>A uniform initial temperature (ignored when
     /// <see cref="InitialField"/> is set).</summary>
     public double InitialTemperature { get; init; }
@@ -520,6 +533,15 @@ public static class ThermalSolver
         // steady operator has. The refusal exists for the steady case, where nothing else
         // pins the level.
 
+        if (transient.Lumping == MassLumping.RowSum && mesh.Order == ElementOrder.Quadratic)
+            throw new FeaException(
+                "MassLumping.RowSum is not available for 10-node (quadratic) elements: the "
+                + "row sums are -V/20 at every CORNER node, a NEGATIVE heat capacity — a "
+                + "node that cools when heat flows in, which is not an approximation but a "
+                + "wrong answer. Use MassLumping.Hrz, which scales the consistent matrix's "
+                + "strictly positive diagonal to preserve each element's capacity, or "
+                + "MassLumping.Consistent.");
+
         var reduced = ReducedIndices(model, out int freeCount);
         if (freeCount == 0)
             throw new FeaException(
@@ -530,7 +552,7 @@ public static class ThermalSolver
 
         var stopwatch = Stopwatch.StartNew();
         var conduction = AssembleConduction(model, conductivityRule);
-        var capacity = AssembleCapacity(model, capacityRule);
+        var capacity = AssembleCapacity(model, capacityRule, transient.Lumping);
         bool timeLaws = model.HasTimeLaws;
         var load = AssembleLoad(model, 0.0);
         var loadNow = load;
@@ -850,13 +872,15 @@ public static class ThermalSolver
     }
 
     /// <summary>The FULL consistent capacity matrix over every node.</summary>
-    private static PackedSparseMatrix AssembleCapacity(ThermalModel model, in TetQuadrature rule)
+    private static PackedSparseMatrix AssembleCapacity(
+        ThermalModel model, in TetQuadrature rule, MassLumping lumping = MassLumping.Consistent)
     {
         var mesh = model.Mesh;
         int perElement = mesh.NodesPerElement;
         var builder = new SparseMatrixBuilder(mesh.NodeCount, mesh.NodeCount);
         var ce = new double[perElement * perElement];
         var positions = new Vector3d[perElement];
+        var diagonal = new double[perElement];
 
         for (int e = 0; e < mesh.ElementCount; e++)
         {
@@ -865,7 +889,51 @@ public static class ThermalSolver
                 positions[i] = mesh.Position(nodes[i]);
             ThermalElement.Capacity(
                 mesh.Order, positions, model.MaterialOf(e).VolumetricHeatCapacity, rule, ce);
-            AddSymmetric(builder, nodes, ce, perElement);
+
+            if (lumping == MassLumping.Consistent)
+            {
+                AddSymmetric(builder, nodes, ce, perElement);
+                continue;
+            }
+
+            // The modal solver's lumping arithmetic verbatim — the capacity IS the mass
+            // matrix's integral under another name, so the rules cannot be allowed to
+            // drift: row-sum sums each row; HRZ scales the strictly positive consistent
+            // diagonal to preserve the ELEMENT capacity exactly (and coincides with
+            // row-sum on a 4-node element, where the row sums are all positive).
+            double elementCapacity = 0;
+            for (int i = 0; i < perElement * perElement; i++)
+                elementCapacity += ce[i];
+            if (lumping == MassLumping.RowSum)
+            {
+                for (int i = 0; i < perElement; i++)
+                {
+                    double sum = 0;
+                    int row = i * perElement;
+                    for (int j = 0; j < perElement; j++)
+                        sum += ce[row + j];
+                    diagonal[i] = sum;
+                }
+            }
+            else
+            {
+                double trace = 0;
+                for (int i = 0; i < perElement; i++)
+                {
+                    diagonal[i] = ce[i * perElement + i];
+                    trace += diagonal[i];
+                }
+                // Exact-zero division guard, as the modal twin's.
+                double scale = trace > 0 ? elementCapacity / trace : 0;
+                for (int i = 0; i < perElement; i++)
+                    diagonal[i] *= scale;
+            }
+            for (int i = 0; i < perElement; i++)
+            {
+                if (diagonal[i] == 0)
+                    continue;
+                builder.Add(nodes[i], nodes[i], diagonal[i]);
+            }
         }
         return builder.ToSymmetricUpper();
     }
