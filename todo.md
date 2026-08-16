@@ -2477,9 +2477,10 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     **Stage-2 residuals, open**: G2/G3 arcs from the exact curved-profile tier
     (`SectionExact`/`CurvedRegion2dOffset` — a bore rim as ONE arc in the G-code),
     lead-in/out arcs, and the material-removal animation over recorded stock
-    states. A LASER/drag-knife mode is the near-free
-    adjacent (a kerf-offset outline cut — the 2D machinery plus the DXF/SVG writers
-    already cover it; Kiri:Moto ships it for the same reason).
+    states. The LASER/drag-knife mode LANDED
+    (`CncLaser` — one outward kerf/2 offset gives outer AND hole beam paths with the
+    compensation right, holes first per the release rule, GRBL M4 flavour with no Z
+    word anywhere, decoder-verified at the micron quantization grade).
   - **Stage 3 — 3-axis surfacing: the CORE HAS LANDED** (`CncSurfacing.Raster`/
     `Waterline` + the `ScallopHeight`/`StepoverForScallop` chord identity; design.md
     §6e, docs `examples/cam-surfacing.md`) — the implicit-engine differentiator built

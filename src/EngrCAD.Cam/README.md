@@ -155,6 +155,13 @@ The slicer is deliberately a THIN layer over machinery that already shipped:
   tipAt (the fidelity of a within-row chord — gouge-free by the same construction); one
   plunge replaces one per row, both cutter routes through the one serpentine rule.
 
+- **Laser / drag-knife cutting** (`CncLaser.Cut`/`WriteGcode`, `LaserTool`): one outward
+  offset by kerf/2 gives every beam path with the compensation right (outer loops out into
+  the waste, hole loops into the holes — the freed part measures the drawn dimensions),
+  holes first (the release rule); GRBL M4 dynamic-power G-code with NO Z word anywhere,
+  read by the twin decoder (cut length verified through the decoded file at the writer's
+  own micron quantization grade).
+
 ## G-code (`GcodeWriter`, `GcodeReader`)
 
 The writer is Marlin/RepRap flavour and STATES its modes (G21/G90/M82) because a reader that

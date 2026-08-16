@@ -9352,6 +9352,18 @@ default off byte-identical), both cutter routes through the one serpentine rule,
 samples themselves asserted IDENTICAL to the unlinked emission (linking adds only the
 connectors).
 
+**Laser cutting was the predicted near-free adjacent and measured as one**: the whole
+feature is ONE outward offset — growing the region by kerf/2 moves its outer loops OUT into
+the waste and its hole loops IN into the holes, which are exactly the two beam centrelines,
+so the kerf compensation needs no per-loop case analysis and the freed part measures the
+drawn dimensions by construction (the perimeter oracle is closed form: 2(w+h) + 2π·kerf/2
+outside with round corners, 2(w+h) − 8·kerf/2 inside where an inward rectangle offset keeps
+sharp corners). Holes cut FIRST (the release rule), the G-code is GRBL's M4 dynamic-power
+flavour with NO Z word anywhere (a laser has no depth axis, and emitting one would make the
+file mean something on the wrong machine), and the twin decoder reads the program unchanged
+— M4/S are modes — so the cut length is verified through the decoded file at the writer's
+own micron coordinate-quantization grade rather than against the plan's arithmetic.
+
 **Stage 4 opened with trochoidal slotting** (`CncHsm.TrochoidalSlot`; docs
 `examples/cam-milling.md` §HSM), and the finding that justifies the campaign's whole framing —
 "the engagement angle computed from the evolving stock and BOUNDED by the stated maximum,

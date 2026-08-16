@@ -376,6 +376,32 @@ Console.WriteLine($"Ø2 in aluminium wants ~40k rpm; capped at 24k the feed foll
     + $"{small.FeedRate:0} mm/min (chip load preserved)");
 ```
 
+## Laser cutting
+
+`CncLaser.Cut` is the 2D machinery's near-free adjacent: a part cut free of sheet stock with
+the **kerf spent in the waste**, and one outward offset gives every beam path with the
+compensation already right — growing the region by kerf/2 moves its outer loops *out* into
+the waste and its hole loops *in* into the holes, which are exactly the two beam
+centrelines, so the freed part measures exactly the drawn dimensions with no per-loop case
+analysis. Holes cut **first** (the release rule: a freed part is no longer held by the
+sheet, so anything cut after the perimeter drifts). The G-code is GRBL's laser flavour —
+`M4` dynamic power (the beam gates off during `G0` travels by the controller's own rule),
+one `S` word, and **no Z anywhere**, because a laser has no depth axis and emitting one
+would make the file mean something on the wrong machine.
+
+```csharp run:cam-laser
+var part = new Region2d(
+    new List<Vector2d> { new(0, 0), new(40, 0), new(40, 20), new(0, 20) },
+    [new List<Vector2d> { new(15, 5), new(15, 15), new(25, 15), new(25, 5) }]);
+var cut = CncLaser.Cut(part, new LaserTool(KerfWidth: 0.2, Power: 750, Passes: 2));
+Console.WriteLine($"{cut.Passes.Count} paths, hole first; beam path {cut.CutLength:0.00} mm");
+Console.WriteLine($"outer = 2(40+20) + 2*pi*0.1 = {2 * (40 + 20) + 2 * Math.PI * 0.1:0.00} "
+    + "(round corners carry the kerf compensation exactly)");
+var decoded = GcodeReader.Read(CncLaser.WriteGcode(cut));
+Console.WriteLine($"decoded cut length {decoded.Moves.Where(m => !m.Rapid).Sum(m => m.XyLength):0.0} mm "
+    + "= 2 passes of every path");
+```
+
 Still filed with the campaign: `G2`/`G3` arcs from the exact curved-profile tier, helical
 entry, rest machining, the 3-axis (surfacing) stock simulation — a raster row's swept volume
 is not a prism, so `Simulate` refuses it by name today — and the trochoid × stock-record
