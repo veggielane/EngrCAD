@@ -95,11 +95,14 @@ public static class TextOutlines
     /// on a straight horizontal path; they differ only in whether a glyph tilts with the
     /// curve, and in whether <see cref="TextStyle.VerticalAlign"/> lifts along the path's
     /// left normal (rotated) or world +Y (upright, the glyph's own up).</param>
-    /// <exception cref="ArgumentException">The text has more than one line (a second line
-    /// would need an offset of the path, which is a different curve and may
-    /// self-intersect — build it deliberately and call this again); the font has no glyph
-    /// for one of the characters; or the run does not fit on the path (the required and
-    /// available lengths are named).</exception>
+    /// <exception cref="ArgumentException">The text has more than one line on a path
+    /// that is not a <see cref="EngrCAD.BRep.Line2d"/> or <see cref="EngrCAD.BRep.Arc2d"/>
+    /// (only those two offset EXACTLY — a parallel line, a concentric arc; a general
+    /// curve's offset is a different curve with no exact form and may self-intersect,
+    /// so the caller builds it deliberately); an inner arc line would reach past the
+    /// arc's own centre; the font has no glyph for one of the characters; or a line
+    /// does not fit on its own path (the required and available lengths are
+    /// named).</exception>
     public static IReadOnlyList<Sketch> SketchesOnPath(
         string text, TrueTypeFont font, double size, Curve2d path,
         TextStyle? style = null, double startOffset = 0, bool upright = false)
@@ -233,16 +236,66 @@ public static class TextOutlines
         style ??= TextStyle.Default;
 
         var lines = SplitLines(text);
-        if (lines.Count > 1)
+        if (lines.Count > 1 && path is not (EngrCAD.BRep.Line2d or EngrCAD.BRep.Arc2d))
             throw new ArgumentException(
-                $"Text on a path must be a single line ({lines.Count} were given). A second line "
-                + "would sit on an OFFSET of the path, which is a different curve and can "
-                + "self-intersect — build that curve deliberately and lay its line on it.",
-                nameof(text));
+                $"Multi-line text on a path needs an exactly-offsettable path, and only Line2d "
+                + $"(a parallel line) and Arc2d (a concentric arc) have one — this path is a "
+                + $"{path.GetType().Name}, whose offset is a different curve with no exact form "
+                + "and can self-intersect. Build the offset curve deliberately and lay each "
+                + "line on its own path.", nameof(text));
 
+        // Line k rides the path offset k line-heights DOWN — down being minus the
+        // glyphs' up, which is the path's LEFT normal — so a straight horizontal path
+        // reproduces the ordinary multi-line layout exactly, and an arc's lines sit on
+        // concentric arcs sharing its angular span (each spaced by its OWN arc length,
+        // exactly as lettering on rings is).
+        for (int index = 0; index < lines.Count; index++)
+        {
+            var linePath = index == 0
+                ? path
+                : OffsetDown(path, index * LineHeight(size, style), lines.Count);
+            LayoutLineOnPath(lines[index], font, size, linePath, style, startOffset, upright, place);
+        }
+    }
+
+    /// <summary>The exact offset of an analytic path one or more line-heights DOWN
+    /// (minus the left normal): a parallel line, or a concentric arc keeping the
+    /// angular span — outward for a counter-clockwise arc (whose left normal points at
+    /// its centre), inward for a clockwise one, refusing an inner radius that reaches
+    /// past the centre.</summary>
+    private static Curve2d OffsetDown(Curve2d path, double drop, int lineCount)
+    {
+        switch (path)
+        {
+            case EngrCAD.BRep.Line2d line:
+            {
+                var direction = (line.PointAt(1) - line.PointAt(0)).Normalized(Tolerance.Default);
+                var left = new Vector2d(-direction.Y, direction.X);
+                var shift = left * -drop;
+                return new EngrCAD.BRep.Line2d(line.PointAt(0) + shift, line.PointAt(1) + shift);
+            }
+            case EngrCAD.BRep.Arc2d arc:
+            {
+                // CCW (positive sweep): left normal is inward, so down is OUTWARD.
+                double radius = arc.SweepAngle >= 0 ? arc.Radius + drop : arc.Radius - drop;
+                if (!(radius > 0))
+                    throw new ArgumentException(
+                        $"A line {drop:G6} below the path would sit on a concentric arc of radius "
+                        + $"{radius:G6} — at or inside the arc's own centre. Fewer lines ({lineCount} "
+                        + "were given), a larger arc, or a smaller size.", nameof(path));
+                return new EngrCAD.BRep.Arc2d(arc.Center, radius, arc.StartAngle, arc.SweepAngle);
+            }
+            default:
+                throw new InvalidOperationException("unreachable: the caller gated the path kind");
+        }
+    }
+
+    private static void LayoutLineOnPath(
+        string line, TrueTypeFont font, double size, Curve2d path, TextStyle style,
+        double startOffset, bool upright, Action<Glyph, double, GlyphPose> place)
+    {
         double scale = size / font.UnitsPerEm;
         double tracking = size * style.LetterSpacing;
-        string line = lines[0];
         double width = MeasureLine(line, font, size, style);
 
         var table = new ArcLengthTable2d(path);

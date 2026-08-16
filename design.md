@@ -10205,6 +10205,26 @@ lines SEPARATELY from the dimensions' shared `CenteredText`, so the first cut gr
 only dimension notes — the leader-note test caught the miss, and both sites attach
 blocks now, each with the attachment its own stacking datum implies.
 
+**Multi-line text on a path landed as the analytic-only tier the entry sketched, with
+the refusal narrowed rather than removed** (`TextOutlines.SketchesOnPath`/`Shape.TextOnPath`
+accept `'\n'` on `Line2d` and `Arc2d` paths): line k rides the path offset k
+line-heights DOWN — down being minus the glyphs' up, the path's left normal — and only
+two curve kinds offset EXACTLY (a parallel line; a concentric arc keeping the angular
+span), so every other path keeps the refusal NAMING those two kinds and the reason (a
+general open curve's offset has no exact form and can self-intersect — the caller
+builds it deliberately). The orientation rules compose rather than being restated: a
+counter-clockwise arc's left normal points at its centre (the recorded dial
+convention), so its lines stack OUTWARD, a clockwise arc's inward — with an inner line
+reaching the arc's own centre refused by name. Two oracles carry it: the straight
+horizontal path with two lines reproduces the ordinary two-line layout to nine decimals
+(THE reduction — the offset line is exactly where ordinary layout puts its second
+baseline), and on a circle the line-1 ink centres sit EXACTLY one line-height farther
+out than line-0's — measured as the DIFFERENCE of the two rings, because the glyph's
+constant baseline-to-ink offset lies along the radial direction and cancels there,
+where asserting the raw radius books that offset as error (the fixture finding: 48.5
+measured against a naive 52 expected, the 3.5 being the 'I' glyph's own ink centre
+above its baseline).
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

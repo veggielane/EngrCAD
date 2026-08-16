@@ -141,9 +141,14 @@ var banner = Shape.TextOnPath("ENGRCAD", font, size: 8, height: 1, arc,
 if (!banner.ToMesh().IsClosed) throw new Exception("upright banner did not build");
 ```
 
-Multi-line text on a path is refused by name: a second line would sit on an *offset* of
-the path, which is a different curve and can self-intersect. Build that curve deliberately
-(`Sketch.Offset` on a closed path, or a concentric `Arc2d`) and lay its line on it.
+Multi-line text works on the paths whose offset is EXACT — a straight line (each line
+rides a parallel line, reproducing ordinary multi-line layout to nine decimals) and an
+arc (each line a *concentric* arc sharing the angular span: a counter-clockwise ring
+stacks its lines outward, the dial convention, and an inner line reaching past the
+arc's centre is refused by name). Every other path keeps the refusal naming those two
+kinds: a general curve's offset is a different curve with no exact form and can
+self-intersect, so the caller builds it deliberately and lays each line on its own
+path.
 
 ## Text as a parametric feature
 

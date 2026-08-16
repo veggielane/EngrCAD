@@ -743,20 +743,6 @@ export — is recorded in CLAUDE.md):
   the code. Verified coordinate-for-coordinate on synthetic fonts, with the charset
   tests choosing codes the TABLE routes to different glyphs than the identity would —
   which is what proves the table was read rather than assumed.
-- [ ] **Text on a path: second line via an offset path.** The rigid-placement UPRIGHT mode
-  ✅ landed (`SketchesOnPath`/`Shape.TextOnPath` `upright:` argument — a property of the
-  placement, so an argument not a `TextStyle` field; anchors mid-advance, spaces by arc
-  length, `VerticalAlign` lifts along world +Y). What remains is **a second line via
-  `Sketch.Offset`** — a convenience overload that builds the offset curve itself, currently
-  refused by name so the caller does it (right while offsetting can self-intersect), with a
-  helper that offsets and REPORTS what it got carrying the honest failure. The clean general
-  answer needs offsetting an OPEN `Curve2d`, which has no exact form except `Line2d` (a
-  parallel line) and `Arc2d` (a concentric arc) — so it is either an analytic-only Modeling
-  helper (refuse other curve types by name; line k rides the path offset by −k·lineHeight
-  along the left normal, oracle: concentric radii r and r±lineHeight subtending
-  advance/(r±lineHeight)) or a new open-path offset in `Core.Geometry2`. The two-call form
-  (`Shape.TextOnPath` on two hand-built concentric curves) is already clean, so the value is
-  marginal and the API/where-offset-lives is a design call.
 - [ ] **Heightmap follow-ups** (`surface()` ✅ landed — `Shape.Heightmap` +
   `Heightmap.Mesh/ReadDat/ReadPng`; **colour-PNG luminance ✅ landed** — truecolor RGB/RGBA
   → Rec. 709 relative luminance `0.2126 R + 0.7152 G + 0.0722 B`, a documented rule, alpha

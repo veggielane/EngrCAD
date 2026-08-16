@@ -269,13 +269,88 @@ public class TextOnPathTests
     // ---- refusals ------------------------------------------------------------
 
     [Fact]
-    public void OnAPath_RefusesMoreThanOneLine()
+    public void OnAPath_MultiLineRefusesOnlyWhereNoExactOffsetExists()
     {
+        // A bezier path has no exact offset; the refusal names the two kinds that do.
+        var bezier = new BezierCurve2d(
+            new Vector2d(0, 0), new Vector2d(30, 40), new Vector2d(70, -40), new Vector2d(100, 0));
         var error = Assert.Throws<ArgumentException>(
-            () => TextOutlines.SketchesOnPath("I\nI", Font, Size, Circle(20)));
+            () => TextOutlines.SketchesOnPath("I\nI", Font, Size, bezier));
+        Assert.Contains("Line2d", error.Message);
+        Assert.Contains("Arc2d", error.Message);
+    }
 
-        Assert.Contains("single line", error.Message);
-        Assert.Contains("OFFSET", error.Message);
+    /// <summary>
+    /// THE reduction: two lines on a straight horizontal path reproduce the ordinary
+    /// two-line layout — line 1 rides the path offset one line-height DOWN, which for a
+    /// horizontal line is exactly where ordinary layout puts its second baseline.
+    /// </summary>
+    [Fact]
+    public void OnAStraightPath_TwoLinesReproduceOrdinaryLayout()
+    {
+        var straight = TextOutlines.Sketches("IOI\nOI", Font, Size);
+        var onLine = TextOutlines.SketchesOnPath("IOI\nOI", Font, Size, Line(100));
+
+        Assert.Equal(straight.Count, onLine.Count);
+        for (int i = 0; i < straight.Count; i++)
+        {
+            Assert.Equal(straight[i].Bounds.Min.X, onLine[i].Bounds.Min.X, 9);
+            Assert.Equal(straight[i].Bounds.Max.X, onLine[i].Bounds.Max.X, 9);
+            Assert.Equal(straight[i].Bounds.Min.Y, onLine[i].Bounds.Min.Y, 9);
+            Assert.Equal(straight[i].Bounds.Max.Y, onLine[i].Bounds.Max.Y, 9);
+        }
+    }
+
+    /// <summary>
+    /// On a counter-clockwise circle the left normal points INWARD (the recorded
+    /// convention), so DOWN is outward: line 1's glyph anchors sit on the concentric
+    /// circle of radius r + lineHeight, exactly, each line spaced by its OWN arc
+    /// length; and rigid placement keeps every glyph's area, on both rings.
+    /// </summary>
+    [Fact]
+    public void OnACircle_TheSecondLineRidesTheConcentricRing_Exactly()
+    {
+        const double radius = 40;
+        double lineHeight = TextOutlines.LineHeight(Size);
+        var oneLine = TextOutlines.SketchesOnPath("II", Font, Size, Circle(radius));
+        var twoLines = TextOutlines.SketchesOnPath("II\nII", Font, Size, Circle(radius));
+
+        // Line 0's sketches are bit-identical to the single-line run (the loop's
+        // index-0 branch passes the original path object through untouched).
+        Assert.True(twoLines.Count > oneLine.Count);
+        for (int i = 0; i < oneLine.Count; i++)
+        {
+            Assert.Equal(oneLine[i].Bounds.Min.X, twoLines[i].Bounds.Min.X);
+            Assert.Equal(oneLine[i].Bounds.Min.Y, twoLines[i].Bounds.Min.Y);
+        }
+
+        // Every line-1 glyph's ink centre sits EXACTLY a line-height farther from the
+        // circle's centre than a line-0 glyph's: the glyph's up is the radial
+        // direction, so the constant baseline-to-ink offset cancels in the DIFFERENCE
+        // of the two rings — asserting the raw radius would book that offset as error.
+        double Ring(Sketch sketch)
+        {
+            var b = sketch.Bounds;
+            return new Vector2d((b.Min.X + b.Max.X) / 2, (b.Min.Y + b.Max.Y) / 2).Length;
+        }
+        double innerRing = Ring(twoLines[0]);
+        for (int i = oneLine.Count; i < twoLines.Count; i++)
+            Assert.Equal(innerRing + lineHeight, Ring(twoLines[i]), 6);
+
+        // Rigid placement preserves every glyph's area on both rings.
+        double area = TextOutlines.Sketches("I", Font, Size)[0].Area();
+        foreach (var sketch in twoLines)
+            Assert.Equal(area, sketch.Area(), 12);
+    }
+
+    [Fact]
+    public void OnAClockwiseArc_AnInnerLinePastTheCentre_IsRefusedByName()
+    {
+        // Clockwise: left normal outward, so lines go INWARD; a drop past the radius
+        // has no concentric arc to sit on.
+        var error = Assert.Throws<ArgumentException>(() => TextOutlines.SketchesOnPath(
+            "I\nI\nI", Font, Size, ClockwiseCircle(1.5 * TextOutlines.LineHeight(Size))));
+        Assert.Contains("centre", error.Message);
     }
 
     [Fact]
