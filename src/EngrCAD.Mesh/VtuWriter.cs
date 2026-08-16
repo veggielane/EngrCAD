@@ -92,10 +92,19 @@ public static class VtuWriter
                 $"{cells.Count} cells but {cellTypes.Count} cell types.", nameof(cellTypes));
         foreach (var field in pointData)
         {
-            if (field.Count != points.Count)
+            if (field.Association == FieldAssociation.Cell)
+            {
+                if (field.Count != cells.Count)
+                    throw new ArgumentException(
+                        $"Cell-data array '{field.Name}' covers {field.Count} cells but the grid " +
+                        $"has {cells.Count} cells.", nameof(pointData));
+            }
+            else if (field.Count != points.Count)
+            {
                 throw new ArgumentException(
                     $"Point-data array '{field.Name}' covers {field.Count} vertices but the grid " +
                     $"has {points.Count} points.", nameof(pointData));
+            }
         }
 
         var culture = CultureInfo.InvariantCulture;
@@ -167,42 +176,10 @@ public static class VtuWriter
         writer.WriteLine("        </DataArray>");
         writer.WriteLine("      </Cells>");
 
-        if (pointData.Count > 0)
-        {
-            // The Scalars/Vectors hints name the arrays ParaView selects by default;
-            // the first of each kind is the honest choice (there is no "preferred
-            // result" concept in a MeshField list).
-            string? scalars = pointData.FirstOrDefault(f => !f.IsVector)?.Name;
-            string? vectors = pointData.FirstOrDefault(f => f.IsVector)?.Name;
-            line.Clear();
-            line.Append("      <PointData");
-            if (scalars is not null)
-                line.Append(culture, $" Scalars=\"{Escape(scalars)}\"");
-            if (vectors is not null)
-                line.Append(culture, $" Vectors=\"{Escape(vectors)}\"");
-            line.Append('>');
-            writer.WriteLine(line.ToString());
-            foreach (var field in pointData)
-            {
-                writer.WriteLine(string.Create(culture,
-                    $"        <DataArray type=\"Float64\" Name=\"{Escape(field.Name)}\" " +
-                    $"NumberOfComponents=\"{field.Components}\" format=\"ascii\">"));
-                for (int v = 0; v < field.Count; v++)
-                {
-                    line.Clear();
-                    line.Append("          ");
-                    for (int c = 0; c < field.Components; c++)
-                    {
-                        if (c > 0)
-                            line.Append(' ');
-                        Append(line, field.Values[v * field.Components + c], culture);
-                    }
-                    writer.WriteLine(line.ToString());
-                }
-                writer.WriteLine("        </DataArray>");
-            }
-            writer.WriteLine("      </PointData>");
-        }
+        var vertexFields = pointData.Where(f => f.Association == FieldAssociation.Vertex).ToList();
+        var cellFields = pointData.Where(f => f.Association == FieldAssociation.Cell).ToList();
+        WriteDataBlock(writer, line, culture, "PointData", vertexFields);
+        WriteDataBlock(writer, line, culture, "CellData", cellFields);
 
         writer.WriteLine("    </Piece>");
         writer.WriteLine("  </UnstructuredGrid>");
@@ -347,6 +324,47 @@ public static class VtuWriter
 
     /// <summary>Round-trippable doubles, with the spellings VTK expects for the
     /// non-finite values ("NaN", "Infinity"; .NET's own "∞" would not parse).</summary>
+    private static void WriteDataBlock(
+        TextWriter writer, StringBuilder line, CultureInfo culture, string block,
+        IReadOnlyList<MeshField> fields)
+    {
+        if (fields.Count == 0)
+            return;
+        // The Scalars/Vectors hints name the arrays ParaView selects by default; the
+        // first of each kind is the honest choice (there is no "preferred result"
+        // concept in a MeshField list).
+        string? scalars = fields.FirstOrDefault(f => !f.IsVector)?.Name;
+        string? vectors = fields.FirstOrDefault(f => f.IsVector)?.Name;
+        line.Clear();
+        line.Append("      <").Append(block);
+        if (scalars is not null)
+            line.Append(culture, $" Scalars=\"{Escape(scalars)}\"");
+        if (vectors is not null)
+            line.Append(culture, $" Vectors=\"{Escape(vectors)}\"");
+        line.Append('>');
+        writer.WriteLine(line.ToString());
+        foreach (var field in fields)
+        {
+            writer.WriteLine(string.Create(culture,
+                $"        <DataArray type=\"Float64\" Name=\"{Escape(field.Name)}\" " +
+                $"NumberOfComponents=\"{field.Components}\" format=\"ascii\">"));
+            for (int v = 0; v < field.Count; v++)
+            {
+                line.Clear();
+                line.Append("          ");
+                for (int c = 0; c < field.Components; c++)
+                {
+                    if (c > 0)
+                        line.Append(' ');
+                    Append(line, field.Values[v * field.Components + c], culture);
+                }
+                writer.WriteLine(line.ToString());
+            }
+            writer.WriteLine("        </DataArray>");
+        }
+        writer.WriteLine(string.Create(culture, $"      </{block}>"));
+    }
+
     private static void Append(StringBuilder line, double value, CultureInfo culture)
     {
         if (double.IsNaN(value))

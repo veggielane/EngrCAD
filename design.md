@@ -9743,6 +9743,25 @@ temperature field; so the converged per-element k rides on the result
 constant law converges in ONE pass bit-identical to the plain solve; refusals by name
 (unknown region, non-positive k(T), the directional-law conflict, relaxation range).
 
+**Cell-associated fields landed as an ASSOCIATION on the field, not a parallel type**
+(`FieldAssociation.Vertex|Cell` on `MeshField`, `CellScalar`; docs `examples/fields.md`
+§Cell-associated): the association is part of the field's identity — every derived
+operation preserves it, which is what stops a `Magnitude()` of a cell field quietly
+becoming a vertex field of the wrong length — and each consumer routes by it:
+`VtuWriter` writes `PointData` or `CellData` (counts validated against the right total,
+one shared block writer so the two cannot format differently), and the display path
+places a cell value through **`RenderMesh.SourceFaces`, `SourceVertices`' sibling** —
+every duplicate of a face's corners takes that face's value, so a cell field renders
+FLAT per face with no shader change at all (the colour is already a per-vertex
+attribute). Two honesty boundaries carried in the types: a SMOOTH render mesh shares
+vertices between faces, so "which face's value does this vertex take" has no answer —
+`CreateSmooth` carries an EMPTY face map and a cell display on one refuses with that
+reason, rather than an arbitrary pick; and a CELL-associated deformation refuses by name
+(a displacement moves vertices — a per-face displacement has no vertex to move). The
+real consumer landed with it: a structural `.vtu` now carries the per-element von Mises
+as cell data beside the recovered nodal field — the value the assembly actually
+integrated, before any nodal recovery, and the array a ParaView threshold filter wants.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

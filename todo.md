@@ -707,11 +707,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   `VtuWriter` in EngrCAD.Mesh, `Part.Results`/`FieldDisplay`/`TryResolveFieldDisplay` in
   Modeling, `ColorMaps`/`FieldRendering`/`FieldLegend` in Viewer.Core, drawn in all
   three front ends with `--export .vtu` and `docs/examples/fields.md`):
-  - [ ] **Cell-associated fields.** `MeshField` is vertex-only by construction and
-    `VtuWriter` writes point data only — a per-ELEMENT result (an element's von Mises,
-    a material id) has nowhere to go. Needs an association on the field plus a
-    `RenderMesh` face→cell map for display (`SourceVertices`' sibling), and the
-    `<CellData>` block, which is ten lines once the association exists.
   - [ ] **A solver's results are on ITS vertex set, not the display mesh.** The seam
     task #27 publishes through requires `field.Count == part.GetMesh().VertexCount`.
     A tet solve's surface vertices need not coincide with the tessellation's, so the

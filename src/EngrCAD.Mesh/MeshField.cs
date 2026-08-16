@@ -100,10 +100,12 @@ public readonly record struct FieldRange(double Min, double Max)
 /// disagree about it, and a cached colour buffer keyed on it cannot go stale behind
 /// their backs.</para>
 ///
-/// <para><b>Vertex association only, in v1.</b> A field's <see cref="Count"/> is a
-/// vertex count, and the consumer that displays one checks it against the mesh it is
-/// shown on. Cell-associated fields are a documented gap, not a half-supported mode —
-/// <see cref="VtuWriter"/> writes point data only for the same reason.</para>
+/// <para><b>Association is part of the field's identity.</b> A field is VERTEX-associated
+/// by default (<see cref="Count"/> is a vertex count) or CELL-associated
+/// (<see cref="FieldAssociation.Cell"/> — one value per face: an element quality, a
+/// material id, a per-element stress). The consumer that displays or exports one checks
+/// the count against the mesh it is shown on; <see cref="VtuWriter"/> routes each field
+/// to <c>PointData</c> or <c>CellData</c> by this association.</para>
 ///
 /// <para><b>Scalar reading.</b> Everything that needs one number per vertex — colour
 /// mapping, the legend, the range — goes through <see cref="ScalarAt"/>, which is the
@@ -112,6 +114,21 @@ public readonly record struct FieldRange(double Min, double Max)
 /// <see cref="Magnitude"/> still exists for callers that want the derived field as a
 /// first-class object (to export it, or to give it its own legend).</para>
 /// </summary>
+/// <summary>What a field's values are attached to — see <see cref="MeshField"/>'s
+/// remarks. The association is part of the field's identity, not a display hint: a
+/// vertex field interpolates across faces, a cell field is constant on each.</summary>
+public enum FieldAssociation
+{
+    /// <summary>One value (or vector) per mesh VERTEX — the default, and what colour
+    /// interpolation wants.</summary>
+    Vertex,
+
+    /// <summary>One value (or vector) per mesh FACE (or per cell of the grid a
+    /// <see cref="VtuWriter"/> export describes) — flat per cell, never
+    /// interpolated.</summary>
+    Cell,
+}
+
 public sealed class MeshField
 {
     private readonly double[] _values;
@@ -127,8 +144,11 @@ public sealed class MeshField
     /// <param name="components">1 for a scalar field, 3 for a vector field.</param>
     /// <param name="values">Interleaved values; length must be a multiple of
     /// <paramref name="components"/>.</param>
-    public MeshField(string name, string units, int components, IReadOnlyList<double> values)
+    public MeshField(
+        string name, string units, int components, IReadOnlyList<double> values,
+        FieldAssociation association = FieldAssociation.Vertex)
     {
+        Association = association;
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("A field needs a non-empty name.", nameof(name));
         if (components is not (1 or 3))
@@ -155,7 +175,12 @@ public sealed class MeshField
     /// <summary>1 = scalar, 3 = vector.</summary>
     public int Components { get; }
 
-    /// <summary>Number of vertices the field covers.</summary>
+    /// <summary>What the values attach to (vertices by default; see
+    /// <see cref="FieldAssociation"/>).</summary>
+    public FieldAssociation Association { get; }
+
+    /// <summary>Number of vertices (or cells, for a cell-associated field) the field
+    /// covers.</summary>
     public int Count => _values.Length / Components;
 
     /// <summary>True for a 3-component field.</summary>
@@ -167,6 +192,12 @@ public sealed class MeshField
     /// <summary>A scalar field.</summary>
     public static MeshField Scalar(string name, string units, IReadOnlyList<double> values) =>
         new(name, units, 1, values);
+
+    /// <summary>A CELL-associated scalar field — one value per face (an element quality,
+    /// a material id, a per-element stress). Constant on each face, never
+    /// interpolated.</summary>
+    public static MeshField CellScalar(string name, string units, IReadOnlyList<double> values) =>
+        new(name, units, 1, values, FieldAssociation.Cell);
 
     /// <summary>A vector field, from one <see cref="Vector3d"/> per vertex.</summary>
     public static MeshField Vector(string name, string units, IReadOnlyList<Vector3d> values)
@@ -268,7 +299,7 @@ public sealed class MeshField
         var values = new double[Count];
         for (int v = 0; v < values.Length; v++)
             values[v] = ScalarAt(v);
-        return Scalar(name ?? $"|{Name}|", Units, values);
+        return new MeshField(name ?? $"|{Name}|", Units, 1, values, Association);
     }
 
     /// <summary>
@@ -284,11 +315,11 @@ public sealed class MeshField
         var values = new double[Count];
         for (int v = 0; v < values.Length; v++)
             values[v] = _values[v * 3 + component];
-        return Scalar(name ?? $"{Name}.{"XYZ"[component]}", Units, values);
+        return new MeshField(name ?? $"{Name}.{"XYZ"[component]}", Units, 1, values, Association);
     }
 
     /// <summary>The same values under a different name (unit label kept).</summary>
-    public MeshField Renamed(string name) => new(name, Units, Components, _values);
+    public MeshField Renamed(string name) => new(name, Units, Components, _values, Association);
 
     /// <summary>Every value scaled by <paramref name="factor"/> — unit conversion, or a
     /// displacement exaggerated for a deformed-shape view.</summary>
@@ -297,7 +328,7 @@ public sealed class MeshField
         var values = new double[_values.Length];
         for (int i = 0; i < values.Length; i++)
             values[i] = _values[i] * factor;
-        return new MeshField(Name, units ?? Units, Components, values);
+        return new MeshField(Name, units ?? Units, Components, values, Association);
     }
 
     /// <summary>"name [units]" — the legend title and the properties-panel label.</summary>
@@ -305,5 +336,6 @@ public sealed class MeshField
 
     /// <inheritdoc/>
     public override string ToString() =>
-        $"{Label}: {(IsVector ? "vector" : "scalar")} over {Count} vertices, {Range}";
+        $"{Label}: {(IsVector ? "vector" : "scalar")} over {Count} "
+        + $"{(Association == FieldAssociation.Cell ? "cells" : "vertices")}, {Range}";
 }

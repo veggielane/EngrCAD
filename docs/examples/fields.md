@@ -284,3 +284,18 @@ to its own colour and undeformed shape) and the properties panel shows the selec
 results, the one being displayed, its range and any deformation scale. Headlessly,
 `EngrCad.RenderToImage(scene, path, fields: false)` does the same — which is how a
 geometry figure is taken of a model that also carries results.
+
+## Cell-associated fields
+
+A field is **vertex**-associated by default, and interpolates across faces; a
+**cell**-associated field (`MeshField.CellScalar`, or the constructor's
+`FieldAssociation.Cell`) carries one value per face — an element quality, a material id, a
+per-element stress — and renders *flat* on each. The association is part of the field's
+identity: every derived operation (`Magnitude`, `Component`, `Renamed`, `Scaled`)
+preserves it, `VtuWriter` routes each field to `PointData` or `CellData` by it (counts
+validated against the right total), and the flat render mesh's source-face map places a
+cell value on every duplicate of its face's corners, so the flat look needs no shader
+change. A *smooth* render mesh shares vertices between faces, so it honestly carries no
+face map and a cell display on one refuses with the reason. A structural `.vtu` now
+carries the per-element von Mises as cell data beside the recovered nodal field — the
+value the assembly actually integrated, before any nodal recovery.

@@ -103,7 +103,7 @@ public static class FieldRendering
     /// <param name="error">Why a requested display could not be honoured.</param>
     public static bool TryBuild(
         Part part, RenderMesh render, int vertexCount,
-        out FieldMeshData data, out string? error)
+        out FieldMeshData data, out string? error, int faceCount = -1)
     {
         ArgumentNullException.ThrowIfNull(part);
         ArgumentNullException.ThrowIfNull(render);
@@ -111,18 +111,47 @@ public static class FieldRendering
         if (!part.TryResolveFieldDisplay(out var display, out error))
             return false;
 
-        if (display.Field.Count != vertexCount)
+        if (display.Field.Association == FieldAssociation.Cell)
+        {
+            // A cell field is indexed by the display mesh's FACES, so the caller must
+            // say how many there are; the flat render mesh's face map places it.
+            if (faceCount >= 0 && display.Field.Count != faceCount)
+            {
+                error = $"Part '{part.Name}': cell result '{display.Field.Name}' covers "
+                    + $"{display.Field.Count} cells but the display mesh has {faceCount} "
+                    + "faces. A cell result is indexed by the display mesh's faces.";
+                return false;
+            }
+            if (render.SourceFaces.Length != render.VertexCount)
+            {
+                error = $"Part '{part.Name}': the render mesh carries no source-face map, "
+                    + "so a cell result cannot be placed on it (a smooth mesh shares "
+                    + "vertices between faces, so the question has no answer there).";
+                return false;
+            }
+        }
+        else if (display.Field.Count != vertexCount)
         {
             error = $"Part '{part.Name}': result '{display.Field.Name}' covers "
                 + $"{display.Field.Count} vertices but the display mesh has {vertexCount}. "
                 + "A result is indexed by the part's display-mesh vertices, in vertex order.";
             return false;
         }
-        if (display.Deform is { } deform && deform.Count != vertexCount)
+        if (display.Deform is { } deform)
         {
-            error = $"Part '{part.Name}': displacement result '{deform.Name}' covers "
-                + $"{deform.Count} vertices but the display mesh has {vertexCount}.";
-            return false;
+            if (deform.Association == FieldAssociation.Cell)
+            {
+                error = $"Part '{part.Name}': displacement result '{deform.Name}' is "
+                    + "CELL-associated, and a displacement moves vertices — a per-face "
+                    + "displacement has no vertex to move.";
+                return false;
+            }
+            if (deform.Count != vertexCount)
+            {
+                error = $"Part '{part.Name}': displacement result '{deform.Name}' covers "
+                    + $"{deform.Count} vertices but the display mesh has {vertexCount}.";
+                return false;
+            }
         }
         if (render.SourceVertices.Length != render.VertexCount)
         {
@@ -210,10 +239,16 @@ public static class FieldRendering
         ArgumentNullException.ThrowIfNull(render);
         var perSource = SourceColors(field, range, map);
 
+        // A cell field looks up by the render vertex's source FACE — every duplicate of
+        // a face's corners takes that face's value, so the cell renders flat with no
+        // shader change; a vertex field looks up by source vertex, as ever.
+        var lookup = field.Association == FieldAssociation.Cell
+            ? render.SourceFaces
+            : render.SourceVertices;
         var colors = new float[render.VertexCount * 3];
         for (int v = 0; v < render.VertexCount; v++)
         {
-            var (r, g, b) = perSource[render.SourceVertices[v]];
+            var (r, g, b) = perSource[lookup[v]];
             colors[v * 3] = r;
             colors[v * 3 + 1] = g;
             colors[v * 3 + 2] = b;

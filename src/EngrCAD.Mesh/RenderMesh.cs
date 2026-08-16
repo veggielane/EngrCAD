@@ -29,6 +29,17 @@ public sealed class RenderMesh
     /// </summary>
     public int[] SourceVertices { get; init; } = [];
 
+    /// <summary>
+    /// The source <see cref="HalfEdgeMesh"/> FACE each render vertex came from — one
+    /// entry per render vertex, <see cref="SourceVertices"/>' sibling, and what places a
+    /// CELL-associated <see cref="MeshField"/> on the flat mesh (every duplicate of a
+    /// face's corners takes that face's value, so the cell renders flat with no shader
+    /// change). Populated by <see cref="CreateFlat"/> only: a SMOOTH mesh shares vertices
+    /// between faces, so "which face's value does this vertex take" has no answer there,
+    /// and an empty map is the honest statement rather than an arbitrary pick.
+    /// </summary>
+    public int[] SourceFaces { get; init; } = [];
+
     public int VertexCount => Positions.Length / 3;
     public int TriangleCount => Indices.Length / 3;
 
@@ -38,6 +49,7 @@ public sealed class RenderMesh
         var normals = new List<float>();
         var indices = new List<uint>();
         var sources = new List<int>();
+        var sourceFaces = new List<int>();
 
         foreach (var face in mesh.Faces)
         {
@@ -61,6 +73,9 @@ public sealed class RenderMesh
                 sources.Add(loop[apex].Index);
                 sources.Add(loop[b].Index);
                 sources.Add(loop[c].Index);
+                sourceFaces.Add(face.Index);
+                sourceFaces.Add(face.Index);
+                sourceFaces.Add(face.Index);
                 uint baseIndex = (uint)(positions.Count / 3 - 3);
                 indices.Add(baseIndex);
                 indices.Add(baseIndex + 1);
@@ -74,6 +89,7 @@ public sealed class RenderMesh
             Normals = [.. normals],
             Indices = [.. indices],
             SourceVertices = [.. sources],
+            SourceFaces = [.. sourceFaces],
         };
     }
 

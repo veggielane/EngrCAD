@@ -182,7 +182,9 @@ public static class PartUploads
         string? fieldError = null;
         if (request.Fields)
         {
-            if (FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out string? error))
+            if (FieldRendering.TryBuild(
+                part, render, mesh.VertexCount, out var built, out string? error,
+                mesh.FaceCount))
                 field = built;
             else
                 fieldError = error;   // null when the part simply shows no field

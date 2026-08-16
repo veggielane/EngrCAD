@@ -847,7 +847,17 @@ public sealed class StructuralResults
             cells.Add(cell);
             types[e] = type;
         }
-        VtuWriter.Write(Mesh.Nodes, cells, types, Fields(lengthUnits, stressUnits), writer);
+        // The per-ELEMENT von Mises rides as CELL data — the value the assembly actually
+        // integrated, before any nodal recovery, and the array a material-id-style
+        // ParaView threshold wants.
+        var elementVonMises = new double[Mesh.ElementCount];
+        for (int e = 0; e < Mesh.ElementCount; e++)
+            elementVonMises[e] = ElementVonMises(e);
+        var fields = new List<MeshField>(Fields(lengthUnits, stressUnits))
+        {
+            MeshField.CellScalar("von Mises (element)", stressUnits, elementVonMises),
+        };
+        VtuWriter.Write(Mesh.Nodes, cells, types, fields, writer);
     }
 
     /// <summary><see cref="WriteVtu(TextWriter, string, string)"/> to a file.</summary>
