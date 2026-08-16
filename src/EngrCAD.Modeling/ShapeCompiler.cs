@@ -120,9 +120,6 @@ internal static class ShapeCompiler
                 if (twisted.IsTwisted)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a twisted side wall is not an analytic or ruled surface the B-Rep kernel carries; ToMesh sweeps section rings and ToImplicit wraps that mesh"));
-                else if (twisted.Sketch.Holes.Count > 0)
-                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                        "a tapered extrusion of a sketch with holes needs loft sections with holes (a documented follow-up); cut the hole after the taper, or use ToMesh/ToImplicit"));
                 else
                     // Mirrored similarities included: this case IS a two-section loft, so
                     // it inherits the loft's isometry argument verbatim.
@@ -588,20 +585,32 @@ internal static class ShapeCompiler
                 if (twisted.IsTwisted)
                     throw new NotSupportedException(
                         "A twisted extrusion has no exact B-Rep side surface; lower to mesh or implicit instead.");
-                if (twisted.Sketch.Holes.Count > 0)
-                    throw new NotSupportedException(
-                        "A tapered extrusion of a sketch with holes needs loft sections with holes; cut the hole after the taper, or use ToMesh/ToImplicit.");
                 DecomposeSimilarity(m, shape, out _, out _, out _); // similarity only (the loft rule)
                 var effective = m * twisted.PlaneMatrix;
                 // The top section is the base scaled per axis about the plane origin and
                 // lifted by the height; a ruled loft between the two IS the linear taper
                 // (scaling is linear, and a two-section loft's v is linear), and every
-                // straight side sweeps an exact plane through the scaling centre.
+                // straight side sweeps an exact plane through the scaling centre. A hole
+                // takes the SAME two placements, so its inner skin is the taper of the
+                // hole about the same scaling centre.
                 var topLocal = Matrix4d.CreateTranslation((0, 0, twisted.Height))
                              * Matrix4d.CreateScale((twisted.ScaleTop.X, twisted.ScaleTop.Y, 1));
-                var (outer, _) = twisted.Sketch.ToProfiles();
+                var (outer, holes) = twisted.Sketch.ToProfiles();
+                IReadOnlyList<IReadOnlyList<Profile>>? holesPerSection = null;
+                if (holes is { Count: > 0 })
+                {
+                    var bottomHoles = new Profile[holes.Count];
+                    var topHoles = new Profile[holes.Count];
+                    for (int j = 0; j < holes.Count; j++)
+                    {
+                        bottomHoles[j] = TransformProfile(holes[j], effective);
+                        topHoles[j] = TransformProfile(holes[j], effective * topLocal);
+                    }
+                    holesPerSection = [bottomHoles, topHoles];
+                }
                 return SolidFactory.Loft(
                     [TransformProfile(outer, effective), TransformProfile(outer, effective * topLocal)],
+                    holesPerSection,
                     LoftStyle.Ruled);
             }
 
@@ -706,7 +715,20 @@ internal static class ShapeCompiler
                 var placed = new Profile[loft.Sections.Count];
                 for (int i = 0; i < placed.Length; i++)
                     placed[i] = TransformProfile(loft.Sections[i], m);
-                return SolidFactory.Loft(placed, loft.Style);
+                IReadOnlyList<IReadOnlyList<Profile>>? loftHoles = null;
+                if (loft.HolesPerSection is { } perSection)
+                {
+                    var placedHoles = new IReadOnlyList<Profile>[perSection.Count];
+                    for (int i = 0; i < perSection.Count; i++)
+                    {
+                        var sectionHoles = new Profile[perSection[i].Count];
+                        for (int j = 0; j < sectionHoles.Length; j++)
+                            sectionHoles[j] = TransformProfile(perSection[i][j], m);
+                        placedHoles[i] = sectionHoles;
+                    }
+                    loftHoles = placedHoles;
+                }
+                return SolidFactory.Loft(placed, loftHoles, loft.Style);
             }
 
             case BooleanShape boolean:

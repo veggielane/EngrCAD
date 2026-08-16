@@ -36,7 +36,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Extrude(Sketch)` | ✅ native | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Revolve(Sketch)` full turn | ✅ native (axis-touching OK: on-axis stretches become poles) | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Extrude` (profile, holes, shear) | ✅ native | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
-| `Extrude(Sketch, twist, scale)` (OpenSCAD `linear_extrude`) | taper only: ✅ native (ruled loft — straight sides sweep exact planes through the scaling centre; mirrored included, since it IS a two-section loft; ❌ with holes) · twist: ❌ (no analytic twisted surface) | 🔶 bridged (section-sweep mesh → mesh SDF) | ✅ native (direct section sweep, `slices` rings) |
+| `Extrude(Sketch, twist, scale)` (OpenSCAD `linear_extrude`) | taper only: ✅ native (ruled loft — straight sides sweep exact planes through the scaling centre; mirrored and HOLED sketches included, since it IS a two-section loft with hole families) · twist: ❌ (no analytic twisted surface) | 🔶 bridged (section-sweep mesh → mesh SDF) | ✅ native (direct section sweep, `slices` rings) |
 | `Revolve` (partial/full, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Sweep` (RMF path, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Loft` (sections) / `LoftAlong` (evolution law) | ✅ native (any similarity, MIRRORED included; `SolidFactory.Loft`) · ❌ sheared (chord parameterization is metric) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
@@ -1086,8 +1086,10 @@ B-Rep-Native under rigid placement + uniform scale — the transform bakes into 
 section curves and the skin interpolates them exactly. A sheared placement is
 B-Rep-Impossible (the loft's chord-length parameterization and least-twist alignment
 are metric, so they do not commute with a shear); implicit lowering bridges through the
-tessellation. Sections with holes, open (uncapped) skins and periodic lofts are refused
-by name — see todo.md for the follow-up assessments.
+tessellation. Sections may carry HOLES — hole j of every section lofts into its own
+inner skin and the caps gain hole loops (holes correspond by `WithHole` declaration
+order; count mismatches fail at the call). Open (uncapped) skins and periodic lofts are
+refused by name — see todo.md for the follow-up assessments.
 
 **`Shape.LoftAlong(section, spine, sectionCount, scale, twist, style)`** is the
 evolution-law loft (OCCT's pipe shell with a law): one sketch carried along a spine in

@@ -142,6 +142,88 @@ public class LoftTessellationTests
     }
 
     [Fact]
+    public void Loft_WithASquareHole_HasTheExactHollowFrustumVolume()
+    {
+        // Outer square 4 → 2, hole square 1 → 0.5: every wall of both families is a
+        // planar trapezoid, so the difference of the two frustum closed forms is an
+        // IDENTITY of the tessellation, not an approximation.
+        var solid = SolidFactory.Loft(
+            [Square(2, 0), Square(1, 4)],
+            [[Square(0.5, 0)], [Square(0.25, 4)]],
+            LoftStyle.Ruled);
+        var mesh = BRepTessellator.Tessellate(solid);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(0, mesh.EulerCharacteristic); // genus 1
+        Assert.Equal(Frustum(16, 4, 4) - Frustum(1, 0.25, 4), mesh.Volume(), 9);
+    }
+
+    [Fact]
+    public void Loft_WithACircularHole_SubtractsTheInscribedConeFrustum()
+    {
+        // A constant square outer with a circle hole tapering 1 → 0.5: the hole family
+        // is a single closed curve (the drilled-taper archetype), and its skin
+        // tessellates to exactly the inscribed n-gonal cone frustum.
+        const int n = 48;
+        var solid = SolidFactory.Loft(
+            [Square(2, 0), Square(2, 4)],
+            [[Circle(1, 0)], [Circle(0.5, 4)]],
+            LoftStyle.Ruled);
+        var mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle: n);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(0, mesh.EulerCharacteristic);
+        double inscribed = n / (2 * Math.PI) * Math.Sin(2 * Math.PI / n);
+        Assert.Equal(
+            16 * 4 - inscribed * Frustum(Math.PI, Math.PI * 0.25, 4), mesh.Volume(), 9);
+    }
+
+    [Fact]
+    public void Loft_WithTwoHoles_IsGenusTwo_WithTheExactVolume()
+    {
+        var solid = SolidFactory.Loft(
+            [Square(3, 0), Square(2, 4)],
+            [
+                [SquareAt(-1.2, 0.5, 0), SquareAt(1.2, 0.5, 0)],
+                [SquareAt(-0.8, 0.25, 4), SquareAt(0.8, 0.25, 4)],
+            ],
+            LoftStyle.Ruled);
+        var mesh = BRepTessellator.Tessellate(solid);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(-2, mesh.EulerCharacteristic); // genus 2
+        Assert.Equal(Frustum(36, 16, 4) - 2 * Frustum(1, 0.25, 4), mesh.Volume(), 9);
+    }
+
+    [Fact]
+    public void SmoothLoft_ThroughThreeHoledSections_IsClosedGenusOne()
+    {
+        var solid = SolidFactory.Loft(
+            [Square(2, 0), Square(3, 2), Square(1.5, 5)],
+            [[Square(0.5, 0)], [Square(0.75, 2)], [Square(0.4, 5)]]);
+        var mesh = BRepTessellator.Tessellate(solid);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(0, mesh.EulerCharacteristic);
+    }
+
+    [Fact]
+    public void Loft_EmptyHoleLists_AreExactlyTheUnholedLoft()
+    {
+        var plain = BRepTessellator.Tessellate(
+            SolidFactory.Loft([Square(1, 0), Square(0.5, 3)], null, LoftStyle.Ruled));
+        var empty = BRepTessellator.Tessellate(
+            SolidFactory.Loft([Square(1, 0), Square(0.5, 3)], [[], []], LoftStyle.Ruled));
+        Assert.Equal(plain.ToIndexed().Positions, empty.ToIndexed().Positions);
+        Assert.Equal(plain.Volume(), empty.Volume());
+    }
+
+    /// <summary>An axis-aligned square of half-size <paramref name="half"/> centred at
+    /// (cx, 0, z) — hole placement for the multi-hole fixtures.</summary>
+    private static Profile SquareAt(double cx, double half, double z) => Profile.FromPoints(
+        [(cx - half, -half, z), (cx + half, -half, z), (cx + half, half, z), (cx - half, half, z)]);
+
+    [Fact]
     public void Loft_TwistAlignedSections_WeldAndKeepTheirVolume()
     {
         // Sections listed from different corners and wound oppositely: alignment must

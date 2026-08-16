@@ -787,9 +787,9 @@ export — is recorded in CLAUDE.md):
 - [ ] **Twist-extrude follow-ups** (`Shape.Extrude(sketch, height, twist, scale, slices)`
   ✅ landed — taper = B-Rep-Native ruled loft, twist = direct mesh section sweep with
   twist-matched profile subdivision + collinear-chord-zip caps, implicit via mesh SDF):
-  tapered sketches WITH holes are B-Rep-Impossible until loft sections support holes
-  (same gap as the Loft section); an exact twisted B-Rep surface type would make twist
-  Native (big kernel feature, low priority).
+  an exact twisted B-Rep surface type would make twist Native (big kernel feature, low
+  priority); tapered sketches with holes are B-Rep-Native now (loft sections carry
+  holes).
 - [ ] **Planar-view follow-ups** (`PlanarSection.OfMesh`/`OfSolid`/`SilhouetteOfMesh` +
   `Shape.Section`/`Shape.Silhouette` ✅ landed — both OpenSCAD `projection` modes):
   - [x] ~~**`Region2dBoolean` leaves ~1e-7-area pinholes at near-tangency.**~~ **CLOSED
@@ -959,8 +959,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     sections want degree elevation + knot merging (The NURBS Book A5.9; `BSplineBasis`
     is public). Non-integer-ratio chains have no canonical correspondence and should
     stay rejected.
-  - [ ] **Holes in sections** — each hole chain lofts as its own inner skin and the caps
-    gain hole loops: topology work in `BuildLoftedSolid`, no new surface math.
   - [ ] **Open (uncapped) skins** — structurally blocked: `BrepSolid.Validate` requires
     two-manifold edge use, so this needs a sheet-body concept first, not a loft change.
   - [ ] **Periodic lofts** closing back on the first section — `LoftedSurface` needs a

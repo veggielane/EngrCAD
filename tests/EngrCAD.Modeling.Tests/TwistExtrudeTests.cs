@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Interop;
 using Xunit;
 
 namespace EngrCAD.Modeling.Tests;
@@ -53,15 +54,34 @@ public class TwistExtrudeTests
     }
 
     [Fact]
-    public void TaperOfHoledSketch_IsBrepImpossible_NamingLoftHoles()
+    public void TaperOfHoledSketch_IsBrepNative_WithTheExactHollowVolume()
     {
-        var washer = Square(20).WithHole(Sketch.Circle(3));
-        var shape = Shape.Extrude(washer, height: 10, twist: 0, scale: 0.5);
+        // A pure taper of a holed sketch lowers as a two-section ruled loft with a hole
+        // family: the hole takes the SAME two placements as the outer, so its skin is
+        // the taper of the hole about the same scaling centre. With a RECT hole every
+        // wall is planar and the volume identity is exact.
+        var holed = Square(20).WithHole(Sketch.Rectangle(6, 4));
+        var shape = Shape.Extrude(holed, height: 10, twist: 0, scale: 0.5);
 
-        var entry = shape.Explain(TargetRep.Brep).Entries[0];
-        Assert.Equal(NodeSupport.Impossible, entry.Support);
-        Assert.Contains("holes", entry.Detail);
+        Assert.All(shape.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var brep = shape.ToBrep();
+        brep.Validate();
+        Assert.True(brep.SatisfiesEulerFormula(genus: 1));
+
+        double exact = 10.0 / 3 * 700 - RuledRectVolume(6, 4, 3, 2, 10);
+        var mesh = BRepTessellator.Tessellate(brep);
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(exact, mesh.Volume(), 9);
+
+        // The mesh route (TwistedExtrusion's section sweep) is a different construction
+        // of the same solid: with straight sides both are exact, so they agree.
+        Assert.Equal(exact, shape.ToMesh().Volume(), 6);
     }
+
+    /// <summary>Rect(a0×b0) tapering linearly to rect(a1×b1) over h — the prismatoid
+    /// integral of the lerped rectangle.</summary>
+    private static double RuledRectVolume(double a0, double b0, double a1, double b1, double h) =>
+        h * (a0 * b0 / 3 + (a0 * b1 + a1 * b0) / 6 + a1 * b1 / 3);
 
     // ---- twist ---------------------------------------------------------------
 

@@ -56,7 +56,24 @@ public static partial class SolidFactory
     /// </summary>
     /// <param name="sections">Two or more planar profiles, in loft order.</param>
     /// <param name="style">Smooth (one surface through all sections) or ruled.</param>
-    public static BrepSolid Loft(IReadOnlyList<Profile> sections, LoftStyle style = LoftStyle.Smooth)
+    public static BrepSolid Loft(IReadOnlyList<Profile> sections, LoftStyle style = LoftStyle.Smooth) =>
+        Loft(sections, holesPerSection: null, style);
+
+    /// <summary>
+    /// <see cref="Loft(IReadOnlyList{Profile}, LoftStyle)"/> with THROUGH-HOLES: each
+    /// section carries the same number of hole profiles, hole j of every section lofts
+    /// into its own inner skin, and the caps become faces with hole loops. A hole
+    /// family is aligned by the SAME least-twist rules the outer sections get and then
+    /// REVERSED — the extrude factories' convention, so the winding carries the wall
+    /// orientation and the cap machinery needs no per-family cases — and every hole
+    /// strip shares the OUTER's global v parameterization (the sections are common
+    /// stations; a per-family v would crack nothing today but would let a hole's rail
+    /// disagree with its cap about where a section sits).
+    /// </summary>
+    public static BrepSolid Loft(
+        IReadOnlyList<Profile> sections,
+        IReadOnlyList<IReadOnlyList<Profile>>? holesPerSection,
+        LoftStyle style = LoftStyle.Smooth)
     {
         ArgumentNullException.ThrowIfNull(sections);
         if (sections.Count < 2)
@@ -66,29 +83,72 @@ public static partial class SolidFactory
             if (section is null)
                 throw new ArgumentException("Loft sections must not be null.", nameof(sections));
         }
+        ValidateLoftFamily(sections, "sections", nameof(sections));
 
-        bool singleClosed = sections[0].IsSingleClosedCurve;
-        int segmentCount = sections[0].Segments.Count;
-        for (int k = 1; k < sections.Count; k++)
+        int holeCount = 0;
+        if (holesPerSection is { Count: > 0 })
         {
-            if (sections[k].IsSingleClosedCurve != singleClosed)
+            if (holesPerSection.Count != sections.Count)
                 throw new ArgumentException(
-                    "Loft sections must be all single closed curves or all segment chains; " +
-                    $"section 0 is {(singleClosed ? "a closed curve" : "a chain")} but section {k} is not.",
-                    nameof(sections));
-            if (sections[k].Segments.Count != segmentCount)
-                throw new ArgumentException(
-                    $"Loft sections must have the same segment count: section 0 has {segmentCount}, " +
-                    $"section {k} has {sections[k].Segments.Count}. Split the coarser section so the " +
-                    "segments correspond (this factory matches by segment index, it does not " +
-                    "re-parameterize sections to make them compatible).",
-                    nameof(sections));
+                    $"{holesPerSection.Count} hole lists for {sections.Count} sections; supply one "
+                    + "list per section (empty lists included).", nameof(holesPerSection));
+            holeCount = holesPerSection[0].Count;
+            for (int k = 1; k < holesPerSection.Count; k++)
+            {
+                if (holesPerSection[k].Count != holeCount)
+                    throw new ArgumentException(
+                        $"Section 0 has {holeCount} holes but section {k} has "
+                        + $"{holesPerSection[k].Count}; every section must carry the same holes "
+                        + "in the same order (a hole appearing or vanishing mid-loft has no "
+                        + "skin to loft).", nameof(holesPerSection));
+            }
         }
 
         var aligned = AlignLoftSections(sections);
         aligned = UnifyLoftSectionSampling(aligned);
         var parameters = LoftSectionParameters(aligned);
-        return BuildLoftedSolid(aligned, parameters, style == LoftStyle.Ruled);
+
+        var holeFamilies = new Profile[holeCount][];
+        for (int j = 0; j < holeCount; j++)
+        {
+            var family = new Profile[sections.Count];
+            for (int k = 0; k < sections.Count; k++)
+                family[k] = holesPerSection![k][j]
+                    ?? throw new ArgumentException(
+                        $"Hole {j} of section {k} is null.", nameof(holesPerSection));
+            ValidateLoftFamily(family, $"hole {j}'s sections", nameof(holesPerSection));
+            var alignedFamily = AlignLoftSections(family);
+            alignedFamily = UnifyLoftSectionSampling(alignedFamily);
+            for (int k = 0; k < alignedFamily.Length; k++)
+                alignedFamily[k] = alignedFamily[k].Reversed();
+            holeFamilies[j] = alignedFamily;
+        }
+
+        return BuildLoftedSolid(aligned, holeFamilies, parameters, style == LoftStyle.Ruled);
+    }
+
+    /// <summary>The compatibility rule one loop family must satisfy — the outer
+    /// sections and each hole family alike: consistent single-closed-ness and equal
+    /// segment counts, matched by index.</summary>
+    private static void ValidateLoftFamily(IReadOnlyList<Profile> family, string what, string parameter)
+    {
+        bool singleClosed = family[0].IsSingleClosedCurve;
+        int segmentCount = family[0].Segments.Count;
+        for (int k = 1; k < family.Count; k++)
+        {
+            if (family[k].IsSingleClosedCurve != singleClosed)
+                throw new ArgumentException(
+                    $"Loft {what} must be all single closed curves or all segment chains; " +
+                    $"member 0 is {(singleClosed ? "a closed curve" : "a chain")} but member {k} is not.",
+                    parameter);
+            if (family[k].Segments.Count != segmentCount)
+                throw new ArgumentException(
+                    $"Loft {what} must have the same segment count: member 0 has {segmentCount}, " +
+                    $"member {k} has {family[k].Segments.Count}. Split the coarser one so the " +
+                    "segments correspond (this factory matches by segment index, it does not " +
+                    "re-parameterize sections to make them compatible).",
+                    parameter);
+        }
     }
 
     /// <summary>Two-section convenience overload.</summary>
@@ -452,11 +512,10 @@ public static partial class SolidFactory
 
     // ---- topology ----
 
-    private static BrepSolid BuildLoftedSolid(Profile[] sections, double[] parameters, bool ruled)
+    private static BrepSolid BuildLoftedSolid(
+        Profile[] sections, Profile[][] holeFamilies, double[] parameters, bool ruled)
     {
         int m = sections.Length;
-        bool singleClosed = sections[0].IsSingleClosedCurve;
-        int n = sections[0].Segments.Count;
 
         // Ruled lofts get a band of faces per interval (every intermediate section is a
         // real edge); a smooth loft is one face per strip across the whole stack.
@@ -471,103 +530,136 @@ public static partial class SolidFactory
             spans.Add((0, m - 1));
         }
 
-        var vertices = new Dictionary<int, BrepVertex[]>();
-        var sectionEdges = new Dictionary<int, BrepEdge[]>();
-        foreach (int k in spans.SelectMany<(int Start, int End), int>(s => [s.Start, s.End]).Distinct())
-        {
-            var segments = sections[k].Segments;
-            if (singleClosed)
-            {
-                var curve = segments[0];
-                var seam = new BrepVertex(curve.PointAt(curve.Domain.Start));
-                vertices[k] = [seam];
-                sectionEdges[k] = [new BrepEdge(curve, curve.Domain, seam, seam)];
-                continue;
-            }
-
-            var loopVertices = new BrepVertex[n];
-            for (int i = 0; i < n; i++)
-                loopVertices[i] = new BrepVertex(segments[i].PointAt(segments[i].Domain.Start));
-            var loopEdges = new BrepEdge[n];
-            for (int i = 0; i < n; i++)
-                loopEdges[i] = new BrepEdge(segments[i], segments[i].Domain, loopVertices[i], loopVertices[(i + 1) % n]);
-            vertices[k] = loopVertices;
-            sectionEdges[k] = loopEdges;
-        }
-
         var faces = new List<BrepFace>();
-        foreach (var (first, last) in spans)
+        // The per-family machinery: wall strips (or the closed band) plus the family's
+        // section-0 and section-(m−1) edge arrays for the caps. One code path for the
+        // outer sections and every hole family — a hole arrives REVERSED, so its walls
+        // face inward and its cap loops wind against the outer's with no per-family
+        // branching (the extrude factories' convention).
+        (BrepEdge[] Bottom, BrepEdge[] Top, bool SingleClosed) BuildFamily(Profile[] family)
         {
-            int[] indices = ruled ? [first, last] : [.. Enumerable.Range(0, m)];
-            double[] spanParameters = ruled ? [0.0, 1.0] : parameters;
+            bool singleClosed = family[0].IsSingleClosedCurve;
+            int n = family[0].Segments.Count;
 
-            var surfaces = new LoftedSurface[n];
-            for (int i = 0; i < n; i++)
+            var vertices = new Dictionary<int, BrepVertex[]>();
+            var sectionEdges = new Dictionary<int, BrepEdge[]>();
+            foreach (int k in spans.SelectMany<(int Start, int End), int>(s => [s.Start, s.End]).Distinct())
             {
-                var curves = new Curve3d[indices.Length];
-                for (int k = 0; k < indices.Length; k++)
-                    curves[k] = sections[indices[k]].Segments[i];
-                surfaces[i] = new LoftedSurface(curves, spanParameters);
+                var segments = family[k].Segments;
+                if (singleClosed)
+                {
+                    var curve = segments[0];
+                    var seam = new BrepVertex(curve.PointAt(curve.Domain.Start));
+                    vertices[k] = [seam];
+                    sectionEdges[k] = [new BrepEdge(curve, curve.Domain, seam, seam)];
+                    continue;
+                }
+
+                var loopVertices = new BrepVertex[n];
+                for (int i = 0; i < n; i++)
+                    loopVertices[i] = new BrepVertex(segments[i].PointAt(segments[i].Domain.Start));
+                var loopEdges = new BrepEdge[n];
+                for (int i = 0; i < n; i++)
+                    loopEdges[i] = new BrepEdge(segments[i], segments[i].Domain, loopVertices[i], loopVertices[(i + 1) % n]);
+                vertices[k] = loopVertices;
+                sectionEdges[k] = loopEdges;
             }
 
+            foreach (var (first, last) in spans)
+            {
+                int[] indices = ruled ? [first, last] : [.. Enumerable.Range(0, m)];
+                double[] spanParameters = ruled ? [0.0, 1.0] : parameters;
+
+                var surfaces = new LoftedSurface[n];
+                for (int i = 0; i < n; i++)
+                {
+                    var curves = new Curve3d[indices.Length];
+                    for (int k = 0; k < indices.Length; k++)
+                        curves[k] = family[indices[k]].Segments[i];
+                    surfaces[i] = new LoftedSurface(curves, spanParameters);
+                }
+
+                if (singleClosed)
+                {
+                    // Band topology, exactly the cylinder side's: the lower rim follows +u,
+                    // the upper opposes it.
+                    faces.Add(new BrepFace(surfaces[0],
+                    [
+                        new BrepLoop([new BrepCoedge(sectionEdges[first][0], sameSense: true)]),
+                        new BrepLoop([new BrepCoedge(sectionEdges[last][0], sameSense: false)]),
+                    ]));
+                    continue;
+                }
+
+                // Rails evaluate the strip surface at u = 0 rather than re-interpolating the
+                // junction points: the rail edge and the face's first grid column are then the
+                // same arithmetic and cannot drift apart.
+                var rails = new BrepEdge[n];
+                for (int i = 0; i < n; i++)
+                {
+                    rails[i] = new BrepEdge(
+                        new LoftRailCurve(surfaces[i], surfaces[i].DomainU.Start),
+                        Interval.Unit, vertices[first][i], vertices[last][i]);
+                }
+
+                for (int i = 0; i < n; i++)
+                {
+                    faces.Add(new BrepFace(surfaces[i],
+                    [
+                        new BrepLoop(
+                        [
+                            new BrepCoedge(sectionEdges[first][i], sameSense: true),
+                            new BrepCoedge(rails[(i + 1) % n], sameSense: true),
+                            new BrepCoedge(sectionEdges[last][i], sameSense: false),
+                            new BrepCoedge(rails[i], sameSense: false),
+                        ]),
+                    ]));
+                }
+            }
+
+            return (sectionEdges[0], sectionEdges[m - 1], singleClosed);
+        }
+
+        // The family-agnostic cap loop: winding carries orientation, so the same sense
+        // rule serves the outer boundary and every (reversed) hole.
+        static BrepLoop CapLoop(BrepEdge[] edges, bool singleClosed, bool topCap)
+        {
+            var coedges = new List<BrepCoedge>();
             if (singleClosed)
             {
-                // Band topology, exactly the cylinder side's: the lower rim follows +u,
-                // the upper opposes it.
-                faces.Add(new BrepFace(surfaces[0],
-                [
-                    new BrepLoop([new BrepCoedge(sectionEdges[first][0], sameSense: true)]),
-                    new BrepLoop([new BrepCoedge(sectionEdges[last][0], sameSense: false)]),
-                ]));
-                continue;
+                coedges.Add(new BrepCoedge(edges[0], sameSense: topCap));
             }
-
-            // Rails evaluate the strip surface at u = 0 rather than re-interpolating the
-            // junction points: the rail edge and the face's first grid column are then the
-            // same arithmetic and cannot drift apart.
-            var rails = new BrepEdge[n];
-            for (int i = 0; i < n; i++)
+            else if (topCap)
             {
-                rails[i] = new BrepEdge(
-                    new LoftRailCurve(surfaces[i], surfaces[i].DomainU.Start),
-                    Interval.Unit, vertices[first][i], vertices[last][i]);
+                for (int i = 0; i < edges.Length; i++)
+                    coedges.Add(new BrepCoedge(edges[i], sameSense: true));
             }
-
-            for (int i = 0; i < n; i++)
+            else
             {
-                faces.Add(new BrepFace(surfaces[i],
-                [
-                    new BrepLoop(
-                    [
-                        new BrepCoedge(sectionEdges[first][i], sameSense: true),
-                        new BrepCoedge(rails[(i + 1) % n], sameSense: true),
-                        new BrepCoedge(sectionEdges[last][i], sameSense: false),
-                        new BrepCoedge(rails[i], sameSense: false),
-                    ]),
-                ]));
+                for (int i = edges.Length - 1; i >= 0; i--)
+                    coedges.Add(new BrepCoedge(edges[i], sameSense: false));
             }
+            return new BrepLoop(coedges);
         }
+
+        var outer = BuildFamily(sections);
+        var holes = new (BrepEdge[] Bottom, BrepEdge[] Top, bool SingleClosed)[holeFamilies.Length];
+        for (int j = 0; j < holeFamilies.Length; j++)
+            holes[j] = BuildFamily(holeFamilies[j]);
 
         var bottom = sections[0];
         var top = sections[m - 1];
-        List<BrepCoedge> bottomCoedges = [];
-        List<BrepCoedge> topCoedges = [];
-        if (singleClosed)
+        var bottomLoops = new List<BrepLoop> { CapLoop(outer.Bottom, outer.SingleClosed, topCap: false) };
+        var topLoops = new List<BrepLoop> { CapLoop(outer.Top, outer.SingleClosed, topCap: true) };
+        foreach (var hole in holes)
         {
-            bottomCoedges.Add(new BrepCoedge(sectionEdges[0][0], sameSense: false));
-            topCoedges.Add(new BrepCoedge(sectionEdges[m - 1][0], sameSense: true));
-        }
-        else
-        {
-            for (int i = n - 1; i >= 0; i--)
-                bottomCoedges.Add(new BrepCoedge(sectionEdges[0][i], sameSense: false));
-            for (int i = 0; i < n; i++)
-                topCoedges.Add(new BrepCoedge(sectionEdges[m - 1][i], sameSense: true));
+            bottomLoops.Add(CapLoop(hole.Bottom, hole.SingleClosed, topCap: false));
+            topLoops.Add(CapLoop(hole.Top, hole.SingleClosed, topCap: true));
         }
 
         // Bottom cap axes swapped so its normal points back along the loft direction.
-        faces.Add(new BrepFace(new PlaneSurface(bottom.Origin, bottom.YAxis, bottom.XAxis), [new BrepLoop(bottomCoedges)]));
-        faces.Add(new BrepFace(new PlaneSurface(top.Origin, top.XAxis, top.YAxis), [new BrepLoop(topCoedges)]));
+        faces.Add(new BrepFace(new PlaneSurface(bottom.Origin, bottom.YAxis, bottom.XAxis), bottomLoops));
+        faces.Add(new BrepFace(new PlaneSurface(top.Origin, top.XAxis, top.YAxis), topLoops));
         return new BrepSolid([new BrepShell(faces)]);
     }
 }

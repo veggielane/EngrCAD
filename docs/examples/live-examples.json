@@ -544,6 +544,11 @@
       "live": true
     },
     {
+      "id": "loft-holes",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
       "id": "loft-ruled",
       "page": "examples/loft-draft-shell.md",
       "live": true

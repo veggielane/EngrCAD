@@ -177,9 +177,9 @@ public abstract class Shape
     /// when null), and the implicit lowering wraps that mesh in a mesh SDF.
     /// <c>Explain(target)</c> reports each case.</para>
     /// </summary>
-    /// <param name="sketch">The profile; holes are carried through the sweep (a
-    /// tapered B-Rep of a holed sketch is rejected — loft sections with holes are a
-    /// documented follow-up).</param>
+    /// <param name="sketch">The profile; holes are carried through the sweep, and a
+    /// pure taper of a holed sketch is B-Rep-Native too (the hole lofts as its own
+    /// inner skin about the same scaling centre).</param>
     /// <param name="height">Extrusion height along the plane normal (&gt; 0).</param>
     /// <param name="twist">Total twist over the height, radians.</param>
     /// <param name="scale">Per-axis scale of the top section (components &gt; 0; use
@@ -268,26 +268,34 @@ public abstract class Shape
     /// Lofts through sketches, each placed by its own <see cref="SketchPlane"/> — the
     /// sketch-first spelling of <see cref="Loft(IReadOnlyList{Profile}, LoftStyle)"/>,
     /// matching the <see cref="Extrude(Sketch, double, SketchPlane?)"/> vocabulary.
-    /// Sketches with holes are rejected (lofting hole chains into an inner skin is a
-    /// documented follow-up — loft the outer boundaries and cut the hole afterwards).
+    /// Sketches may carry HOLES: hole j of every section lofts into its own inner skin
+    /// (holes correspond by their <c>WithHole</c> declaration order, so every section
+    /// must declare the same number), and the caps become faces with hole loops.
     /// </summary>
     public static Shape Loft(
         IReadOnlyList<(Sketch Sketch, SketchPlane Plane)> sections, LoftStyle style = LoftStyle.Smooth)
     {
         ArgumentNullException.ThrowIfNull(sections);
         var profiles = new Profile[sections.Count];
+        var holes = new IReadOnlyList<Profile>[sections.Count];
+        int holeCount = 0;
+        bool anyHoles = false;
         for (int i = 0; i < sections.Count; i++)
         {
             var (sketch, plane) = sections[i];
             ArgumentNullException.ThrowIfNull(sketch, nameof(sections));
-            if (sketch.Holes.Count > 0)
-                throw new NotSupportedException(
-                    $"Loft section {i} has holes; lofting hole chains into an inner skin is not " +
-                    "supported yet. Loft the outer boundaries and subtract the hole afterwards.");
-            profiles[i] = PlaceSketchProfile(sketch, plane);
+            (profiles[i], holes[i]) = PlaceSketchProfiles(sketch, plane);
+            if (i == 0)
+                holeCount = holes[i].Count;
+            else if (holes[i].Count != holeCount)
+                throw new ArgumentException(
+                    $"Loft section 0 has {holeCount} holes but section {i} has {holes[i].Count}; " +
+                    "every section must declare the same holes in the same order (a hole " +
+                    "appearing or vanishing mid-loft has no skin to loft).", nameof(sections));
+            anyHoles |= holes[i].Count > 0;
         }
         ValidateLoftSections(profiles);
-        return new LoftShape(profiles, style);
+        return new LoftShape(profiles, style, anyHoles ? holes : null);
     }
 
     /// <summary>
@@ -324,16 +332,12 @@ public abstract class Shape
         ArgumentNullException.ThrowIfNull(spine);
         if (sectionCount < 2)
             throw new ArgumentOutOfRangeException(nameof(sectionCount), "A loft needs at least 2 sections.");
-        if (section.Holes.Count > 0)
-            throw new NotSupportedException(
-                "LoftAlong sections with holes are not supported yet (as for Loft); use the outer " +
-                "boundary and subtract the hole afterwards.");
         if (spine.IsClosed)
             throw new NotSupportedException(
                 "LoftAlong needs an open spine: a periodic loft closing back on its first section " +
                 "is not supported yet.");
 
-        var (outer, _) = section.ToProfiles();
+        var (outer, sectionHoles) = section.ToProfiles();
         // The rotation-minimizing frames come from the sweep machinery itself (only the
         // path and the start x seed the frames — the generator argument is irrelevant to
         // them), so a law-free LoftAlong stations its sections on the same frames a
@@ -343,6 +347,7 @@ public abstract class Shape
             outer.Segments[0], spine, startTangent.ArbitraryPerpendicular(Tolerance.Default));
 
         var profiles = new Profile[sectionCount];
+        IReadOnlyList<Profile>[]? holesPerStation = null;
         for (int k = 0; k < sectionCount; k++)
         {
             double s = (double)k / (sectionCount - 1);
@@ -358,21 +363,30 @@ public abstract class Shape
                 placement *= Matrix4d.CreateScale(factor);
             profiles[k] = new Profile(
                 [.. outer.Segments.Select(c => (Curve3d)new TransformedCurve(c, placement))]);
+            if (sectionHoles is { Count: > 0 })
+            {
+                var stationHoles = new Profile[sectionHoles.Count];
+                for (int j = 0; j < sectionHoles.Count; j++)
+                    stationHoles[j] = new Profile(
+                        [.. sectionHoles[j].Segments.Select(c => (Curve3d)new TransformedCurve(c, placement))]);
+                (holesPerStation ??= new IReadOnlyList<Profile>[sectionCount])[k] = stationHoles;
+            }
         }
-        return new LoftShape(profiles, style);
+        return new LoftShape(profiles, style, holesPerStation);
     }
 
-    /// <summary>
-    /// Places a sketch's outer profile on a plane (holes must be rejected by the caller
-    /// first — loft sections carry no holes yet).
-    /// </summary>
-    private static Profile PlaceSketchProfile(Sketch sketch, SketchPlane plane)
+    /// <summary>Places a sketch's outer profile AND its holes on a plane.</summary>
+    private static (Profile Outer, IReadOnlyList<Profile> Holes) PlaceSketchProfiles(
+        Sketch sketch, SketchPlane plane)
     {
-        var (outer, _) = sketch.ToProfiles();
+        var (outer, holes) = sketch.ToProfiles();
+        IReadOnlyList<Profile> placedHoles = holes ?? [];
         var matrix = plane.ToMatrix();
         if (matrix.Equals(Matrix4d.Identity))
-            return outer;
-        return new Profile([.. outer.Segments.Select(c => (Curve3d)new TransformedCurve(c, matrix))]);
+            return (outer, placedHoles);
+        static Profile Place(Profile profile, Matrix4d matrix) =>
+            new([.. profile.Segments.Select(c => (Curve3d)new TransformedCurve(c, matrix))]);
+        return (Place(outer, matrix), [.. placedHoles.Select(h => Place(h, matrix))]);
     }
 
     /// <summary>

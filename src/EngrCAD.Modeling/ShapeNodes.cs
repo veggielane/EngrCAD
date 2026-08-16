@@ -113,10 +113,15 @@ internal sealed class WedgeShape : Shape
 /// construction), so lowering only has to bake the accumulated graph transform into the
 /// section curves. A leaf in the operation graph: its inputs are profiles, not shapes.
 /// </summary>
-internal sealed class LoftShape(IReadOnlyList<Profile> sections, LoftStyle style) : Shape
+internal sealed class LoftShape(
+    IReadOnlyList<Profile> sections, LoftStyle style,
+    IReadOnlyList<IReadOnlyList<Profile>>? holesPerSection = null) : Shape
 {
     public IReadOnlyList<Profile> Sections => sections;
     public LoftStyle Style => style;
+    /// <summary>One hole list per section (index-corresponded across sections), already
+    /// placed in 3D like the sections themselves; null = no holes.</summary>
+    public IReadOnlyList<IReadOnlyList<Profile>>? HolesPerSection => holesPerSection;
     internal override string Describe() => $"Loft({sections.Count} sections, {style})";
 }
 

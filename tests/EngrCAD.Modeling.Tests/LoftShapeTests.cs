@@ -170,10 +170,58 @@ public class LoftShapeTests
         Assert.Throws<ArgumentException>(() => Shape.Loft(
             [(Sketch.Rectangle(6, 4), PlaneAt(0)), (Sketch.RoundedRectangle(6, 4, 1), PlaneAt(5))]));
 
-        // Holes are a documented follow-up, refused by name.
+        // Hole counts must match across sections (holes correspond by declaration order).
         var holed = Sketch.Rectangle(8, 8).WithHole(Sketch.Circle(2));
-        Assert.Throws<NotSupportedException>(() =>
-            Shape.Loft([(holed, PlaneAt(0)), (holed, PlaneAt(5))]));
+        var ex = Assert.Throws<ArgumentException>(() =>
+            Shape.Loft([(holed, PlaneAt(0)), (Sketch.Rectangle(8, 8), PlaneAt(5))]));
+        Assert.Contains("holes", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Loft_HoledSketches_HaveTheExactHollowVolume()
+    {
+        // Rect 8×6 → 4×2 with a rect hole 3×2 → 1.5×1: every wall of both skins is a
+        // planar trapezoid, so the difference of the two prismatoid closed forms is an
+        // identity of the tessellation.
+        var loft = Shape.Loft(
+        [
+            (Sketch.Rectangle(8, 6).WithHole(Sketch.Rectangle(3, 2)), PlaneAt(0)),
+            (Sketch.Rectangle(4, 2).WithHole(Sketch.Rectangle(1.5, 1)), PlaneAt(H)),
+        ], LoftStyle.Ruled);
+
+        Assert.All(loft.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var brep = loft.ToBrep();
+        brep.Validate();
+        Assert.True(brep.SatisfiesEulerFormula(genus: 1));
+
+        double exact = RuledRectVolume(8, 6, 4, 2, H) - RuledRectVolume(3, 2, 1.5, 1, H);
+        var mesh = BRepTessellator.Tessellate(brep);
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(exact, mesh.Volume(), 9);
+        Assert.Equal(exact, loft.ToMesh().Volume(), 9);
+    }
+
+    [Fact]
+    public void LoftAlong_HoledSection_LoftsTheHoleSkinToo()
+    {
+        // A holed section stationed along a straight spine with no laws is the hollow
+        // prism; with a scale law the hole tapers with the outer about the same centre.
+        var spine = new Line3d(new Vector3d(0, 0, 0), new Vector3d(0, 0, H));
+        var hollow = Shape.LoftAlong(
+            Sketch.Rectangle(6, 4).WithHole(Sketch.Rectangle(2, 1)), spine,
+            sectionCount: 2, style: LoftStyle.Ruled);
+        var mesh = hollow.ToMesh();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal((6 * 4 - 2 * 1) * H, mesh.Volume(), 9);
+
+        var tapered = Shape.LoftAlong(
+            Sketch.Rectangle(6, 4).WithHole(Sketch.Rectangle(2, 1)), spine,
+            sectionCount: 2, scale: s => 1 - 0.5 * s, style: LoftStyle.Ruled);
+        var taperedMesh = tapered.ToMesh();
+        Assert.True(taperedMesh.IsClosed);
+        Assert.Equal(
+            RuledRectVolume(6, 4, 3, 2, H) - RuledRectVolume(2, 1, 1, 0.5, H),
+            taperedMesh.Volume(), 9);
     }
 
     // ---- LoftAlong: the evolution-law loft (pipe shell with a law) ----

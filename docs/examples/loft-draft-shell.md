@@ -53,6 +53,37 @@ Ruled lofts of polygonal sections are exact prismatoids — the two-rectangle lo
 has the closed-form volume `h·(A₀/3 + Aₘᵢₓ/6·2 + A₁/3)`, and the tests hold the
 tessellated solid to it at nine digits.
 
+### Sections with holes
+
+A section sketch may carry holes: hole *j* of every section lofts into its own inner
+skin (holes correspond by their `WithHole` declaration order, so every section must
+declare the same number), and the caps become faces with hole loops. A hole family may
+even be a different curve kind than the outer — here a square outer tapers around a
+circular bore, the drilled-adapter archetype:
+
+```csharp render:loft-holes
+var sectionPlanes = new[] { SectionPlane.On(SectionAxis.Y, 0) };
+
+var adapter = Shape.Loft(
+[
+    (Sketch.Rectangle(30, 30).WithHole(Sketch.Circle(6)), SketchPlane.XY),
+    (Sketch.Rectangle(18, 18).WithHole(Sketch.Circle(7.5)),
+        SketchPlane.At((0, 0, 20), Vector3d.UnitX, Vector3d.UnitY)),
+], LoftStyle.Ruled);
+
+var scene = new Scene();
+scene.Add(new Part("adapter", adapter, Palette.Steel));
+```
+
+![A holed loft sectioned open: the outer tapers while the bore flares](images/loft-holes.png)
+
+The same machinery reaches the pure taper — `Shape.Extrude(sketch, height, twist: 0,
+scale: …)` of a holed sketch is B-Rep-Native now, the hole tapering with the outer
+about the same scaling centre — and `LoftAlong`, whose stations place the holes
+through the same frames as the outer. With a rectangular hole every wall of both skins
+is a planar trapezoid, so the hollow prismatoid volume is an exact identity of the
+tessellation, held at nine digits in the tests.
+
 ### Evolution laws: `LoftAlong`
 
 `Shape.LoftAlong` generates the sections itself: one sketch carried along a spine in

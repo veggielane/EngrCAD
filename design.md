@@ -10225,6 +10225,37 @@ where asserting the raw radius books that offset as error (the fixture finding: 
 measured against a naive 52 expected, the 3.5 being the 'I' glyph's own ink centre
 above its baseline).
 
+**Loft sections carry holes now, and the filed assessment — "topology work in
+`BuildLoftedSolid`, no new surface math" — was exactly right** (`SolidFactory.Loft`
+gained a `holesPerSection` overload; `Shape.Loft` sketch sections, `Shape.LoftAlong`
+and the pure taper's lowering all feed it): hole j of every section lofts into its own
+inner skin and the caps become faces with hole loops. Three decisions carry it. **A
+hole family is an ordinary loop family**, so the per-family machinery
+(vertices/section edges/strips/rails, or the closed band) is ONE local function run for
+the outer sections and each hole family — a family may be a segment chain while
+another is a single closed curve (the drilled-taper archetype: square outer, circular
+bore), because single-closed-ness is a per-family property. **A hole is aligned by the
+SAME least-twist rules the outer gets and then `Reversed()`** — the extrude factories'
+convention, so the winding carries the wall orientation and the cap loop builder needs
+no per-family cases: the same sense rule (reversed order/`false` on the bottom,
+forward/`true` on the top) applied to a reversed family IS the opposed hole loop.
+**Every hole strip shares the OUTER's global v parameterization** rather than its own
+chord lengths — the sections are common stations, and a per-family v would let a
+hole's rail disagree with its cap about where a section sits. Correspondence is by
+index (hole j of section k is hole j of section k+1, the `WithHole` declaration order
+at the sketch level), hole-count mismatches and per-family incompatibilities refuse by
+name, and an empty or null hole list reproduces the unholed loft — asserted as
+bit-identical tessellation positions, which the shared-machinery refactor makes a
+theorem rather than a hope. The oracles are exact identities: a square-holed square
+frustum measures `Frustum(16,4,4) − Frustum(1,0.25,4)` to nine decimals (every wall of
+both families is a planar trapezoid), a circular bore subtracts exactly the inscribed
+n-gonal cone frustum, two holes read genus 2 off the tessellation's Euler
+characteristic, and the taper flip turned `TwistExtrudeTests`' Impossible-naming test
+into a Native one whose mesh route (the section sweep) agrees with the B-Rep route to
+six decimals on the same closed form. The consequence stated in the API: a pure taper
+of a holed sketch is B-Rep-Native, so a washer tapers with its bore about the same
+scaling centre instead of refusing toward a boolean.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

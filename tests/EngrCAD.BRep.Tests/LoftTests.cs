@@ -261,6 +261,59 @@ public class LoftTests
     }
 
     [Fact]
+    public void Loft_WithASquareHole_HasFrameTopologyAndGenusOne()
+    {
+        var solid = SolidFactory.Loft(
+            [Square(2, 0), Square(1, 4)],
+            [[Square(0.5, 0)], [Square(0.25, 4)]],
+            LoftStyle.Ruled);
+        solid.Validate();
+        Assert.Equal(16, solid.Vertices.Count());
+        Assert.Equal(24, solid.Edges.Count());
+        Assert.Equal(10, solid.Faces.Count()); // 4 outer walls + 4 hole walls + 2 caps
+        Assert.True(solid.SatisfiesEulerFormula(genus: 1));
+        // Each cap carries the outer boundary AND the hole loop.
+        Assert.Equal(2, solid.Faces.Count(f => f.Surface is PlaneSurface && f.Loops.Count == 2));
+    }
+
+    [Fact]
+    public void Loft_WithACircularHole_MixesTheTwoFamilyKinds()
+    {
+        // The outer is a segment CHAIN and the hole a single closed curve — the drilled
+        // taper archetype. The two families each keep their own topology rules.
+        var solid = SolidFactory.Loft(
+            [Square(3, 0), Square(2, 5)],
+            [[Circle(1, 0)], [Circle(0.5, 5)]],
+            LoftStyle.Ruled);
+        solid.Validate();
+        Assert.True(solid.SatisfiesEulerFormula(genus: 1));
+        Assert.Equal(7, solid.Faces.Count()); // 4 outer walls + 1 hole band + 2 caps
+    }
+
+    [Fact]
+    public void Loft_HoleValidations()
+    {
+        // Hole counts must match across sections.
+        Assert.Throws<ArgumentException>(() => SolidFactory.Loft(
+            [Square(2, 0), Square(2, 4)],
+            [[Square(0.5, 0)], []],
+            LoftStyle.Ruled));
+        // One hole list per section.
+        Assert.Throws<ArgumentException>(() => SolidFactory.Loft(
+            [Square(2, 0), Square(2, 4)],
+            [[Square(0.5, 0)]],
+            LoftStyle.Ruled));
+        // A hole family obeys the same compatibility rules as the outer sections.
+        Assert.Throws<ArgumentException>(() => SolidFactory.Loft(
+            [Square(2, 0), Square(2, 4)],
+            [[Square(0.5, 0)], [Circle(0.5, 4)]],
+            LoftStyle.Ruled));
+        // Null and empty hole lists are the unholed loft.
+        SolidFactory.Loft([Square(2, 0), Square(2, 4)], null, LoftStyle.Ruled).Validate();
+        SolidFactory.Loft([Square(2, 0), Square(2, 4)], [[], []], LoftStyle.Ruled).Validate();
+    }
+
+    [Fact]
     public void Loft_Validations()
     {
         Assert.Throws<ArgumentException>(() => SolidFactory.Loft([Square(1, 0)]));
