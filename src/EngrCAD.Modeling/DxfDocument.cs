@@ -127,6 +127,15 @@ public sealed record DxfText(
     Vector2d Position, string Value, double Height,
     SheetTextAnchor Anchor = SheetTextAnchor.Left, string Layer = "0") : DxfEntity(Layer);
 
+/// <summary>A multi-line note (DXF MTEXT): one entity whose <paramref name="Value"/>
+/// carries its own <c>'\n'</c> breaks (written as the format's <c>\P</c> separators),
+/// inserted at <paramref name="Position"/> with middle-centre attachment — what a
+/// stacked run of single-line TEXTs loses in transit, a reader seeing N unrelated
+/// strings instead of one note.</summary>
+public sealed record DxfMText(
+    Vector2d Position, string Value, double Height, int Attachment = 5, string Layer = "0")
+    : DxfEntity(Layer);
+
 /// <summary>A lightweight polyline (DXF LWPOLYLINE): vertices plus a per-vertex
 /// <paramref name="Bulges"/> value — tan(sweep/4) of the arc from that vertex to the
 /// next, 0 for a straight segment, positive counter-clockwise. Exact for line+arc
@@ -760,6 +769,13 @@ public sealed class DxfDocument
                     Real(10, circle.Center.X); Real(20, circle.Center.Y); Real(30, 0);
                     Real(40, circle.Radius);
                     break;
+                case DxfMText mtext:
+                    Pair(0, "MTEXT"); Pair(8, mtext.Layer);
+                    Real(10, mtext.Position.X); Real(20, mtext.Position.Y); Real(30, 0);
+                    Real(40, mtext.Height);
+                    Pair(71, mtext.Attachment.ToString(culture));
+                    Pair(1, mtext.Value.Replace("\n", "\\P"));
+                    break;
                 case DxfText text:
                     Pair(0, "TEXT"); Pair(8, text.Layer);
                     Real(10, text.Position.X); Real(20, text.Position.Y); Real(30, 0);
@@ -1005,6 +1021,22 @@ public sealed class DxfDocument
             case "CIRCLE":
                 document._entities.Add(new DxfCircle((Value(10), Value(20)), Value(40), Layer()));
                 break;
+            case "MTEXT":
+            {
+                // Contents arrive as code-3 chunks (250-char continuation) followed by
+                // the final code-1; concatenated IN ORDER, with the format's \P
+                // paragraph separators restored to '\n'.
+                var contents = new System.Text.StringBuilder();
+                for (int i = start; i < end; i++)
+                {
+                    if (pairs[i].Code is 3 or 1)
+                        contents.Append(pairs[i].Value);
+                }
+                document._entities.Add(new DxfMText(
+                    (Value(10), Value(20)), contents.Replace("\\P", "\n").ToString(),
+                    Value(40, 1), (int)Value(71, 5), Layer()));
+                break;
+            }
             case "TEXT":
             {
                 string? value = null;

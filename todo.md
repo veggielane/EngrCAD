@@ -889,16 +889,7 @@ export — is recorded in CLAUDE.md):
   never scaled). **Two remain, and BOTH turn out to be changes to what the drafting layer
   PRODUCES rather than to how a writer spells it** — which is why neither is the small job
   its one-line description implies:
-  - [ ] **MTEXT for multi-line notes.** The filed framing ("a note currently writes one
-    TEXT entity per line") is the symptom; the cause is that `SheetAnnotations`'
-    `CenteredText` and `SheetNote` **split on `'\n'` inside `Compute()`**, so by the time
-    either writer runs there is no multi-line note left — only N single-line `SheetText`s
-    at stacked positions. Emitting MTEXT therefore means the content model carrying a note
-    as ONE object with its own breaks, after which the SVG writer has to do the stacking
-    itself — which breaks the recorded invariant that `ToSvg`/`ToDxf` consume one
-    `Compute()` **so the two writers cannot disagree**. Worth doing only alongside a
-    decision about where line breaking lives; a `DxfMText` entity read/written in
-    isolation is cheap but buys little, since `ToSketches` consumes no text at all.
+
   - [ ] **SVG hatch as a `<pattern>` fill** rather than one path per hatch line (smaller
     files for a big section). Same shape: `SheetHatch.Fill` returns clipped LINE SEGMENTS,
     and a `<pattern>` needs the cut REGION plus a tile, so the hatch layer's output type

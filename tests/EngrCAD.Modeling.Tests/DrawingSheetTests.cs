@@ -266,6 +266,41 @@ public class DrawingSheetTests
         Assert.All(texts, t => Assert.True(t.Height > 0));
     }
 
+    /// <summary>
+    /// A MULTI-LINE note travels as ONE MTEXT — a reader then sees one note instead of
+    /// N unrelated strings — while every single-line text stays a plain TEXT entity,
+    /// and the SVG output is untouched by the grouping entirely (its lines are the very
+    /// SheetTexts the block groups; the one-Compute invariant).
+    /// </summary>
+    [Fact]
+    public void AMultiLineNoteTravelsAsOneMText_AndRoundTrips()
+    {
+        var sheet = DrawingSheet.StandardLayout(SceneOf(Plate()), SheetFormat.A4);
+        sheet.Views[0].Annotations.Add(
+            new SheetNote(new Vector2d(0, 0), new Vector2d(10, 10), "M6 x 1\nTHRU\n2 PLACES"));
+        var written = sheet.ToDxf();
+
+        var mtext = Assert.Single(written.Entities.OfType<DxfMText>());
+        Assert.Equal("M6 x 1\nTHRU\n2 PLACES", mtext.Value);
+        // The stacked single-line spellings must NOT ride beside it — one note, once.
+        Assert.DoesNotContain(written.Entities.OfType<DxfText>(), t => t.Value == "THRU");
+
+        // Through the reader: the \P separators come back as line breaks.
+        using var buffer = new StringWriter();
+        written.Save(buffer);
+        var read = DxfDocument.Load(new StringReader(buffer.ToString()));
+        Assert.Empty(read.Diagnostics);
+        var readBack = Assert.Single(read.Entities.OfType<DxfMText>());
+        Assert.Equal(mtext.Value, readBack.Value);
+        Assert.Equal(mtext.Position.X, readBack.Position.X);
+        Assert.Equal(mtext.Position.Y, readBack.Position.Y);
+
+        // A sheet with no multi-line note emits no MTEXT at all — the incumbent file,
+        // byte-compatible.
+        var plain = DrawingSheet.StandardLayout(SceneOf(Plate()), SheetFormat.A4).ToDxf();
+        Assert.Empty(plain.Entities.OfType<DxfMText>());
+    }
+
     /// <summary>A file that names a line type must define it, or every reader shows
     /// solid lines and the hidden/visible distinction is lost in transit.</summary>
     [Fact]

@@ -134,7 +134,10 @@ how a polyline, a dash pattern and a piece of text are spelled.
 
 A DXF that *names* a line type must also **define** it, or every reader falls back to
 solid lines and the classification is lost in transit — so the writer emits an LTYPE
-table for every pattern its layers use. This round-trips the whole sheet through the
+table for every pattern its layers use. A **multi-line note travels as one MTEXT**
+(with the format's `\P` breaks and its attachment point), so a DXF consumer sees one
+note rather than N unrelated strings — while the SVG and PDF outputs keep drawing the
+same stacked lines, the grouping being semantic rather than a second geometry. This round-trips the whole sheet through the
 landed reader on every docs build:
 
 ```csharp run:drawing-dxf

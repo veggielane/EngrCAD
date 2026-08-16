@@ -10186,6 +10186,25 @@ tests choose codes the TABLE routes to DIFFERENT glyphs than the identity would
 was read rather than assumed — a parser bug that fell back to SID == GID would pass
 every identity-charset test and fail these by drawing the wrong letter.
 
+**MTEXT multi-line notes landed with the one-`Compute()` invariant KEPT rather than
+traded** (`SheetNoteBlock` on `SheetText`; `DxfMText` both ways): the filed entry
+judged the feature worth doing "only alongside a decision about where line breaking
+lives", because collapsing a note into one object would make the SVG writer restack
+lines and break the rule that every writer consumes ONE `Compute()`. The resolution is
+that the grouping does not need to BE the geometry: the stacked single-line
+`SheetText`s remain what every writer draws (SVG and PDF untouched byte for byte), and
+a multi-line note's lines additionally share a `SheetNoteBlock` by REFERENCE —
+insertion point, DXF attachment (5 middle-centre for a dimension's centred note, 1/3
+top-left/right for a leader note, since the two stack about different datums), and the
+full text with its own breaks. Only the DXF writer reads it: a run sharing a block
+collapses to ONE MTEXT (`\P` separators, group 71), a single-line text stays a TEXT
+entity byte-identically, and the reader joins code-3/1 chunks in order and restores
+the breaks — so a DXF consumer finally sees one note instead of N unrelated strings,
+which is what the entity exists for. The build's finding: `SheetNote` stacks its own
+lines SEPARATELY from the dimensions' shared `CenteredText`, so the first cut grouped
+only dimension notes — the leader-note test caught the miss, and both sites attach
+blocks now, each with the attachment its own stacking datum implies.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

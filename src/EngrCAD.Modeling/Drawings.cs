@@ -170,7 +170,23 @@ public enum SheetTextAnchor
 /// <param name="Layer">Layer name.</param>
 public sealed record SheetText(
     Vector2d Position, string Text, double Height,
-    SheetTextAnchor Anchor = SheetTextAnchor.Left, string Layer = SheetLayers.TitleBlock);
+    SheetTextAnchor Anchor = SheetTextAnchor.Left, string Layer = SheetLayers.TitleBlock,
+    SheetNoteBlock? Block = null);
+
+/// <summary>
+/// The multi-line note a stacked run of <see cref="SheetText"/> lines came from —
+/// shared BY REFERENCE across the run, which is what lets the DXF writer collapse the
+/// run into one MTEXT while the SVG and PDF writers keep drawing the very same stacked
+/// single-line texts (the one-<c>Compute()</c> invariant: every writer consumes one
+/// geometry, and the block is a semantic grouping over it, not a second geometry).
+/// </summary>
+/// <param name="Insertion">The MTEXT insertion point, paired with
+/// <paramref name="Attachment"/> — a centred dimension note inserts at its stacking
+/// centre (attachment 5, middle-centre), a leader note at its first line's top on the
+/// anchored side (1 top-left / 3 top-right).</param>
+/// <param name="Attachment">The DXF MTEXT attachment point (group 71).</param>
+/// <param name="Text">The full note with its own <c>'\n'</c> breaks.</param>
+public sealed record SheetNoteBlock(Vector2d Insertion, int Attachment, string Text);
 
 /// <summary>
 /// The block in the sheet's bottom-right corner. Every field is optional text; the

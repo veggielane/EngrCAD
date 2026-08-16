@@ -74,8 +74,22 @@ public static class SheetWriter
             dxf.Add(new DxfLine(a, b, SheetLayers.Hatch));
         foreach (var (a, b, layer) in content.Lines)
             dxf.Add(new DxfLine(a, b, layer));
+        // A multi-line note travels as ONE MTEXT — its lines share a SheetNoteBlock by
+        // reference, and the first line of each block carries the whole note (the SVG
+        // and PDF writers keep drawing the stacked lines; the block is a semantic
+        // grouping over the same geometry, so the one-Compute invariant holds).
+        var emitted = new HashSet<SheetNoteBlock>();
         foreach (var text in content.Texts)
+        {
+            if (text.Block is { } block)
+            {
+                if (emitted.Add(block))
+                    dxf.Add(new DxfMText(
+                        block.Insertion, block.Text, text.Height, block.Attachment, text.Layer));
+                continue;
+            }
             dxf.Add(new DxfText(text.Position, text.Text, text.Height, text.Anchor, text.Layer));
+        }
         return dxf;
     }
 

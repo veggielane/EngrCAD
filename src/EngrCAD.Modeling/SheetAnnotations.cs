@@ -165,11 +165,15 @@ public abstract class SheetAnnotation
         string[] lines = text.Split('\n');
         double step = style.TextHeight * SheetStyle.LineSpacing;
         double blockHeight = style.TextHeight + (lines.Length - 1) * step;
+        // One shared block per multi-line note, BY REFERENCE: the DXF writer collapses
+        // the run into a single MTEXT while SVG/PDF keep drawing these very lines.
+        var block = lines.Length > 1 ? new SheetNoteBlock(center, 5, text) : null;
         for (int i = 0; i < lines.Length; i++)
         {
             var position = center + new Vector2d(0, blockHeight / 2 - style.TextHeight - i * step);
             texts.Add(new SheetText(
-                position, lines[i], style.TextHeight, SheetTextAnchor.Center, SheetLayers.Dimensions));
+                position, lines[i], style.TextHeight, SheetTextAnchor.Center, SheetLayers.Dimensions,
+                block));
         }
         _ = rotation;
     }
@@ -446,12 +450,21 @@ public sealed class SheetNote : SheetAnnotation
 
         string[] lines = Text.Split('\n');
         double step = style.TextHeight * SheetStyle.LineSpacing;
+        // Multi-line leader notes group under one block too: the MTEXT inserts at the
+        // first line's TOP on the anchored side (attachment 1 left / 3 right), so a
+        // reader places the whole note where the stacked lines begin.
+        var block = lines.Length > 1
+            ? new SheetNoteBlock(
+                tail + new Vector2d(side * style.TextGap, style.TextHeight * 0.5),
+                side > 0 ? 1 : 3, Text)
+            : null;
         for (int i = 0; i < lines.Length; i++)
         {
             texts.Add(new SheetText(
                 tail + new Vector2d(side * style.TextGap, -style.TextHeight * 0.5 - i * step),
                 lines[i], style.TextHeight,
-                side > 0 ? SheetTextAnchor.Left : SheetTextAnchor.Right, SheetLayers.Dimensions));
+                side > 0 ? SheetTextAnchor.Left : SheetTextAnchor.Right, SheetLayers.Dimensions,
+                block));
         }
     }
 }
