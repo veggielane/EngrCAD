@@ -9720,6 +9720,29 @@ than from the retained list, so they are identical either way — asserted, sinc
 quietly computed over a two-entry list would be the silent regression this feature
 invites.
 
+**Temperature-dependent conductivity landed as the radiation template's second consumer,
+with the structural difference stated up front** (`ThermalNonlinear.Solve`; docs
+`examples/fea-thermal.md` §Temperature-dependent): a radiating pass moves only the LOAD,
+while a k(T) pass changes the MATRIX, so every iteration re-assembles and re-factors —
+each pass evaluating the law per ELEMENT at the element's node-mean temperature through a
+per-element conductivity OVERLAY on `ThermalModel` (the film overlay's pattern one level
+in), where **NaN means "keep the model's own law"** — the sentinel that lets a temperature
+law on one region coexist with a DIRECTIONAL `ConductivityLaw` on another, because the
+first draft flattened every un-lawed element's tensor to its meaningless isotropic scalar
+and the hole was caught in design rather than by a fixture. **The oracle is the KIRCHHOFF
+TRANSFORM**, sharing no line with the linearization: for k(T) = k0(1 + βT) the variable
+θ = ∫k dT is linear in x, so the slab's flux is (k0/L)[(T1 − T2) + β(T1² − T2²)/2]
+exactly and θ(T_node)/θ(hot) must equal x/L at EVERY node (asserted to 5e-3, the
+per-element-constant grade; the flux to 2e-3). **The flux caveat is stated on the result
+rather than discovered by a caller**: `ThermalResults`' flux accessors read the MODEL's
+constant laws — the overlay is cleared when the solve returns (asserted: a plain solve
+afterwards answers identically) — and the first fixture measured exactly that failure,
+the accessor-mean reading the constant-k 100 against the Kirchhoff 150 over the correct
+temperature field; so the converged per-element k rides on the result
+(`ElementConductivity`) and the nonlinear flux is the accessor's value rescaled by it. A
+constant law converges in ONE pass bit-identical to the plain solve; refusals by name
+(unknown region, non-positive k(T), the directional-law conflict, relaxation range).
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

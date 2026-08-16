@@ -570,9 +570,10 @@ quarter of `E·alpha·dT`). A statically determinate 3-2-1 restraint gives 1e-10
 
 ## Limitations
 
-- **Constant material properties.** `k`, `c` and `alpha` do not vary with temperature, so
-  the problem stays linear and the solve is one factorization. Temperature-dependent
-  properties make it nonlinear and are a different solver wrapping this one.
+- **Temperature-dependent conductivity is a separate solver** (`ThermalNonlinear.Solve`,
+  below); the LINEAR solve keeps constant properties by design — that is what makes it one
+  factorization. The heat capacity `c` and expansion `alpha` stay constant everywhere
+  (a c(T) belongs to the transient and is a different change).
 - **A transient streams** when asked: `OnState` sees exactly the states a retained run
   stores (bit-identical, asserted against a retained twin) and `RetainStates = false` caps
   the returned list at the two ends — a run of any length writes each state to a `.vtu`
@@ -590,6 +591,48 @@ quarter of `E·alpha·dT`). A statically determinate 3-2-1 restraint gives 1e-10
   10-node elements is refused by name (−V/20 at every corner — a negative heat capacity).
 - **Sliver elements are the real constraint, and they belong to the mesher** — the same
   limitation the structural page records, refused by name here by the same shared guard.
+
+## Temperature-dependent conductivity
+
+`ThermalNonlinear.Solve(model, conductivityByRegion)` handles `k = k(T)` as the second
+consumer of the outer-iteration shape radiation established — with the one structural
+difference stated up front: a radiating pass moves only the *load*, while a conductivity
+pass changes the *matrix*, so every iteration re-assembles and re-factors. Each pass
+evaluates the law per element at the element's node-mean temperature from the previous
+answer; a converged fixed point solves the true `k(T)` problem in the per-element-constant
+sense the discretization carries anyway. Regions not named keep their constant
+conductivity (a directional `ConductivityLaw` cannot also take a temperature law — that
+composition is a temperature-dependent tensor, a different feature, refused by name).
+
+The oracle is the **Kirchhoff transform**: for `k(T) = k0(1 + βT)` the variable
+`θ = ∫k dT` is linear in x, so a slab held at `T1`/`T2` carries flux
+`q = (k0/L)[(T1 − T2) + β(T1² − T2²)/2]` *exactly* — a closed form sharing no line with
+the solver's linearization. One caveat is stated rather than discovered: the returned
+results' flux accessors read the model's constant laws (the overlay is cleared when the
+solve returns), so the converged per-element k rides on the result
+(`ElementConductivity`) and the nonlinear flux is the accessor's value rescaled by it.
+
+```csharp run:fea-thermal-nonlinear
+var bar = Shape.Box(40, 8, 8).Translate(20, 0, 0);
+// Refined: with BOTH ends held, a minimal box mesh would leave no free node at all.
+var mesh = AnalysisMesh.Of(TetMesher.Mesh(bar.ToMesh(),
+    new TetMeshOptions { MaxElementSize = 5, RefineQuality = true }));
+var model = new ThermalModel(mesh, Materials.Aluminium6061)
+    .Temperature(Facets.OnPlane(Vector3d.Zero, new Vector3d(-1, 0, 0)), 0.0)
+    .Temperature(Facets.OnPlane(new Vector3d(40, 0, 0), Vector3d.UnitX), 100.0);
+const double k0 = 167, beta = 0.01;
+var run = ThermalNonlinear.Solve(model,
+    new Dictionary<int, Func<double, double>> { [0] = t => k0 * (1 + beta * t) });
+
+// Kirchhoff: q = (k0/L)[(T1 − T2) + beta(T1² − T2²)/2].
+double exact = k0 / 40 * (100 + beta * 100 * 100 / 2);
+double flux = 0;
+for (int e = 0; e < mesh.ElementCount; e++)
+    flux += Math.Abs(run.Results.ElementFlux(e).X) * run.ElementConductivity[e] / k0;
+flux /= mesh.ElementCount;
+Console.WriteLine($"flux {flux:0.0} vs Kirchhoff {exact:0.0} mW/mm2 "
+    + $"in {run.Iterations} iterations");
+```
 
 ## Surface radiation
 

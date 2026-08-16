@@ -202,6 +202,12 @@ public sealed class ThermalModel
     internal double[]? OverlayFilm;
     internal double[]? OverlaySupply;
 
+    /// <summary>Per-ELEMENT scalar conductivity overlay — <see cref="ThermalNonlinear"/>'s
+    /// linearization point, same contract as the film overlay: solver-internal, set around
+    /// each inner solve, cleared in a finally, never part of the model's own
+    /// conditions.</summary>
+    internal double[]? OverlayConductivity;
+
     /// <summary>The accumulated film coefficient on one boundary facet (0 = no
     /// convection).</summary>
     public double FilmCoefficientOf(int facet)

@@ -1644,7 +1644,11 @@ iteration (per-facet linearization exact at its own point through the model's in
 film overlay — a radiating facet counts as driven; the plain Picard map measurably
 oscillates); the oracle is the lumped Stefan-Boltzmann equilibrium solved independently
 by bisection, and temperatures must be ABSOLUTE (a celsius model refuses by name at the
-surroundings). Transients stream: `OnState` sees exactly the states a retained run stores
+surroundings). `ThermalNonlinear.Solve` is the template's second consumer for k(T) —
+re-assembly per pass through a per-element overlay (NaN = keep the model's law, so a
+directional region elsewhere is untouched), the Kirchhoff-transform slab as the oracle
+(θ linear in x at every node), and the flux caveat stated on the result (the converged
+per-element k rides as `ElementConductivity`). Transients stream: `OnState` sees exactly the states a retained run stores
 (bit-identical, asserted) and `RetainStates = false` caps memory at the two ends — and
 the STRUCTURAL transient streams the same way (`TransientSolveOptions.OnState`, the
 heaviest states of all), with the summary peaks/energies tracked from every streamed

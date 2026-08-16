@@ -118,6 +118,11 @@ public sealed class ConductivityLaw
     /// property — <see cref="ElasticLaw.FromMaterial"/> makes the same choice about a zero
     /// modulus for the same reason.</para>
     /// </summary>
+    /// <summary>An isotropic law from a bare scalar — the nonlinear solver's per-element
+    /// linearization point (<see cref="ThermalNonlinear"/>).</summary>
+    internal static ConductivityLaw Isotropic(double k) =>
+        new([k, 0, 0, 0, k, 0, 0, 0, k], isotropic: true, k, "isotropic (nonlinear)");
+
     public static ConductivityLaw FromMaterial(Material material)
     {
         ArgumentNullException.ThrowIfNull(material);

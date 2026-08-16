@@ -867,8 +867,13 @@ public static class ThermalSolver
             // exactly the matrix it always did. (ThermalModel resolves and caches the law per
             // region, so the tensor rotation is paid once per region rather than once per
             // element.)
-            ThermalElement.Conductivity(
-                mesh.Order, positions, model.ConductivityLawOf(e), rule, ke);
+            // NaN in the overlay means "this element keeps the model's own law" — which
+            // is what lets a temperature law on one region coexist with a DIRECTIONAL law
+            // on another (the overlay must not flatten a tensor it was never aimed at).
+            var law = model.OverlayConductivity is { } overlay && !double.IsNaN(overlay[e])
+                ? ConductivityLaw.Isotropic(overlay[e])
+                : model.ConductivityLawOf(e);
+            ThermalElement.Conductivity(mesh.Order, positions, law, rule, ke);
             AddSymmetric(builder, nodes, ke, perElement);
         }
 
