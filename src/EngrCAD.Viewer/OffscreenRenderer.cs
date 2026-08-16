@@ -739,10 +739,12 @@ public static class OffscreenRenderer
         {
             // At the EFFECTIVE exaggeration: the legend's title states the factor, so
             // an animated frame must say the number it was drawn at (the window's
-            // ActiveFieldDisplay applies the same multiply). Factor 1 leaves it exact.
-            var display = FieldRendering.AtFactor(
-                draws.Exists(d => d.FieldColored) ? FirstFieldDisplay(instances) : null, deformFactor);
-            new FieldLegendLayer().Draw(gl, display, width, height, supersample,
+            // ActiveFieldDisplays applies the same multiply). Factor 1 leaves it exact.
+            var displays = draws.Exists(d => d.FieldColored)
+                ? FieldDisplays(instances) : [];
+            for (int i = 0; i < displays.Count; i++)
+                displays[i] = FieldRendering.AtFactor(displays[i], deformFactor)!.Value;
+            new FieldLegendLayer().Draw(gl, displays, width, height, supersample,
                 new LineProgramHandles(
                     lineProgram, uLineModel, uLineView, uLineProj, uLineColor, uLineSectionEnabled));
         }
@@ -767,17 +769,19 @@ public static class OffscreenRenderer
     /// <see cref="CameraMath.DefaultCamera"/> (turntable tracks base on it too).</summary>
     private static CameraState DefaultCamera(in Aabb bounds) => CameraMath.DefaultCamera(bounds);
 
-    /// <summary>The first instance's resolvable field display — the legend's scale.
-    /// ONE display, matching the window's <c>ViewportControl.ActiveFieldDisplay</c>: a
-    /// legend is a single scale, and several parts on different scales under one bar
-    /// would be a legend that lies.</summary>
-    private static ResolvedFieldDisplay? FirstFieldDisplay(IReadOnlyList<PartInstance> instances)
+    /// <summary>Every DISTINCT resolvable display, in instance order — one legend
+    /// each, matching the window's <c>ViewportControl.ActiveFieldDisplays</c>: a
+    /// legend is a single scale, so several parts on different scales get a STACK of
+    /// bars rather than one bar that lies.</summary>
+    private static List<ResolvedFieldDisplay> FieldDisplays(IReadOnlyList<PartInstance> instances)
     {
+        var displays = new List<ResolvedFieldDisplay>();
         foreach (var instance in instances)
         {
-            if (instance.Part.TryResolveFieldDisplay(out var resolved, out _))
-                return resolved;
+            if (instance.Part.TryResolveFieldDisplay(out var resolved, out _)
+                && !displays.Contains(resolved))
+                displays.Add(resolved);
         }
-        return null;
+        return displays;
     }
 }

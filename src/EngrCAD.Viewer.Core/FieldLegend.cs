@@ -152,12 +152,63 @@ public static class FieldLegend
     /// make for point sprites and annotation text).
     /// </summary>
     public static FieldLegendGeometry Build(
-        in ResolvedFieldDisplay display, double widthPx, double heightPx, double pixelScale = 1)
+        in ResolvedFieldDisplay display, double widthPx, double heightPx, double pixelScale = 1) =>
+        Build([display], widthPx, heightPx, pixelScale);
+
+    /// <summary>Vertical gap, in DIPs, between STACKED legends — room for the lower
+    /// bar's title plus clearance, so two scales never read as one.</summary>
+    public const double StackGapDip = 34;
+
+    /// <summary>
+    /// Lays out one legend per DISTINCT display, stacked top-to-bottom in list order and
+    /// centred as a group — several visible parts on genuinely different scales each get
+    /// their own bar, because one bar over two scales is a legend that lies. Everything
+    /// is appended into ONE geometry (more bands, more frame, more labels), so the front
+    /// ends draw a stack with zero change — the NO-VALUE swatch's trick, one level up.
+    /// As many legends as fit vertically are kept, first-come (the caller passes draw
+    /// order); a single display reproduces the incumbent centred layout bit for bit.
+    /// </summary>
+    public static FieldLegendGeometry Build(
+        IReadOnlyList<ResolvedFieldDisplay> displays,
+        double widthPx, double heightPx, double pixelScale = 1)
     {
+        ArgumentNullException.ThrowIfNull(displays);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(pixelScale, 0);
-        if (!Fits(widthPx, heightPx, pixelScale))
+        if (displays.Count == 0 || !Fits(widthPx, heightPx, pixelScale))
             return FieldLegendGeometry.Empty;
 
+        double barHeight = BarHeightDip * pixelScale;
+        double stackGap = StackGapDip * pixelScale;
+
+        // How many bars fit: the group needs n bars + (n-1) gaps + the same 40-DIP
+        // breathing room Fits reserves for one. At least one always fits (Fits said so).
+        int count = Math.Max(1, Math.Min(displays.Count,
+            (int)Math.Floor((heightPx - 40 * pixelScale + stackGap) / (barHeight + stackGap))));
+
+        double groupHeight = count * barHeight + (count - 1) * stackGap;
+        double groupBottom = (heightPx - groupHeight) / 2;
+
+        var bandVertices = new List<float>();
+        var bandColors = new List<(float R, float G, float B)>();
+        var frame = new List<float>();
+        var labels = new List<(Vector3d A, Vector3d B)>();
+        for (int k = 0; k < count; k++)
+        {
+            // List order reads top to bottom, the way a caller's draw order reads.
+            double y0 = groupBottom + (count - 1 - k) * (barHeight + stackGap);
+            AppendLegend(displays[k], y0, widthPx, pixelScale,
+                bandVertices, bandColors, frame, labels);
+        }
+        return new FieldLegendGeometry(
+            [.. bandVertices], [.. bandColors], [.. frame], Flatten(labels),
+            Projection(widthPx, heightPx));
+    }
+
+    private static void AppendLegend(
+        in ResolvedFieldDisplay display, double y0, double widthPx, double pixelScale,
+        List<float> bandVertices, List<(float R, float G, float B)> bandColors,
+        List<float> frame, List<(Vector3d A, Vector3d B)> labels)
+    {
         double barWidth = BarWidthDip * pixelScale;
         double barHeight = BarHeightDip * pixelScale;
         double margin = MarginDip * pixelScale;
@@ -167,18 +218,8 @@ public static class FieldLegend
 
         double x0 = margin;
         double x1 = margin + barWidth;
-        double y0 = (heightPx - barHeight) / 2;
         double y1 = y0 + barHeight;
 
-        // A field carrying a value with no colour position gets one extra "band": a
-        // grey NO-VALUE swatch below the bar. Appended as a band because both front
-        // ends draw bands generically from these arrays (BandCount x VerticesPerBand),
-        // so the swatch costs no front-end change at all; absent, the arrays are
-        // bit-identical to what they always were.
-        bool noValue = HasNoValue(display);
-        int bands = Bands + (noValue ? 1 : 0);
-        var bandVertices = new float[bands * VerticesPerBand * 3];
-        var bandColors = new (float R, float G, float B)[bands];
         for (int b = 0; b < Bands; b++)
         {
             double lo = y0 + barHeight * b / Bands;
@@ -186,24 +227,27 @@ public static class FieldLegend
             // The band's colour is its MIDPOINT's, so the ramp is symmetric about the
             // bar's ends: the bottom band shows the map at 1/(2N) rather than at 0,
             // which is what the values inside it actually map to.
-            bandColors[b] = ColorMaps.Sample(display.ColorMap, (b + 0.5) / Bands);
-            int at = b * VerticesPerBand * 3;
-            Quad(bandVertices, at, x0, lo, x1, hi);
+            bandColors.Add(ColorMaps.Sample(display.ColorMap, (b + 0.5) / Bands));
+            AppendQuad(bandVertices, x0, lo, x1, hi);
         }
 
-        var frame = new List<float>();
+        frame.EnsureCapacity(frame.Count + (4 + Ticks) * 6);
         AppendSegment(frame, x0, y0, x1, y0);
         AppendSegment(frame, x1, y0, x1, y1);
         AppendSegment(frame, x1, y1, x0, y1);
         AppendSegment(frame, x0, y1, x0, y0);
 
-        var labels = new List<(Vector3d A, Vector3d B)>();
-        if (noValue)
+        // A field carrying a value with no colour position gets one extra "band": a
+        // grey NO-VALUE swatch below the bar. Appended as a band because both front
+        // ends draw bands generically from these arrays (BandCount x VerticesPerBand),
+        // so the swatch costs no front-end change at all; absent, the arrays are
+        // bit-identical to what they always were.
+        if (HasNoValue(display))
         {
             double swTop = y0 - NoValueGapDip * pixelScale;
             double swBottom = swTop - NoValueSwatchDip * pixelScale;
-            bandColors[Bands] = ColorMaps.NoValueColor;
-            Quad(bandVertices, Bands * VerticesPerBand * 3, x0, swBottom, x1, swTop);
+            bandColors.Add(ColorMaps.NoValueColor);
+            AppendQuad(bandVertices, x0, swBottom, x1, swTop);
             AppendSegment(frame, x0, swBottom, x1, swBottom);
             AppendSegment(frame, x1, swBottom, x1, swTop);
             AppendSegment(frame, x1, swTop, x0, swTop);
@@ -226,9 +270,24 @@ public static class FieldLegend
         // silently come out as gaps.
         StrokeFont.AppendText(labels, Title(display),
             new Vector3d(x0, y1 + textHeight * 0.9, 0), Vector3d.UnitX, Vector3d.UnitY, textHeight);
+    }
 
-        return new FieldLegendGeometry(
-            bandVertices, bandColors, [.. frame], Flatten(labels), Projection(widthPx, heightPx));
+    private static void AppendQuad(List<float> vertices, double x0, double y0, double x1, double y1)
+    {
+        // The same two triangles Quad writes, appended — identical corner order and the
+        // identical double->float narrowing, which is what keeps a one-display build
+        // bit-identical to the incumbent fixed-array path.
+        Span<(double X, double Y)> corners =
+        [
+            (x0, y0), (x1, y0), (x1, y1),
+            (x0, y0), (x1, y1), (x0, y1),
+        ];
+        foreach (var (x, y) in corners)
+        {
+            vertices.Add((float)x);
+            vertices.Add((float)y);
+            vertices.Add(0);
+        }
     }
 
     /// <summary>

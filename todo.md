@@ -684,9 +684,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   `VtuWriter` in EngrCAD.Mesh, `Part.Results`/`FieldDisplay`/`TryResolveFieldDisplay` in
   Modeling, `ColorMaps`/`FieldRendering`/`FieldLegend` in Viewer.Core, drawn in all
   three front ends with `--export .vtu` and `docs/examples/fields.md`):
-  - [ ] **One legend per view.** The viewer shows the first visible part's display;
-    several parts on genuinely different scales cannot each get a bar. Stacked legends,
-    or a scene-level shared range, are the honest options.
   - (A deformed part's missing feature edges, and picking during an animation, moved to
     their own item below now that the deformation rides a uniform.)
 

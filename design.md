@@ -9851,6 +9851,25 @@ self-contained, pinned by the existing coverage certificate plus closed-form
 `HexCellDistance` tests) and the docs now attribute the fineness to the radix rather
 than to the placement.
 
+**Stacked legends: one bar per distinct visible display** (`FieldLegend.Build` over a
+display LIST; `ViewportControl.ActiveFieldDisplays`; docs `examples/fields.md`): the
+viewer used to show the FIRST visible part's display only, so a second part on a
+genuinely different scale rendered with no bar at all — and the honest options the
+backlog named were stacked legends or a scene-level shared range. A shared range was
+rejected because it changes what the colours MEAN (re-ranging every part to one span is
+a modelling decision the viewer must not make silently — the `SymmetricAboutZero`
+never-apply-silently rule); stacking keeps each display's own statement. **The
+mechanism is the NO-VALUE swatch's trick one level up**: everything is appended into
+ONE `FieldLegendGeometry` — more bands, more frame segments, more labels — so all three
+front ends draw a stack with ZERO draw-path change, and the plumbing reduces to each
+selection site collecting every distinct resolvable display (record equality, draw
+order — two parts SHARING one result object share one bar) instead of stopping at the
+first. As many bars as fit vertically are kept, first-come; a single display reproduces
+the incumbent centred layout bit for bit (the delegating overload plus the pinned
+centring expression), which is what keeps every committed field render byte-identical.
+The legend caches on display CONTENTS (per-entry record equality), the annotation
+overlay's value-equality rule, in the window layer and the browser alike.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

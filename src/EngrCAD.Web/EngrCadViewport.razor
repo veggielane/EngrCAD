@@ -1210,40 +1210,50 @@
     // it was built for. Value equality is the rebuild key, exactly the rule the
     // annotation overlay follows.
     private ViewportLegend? _legend;
-    private (ResolvedFieldDisplay? Display, double Width, double Height, double Scale)? _legendKey;
+    private (ResolvedFieldDisplay[] Displays, double Width, double Height, double Scale)? _legendKey;
 
     /// <summary>
-    /// The active field display's colour bar, rebuilt and re-uploaded only when the
-    /// display or the canvas size changes. ONE display, from the first visible instance
-    /// that resolves one — the desktop rule: a legend is a single scale, and several
-    /// parts on different scales under one bar would be a legend that lies.
+    /// The visible field displays' colour bars, rebuilt and re-uploaded only when the
+    /// display set or the canvas size changes. One legend per DISTINCT display, draw
+    /// order — the desktop rule: a legend is a single scale, so several parts on
+    /// different scales get a stack of bars rather than one bar that lies.
     /// </summary>
     private async Task<ViewportLegend?> RebuildLegendAsync(
         WebGlContext gl, double widthPx, double heightPx, double pixelScale, double deformFactor)
     {
-        ResolvedFieldDisplay? display = null;
-        for (int i = 0; i < _drawn.Count && display is null; i++)
+        var displays = new List<ResolvedFieldDisplay>();
+        for (int i = 0; i < _drawn.Count; i++)
         {
-            if (_drawn[i].Visible && _drawnParts[i].TryResolveFieldDisplay(out var resolved, out _))
-                display = resolved;
+            if (_drawn[i].Visible && _drawnParts[i].TryResolveFieldDisplay(out var resolved, out _)
+                && !displays.Contains(resolved))
+                displays.Add(resolved);
         }
         // At the EFFECTIVE exaggeration: the title states that number, so an animated
         // frame must show what it was drawn at (both desktop passes apply the same
         // multiply). It joins the cache key, so a moving factor rebuilds the widget's
         // small line buffer and a static one never does.
-        display = FieldRendering.AtFactor(display, deformFactor);
+        for (int i = 0; i < displays.Count; i++)
+            displays[i] = FieldRendering.AtFactor(displays[i], deformFactor)!.Value;
 
-        var key = (display, widthPx, heightPx, pixelScale);
-        if (_legendKey is { } previous && previous.Equals(key))
+        // Contents-compared key (record equality per entry), the desktop layer's rule.
+        bool same = _legendKey is { } k && k.Width == widthPx && k.Height == heightPx
+            && k.Scale == pixelScale && k.Displays.Length == displays.Count;
+        if (same)
+        {
+            var cached = _legendKey!.Value.Displays;
+            for (int i = 0; i < cached.Length && same; i++)
+                same = cached[i].Equals(displays[i]);
+        }
+        if (same)
             return _legend;
-        _legendKey = key;
+        _legendKey = ([.. displays], widthPx, heightPx, pixelScale);
 
-        if (display is not { } active)
+        if (displays.Count == 0)
         {
             _legend = null;
             return null;
         }
-        var geometry = FieldLegend.Build(active, widthPx, heightPx, pixelScale);
+        var geometry = FieldLegend.Build(displays, widthPx, heightPx, pixelScale);
         if (!geometry.HasContent)
         {
             _legend = null;

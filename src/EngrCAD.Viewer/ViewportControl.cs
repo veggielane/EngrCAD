@@ -866,7 +866,7 @@ public sealed class ViewportControl : OpenGlControlBase
         // Field-display colour bar, with the annotations and before the view cube: it
         // is documentation about what the colours mean, so it belongs on top of the
         // model and under the orientation widget.
-        _legend.Draw(gl, ActiveFieldDisplay, width, height, scaling, new LineProgramHandles(
+        _legend.Draw(gl, ActiveFieldDisplays, width, height, scaling, new LineProgramHandles(
             _lineProgram, _uLineModel, _uLineView, _uLineProj, _uLineColor, _uLineSectionEnabled));
 
         gl.BindVertexArray(0);
@@ -1810,21 +1810,42 @@ public sealed class ViewportControl : OpenGlControlBase
     public ResolvedFieldDisplay? ActiveFieldDisplay =>
         _showFields ? FieldRendering.AtFactor(_activeField, _deformFactor) : null;
 
-    /// <summary>Re-resolves <see cref="ActiveFieldDisplay"/> from the visible instances.
-    /// Caller holds <see cref="_sceneLock"/>, off the render thread or at a scene
-    /// swap.</summary>
+    /// <summary>Every DISTINCT resolvable display among the visible instances, in draw
+    /// order at the effective exaggeration — one legend each (a bar per scale, because
+    /// one bar over two scales is a legend that lies). Empty with fields off.</summary>
+    public IReadOnlyList<ResolvedFieldDisplay> ActiveFieldDisplays
+    {
+        get
+        {
+            if (!_showFields || _activeFields.Count == 0)
+                return [];
+            var result = new ResolvedFieldDisplay[_activeFields.Count];
+            for (int i = 0; i < result.Length; i++)
+                result[i] = FieldRendering.AtFactor(_activeFields[i], _deformFactor)!.Value;
+            return result;
+        }
+    }
+
+    /// <summary>Re-resolves <see cref="ActiveFieldDisplays"/> from the visible
+    /// instances: every distinct display, draw order, duplicates collapsed by record
+    /// equality (two parts SHARING one result object share one bar). Caller holds
+    /// <see cref="_sceneLock"/>, off the render thread or at a scene swap.</summary>
     private void LoadFieldDisplay()
     {
         _activeField = null;
+        _activeFields.Clear();
         for (int i = 0; i < _instances.Count; i++)
         {
-            if (_visible[i] && _instances[i].Part.TryResolveFieldDisplay(out var resolved, out _))
+            if (_visible[i] && _instances[i].Part.TryResolveFieldDisplay(out var resolved, out _)
+                && !_activeFields.Contains(resolved))
             {
-                _activeField = resolved;
-                return;
+                _activeField ??= resolved;
+                _activeFields.Add(resolved);
             }
         }
     }
+
+    private readonly List<ResolvedFieldDisplay> _activeFields = [];
 
     private bool _ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault;
 

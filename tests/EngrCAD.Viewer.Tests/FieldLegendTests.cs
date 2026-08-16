@@ -324,6 +324,55 @@ public class FieldLegendTests
     }
 
     [Fact]
+    public void Build_TwoDistinctDisplays_StacksTwoBars_FirstOnTop()
+    {
+        var second = new ResolvedFieldDisplay(
+            MeshField.Scalar("temperature", "K", [300, 400]),
+            new FieldRange(300, 400), FieldColorMap.Diverging, null, 1, true);
+        var legend = FieldLegend.Build([Display(), second], 800, 700);
+
+        // Two full ramps, two outlines-with-ticks, and the FIRST display reads on top
+        // (list order is draw order, and a stack reads top to bottom).
+        Assert.Equal(2 * FieldLegend.Bands, legend.BandCount);
+        Assert.Equal(2 * (4 + FieldLegend.Ticks) * 2, legend.FrameVertexCount);
+        float firstBottom = legend.BandVertices[1];
+        float secondBottom = legend.BandVertices[(FieldLegend.Bands * FieldLegend.VerticesPerBand + 0) * 3 + 1];
+        Assert.True(firstBottom > secondBottom,
+            $"first display's bar ({firstBottom}) must sit above the second's ({secondBottom})");
+        // The upper bar's colours are the first display's map, the lower the second's.
+        Assert.Equal(ColorMaps.Sample(FieldColorMap.Viridis, 0.5 / FieldLegend.Bands),
+            legend.BandColors[0]);
+        Assert.Equal(ColorMaps.Sample(FieldColorMap.Diverging, 0.5 / FieldLegend.Bands),
+            legend.BandColors[FieldLegend.Bands]);
+    }
+
+    [Fact]
+    public void Build_ASingleDisplay_KeepsTheIncumbentCentredLayout()
+    {
+        // The centring expression is pinned so the delegating single overload cannot
+        // drift: one bar sits at (height - barHeight) / 2 exactly.
+        var legend = FieldLegend.Build(Display(), 800, 600);
+        Assert.Equal((float)((600 - FieldLegend.BarHeightDip) / 2), legend.BandVertices[1]);
+    }
+
+    [Fact]
+    public void Build_MoreDisplaysThanFit_KeepsWhatFits()
+    {
+        // Height 600 fits at most floor((600 - 40 + 34)/(170 + 34)) = 2 bars.
+        var displays = new List<ResolvedFieldDisplay>();
+        for (int i = 0; i < 3; i++)
+            displays.Add(new ResolvedFieldDisplay(
+                MeshField.Scalar($"f{i}", "", [0, i + 1]),
+                new FieldRange(0, i + 1), FieldColorMap.Viridis, null, 1, true));
+
+        var legend = FieldLegend.Build(displays, 800, 600);
+        Assert.Equal(2 * FieldLegend.Bands, legend.BandCount);
+        // A taller viewport takes all three.
+        Assert.Equal(3 * FieldLegend.Bands,
+            FieldLegend.Build(displays, 800, 900).BandCount);
+    }
+
+    [Fact]
     public void EveryLogLabelCharacterIsInTheStrokeFont()
     {
         var display = LogDisplay(-3.2, 8.6);

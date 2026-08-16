@@ -47,6 +47,9 @@ scene.Add(part);
 Three things are in that picture and all three come from the same handful of lines: the
 plate is painted through a **perceptual colour map**, the **legend** on the left states
 what the colours mean and over what range, and the range is the one the model asked for.
+Several visible parts showing genuinely different displays each get their **own bar**,
+stacked top-to-bottom in draw order (as many as fit vertically) — one bar over two
+scales would be a legend that lies — while parts sharing one display share one bar.
 Leave `Range` out and the field's own min and max are used instead — which is the right
 default for a first look and the wrong one for a figure, since the bore walls sit at
 distance zero give or take a rounding error and the legend would say so.

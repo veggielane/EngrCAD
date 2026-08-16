@@ -23,7 +23,7 @@ internal sealed class FieldLegendLayer
 {
     private uint _bandVao, _bandVbo, _lineVao, _lineVbo;
     private FieldLegendGeometry _geometry = FieldLegendGeometry.Empty;
-    private (ResolvedFieldDisplay? Display, double Width, double Height, double Scale)? _key;
+    private (ResolvedFieldDisplay[] Displays, double Width, double Height, double Scale)? _key;
     private int _frameVertexCount, _labelVertexCount;
 
     /// <summary>
@@ -33,15 +33,25 @@ internal sealed class FieldLegendLayer
     /// reads over the model, and it is never section-clipped — it is chrome.
     /// </summary>
     public void Draw(
-        GL gl, ResolvedFieldDisplay? display, double widthPx, double heightPx, double pixelScale,
+        GL gl, IReadOnlyList<ResolvedFieldDisplay> displays,
+        double widthPx, double heightPx, double pixelScale,
         in LineProgramHandles line)
     {
-        var key = (display, widthPx, heightPx, pixelScale);
-        if (_key is null || !_key.Value.Equals(key))
+        // The cache key compares display CONTENTS (record equality per entry), so a
+        // frame with the same stack rebuilds nothing and a changed factor or set does.
+        bool same = _key is { } k && k.Width == widthPx && k.Height == heightPx
+            && k.Scale == pixelScale && k.Displays.Length == displays.Count;
+        if (same)
         {
-            _key = key;
-            _geometry = display is { } d
-                ? FieldLegend.Build(d, widthPx, heightPx, pixelScale)
+            var cached = _key!.Value.Displays;
+            for (int i = 0; i < cached.Length && same; i++)
+                same = cached[i].Equals(displays[i]);
+        }
+        if (!same)
+        {
+            _key = ([.. displays], widthPx, heightPx, pixelScale);
+            _geometry = displays.Count > 0
+                ? FieldLegend.Build(displays, widthPx, heightPx, pixelScale)
                 : FieldLegendGeometry.Empty;
             Upload(gl);
         }
