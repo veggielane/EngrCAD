@@ -269,6 +269,30 @@ public class SceneToolsTests
     }
 
     [Fact]
+    public void Export_writes_vtu_with_the_result_array_count()
+    {
+        // The parity case the CLI's --export already had: a .vtu carries the geometry
+        // plus every part's results, and the reply states how many arrays came out —
+        // a .vtu with none is a valid geometry file, and the difference must be visible.
+        var tools = Tools(TestScenes.Basic());
+        string directory = Path.Combine(Path.GetTempPath(), $"engrcad-mcp-vtu-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string vtu = Path.Combine(directory, "model.vtu");
+            var payload = Payload(tools.Export(vtu));
+            Assert.Equal(Path.GetFullPath(vtu), (string?)payload["wrote"]);
+            Assert.Equal("VTU", (string?)payload["format"]);
+            Assert.NotNull(payload["resultArrays"]);
+            Assert.Contains("<VTKFile", File.ReadAllText(vtu));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Export_rejects_an_unknown_format()
     {
         string error = ErrorText(Tools(TestScenes.Basic()).Export("model.iges"));

@@ -528,7 +528,7 @@ public sealed class SceneTools(SceneSession session)
     /// per distinct part however many times it is placed), or <c>.png</c> (a render).
     /// </summary>
     public CallToolResult Export(
-        [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .3mf, .amf, .off, .glb, .gltf, .png).")]
+        [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .3mf, .amf, .off, .glb, .gltf, .vtu, .png).")]
         string path,
         [Description("Export only this tab (omit for the whole scene).")] string? tab = null,
         [Description("Image width in pixels for .png exports, 16-4096 (default 1280).")]
@@ -630,13 +630,36 @@ public sealed class SceneTools(SceneSession session)
                     });
                 }
 
+                case ".vtu":
+                {
+                    // ParaView's unstructured grid: geometry PLUS every part's simulation
+                    // results (arrays are the union of the parts' result names; a part
+                    // lacking one contributes NaN — VtuWriter's own no-value rule). The
+                    // reply states how many arrays came out, because a .vtu with none is
+                    // a valid geometry file and the difference should be visible.
+                    VtuWriter.WriteFile(
+                        [.. instances.Select(i => (i.Part.GetMesh(quality), i.World, i.Part.Results))],
+                        path);
+                    int arrays = instances
+                        .SelectMany(i => i.Part.Results.Select(f => f.Name))
+                        .Distinct(StringComparer.Ordinal)
+                        .Count();
+                    return Ok(new JsonObject
+                    {
+                        ["wrote"] = Path.GetFullPath(path),
+                        ["format"] = "VTU",
+                        ["instances"] = instances.Count,
+                        ["resultArrays"] = arrays,
+                    });
+                }
+
                 case ".step" or ".stp":
                     return ExportStep(path, instances);
 
                 default:
                     return Error(
                         $"Unsupported export format '{extension}' — use .step, .stl, .obj, "
-                        + ".3mf, .amf, .off, .glb, .gltf, or .png.");
+                        + ".3mf, .amf, .off, .glb, .gltf, .vtu, or .png.");
             }
         }
         catch (Exception e)

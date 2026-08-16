@@ -718,8 +718,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
     programs are flat-colour; a field-coloured part drawn in Points or Wireframe falls
     back to its part colour. The attribute is already uploaded, so this is a per-vertex
     colour varying in those two shaders.
-  - [ ] **MCP `export` does not offer `.vtu`.** `EngrCad.Run`'s `--export` does; the
-    MCP tool's format switch needs the same case and its description updated.
   - [ ] **One legend per view.** The viewer shows the first visible part's display;
     several parts on genuinely different scales cannot each get a bar. Stacked legends,
     or a scene-level shared range, are the honest options.
