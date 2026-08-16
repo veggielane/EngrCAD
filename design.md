@@ -9944,6 +9944,25 @@ return a confidently wrong measurement instead of a refusal — the tips guard i
 therefore checked in INV-SPACE before the inversion (α_M ≤ acos(r_b/(r_tip + r_pin)),
 one closed form), the bisection-needs-a-monotone-bracket lesson in Newton clothing.
 
+**The keyed bore landed as one arc and three lines** (`StandardKeys`/`KeywaySpec` +
+`Gears.KeyedBore` + the `keyway:` optional on `SpurGear`/`HelicalGear`; docs
+`examples/gears.md` §A keyed bore): the hub's half of a DIN 6885 parallel-key seat is
+a notch in the bore, and placing the notch corners exactly ON the bore circle (at
+x = ±b/2, y = √(r² − b²/4)) is what keeps the profile lines-and-an-arc — exact in all
+three representations, with a CLOSED-FORM hole area (πr² + b·(r + t2) − b·y_c/2 −
+r²·asin(b/(2r))) the sketch's own exact `Area()` is held to at 1e-9 and the keyed
+solid's volume to at mass-properties grade (~1e-7 relative, since the two bores chord
+their arcs independently — the grade stated in the test rather than hidden in a loose
+decimal count). The table follows the `StandardHoles` transcription convention (⚠
+verify-against-datasheet; the SHAFT half — t1, the key height — is deliberately not
+carried, since a hub feature should not restate dimensions it does not cut), the
+`keyway:` optional defaults to null for a bit-identical plain bore, and the refusals
+fire by name (a keyway with no bore, into the root circle, wider than its bore, an
+off-table shaft). Wiring it surfaced the positional-caller tax of appending an
+optional parameter: three internal call sites passed `fitTolerance` positionally into
+the new slot and were moved to named arguments — the compiler caught all three, which
+is the argument for optionals over overload pairs here.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

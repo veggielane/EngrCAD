@@ -338,10 +338,10 @@ public static class PlanetaryGears
         ArgumentNullException.ThrowIfNull(set);
         var members = new List<(string, Shape)>(set.PlanetCount + 2)
         {
-            ("sun", Gears.SpurGear(set.Sun, faceWidth, sunBore, fitTolerance)),
+            ("sun", Gears.SpurGear(set.Sun, faceWidth, sunBore, fitTolerance: fitTolerance)),
         };
 
-        var planet = Gears.SpurGear(set.Planet, faceWidth, planetBore, fitTolerance);
+        var planet = Gears.SpurGear(set.Planet, faceWidth, planetBore, fitTolerance: fitTolerance);
         for (int k = 0; k < set.PlanetCount; k++)
         {
             double azimuth = set.PlanetAzimuth(k);

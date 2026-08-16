@@ -212,6 +212,58 @@ public class GearTests
                 () => spec.MeasurementOverPins(400)).Message);
     }
 
+    // ---- the keyed bore ----
+
+    /// <summary>The keyed bore's area is CLOSED FORM — the notch corners sit exactly on
+    /// the bore circle, so the union is πr² plus the rectangle above the chord less the
+    /// circular segment it overlaps — held against the sketch's own exact Area(), and
+    /// the keyed gear's volume against the plain one less the notch prism.</summary>
+    [Fact]
+    public void KeyedBore_AreaAndVolume_MatchTheClosedForms()
+    {
+        var keyway = StandardKeys.For(20);          // 6 x 6, t2 = 2.8
+        Assert.Equal(6, keyway.Width);
+        Assert.Equal(2.8, keyway.HubDepth);
+
+        double r = 10, half = keyway.Width / 2;
+        double chord = Math.Sqrt(r * r - half * half);
+        double area = Math.PI * r * r
+            + keyway.Width * (r + keyway.HubDepth)
+            - keyway.Width * chord / 2
+            - r * r * Math.Asin(half / r);
+        var bore = Gears.KeyedBore(20, keyway);
+        Assert.Equal(area, bore.Area(), 9);
+
+        var spec = new GearSpec(module: 2.5, teeth: 24);
+        var plain = new Part("plain", Gears.SpurGear(spec, faceWidth: 8, boreDiameter: 20));
+        var keyed = new Part("keyed", Gears.SpurGear(spec, faceWidth: 8, boreDiameter: 20, keyway));
+        double notch = area - Math.PI * r * r;
+        double expected = plain.MassProperties().Volume - notch * 8;
+        double actual = keyed.MassProperties().Volume;
+        // Mass-properties grade: both volumes ride tessellate-then-Richardson, and the
+        // two bores chord their arcs independently, so the identity holds to ~1e-7
+        // relative rather than to the sketch area's 1e-9 absolute.
+        Assert.True(Math.Abs(actual - expected) <= 1e-6 * expected,
+            $"keyed volume {actual} vs plain-minus-notch {expected}");
+    }
+
+    [Fact]
+    public void KeyedBore_RefusalsFireByName()
+    {
+        // A keyway with no bore, a keyway into the root circle, a keyway wider than
+        // its bore, and an off-table shaft — each named.
+        var spec = new GearSpec(module: 2, teeth: 20);
+        Assert.Contains("needs a bore", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 8, keyway: StandardKeys.For(20))).Message);
+        Assert.Contains("root circle", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 8, boreDiameter: 30,
+                keyway: new KeywaySpec(8, 4))).Message);
+        Assert.Contains("does not fit", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.KeyedBore(6, new KeywaySpec(8, 3))).Message);
+        Assert.Contains("outside that range", Assert.Throws<ArgumentOutOfRangeException>(
+            () => StandardKeys.For(100)).Message);
+    }
+
     // ---- the exact area identity ----
 
     [Theory]

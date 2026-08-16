@@ -204,7 +204,7 @@ public sealed class CrossedHelicalPair
         GearSpec spec, double helixAngleDegrees, double faceWidth, double boreDiameter,
         double? fitTolerance, in Frame3d frame)
     {
-        var gear = Gears.HelicalGear(spec, faceWidth, helixAngleDegrees, boreDiameter, fitTolerance);
+        var gear = Gears.HelicalGear(spec, faceWidth, helixAngleDegrees, boreDiameter, fitTolerance: fitTolerance);
         // HelicalGear grows from z = 0, so the gear is dropped half its width to put the
         // contact plane at its middle, and only then posed.
         return gear.Translate(0, 0, -faceWidth / 2).Transform(frame.ToMatrix());

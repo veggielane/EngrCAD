@@ -70,8 +70,10 @@ design.md §2). Residuals:
     z_min = 2(h_a* − x)/sin²α by name; drawing the actual generated trochoid would
     admit z ≥ ~12 if it can be VERIFIED (the conjugate-contact instrument exists and
     measurably sees a 5e-2 flank error as 5.6e-4 rad of transmission wobble).
-  - **Keyway on the bore** (DIN 6885 parallel key seat as a sketch boolean on the
-    blank), set screw boss, web/spoke lightening.
+  - **Set screw boss and web/spoke lightening** (the keyway half ✅ landed —
+    `StandardKeys`/`KeywaySpec` + `Gears.KeyedBore` + the `keyway:` optional on
+    `SpurGear`/`HelicalGear`, exact in all three representations with a closed-form
+    hole area).
   - **The apex relief groove on a herringbone** (`HerringboneGears`) — the one part
     of the double-helical form that did NOT land, and the entry carries its
     measurement so it cannot rot into a guess. A hobbed herringbone cannot have a

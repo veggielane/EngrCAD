@@ -343,6 +343,6 @@ public static partial class Gears
     {
         ArgumentNullException.ThrowIfNull(pair);
         return HelicalGear(pair.Wheel, faceWidth, pair.WheelHelixAngleDegrees, boreDiameter,
-            fitTolerance, slices);
+            fitTolerance: fitTolerance, slices: slices);
     }
 }

@@ -138,6 +138,30 @@ if (!(overPins > spec.TipDiameter))
     throw new Exception("the pins stand proud of the tips on a standard gear");
 ```
 
+## A keyed bore
+
+A gear drives through a key, and the hub's half of a DIN 6885 parallel-key seat is a
+notch in the bore: `StandardKeys.For(shaftDiameter)` transcribes the standard's key
+width and hub depth t2 (⚠ verify against the datasheet for your fit class, the
+`StandardHoles` convention), and passing the spec as `keyway:` to `SpurGear` or
+`HelicalGear` cuts it. The notch corners sit exactly **on** the bore circle, so the
+hole profile is one arc and three lines — exact in all three representations — and its
+area is closed form, which is what the tests hold the sketch and the solid to.
+
+```csharp run:gear-keyed-bore
+var keyway = StandardKeys.For(20);      // 6 wide, hub depth 2.8
+var bore = Gears.KeyedBore(20, keyway);
+
+double r = 10, half = keyway.Width / 2, chord = Math.Sqrt(r * r - half * half);
+double area = Math.PI * r * r + keyway.Width * (r + keyway.HubDepth)
+    - keyway.Width * chord / 2 - r * r * Math.Asin(half / r);
+if (Math.Abs(bore.Area() - area) > 1e-9)
+    throw new Exception("the keyed bore's area is closed form");
+
+var gear = Gears.SpurGear(new GearSpec(2.5, 24), faceWidth: 8, boreDiameter: 20, keyway);
+if (gear.ToMesh().Volume() <= 0) throw new Exception("the keyed gear is a solid");
+```
+
 ## Putting a pair in mesh
 
 Drawing two gears is not the same as meshing them. `GearMeshing` answers the

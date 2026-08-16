@@ -512,9 +512,10 @@ public static partial class Gears
     /// representations (the profile is lines and circular arcs).
     /// </summary>
     public static Shape SpurGear(GearSpec spec, double faceWidth, double boreDiameter = 0,
+        KeywaySpec? keyway = null,
         double? fitTolerance = null)
     {
-        var sketch = GearBlank(spec, faceWidth, boreDiameter, fitTolerance);
+        var sketch = GearBlank(spec, faceWidth, boreDiameter, keyway, fitTolerance);
         return Shape.Extrude(sketch, faceWidth);
     }
 
@@ -532,12 +533,13 @@ public static partial class Gears
     /// mesh, and B-Rep is honestly Impossible — <c>Explain</c> reports it.
     /// </remarks>
     public static Shape HelicalGear(GearSpec spec, double faceWidth, double helixAngleDegrees,
-        double boreDiameter = 0, double? fitTolerance = null, int? slices = null)
+        double boreDiameter = 0, KeywaySpec? keyway = null,
+        double? fitTolerance = null, int? slices = null)
     {
         if (!(Math.Abs(helixAngleDegrees) < 60))
             throw new ArgumentOutOfRangeException(nameof(helixAngleDegrees),
                 "Helix angle must lie strictly between -60 and 60 degrees.");
-        var sketch = GearBlank(spec, faceWidth, boreDiameter, fitTolerance);
+        var sketch = GearBlank(spec, faceWidth, boreDiameter, keyway, fitTolerance);
         if (helixAngleDegrees == 0)
             return Shape.Extrude(sketch, faceWidth);
         double twist = faceWidth * Math.Tan(helixAngleDegrees * Math.PI / 180) / (spec.PitchDiameter / 2);
@@ -545,18 +547,58 @@ public static partial class Gears
     }
 
     private static Sketch GearBlank(GearSpec spec, double faceWidth, double boreDiameter,
-        double? fitTolerance)
+        KeywaySpec? keyway, double? fitTolerance)
     {
         ArgumentNullException.ThrowIfNull(spec);
         if (!(faceWidth > 0))
             throw new ArgumentOutOfRangeException(nameof(faceWidth));
         var profile = Spur(spec, fitTolerance);
         if (boreDiameter <= 0)
+        {
+            if (keyway is not null)
+                throw new ArgumentOutOfRangeException(nameof(keyway),
+                    "A keyway needs a bore to sit in; state a boreDiameter.");
             return profile.Sketch;
+        }
         if (boreDiameter >= spec.RootDiameter)
             throw new ArgumentOutOfRangeException(nameof(boreDiameter),
                 $"Bore diameter {boreDiameter:0.###} reaches the root circle (diameter {spec.RootDiameter:0.###}).");
+        if (keyway is { } seat)
+        {
+            if (boreDiameter / 2 + seat.HubDepth >= spec.RootDiameter / 2)
+                throw new ArgumentOutOfRangeException(nameof(keyway),
+                    $"The keyway reaches radius {boreDiameter / 2 + seat.HubDepth:0.###}, into the " +
+                    $"root circle (radius {spec.RootDiameter / 2:0.###}).");
+            return profile.Sketch.WithHole(KeyedBore(boreDiameter, seat));
+        }
         return profile.Sketch.WithHole(Sketch.Circle(boreDiameter / 2));
+    }
+
+    /// <summary>
+    /// A bore with a DIN 6885 parallel-key seat, as the hole profile a gear (or any hub)
+    /// subtracts: the bore circle with a rectangular notch of the keyway's width reaching
+    /// its hub depth t2 above the bore wall on the +Y centreline. The notch corners sit
+    /// exactly ON the circle (at x = ±b/2, y = √(r² − b²/4)), so the profile is one major
+    /// arc plus three lines — lines and an arc, exact in all three representations, and
+    /// its area is closed form: πr² + b·(r + t2) − b·y_c/2 − r²·asin(b/(2r)).
+    /// </summary>
+    public static Sketch KeyedBore(double boreDiameter, KeywaySpec keyway)
+    {
+        double r = boreDiameter / 2;
+        if (!(r > 0) || !double.IsFinite(r))
+            throw new ArgumentOutOfRangeException(nameof(boreDiameter));
+        if (keyway.Width >= boreDiameter)
+            throw new ArgumentOutOfRangeException(nameof(keyway),
+                $"A {keyway.Width:0.###} wide keyway does not fit a Ø{boreDiameter:0.###} bore.");
+        double half = keyway.Width / 2;
+        double chord = Math.Sqrt(r * r - half * half);
+        double top = r + keyway.HubDepth;
+        return Sketch.Start(half, chord)
+            .LineTo((half, top))
+            .LineTo((-half, top))
+            .LineTo((-half, chord))
+            .ArcThrough((0, -r), (half, chord))
+            .Close();
     }
 
     // ------------------------------------------------------------------ involute math
