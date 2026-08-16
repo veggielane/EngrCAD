@@ -99,11 +99,19 @@ public readonly struct SketchPointRef
     internal int Variable { get; }
     internal string Description { get; }
 
-    internal SketchPointRef(ConstrainedSketch owner, int variable, string description)
+    /// <summary>The canonical parseable term that rebuilds this ref through the public
+    /// accessors — <c>point(3)</c>, <c>holePoint(0,2)</c>, <c>centerOf(arc(1))</c> —
+    /// the serialized form (the GeometryRefs rule: one string, machine-read; the prose
+    /// <see cref="Description"/> stays for humans and error messages).</summary>
+    internal string Descriptor { get; }
+
+    internal SketchPointRef(ConstrainedSketch owner, int variable, string description,
+        string descriptor = "")
     {
         Owner = owner;
         Variable = variable;
         Description = description;
+        Descriptor = descriptor;
     }
 
     public override string ToString() => Description;
@@ -119,12 +127,16 @@ public readonly struct SketchLineRef
     internal int P2 { get; }
     internal string Description { get; }
 
-    internal SketchLineRef(ConstrainedSketch owner, int p1, int p2, string description)
+    internal string Descriptor { get; }
+
+    internal SketchLineRef(ConstrainedSketch owner, int p1, int p2, string description,
+        string descriptor = "")
     {
         Owner = owner;
         P1 = p1;
         P2 = p2;
         Description = description;
+        Descriptor = descriptor;
     }
 
     public override string ToString() => Description;
@@ -146,8 +158,10 @@ public readonly struct SketchArcRef
 
     internal string Description { get; }
 
+    internal string Descriptor { get; }
+
     internal SketchArcRef(
-        ConstrainedSketch owner, int center, int radius, int startJoint, int endJoint, string description)
+        ConstrainedSketch owner, int center, int radius, int startJoint, int endJoint, string description, string descriptor = "")
     {
         Owner = owner;
         Center = center;
@@ -155,6 +169,7 @@ public readonly struct SketchArcRef
         StartJoint = startJoint;
         EndJoint = endJoint;
         Description = description;
+        Descriptor = descriptor;
     }
 
     public override string ToString() => Description;
@@ -191,14 +206,17 @@ public readonly struct SketchCurveRef
     internal SketchSegment Segment { get; }
     internal string Description { get; }
 
+    internal string Descriptor { get; }
+
     internal SketchCurveRef(
-        ConstrainedSketch owner, int start, int end, SketchSegment segment, string description)
+        ConstrainedSketch owner, int start, int end, SketchSegment segment, string description, string descriptor = "")
     {
         Owner = owner;
         Start = start;
         End = end;
         Segment = segment;
         Description = description;
+        Descriptor = descriptor;
     }
 
     public override string ToString() => Description;
@@ -295,6 +313,20 @@ public sealed class ConstrainedSketch
     /// <summary>The constraints added so far, by display name.</summary>
     public IReadOnlyList<string> Constraints => _constraintNames;
 
+    // Every public constraint call also records ITSELF, as the canonical tokens that
+    // replay it through the same public method — the serialized form. Recorded AFTER
+    // the Add succeeds, so a refusal leaves no record behind.
+    private readonly List<string[]> _records = [];
+
+    private ConstrainedSketch Recorded(ConstrainedSketch result, params string[] record)
+    {
+        _records.Add(record);
+        return result;
+    }
+
+    private static string Num(double value) =>
+        value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+
     // ================================================================= entities
 
     /// <summary>Joint <paramref name="joint"/> of the outer loop — the shared endpoint
@@ -331,49 +363,50 @@ public sealed class ConstrainedSketch
     public SketchPointRef CenterOf(SketchArcRef arc)
     {
         RequireOwned(arc.Owner, arc.Description);
-        return new SketchPointRef(this, arc.Center, $"{arc.Description} center");
+        return new SketchPointRef(this, arc.Center, $"{arc.Description} center",
+            $"centerOf({arc.Descriptor})");
     }
 
     // ================================================================ constraints
 
     /// <summary>Two points coincide.</summary>
     public ConstrainedSketch Coincident(SketchPointRef a, SketchPointRef b) =>
-        Add(new CoincidentConstraint(Owned(a).Variable, Owned(b).Variable)
-            { Name = $"Coincident({a}, {b})" });
+        Recorded(Add(new CoincidentConstraint(Owned(a).Variable, Owned(b).Variable)
+            { Name = $"Coincident({a}, {b})" }), "Coincident", a.Descriptor, b.Descriptor);
 
     /// <summary>The line is horizontal (its endpoints share a y coordinate).</summary>
     public ConstrainedSketch Horizontal(SketchLineRef line)
     {
         RequireOwned(line.Owner, line.Description);
-        return Add(new AlignedConstraint(line.P1, line.P2, horizontal: true)
-            { Name = $"Horizontal({line})" });
+        return Recorded(Add(new AlignedConstraint(line.P1, line.P2, horizontal: true)
+            { Name = $"Horizontal({line})" }), "Horizontal", line.Descriptor);
     }
 
     /// <summary>Two points share a y coordinate.</summary>
     public ConstrainedSketch Horizontal(SketchPointRef a, SketchPointRef b) =>
-        Add(new AlignedConstraint(Owned(a).Variable, Owned(b).Variable, horizontal: true)
-            { Name = $"Horizontal({a}, {b})" });
+        Recorded(Add(new AlignedConstraint(Owned(a).Variable, Owned(b).Variable, horizontal: true)
+            { Name = $"Horizontal({a}, {b})" }), "Horizontal", a.Descriptor, b.Descriptor);
 
     /// <summary>The line is vertical (its endpoints share an x coordinate).</summary>
     public ConstrainedSketch Vertical(SketchLineRef line)
     {
         RequireOwned(line.Owner, line.Description);
-        return Add(new AlignedConstraint(line.P1, line.P2, horizontal: false)
-            { Name = $"Vertical({line})" });
+        return Recorded(Add(new AlignedConstraint(line.P1, line.P2, horizontal: false)
+            { Name = $"Vertical({line})" }), "Vertical", line.Descriptor);
     }
 
     /// <summary>Two points share an x coordinate.</summary>
     public ConstrainedSketch Vertical(SketchPointRef a, SketchPointRef b) =>
-        Add(new AlignedConstraint(Owned(a).Variable, Owned(b).Variable, horizontal: false)
-            { Name = $"Vertical({a}, {b})" });
+        Recorded(Add(new AlignedConstraint(Owned(a).Variable, Owned(b).Variable, horizontal: false)
+            { Name = $"Vertical({a}, {b})" }), "Vertical", a.Descriptor, b.Descriptor);
 
     /// <summary>Two lines are parallel.</summary>
     public ConstrainedSketch Parallel(SketchLineRef a, SketchLineRef b)
     {
         RequireOwned(a.Owner, a.Description);
         RequireOwned(b.Owner, b.Description);
-        return Add(new DirectionConstraint(a.P1, a.P2, b.P1, b.P2, parallel: true, 0)
-            { Name = $"Parallel({a}, {b})" });
+        return Recorded(Add(new DirectionConstraint(a.P1, a.P2, b.P1, b.P2, parallel: true, 0)
+            { Name = $"Parallel({a}, {b})" }), "Parallel", a.Descriptor, b.Descriptor);
     }
 
     /// <summary>Two lines are perpendicular.</summary>
@@ -381,8 +414,8 @@ public sealed class ConstrainedSketch
     {
         RequireOwned(a.Owner, a.Description);
         RequireOwned(b.Owner, b.Description);
-        return Add(new DirectionConstraint(a.P1, a.P2, b.P1, b.P2, parallel: false, 0)
-            { Name = $"Perpendicular({a}, {b})" });
+        return Recorded(Add(new DirectionConstraint(a.P1, a.P2, b.P1, b.P2, parallel: false, 0)
+            { Name = $"Perpendicular({a}, {b})" }), "Perpendicular", a.Descriptor, b.Descriptor);
     }
 
     /// <summary>The angle between the two lines' directions (start→end, in the
@@ -400,8 +433,9 @@ public sealed class ConstrainedSketch
             throw new ArgumentOutOfRangeException(nameof(radians),
                 "An angle of 0 or π has no first-order dot residual at its own solution; " +
                 "use Parallel instead.");
-        return Add(new DirectionConstraint(a.P1, a.P2, b.P1, b.P2, parallel: false, Math.Cos(radians))
-            { Name = $"Angle({a}, {b}) = {radians:g6} rad" });
+        return Recorded(Add(new DirectionConstraint(a.P1, a.P2, b.P1, b.P2, parallel: false, Math.Cos(radians))
+            { Name = $"Angle({a}, {b}) = {radians:g6} rad" }),
+            "Angle", a.Descriptor, b.Descriptor, Num(radians));
     }
 
     /// <summary>
@@ -422,16 +456,16 @@ public sealed class ConstrainedSketch
 
         int joint = SharedJoint(arc, line.P1, line.P2);
         if (joint >= 0)
-            return Add(new TangentAtJointConstraint(line.P1, line.P2, arc.Center, joint)
-                { Name = name });
+            return Recorded(Add(new TangentAtJointConstraint(line.P1, line.P2, arc.Center, joint)
+                { Name = name }), "Tangent", line.Descriptor, arc.Descriptor);
 
         var seed = _map.Seed;
         var p1 = SketchVariables.Point(seed, line.P1);
         var direction = SketchVariables.Point(seed, line.P2) - p1;
         double cross = direction.Cross(SketchVariables.Point(seed, arc.Center) - p1);
         double side = cross >= 0 ? 1 : -1;
-        return Add(new TangentLineArcConstraint(line.P1, line.P2, arc.Center, arc.Radius, side)
-            { Name = name });
+        return Recorded(Add(new TangentLineArcConstraint(line.P1, line.P2, arc.Center, arc.Radius, side)
+            { Name = name }), "Tangent", line.Descriptor, arc.Descriptor);
     }
 
     /// <summary>
@@ -450,8 +484,8 @@ public sealed class ConstrainedSketch
 
         int joint = SharedJoint(a, b.StartJoint, b.EndJoint);
         if (joint >= 0)
-            return Add(new DirectionConstraint(joint, a.Center, joint, b.Center, parallel: true, 0)
-                { Name = name });
+            return Recorded(Add(new DirectionConstraint(joint, a.Center, joint, b.Center, parallel: true, 0)
+                { Name = name }), "Tangent", a.Descriptor, b.Descriptor);
 
         var seed = _map.Seed;
         double separation =
@@ -460,8 +494,8 @@ public sealed class ConstrainedSketch
         double innerSign = radiusA >= radiusB ? 1 : -1;
         bool external = Math.Abs(separation - (radiusA + radiusB))
             <= Math.Abs(separation - innerSign * (radiusA - radiusB));
-        return Add(new TangentArcArcConstraint(a.Center, a.Radius, b.Center, b.Radius, external, innerSign)
-            { Name = name });
+        return Recorded(Add(new TangentArcArcConstraint(a.Center, a.Radius, b.Center, b.Radius, external, innerSign)
+            { Name = name }), "Tangent", a.Descriptor, b.Descriptor);
     }
 
     /// <summary>The arc's endpoint joint that coincides (as a VARIABLE — same index)
@@ -481,8 +515,8 @@ public sealed class ConstrainedSketch
     {
         RequireOwned(a.Owner, a.Description);
         RequireOwned(b.Owner, b.Description);
-        return Add(new EqualLengthConstraint(a.P1, a.P2, b.P1, b.P2)
-            { Name = $"EqualLength({a}, {b})" });
+        return Recorded(Add(new EqualLengthConstraint(a.P1, a.P2, b.P1, b.P2)
+            { Name = $"EqualLength({a}, {b})" }), "EqualLength", a.Descriptor, b.Descriptor);
     }
 
     /// <summary>Two arcs have equal radii.</summary>
@@ -490,8 +524,8 @@ public sealed class ConstrainedSketch
     {
         RequireOwned(a.Owner, a.Description);
         RequireOwned(b.Owner, b.Description);
-        return Add(new EqualScalarConstraint(a.Radius, b.Radius)
-            { Name = $"EqualRadius({a}, {b})" });
+        return Recorded(Add(new EqualScalarConstraint(a.Radius, b.Radius)
+            { Name = $"EqualRadius({a}, {b})" }), "EqualRadius", a.Descriptor, b.Descriptor);
     }
 
     /// <summary>Two arcs share a center.</summary>
@@ -499,8 +533,8 @@ public sealed class ConstrainedSketch
     {
         RequireOwned(a.Owner, a.Description);
         RequireOwned(b.Owner, b.Description);
-        return Add(new CoincidentConstraint(a.Center, b.Center)
-            { Name = $"Concentric({a}, {b})" });
+        return Recorded(Add(new CoincidentConstraint(a.Center, b.Center)
+            { Name = $"Concentric({a}, {b})" }), "Concentric", a.Descriptor, b.Descriptor);
     }
 
     /// <summary>Pins a point exactly where it was drawn — the sketch's datum. Without a
@@ -510,8 +544,8 @@ public sealed class ConstrainedSketch
     {
         var owned = Owned(point);
         var seed = _map.Seed;
-        return Add(new FixConstraint(owned.Variable, seed[owned.Variable], seed[owned.Variable + 1])
-            { Name = $"Fix({point})" });
+        return Recorded(Add(new FixConstraint(owned.Variable, seed[owned.Variable], seed[owned.Variable + 1])
+            { Name = $"Fix({point})" }), "Fix", point.Descriptor);
     }
 
     /// <summary>Pins both endpoints of a line where they were drawn.</summary>
@@ -521,8 +555,8 @@ public sealed class ConstrainedSketch
         var seed = _map.Seed;
         Add(new FixConstraint(line.P1, seed[line.P1], seed[line.P1 + 1])
             { Name = $"Fix({line} start)" });
-        return Add(new FixConstraint(line.P2, seed[line.P2], seed[line.P2 + 1])
-            { Name = $"Fix({line} end)" });
+        return Recorded(Add(new FixConstraint(line.P2, seed[line.P2], seed[line.P2 + 1])
+            { Name = $"Fix({line} end)" }), "Fix", line.Descriptor);
     }
 
     /// <summary>Pins an arc's center and radius as drawn (its endpoints may still slide
@@ -533,8 +567,8 @@ public sealed class ConstrainedSketch
         var seed = _map.Seed;
         Add(new FixConstraint(arc.Center, seed[arc.Center], seed[arc.Center + 1])
             { Name = $"Fix({arc} center)" });
-        return Add(new ScalarValueConstraint(arc.Radius, seed[arc.Radius])
-            { Name = $"Fix({arc} radius)" });
+        return Recorded(Add(new ScalarValueConstraint(arc.Radius, seed[arc.Radius])
+            { Name = $"Fix({arc} radius)" }), "Fix", arc.Descriptor);
     }
 
     /// <summary>Dimension: the distance between two points is
@@ -545,8 +579,9 @@ public sealed class ConstrainedSketch
         if (!(distance > 0))
             throw new ArgumentOutOfRangeException(nameof(distance),
                 "Point-to-point distance must be positive; a zero distance is Coincident.");
-        return Add(new DistancePointsConstraint(Owned(a).Variable, Owned(b).Variable, distance)
-            { Name = $"Distance({a}, {b}) = {distance:g6}" });
+        return Recorded(Add(new DistancePointsConstraint(Owned(a).Variable, Owned(b).Variable, distance)
+            { Name = $"Distance({a}, {b}) = {distance:g6}" }),
+            "Distance", a.Descriptor, b.Descriptor, Num(distance));
     }
 
     /// <summary>Dimension: the point sits <paramref name="distance"/> (≥ 0) from the
@@ -564,8 +599,9 @@ public sealed class ConstrainedSketch
         var direction = SketchVariables.Point(seed, line.P2) - p1;
         double cross = direction.Cross(SketchVariables.Point(seed, owned.Variable) - p1);
         double side = cross >= 0 ? 1 : -1;
-        return Add(new DistancePointLineConstraint(owned.Variable, line.P1, line.P2, distance, side)
-            { Name = $"Distance({point}, {line}) = {distance:g6}" });
+        return Recorded(Add(new DistancePointLineConstraint(owned.Variable, line.P1, line.P2, distance, side)
+            { Name = $"Distance({point}, {line}) = {distance:g6}" }),
+            "Distance", point.Descriptor, line.Descriptor, Num(distance));
     }
 
     /// <summary>
@@ -587,8 +623,8 @@ public sealed class ConstrainedSketch
         RequireOwned(line.Owner, line.Description);
         // side = +1: at a zero target the two signs give the same solution set, and the
         // residual is smooth through it, so there is no branch to select.
-        return Add(new DistancePointLineConstraint(owned.Variable, line.P1, line.P2, 0, 1)
-            { Name = $"PointOn({point}, {line})" });
+        return Recorded(Add(new DistancePointLineConstraint(owned.Variable, line.P1, line.P2, 0, 1)
+            { Name = $"PointOn({point}, {line})" }), "PointOn", point.Descriptor, line.Descriptor);
     }
 
     /// <summary>
@@ -618,8 +654,8 @@ public sealed class ConstrainedSketch
             throw new ArgumentException(
                 $"PointOn({point}, {arc}) is drawn with the point at the arc's centre, where the " +
                 "residual |p - c| - r has no gradient direction; move the point off the centre first.");
-        return Add(new ArcEndpointConstraint(owned.Variable, arc.Center, arc.Radius)
-            { Name = $"PointOn({point}, {arc})" });
+        return Recorded(Add(new ArcEndpointConstraint(owned.Variable, arc.Center, arc.Radius)
+            { Name = $"PointOn({point}, {arc})" }), "PointOn", point.Descriptor, arc.Descriptor);
     }
 
     /// <summary>
@@ -663,10 +699,11 @@ public sealed class ConstrainedSketch
                     throw new ArgumentException(
                         $"PointOn({point}, {curve}) is drawn with the point at the ellipse's centre, " +
                         "where the residual has no gradient direction; move the point off the centre first.");
-                return Add(new PointOnEllipseConstraint(
+                return Recorded(Add(new PointOnEllipseConstraint(
                     owned.Variable, curve.Start, curve.End, ellipse.Start, ellipse.End,
                     ellipse.Center, ellipse.SemiAxisX, ellipse.SemiAxisY)
-                    { Name = $"PointOn({point}, {curve})" });
+                    { Name = $"PointOn({point}, {curve})" }),
+                    "PointOn", point.Descriptor, curve.Descriptor);
             }
 
             case CubicSeg cubic:
@@ -674,10 +711,11 @@ public sealed class ConstrainedSketch
                 RequireChord(curve, $"PointOn({point}, {curve})");
                 var p = SketchVariables.Point(seed, owned.Variable);
                 int foot = AddAuxiliary(NearestParameter(cubic, p));
-                return Add(new PointOnBezierConstraint(
+                return Recorded(Add(new PointOnBezierConstraint(
                     owned.Variable, curve.Start, curve.End, foot,
                     cubic.P0, cubic.P3, cubic.Control1, cubic.Control2)
-                    { Name = $"PointOn({point}, {curve})" });
+                    { Name = $"PointOn({point}, {curve})" }),
+                    "PointOn", point.Descriptor, curve.Descriptor);
             }
 
             default:
@@ -701,9 +739,12 @@ public sealed class ConstrainedSketch
         RequireOwned(line.Owner, line.Description);
         RequireChord(curve, $"Tangent({curve}, {at.ToString().ToLowerInvariant()}, {line})");
         var factor = EndTangentFactor(curve, at);
-        return Add(new CurveTangentConstraint(
+        return Recorded(Add(new CurveTangentConstraint(
             curve.Start, curve.End, factor, line.P1, line.P2, parallel: !perpendicular)
-            { Name = $"Tangent({curve} {at.ToString().ToLowerInvariant()}, {line})" });
+            { Name = $"Tangent({curve} {at.ToString().ToLowerInvariant()}, {line})" }),
+            perpendicular
+                ? ["TangentAtEnd", curve.Descriptor, at.ToString(), line.Descriptor, "perpendicular"]
+                : ["TangentAtEnd", curve.Descriptor, at.ToString(), line.Descriptor]);
     }
 
     /// <summary>
@@ -745,10 +786,10 @@ public sealed class ConstrainedSketch
                 throw new ArgumentException($"{what}: {line} is drawn with no length.");
             int cubicFoot = AddAuxiliary(
                 TangencyParameter(cubicSeg, q1, drawnDirection / drawnDirection.Length));
-            return Add(new TangentLineBezierConstraint(
+            return Recorded(Add(new TangentLineBezierConstraint(
                 line.P1, line.P2, curve.Start, curve.End, cubicFoot,
                 cubicSeg.P0, cubicSeg.P3, cubicSeg.Control1, cubicSeg.Control2)
-                { Name = what });
+                { Name = what }), "Tangent", line.Descriptor, curve.Descriptor);
         }
         if (curve.Segment is not EllipseSeg ellipse)
             throw new ArgumentException(
@@ -786,10 +827,10 @@ public sealed class ConstrainedSketch
                 $"{what} is drawn with the line through the ellipse's centre, where the two tangents " +
                 "are indistinguishable and the drawing states no side; move the line off the centre first.");
 
-        return Add(new TangentLineEllipseConstraint(
+        return Recorded(Add(new TangentLineEllipseConstraint(
             line.P1, line.P2, curve.Start, curve.End, ellipse.Start, ellipse.End,
             ellipse.Center, ellipse.SemiAxisX, ellipse.SemiAxisY, offset >= 0 ? 1 : -1)
-            { Name = what });
+            { Name = what }), "Tangent", line.Descriptor, curve.Descriptor);
     }
 
     private static Vector2d PullToDrawn(
@@ -973,8 +1014,8 @@ public sealed class ConstrainedSketch
         RequireOwned(arc.Owner, arc.Description);
         if (!(radius > 0))
             throw new ArgumentOutOfRangeException(nameof(radius));
-        return Add(new ScalarValueConstraint(arc.Radius, radius)
-            { Name = $"Radius({arc}) = {radius:g6}" });
+        return Recorded(Add(new ScalarValueConstraint(arc.Radius, radius)
+            { Name = $"Radius({arc}) = {radius:g6}" }), "Radius", arc.Descriptor, Num(radius));
     }
 
     /// <summary>Dimension: the arc's diameter is <paramref name="diameter"/> (&gt; 0).</summary>
@@ -983,8 +1024,210 @@ public sealed class ConstrainedSketch
         RequireOwned(arc.Owner, arc.Description);
         if (!(diameter > 0))
             throw new ArgumentOutOfRangeException(nameof(diameter));
-        return Add(new ScalarValueConstraint(arc.Radius, diameter / 2)
-            { Name = $"Diameter({arc}) = {diameter:g6}" });
+        return Recorded(Add(new ScalarValueConstraint(arc.Radius, diameter / 2)
+            { Name = $"Diameter({arc}) = {diameter:g6}" }), "Diameter", arc.Descriptor, Num(diameter));
+    }
+
+    // ============================================================== persistence
+
+    /// <summary>
+    /// The constraint declarations as JSON — an array of token records, one per public
+    /// constraint call in the order made, each holding the method, its entity refs as
+    /// canonical descriptors (<c>point(3)</c>, <c>holeLine(0,0)</c>,
+    /// <c>centerOf(arc(2))</c>) and its numeric values in round-trippable form.
+    /// <para><see cref="LoadConstraints"/> REPLAYS the records through the same public
+    /// methods against the same drawn sketch, so the loaded system is the built one by
+    /// construction (branch selectors and seeds re-derive from the same drawing) and
+    /// save → load → save is a byte fixed point. The whole vocabulary is data — there
+    /// is no lambda anywhere in it — so nothing loads as a warning.</para>
+    /// </summary>
+    public string SaveConstraints() =>
+        System.Text.Json.JsonSerializer.Serialize(_records, MateSet.JsonOptions);
+
+    /// <summary>
+    /// Rebuilds a constrained sketch from <see cref="SaveConstraints"/>' JSON against
+    /// the SAME drawn sketch — the drawing is the seed and every branch selector, so
+    /// the sketch is part of the document (its curves already round-trip through
+    /// <c>Sketch.ToCurves</c>/<c>FromCurves</c>) and the constraints ride beside it.
+    /// An unknown method or an unparseable ref refuses BY NAME: a record this reader
+    /// cannot replay is a file from a newer vocabulary, not something to skip silently.
+    /// </summary>
+    public static ConstrainedSketch LoadConstraints(Sketch sketch, string json)
+    {
+        ArgumentNullException.ThrowIfNull(sketch);
+        var records = System.Text.Json.JsonSerializer.Deserialize<string[][]>(json)
+            ?? throw new ArgumentException("The constraint JSON holds no records.", nameof(json));
+        var cs = sketch.Constrain();
+        foreach (var record in records)
+            cs.Replay(record);
+        return cs;
+    }
+
+    /// <summary>Every record method <see cref="Replay"/> understands — what the
+    /// coverage test holds the public vocabulary against, so a new constraint method
+    /// added without a replay arm fails a test rather than taking a document down.</summary>
+    internal static readonly IReadOnlyList<string> SupportedRecordMethods =
+    [
+        "Coincident", "Horizontal", "Vertical", "Parallel", "Perpendicular", "Angle",
+        "Tangent", "TangentAtEnd", "EqualLength", "EqualRadius", "Concentric", "Fix",
+        "Distance", "PointOn", "Radius", "Diameter",
+    ];
+
+    private void Replay(string[] record)
+    {
+        if (record.Length == 0)
+            throw new ArgumentException("A constraint record carries no method token.");
+        string method = record[0];
+        switch (method)
+        {
+            case "Coincident":
+                Coincident(ParsePoint(record[1]), ParsePoint(record[2]));
+                return;
+            case "Horizontal":
+                if (record.Length == 2) Horizontal(ParseLine(record[1]));
+                else Horizontal(ParsePoint(record[1]), ParsePoint(record[2]));
+                return;
+            case "Vertical":
+                if (record.Length == 2) Vertical(ParseLine(record[1]));
+                else Vertical(ParsePoint(record[1]), ParsePoint(record[2]));
+                return;
+            case "Parallel":
+                Parallel(ParseLine(record[1]), ParseLine(record[2]));
+                return;
+            case "Perpendicular":
+                Perpendicular(ParseLine(record[1]), ParseLine(record[2]));
+                return;
+            case "Angle":
+                Angle(ParseLine(record[1]), ParseLine(record[2]), ParseNumber(record[3]));
+                return;
+            case "Tangent":
+                // The overload is the TOKEN TYPES' to say (the record stays one method).
+                if (IsKind(record[1], "line") && IsKind(record[2], "arc"))
+                    Tangent(ParseLine(record[1]), ParseArc(record[2]));
+                else if (IsKind(record[1], "arc"))
+                    Tangent(ParseArc(record[1]), ParseArc(record[2]));
+                else
+                    Tangent(ParseLine(record[1]), ParseCurve(record[2]));
+                return;
+            case "TangentAtEnd":
+                Tangent(ParseCurve(record[1]), Enum.Parse<SketchCurveEnd>(record[2]),
+                    ParseLine(record[3]), perpendicular: record.Length == 5);
+                return;
+            case "EqualLength":
+                EqualLength(ParseLine(record[1]), ParseLine(record[2]));
+                return;
+            case "EqualRadius":
+                EqualRadius(ParseArc(record[1]), ParseArc(record[2]));
+                return;
+            case "Concentric":
+                Concentric(ParseArc(record[1]), ParseArc(record[2]));
+                return;
+            case "Fix":
+                if (IsKind(record[1], "line")) Fix(ParseLine(record[1]));
+                else if (IsKind(record[1], "arc")) Fix(ParseArc(record[1]));
+                else Fix(ParsePoint(record[1]));
+                return;
+            case "Distance":
+                if (IsKind(record[2], "line"))
+                    Distance(ParsePoint(record[1]), ParseLine(record[2]), ParseNumber(record[3]));
+                else
+                    Distance(ParsePoint(record[1]), ParsePoint(record[2]), ParseNumber(record[3]));
+                return;
+            case "PointOn":
+                if (IsKind(record[2], "line")) PointOn(ParsePoint(record[1]), ParseLine(record[2]));
+                else if (IsKind(record[2], "arc")) PointOn(ParsePoint(record[1]), ParseArc(record[2]));
+                else PointOn(ParsePoint(record[1]), ParseCurve(record[2]));
+                return;
+            case "Radius":
+                Radius(ParseArc(record[1]), ParseNumber(record[2]));
+                return;
+            case "Diameter":
+                Diameter(ParseArc(record[1]), ParseNumber(record[2]));
+                return;
+            default:
+                throw new ArgumentException(
+                    $"Unknown constraint record '{method}' — this file uses a constraint " +
+                    "vocabulary this reader does not know.");
+        }
+    }
+
+    private static bool IsKind(string token, string kind)
+    {
+        var (name, _) = ParseTerm(token);
+        return name.Equals(kind, StringComparison.OrdinalIgnoreCase)
+            || name.Equals(
+                "hole" + char.ToUpperInvariant(kind[0]) + kind[1..], StringComparison.Ordinal);
+    }
+
+    private static (string Name, string Inner) ParseTerm(string token)
+    {
+        int open = token.IndexOf('(');
+        if (open <= 0 || !token.EndsWith(')'))
+            throw new ArgumentException($"'{token}' is not a constraint entity descriptor.");
+        return (token[..open], token[(open + 1)..^1]);
+    }
+
+    private static int[] ParseIndices(string inner, int count, string token)
+    {
+        var parts = inner.Split(',');
+        if (parts.Length != count)
+            throw new ArgumentException($"'{token}' should carry {count} index(es).");
+        var indices = new int[count];
+        for (int i = 0; i < count; i++)
+            indices[i] = int.Parse(parts[i], System.Globalization.CultureInfo.InvariantCulture);
+        return indices;
+    }
+
+    private static double ParseNumber(string token) =>
+        double.Parse(token, System.Globalization.CultureInfo.InvariantCulture);
+
+    private SketchPointRef ParsePoint(string token)
+    {
+        var (name, inner) = ParseTerm(token);
+        return name switch
+        {
+            "point" => Point(ParseIndices(inner, 1, token)[0]),
+            "holePoint" => HolePoint(
+                ParseIndices(inner, 2, token)[0], ParseIndices(inner, 2, token)[1]),
+            "centerOf" => CenterOf(ParseArc(inner)),
+            _ => throw new ArgumentException($"'{token}' is not a point descriptor."),
+        };
+    }
+
+    private SketchLineRef ParseLine(string token)
+    {
+        var (name, inner) = ParseTerm(token);
+        return name switch
+        {
+            "line" => Line(ParseIndices(inner, 1, token)[0]),
+            "holeLine" => HoleLine(
+                ParseIndices(inner, 2, token)[0], ParseIndices(inner, 2, token)[1]),
+            _ => throw new ArgumentException($"'{token}' is not a line descriptor."),
+        };
+    }
+
+    private SketchArcRef ParseArc(string token)
+    {
+        var (name, inner) = ParseTerm(token);
+        return name switch
+        {
+            "arc" => Arc(ParseIndices(inner, 1, token)[0]),
+            "holeArc" => HoleArc(
+                ParseIndices(inner, 2, token)[0], ParseIndices(inner, 2, token)[1]),
+            _ => throw new ArgumentException($"'{token}' is not an arc descriptor."),
+        };
+    }
+
+    private SketchCurveRef ParseCurve(string token)
+    {
+        var (name, inner) = ParseTerm(token);
+        return name switch
+        {
+            "curve" => Curve(ParseIndices(inner, 1, token)[0]),
+            "holeCurve" => HoleCurve(
+                ParseIndices(inner, 2, token)[0], ParseIndices(inner, 2, token)[1]),
+            _ => throw new ArgumentException($"'{token}' is not a curve descriptor."),
+        };
     }
 
     // ================================================================== solving
@@ -1139,6 +1382,11 @@ public sealed class ConstrainedSketch
 
     private static string LoopName(int loop) => loop == 0 ? "outer" : $"hole {loop - 1}";
 
+    /// <summary>The canonical descriptor term an accessor stamps on its ref — the outer
+    /// loop's spelling for loop 0, the hole spelling (hole = loop − 1) otherwise.</summary>
+    private static string RefDescriptor(string outer, string hole, int loop, int index) =>
+        loop == 0 ? $"{outer}({index})" : $"{hole}({loop - 1},{index})";
+
     private int HoleLoop(int hole)
     {
         if (hole < 0 || hole >= _map.Loops.Count - 1)
@@ -1157,7 +1405,8 @@ public sealed class ConstrainedSketch
         if (joint < 0 || joint >= map.JointCount)
             throw new ArgumentOutOfRangeException(nameof(joint),
                 $"The {LoopName(loop)} loop has {map.JointCount} joints; joint {joint} does not exist.");
-        return new SketchPointRef(this, map.JointVars[joint], $"{LoopName(loop)} point {joint}");
+        return new SketchPointRef(this, map.JointVars[joint], $"{LoopName(loop)} point {joint}",
+            RefDescriptor("point", "holePoint", loop, joint));
     }
 
     private SketchLineRef LineRef(int loop, int segment)
@@ -1168,7 +1417,8 @@ public sealed class ConstrainedSketch
         {
             LineSeg => new SketchLineRef(this,
                 map.JointVars[segment], map.JointVars[(segment + 1) % map.JointCount],
-                $"{LoopName(loop)} line {segment}"),
+                $"{LoopName(loop)} line {segment}",
+                RefDescriptor("line", "holeLine", loop, segment)),
             ArcSeg => throw new ArgumentException(
                 $"Segment {segment} of the {LoopName(loop)} loop is an arc — use Arc({segment})."),
             var other => throw new ArgumentException(
@@ -1199,7 +1449,8 @@ public sealed class ConstrainedSketch
         int startJoint = map.SingleCircle ? -1 : map.JointVars[segment];
         int endJoint = map.SingleCircle ? -1 : map.JointVars[(segment + 1) % map.JointCount];
         return new SketchArcRef(this, map.CenterVars[segment], map.RadiusVars[segment],
-            startJoint, endJoint, $"{LoopName(loop)} {(circle ? "circle" : "arc")} {segment}");
+            startJoint, endJoint, $"{LoopName(loop)} {(circle ? "circle" : "arc")} {segment}",
+            RefDescriptor("arc", "holeArc", loop, segment));
     }
 
     private SketchCurveRef CurveRef(int loop, int segment)
@@ -1216,7 +1467,8 @@ public sealed class ConstrainedSketch
         int start = map.SingleCircle ? -1 : map.JointVars[segment];
         int end = map.SingleCircle ? -1 : map.JointVars[(segment + 1) % map.JointCount];
         string kind = drawn is CubicSeg ? "bézier" : "ellipse";
-        return new SketchCurveRef(this, start, end, drawn, $"{LoopName(loop)} {kind} {segment}");
+        return new SketchCurveRef(this, start, end, drawn, $"{LoopName(loop)} {kind} {segment}",
+            RefDescriptor("curve", "holeCurve", loop, segment));
     }
 
     private void RequireSegment(int loop, int segment)

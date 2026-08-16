@@ -9895,6 +9895,34 @@ a true tangency as ~2.5e-7 purely from sampling a parabola off its vertex, so th
 two-level refinement is what makes the tolerance a statement about the solve rather
 than about the probe.
 
+**Sketch constraint serialization landed as REPLAY, and that one choice settled every
+sub-question the backlog filed** (`ConstrainedSketch.SaveConstraints`/`LoadConstraints`;
+docs `examples/sketching.md` §Saving a constrained sketch): the filed design asked for
+(a) a descriptor grammar for the entity refs, (b) a record per public constraint method
+and (c) the assembly-enumeration coverage test, and all three follow from one rule —
+**a saved constraint file is the CALL SEQUENCE, replayed through the public methods
+against the same drawn sketch**. Each ref accessor stamps a canonical parseable
+`Descriptor` (`point(3)`, `holeLine(0,0)`, `centerOf(holeArc(1,0))` — the GeometryRefs
+one-string rule, with the prose `Description` kept for humans), each public method
+appends one token record AFTER its `Add` succeeds (so a refusal leaves no record — a
+pinned test), and the loader parses refs back through the SAME accessors and invokes
+the SAME methods, which is why the loaded system cannot drift from the built one: every
+branch selector (a tangency side, a foot seed, a distance side) re-derives from the
+same drawing by the same code. The verifying pair is a byte fixed point
+(save → load → save) AND a bit-identical replayed SOLVE — every solved segment
+endpoint compared as bits, which an equivalent-but-reordered system fails. Overload
+identity rides in the tokens, not in extra names: `Distance`'s point-point and
+point-line forms share one record method and the second token's own kind says which,
+with the one exception named (`TangentAtEnd`, since three `Tangent` overloads share
+two-entity shapes). The coverage test enumerates the vocabulary FROM the assembly
+(every public `ConstrainedSketch`-returning method must map into
+`SupportedRecordMethods`), the `EverySketchSegmentKind_HasAJsonForm` treatment. The
+vocabulary is all data — no lambda anywhere — so nothing loads as a warning; an
+unknown record method refuses BY NAME (a newer vocabulary's file, not something to
+skip). What deliberately did NOT land: wiring into `Feature.SaveInputs`, because no
+feature carries a `ConstrainedSketch` input today — the seam is ready for the first
+one that does.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

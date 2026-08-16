@@ -241,6 +241,34 @@ the solver's own rank). The drawn configuration seeds the foot and selects the b
 of the up-to-two carrier tangents parallel to the drawn line, the solve lands on the one
 the drawing put the line near.
 
+### Saving a constrained sketch
+
+The constraint declarations serialize as canonical token records —
+`["Distance", "point(0)", "point(1)", "40"]`, entity refs spelled the way they were
+built (`point(3)`, `holeLine(0,0)`, `centerOf(holeArc(1,0))`) — and
+`ConstrainedSketch.LoadConstraints(sketch, json)` **replays** them through the same
+public methods against the same drawn sketch. That replay is the whole design: the
+loaded system is the built one *by construction* (every branch selector re-derives
+from the same drawing), `SaveConstraints()` round-trips as a byte fixed point, and a
+replayed solve is bit-identical to the original's. The vocabulary is all data — no
+lambdas anywhere in it — so nothing loads as a warning; an unknown record refuses by
+name, and a reflection test holds every public constraint method to having a record
+form, so a method added without one fails a test rather than taking a document down.
+
+```csharp run:sketch-constraint-persistence
+var drawn = Sketch.Start(0, 0).LineTo((40, 0)).LineTo((40, 10))
+    .BezierTo((30, 30), (10, 30), (0, 0)).Close();
+var cs = drawn.Constrain();
+cs.Fix(cs.Point(0)).Horizontal(cs.Line(0)).Distance(cs.Point(0), cs.Point(1), 40);
+
+string saved = cs.SaveConstraints();
+var loaded = ConstrainedSketch.LoadConstraints(drawn, saved);
+if (loaded.SaveConstraints() != saved)
+    throw new Exception("save -> load -> save must be a byte fixed point");
+if (!loaded.TrySolve().Converged)
+    throw new Exception("the replayed system must solve");
+```
+
 ## Placing sketches in 3D
 
 Sketches are pure 2D. The modeling operations place them with a `SketchPlane` —
