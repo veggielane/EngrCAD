@@ -278,6 +278,52 @@ public class FieldLegendTests
     }
 
     [Fact]
+    public void Build_AFieldWithNaN_GainsTheNoValueSwatch()
+    {
+        var display = new ResolvedFieldDisplay(
+            MeshField.Scalar("life", "cycles", [double.NaN, 50, 120]),
+            new FieldRange(50, 120), FieldColorMap.Viridis, null, 1, true);
+        var legend = FieldLegend.Build(display, 800, 600);
+
+        // One extra band (the swatch), grey, with four more outline segments and a
+        // NO VALUE label; the colour ramp itself is untouched.
+        Assert.Equal(FieldLegend.Bands + 1, legend.BandCount);
+        Assert.Equal(ColorMaps.NoValueColor, legend.BandColors[^1]);
+        Assert.Equal((4 + 4 + FieldLegend.Ticks) * 2, legend.FrameVertexCount);
+        Assert.Equal(
+            FieldLegend.Build(Display(), 800, 600).BandColors[..FieldLegend.Bands],
+            legend.BandColors[..FieldLegend.Bands]);
+    }
+
+    [Fact]
+    public void Build_AFiniteField_CarriesNoSwatchAndIsUnchanged()
+    {
+        // The swatch appears exactly when a no-value node exists; a finite field's
+        // legend is bit-identical to what it always was.
+        var legend = FieldLegend.Build(Display(), 800, 600);
+        Assert.Equal(FieldLegend.Bands, legend.BandCount);
+        Assert.Equal((4 + FieldLegend.Ticks) * 2, legend.FrameVertexCount);
+    }
+
+    [Fact]
+    public void HasNoValue_ReadsNaNAndLogScaleNonPositives()
+    {
+        var finite = new ResolvedFieldDisplay(
+            MeshField.Scalar("s", "", [1, 2, 3]),
+            new FieldRange(1, 3), FieldColorMap.Viridis, null, 1, true);
+        Assert.False(FieldLegend.HasNoValue(finite));
+
+        var nan = finite with { Field = MeshField.Scalar("s", "", [1, double.NaN, 3]) };
+        Assert.True(FieldLegend.HasNoValue(nan));
+
+        // A zero is an ordinary value on a linear display and a no-value one under
+        // LogScale — the association is with the DISPLAY, not the field.
+        var zero = finite with { Field = MeshField.Scalar("s", "", [0, 2, 3]) };
+        Assert.False(FieldLegend.HasNoValue(zero));
+        Assert.True(FieldLegend.HasNoValue(zero with { LogScale = true }));
+    }
+
+    [Fact]
     public void EveryLogLabelCharacterIsInTheStrokeFont()
     {
         var display = LogDisplay(-3.2, 8.6);

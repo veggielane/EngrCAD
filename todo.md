@@ -290,17 +290,6 @@ Remaining follow-ups:
     little per step, so the seed is good) — a different mechanism that attacks the numeric cost,
     not the symbolic one.
 
-- [ ] **Log-scale colour residual: NaN colours as the map's FIRST stop** (the legend
-  half and the first-class `FieldDisplay.LogScale` flag both ✅ landed; what remains) —
-  `FieldRange.Normalize(NaN)` is NaN and `ColorMaps.Sample`'s `!(t > 0)` catches it —
-  so an infinite-life node (NaN = "no value" by the VTU convention) paints as the
-  BOTTOM of the ramp, indistinguishable from the shortest finite life: the honest
-  render is a distinct neutral (grey), which touches `SourceColors` and possibly the
-  legend (a "no value" swatch). The fatigue docs page sidesteps it today by plotting
-  an aluminium life field, where every node is finite — that choice is documented on
-  the page. A LogScale display's non-positive values land in the same place for the
-  same reason, so one fix covers both.
-
 FEA as a first-class citizen of the hybrid kernel: the CAD model (any representation)
 feeds the mesher, results feed back into the viewer as fields on the mesh. The mesh
 engine's half-edge structure and the implicit engine's SDFs are both real assets here
@@ -522,8 +511,9 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   reach a viewer or a `.vtu` — one gap with two spellings. Two shapes
   are plausible and the choice is a decision rather than a coding job. (a) **One field per
   region**, NaN outside it — which composes with the recorded rules (`FieldRange` skips NaN,
-  and a NaN paints as the map's bottom stop, so the viewer would need to skip rather than
-  colour it) and needs a `FieldDisplay` that can show several fields at once. (b) **VTK's own
+  and a NaN now paints the distinct `ColorMaps.NoValueColor` grey, so the out-of-region
+  surface reads as "no data" rather than as a value) and needs a `FieldDisplay` that can
+  show several fields at once. (b) **VTK's own
   answer**: write the interface as a cell-data array, or duplicate interface nodes per region
   so each material has its own surface — exact, and it changes what "node i" means to every
   consumer downstream. Note the whole thing is unreachable until conforming interfaces land

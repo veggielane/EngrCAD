@@ -337,6 +337,12 @@
       "reason": "does not compile against the browser's assemblies: The type or namespace name 'StructuralModel' could not be found (are you missing a using directive or an assembly reference?)"
     },
     {
+      "id": "fea-fatigue-life-steel",
+      "page": "examples/fea-fatigue.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The type or namespace name 'StructuralModel' could not be found (are you missing a using directive or an assembly reference?)"
+    },
+    {
       "id": "fea-modal-blade",
       "page": "examples/fea-modal.md",
       "live": false,

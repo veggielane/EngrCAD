@@ -179,7 +179,13 @@ its own private scale.
 Two range behaviours are worth knowing. A **constant** field normalizes to 0.5 rather
 than to an end, because a field with no variation has no position to report and an
 extreme colour would read as a hot spot. And **NaN is skipped** when ranging, so one
-undefined value does not collapse a legend.
+undefined value does not collapse a legend — and it **paints a distinct neutral grey**
+(`ColorMaps.NoValueColor`): NaN is "no value" (an infinite fatigue life, a part with
+no data in a merged export), not "small", so it must not take the bottom of the ramp
+and read as the smallest finite value. When the displayed field carries a no-value
+node the legend adds a matching **NO VALUE** swatch below the bar; a finite field's
+legend is unchanged. A `LogScale` display's non-positive values land in the same
+grey for the same reason — a log scale has no position for them.
 
 ### Log-scale fields
 
@@ -210,7 +216,7 @@ A field carrying **real values** that span decades (raw cycle counts, contact
 pressure) takes the other spelling: **`FieldDisplay.LogScale`**. The colour position
 becomes `(log₁₀v − log₁₀min)/(log₁₀max − log₁₀min)`, so a value one decade up the
 range moves one decade up the ramp; a non-positive value has no log position and
-paints as the map's bottom stop (NaN's own "no value" convention); the legend prints
+paints the no-value grey (NaN's own convention); the legend prints
 the **same decade ticks** the units spelling prints for the same data — the two
 share one tick builder, so they cannot drift — and the title tags the field's own
 units `LOG SCALE`. A log display needs a **strictly positive range** and is refused

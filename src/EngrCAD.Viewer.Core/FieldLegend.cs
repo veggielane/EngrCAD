@@ -23,11 +23,13 @@ namespace EngrCAD.Viewer;
 // spans at least two decades, ticks sit on the integer decades. Nothing about the
 // COLOURS changes -- linear colour over log values IS log-colour -- and nothing is
 // applied silently: the transform being rendered is the one the field itself states, so
-// this is typesetting a declaration, not a second FieldRange.SymmetricAboutZero. One
-// declaration rather than a boolean flag beside it, deliberately: a LogScale flag next
-// to a units string that also says log10 would be two spellings of one fact, which is
-// the drift the units-consolidation lesson exists to prevent -- and the units string
-// already round-trips through the document format, so persistence comes free.
+// this is typesetting a declaration, not a second FieldRange.SymmetricAboutZero.
+// FieldDisplay.LogScale is the COMPLEMENTARY spelling, for a field carrying RAW
+// decade-spanning values: there the colours log the values, and the legend converts
+// the raw range to log10 and runs this file's own decade-tick arithmetic, so the two
+// spellings share one tick builder and cannot drift. A display wants exactly one of
+// the two -- the units string says the values are already logged, the flag says the
+// colours should log them.
 
 /// <summary>
 /// The legend's geometry for one frame: the colour bar as flat-coloured bands, the
@@ -117,6 +119,14 @@ public static class FieldLegend
     /// one label height plus a small gap.</summary>
     public const double LogEndClearanceDip = 12;
 
+    /// <summary>Height, in DIPs, of the NO-VALUE swatch drawn below the bar when the
+    /// displayed field carries a value with no colour position (NaN, or non-positive
+    /// under a log-scale display) — see <see cref="HasNoValue"/>.</summary>
+    public const double NoValueSwatchDip = 10;
+
+    /// <summary>Gap, in DIPs, between the bar's bottom and the NO-VALUE swatch.</summary>
+    public const double NoValueGapDip = 6;
+
     /// <summary>The bar's outline and tick colour — the dim chrome grey the rest of the
     /// viewport furniture uses.</summary>
     public static readonly (float R, float G, float B) FrameColor = (0.55f, 0.58f, 0.62f);
@@ -160,8 +170,15 @@ public static class FieldLegend
         double y0 = (heightPx - barHeight) / 2;
         double y1 = y0 + barHeight;
 
-        var bandVertices = new float[Bands * VerticesPerBand * 3];
-        var bandColors = new (float R, float G, float B)[Bands];
+        // A field carrying a value with no colour position gets one extra "band": a
+        // grey NO-VALUE swatch below the bar. Appended as a band because both front
+        // ends draw bands generically from these arrays (BandCount x VerticesPerBand),
+        // so the swatch costs no front-end change at all; absent, the arrays are
+        // bit-identical to what they always were.
+        bool noValue = HasNoValue(display);
+        int bands = Bands + (noValue ? 1 : 0);
+        var bandVertices = new float[bands * VerticesPerBand * 3];
+        var bandColors = new (float R, float G, float B)[bands];
         for (int b = 0; b < Bands; b++)
         {
             double lo = y0 + barHeight * b / Bands;
@@ -181,6 +198,20 @@ public static class FieldLegend
         AppendSegment(frame, x0, y1, x0, y0);
 
         var labels = new List<(Vector3d A, Vector3d B)>();
+        if (noValue)
+        {
+            double swTop = y0 - NoValueGapDip * pixelScale;
+            double swBottom = swTop - NoValueSwatchDip * pixelScale;
+            bandColors[Bands] = ColorMaps.NoValueColor;
+            Quad(bandVertices, Bands * VerticesPerBand * 3, x0, swBottom, x1, swTop);
+            AppendSegment(frame, x0, swBottom, x1, swBottom);
+            AppendSegment(frame, x1, swBottom, x1, swTop);
+            AppendSegment(frame, x1, swTop, x0, swTop);
+            AppendSegment(frame, x0, swTop, x0, swBottom);
+            StrokeFont.AppendText(labels, "NO VALUE",
+                new Vector3d(x1 + tick + labelGap, (swBottom + swTop) / 2 - textHeight / 2, 0),
+                Vector3d.UnitX, Vector3d.UnitY, textHeight);
+        }
         foreach (var (f, label) in TickMarks(display))
         {
             double y = y0 + barHeight * f;
@@ -198,6 +229,26 @@ public static class FieldLegend
 
         return new FieldLegendGeometry(
             bandVertices, bandColors, [.. frame], Flatten(labels), Projection(widthPx, heightPx));
+    }
+
+    /// <summary>
+    /// Whether the displayed field carries a value with NO colour position — NaN (the
+    /// VTU "no value" convention: an infinite fatigue life, a part with no data in a
+    /// merged export), or a non-positive value under a log-scale display, which maps
+    /// through NaN to the same place. Such values paint
+    /// <see cref="ColorMaps.NoValueColor"/>, and the legend earns its swatch exactly
+    /// when one exists; a field without any leaves the legend bit-identical.
+    /// </summary>
+    public static bool HasNoValue(in ResolvedFieldDisplay display)
+    {
+        var field = display.Field;
+        for (int i = 0; i < field.Count; i++)
+        {
+            double v = field.ScalarAt(i);
+            if (double.IsNaN(v) || (display.LogScale && !(v > 0)))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

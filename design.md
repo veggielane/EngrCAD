@@ -5607,7 +5607,7 @@ Design decisions:
   position becomes `(log₁₀v − log₁₀min)/(log₁₀max − log₁₀min)` in the shared
   `FieldRendering.SourceColors` (CPU-side, so all three front ends and the glTF
   `COLOR_0` export inherit it with no shader change); a non-positive value maps to NaN
-  and hence the map's bottom stop, the "no value" convention it already owns, and a
+  and hence the no-value grey (see the record below), and a
   display whose range is not strictly positive is refused BY NAME when it resolves —
   painting every node the bottom stop would be the silent version. The composition
   claim was made checkable rather than trusted: `FieldLegend.TickMarks` converts the
@@ -9778,6 +9778,33 @@ reason, rather than an arbitrary pick; and a CELL-associated deformation refuses
 real consumer landed with it: a structural `.vtu` now carries the per-element von Mises
 as cell data beside the recovered nodal field — the value the assembly actually
 integrated, before any nodal recovery, and the array a ParaView threshold filter wants.
+
+**NaN paints a distinct NO-VALUE grey, never the map's bottom stop** (`ColorMaps.NoValueColor`
+\+ the NaN branch in `Sample(map, t)`; `FieldLegend.HasNoValue` and the NO VALUE swatch;
+docs `examples/fields.md` and the fatigue page's new steel life render): NaN is "no
+value" — an infinite fatigue life, a part with no data in a merged VTU — and the clamp
+that used to catch it (`!(t > 0)` → first stop) painted an immortal node the colour of
+the SHORTEST-lived one, the worst direction for the confusion to run, which is why the
+fatigue docs page had to plot aluminium (every node finite) and document the dodge.
+Three decisions carry it. **One rule, placed at the bottom of the funnel**: the NaN
+branch lives in `ColorMaps.Sample(map, t)` itself, so the range overload
+(`Normalize(NaN)` is NaN) and the log-scale colour path (a non-positive value has no
+log position and arrives as NaN t) both inherit it with no second spelling — and an
+exact zero still takes the bottom stop, because "the range minimum" and "no value" are
+different statements. **The grey is chosen against the maps, and the reason is stated**:
+mid grey (0.5) is unlike anything viridis produces (dark purple to yellow, nothing
+desaturated) and a full lightness step from the diverging map's own neutral MIDPOINT
+(0.865), so "no data" cannot be mistaken for "the crossing". **The legend swatch is
+data-driven and appended as an ordinary BAND**: `FieldLegend.Build` scans the displayed
+field once (`HasNoValue` — NaN always, non-positive under `LogScale`, i.e. the
+association is with the DISPLAY not the field) and appends one grey swatch below the
+bar with a NO VALUE label exactly when one exists — as an extra entry in the band
+arrays both front ends already draw generically (`BandCount` × `VerticesPerBand`), so
+the browser and the window inherit it with zero front-end change, and a finite field's
+legend arrays are bit-identical to what they always were. The fatigue page now shows
+the case it used to sidestep: the SAME bracket in SAE 1045 renders mostly grey
+(immortal below the endurance limit) with the finite-life band coloured — the honest
+picture of what an endurance limit means.
 
 ## 7. Query layer
 

@@ -65,6 +65,17 @@ public static class ColorMaps
         0.706f, 0.016f, 0.150f,
     ];
 
+    /// <summary>The colour a value with NO position takes — NaN (infinite fatigue
+    /// life, the VTU "no value" convention), or a non-positive value under a log-scale
+    /// display. A neutral MID grey, deliberately unlike anything a map produces:
+    /// viridis runs dark purple to yellow with nothing desaturated, and the diverging
+    /// map's neutral midpoint is a much LIGHTER grey (0.865 against 0.5), so "no data"
+    /// cannot be mistaken for "the crossing". Before this existed, NaN fell through
+    /// <see cref="Sample(FieldColorMap, double)"/>'s clamp to the map's BOTTOM stop —
+    /// which on a life plot painted an immortal node the colour of the shortest-lived
+    /// one, the worst direction for the confusion to run.</summary>
+    public static readonly (float R, float G, float B) NoValueColor = (0.5f, 0.5f, 0.5f);
+
     /// <summary>The stop table behind a map — one RGB triple per stop, evenly spaced
     /// over [0, 1]. Exposed so the legend draws the same colours the fills do rather
     /// than re-sampling at its own positions.</summary>
@@ -81,6 +92,12 @@ public static class ColorMaps
     /// </summary>
     public static (float R, float G, float B) Sample(FieldColorMap map, double t)
     {
+        // NaN is "no value", not "small": it takes the dedicated grey rather than
+        // falling through the clamp to the bottom stop. One rule here covers every
+        // route in — the range overload (Normalize(NaN) is NaN) and the log-scale
+        // colour path (a non-positive value has no log position) both arrive as NaN t.
+        if (double.IsNaN(t))
+            return NoValueColor;
         var stops = Stops(map);
         int last = stops.Count / 3 - 1;
         if (!(t > 0))

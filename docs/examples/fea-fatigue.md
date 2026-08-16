@@ -213,10 +213,11 @@ Four fields publish per node (`FatigueResults.Fields()` /
 
 ```csharp render:fea-fatigue-life-log
 // The same bracket and duty cycle in 6061-T6 aluminium, coloured by LIFE. Aluminium
-// deliberately: it has no endurance limit, so EVERY node carries a finite life - a
-// steel life plot is mostly the infinite-life no-value (NaN). The life field
-// publishes log10(cycles) and SAYS so in its units string, which is the declaration
-// the legend reads: ticks sit on the integer decades and print the cycle counts.
+// here because it has no endurance limit, so EVERY node carries a finite life and
+// the whole ramp is populated (the steel plot below shows the other case). The life
+// field publishes log10(cycles) and SAYS so in its units string, which is the
+// declaration the legend reads: ticks sit on the integer decades and print the
+// cycle counts.
 var bracket = Shape.Box(60, 40, 10)
     .Subtract(Shape.Cylinder(6, 40).Translate(0, 0, 20));
 var part = new Part("bracket", bracket);
@@ -274,6 +275,69 @@ decades do — a legend that hides its endpoints lies about its range. A field c
 **raw** decade-spanning values takes the complementary spelling,
 `FieldDisplay.LogScale` (see [the fields page](fields.md)), which logs the colours
 instead of the values and prints the same decade ticks.
+
+### Infinite life reads as NO VALUE, not as the shortest life
+
+The same bracket in steel shows the other case. A steel node stressed below its
+endurance limit lives **forever** — its life is NaN, the "no value" convention the VTU
+export already uses — and an infinite-life node must not paint the colour of the
+*shortest*-lived one, which is what falling to the bottom of the ramp would mean. A
+no-value node paints a distinct neutral grey (`ColorMaps.NoValueColor`), and the
+legend earns a matching **NO VALUE** swatch below the bar exactly when the displayed
+field carries one, so most of this part reads honestly as "outlasts any design life"
+while the stressed region around the bore keeps the colour ramp:
+
+```csharp render:fea-fatigue-life-steel
+// The bracket in SAE 1045 steel under a 3x duty cycle: the endurance limit makes
+// most nodes immortal (life = NaN), which paints the no-value grey with a NO VALUE
+// legend swatch — only the stressed region around the bore carries a finite,
+// coloured life.
+var bracket = Shape.Box(60, 40, 10)
+    .Subtract(Shape.Cylinder(6, 40).Translate(0, 0, 20));
+var part = new Part("bracket", bracket);
+
+var surface = part.GetMesh();
+var tets = TetMesher.Mesh(surface, new TetMeshOptions
+{
+    RefineQuality = true,
+    MaxElementSize = 14,
+});
+var mesh = AnalysisMesh.Quadratic(tets);
+
+StructuralModel Case(double load)
+{
+    var model = new StructuralModel(mesh, Materials.Steel);
+    model.Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX));
+    model.Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX),
+        new Vector3d(0, 0, load));
+    return model;
+}
+var cases = StructuralSolver.SolveAll([Case(-5400), Case(1800)]);
+
+var fatigue = FatigueAnalysis.Evaluate(cases[0], cases[1], FatigueMaterials.Steel1045);
+
+foreach (var field in fatigue.SampleOnto(surface))
+    part.AddResult(field);
+part.FieldDisplay = new FieldDisplay
+{
+    Field = FatigueResults.FieldNames.Life,
+    Range = new FieldRange(2, 10),
+};
+
+// The figure's own claim, verified: BOTH populations must exist, or the picture
+// shows nothing (all grey is the wrong load; all coloured is the wrong material).
+var life = part.Result(FatigueResults.FieldNames.Life)!;
+int finite = 0, infinite = 0;
+for (int i = 0; i < life.Count; i++)
+    if (double.IsNaN(life.ScalarAt(i))) infinite++; else finite++;
+if (finite == 0 || infinite == 0)
+    throw new Exception($"need both populations: {finite} finite, {infinite} infinite");
+
+var scene = new Scene();
+scene.Add(part);
+```
+
+![The steel bracket: infinite-life regions in the no-value grey, finite lives coloured](images/fea-fatigue-life-steel.png)
 
 ## What this deliberately is not
 

@@ -38,9 +38,12 @@ public class ColorMapTests
                      ColorMaps.Sample(FieldColorMap.Viridis, -5));
         Assert.Equal(ColorMaps.Sample(FieldColorMap.Viridis, 1),
                      ColorMaps.Sample(FieldColorMap.Viridis, 12));
-        // NaN takes the low end rather than producing a NaN colour (the !(t > 0) test).
-        Assert.Equal(ColorMaps.Sample(FieldColorMap.Viridis, 0),
+        // NaN is "no value", not "small": it takes the dedicated grey, never the low
+        // end — on a life plot the low end is the SHORTEST-lived node's colour.
+        Assert.Equal(ColorMaps.NoValueColor,
                      ColorMaps.Sample(FieldColorMap.Viridis, double.NaN));
+        Assert.NotEqual(ColorMaps.NoValueColor,
+                     ColorMaps.Sample(FieldColorMap.Viridis, 0));
     }
 
     [Fact]

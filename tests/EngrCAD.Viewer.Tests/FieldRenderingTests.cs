@@ -340,20 +340,36 @@ public class FieldRenderingTests
     }
 
     [Fact]
-    public void SourceColors_LogScale_ANonPositiveValueTakesTheBottomStop()
+    public void SourceColors_LogScale_ANonPositiveValueTakesTheNoValueColour()
     {
-        // A log scale has no position for zero or a negative value: it maps to NaN,
-        // which ColorMaps.Sample's !(t > 0) sends to the map's FIRST stop — the same
-        // "no value here" convention NaN already takes on a linear display.
+        // A log scale has no position for zero or a negative value: it maps through
+        // NaN to ColorMaps.NoValueColor — the same "no value here" convention NaN
+        // already takes on a linear display — and NOT to the map's bottom stop, which
+        // would paint it the colour of the smallest finite value.
         var field = MeshField.Scalar("life", "cycles", [0.0, -5, double.NaN, 10]);
         var range = new FieldRange(10, 1e5);
         var colors = FieldRendering.SourceColors(field, range, FieldColorMap.Viridis, logScale: true);
 
-        var bottom = ColorMaps.Sample(FieldColorMap.Viridis, double.NaN);
-        Assert.Equal(bottom, colors[0]);
-        Assert.Equal(bottom, colors[1]);
-        Assert.Equal(bottom, colors[2]);
+        Assert.Equal(ColorMaps.NoValueColor, colors[0]);
+        Assert.Equal(ColorMaps.NoValueColor, colors[1]);
+        Assert.Equal(ColorMaps.NoValueColor, colors[2]);
         Assert.Equal(ColorMaps.Sample(FieldColorMap.Viridis, 0.0), colors[3]);
+        Assert.NotEqual(ColorMaps.NoValueColor, colors[3]);
+    }
+
+    [Fact]
+    public void SourceColors_NaN_TakesTheNoValueColourOnALinearDisplay()
+    {
+        // NaN is "no value", not "small": an infinite-life node must not paint the
+        // colour of the shortest finite life. An exact zero is genuinely the range
+        // minimum and keeps the bottom stop — the two are different statements.
+        var field = MeshField.Scalar("life", "cycles", [double.NaN, 0.0, 100.0]);
+        var range = new FieldRange(0, 100);
+        var colors = FieldRendering.SourceColors(field, range, FieldColorMap.Viridis);
+
+        Assert.Equal(ColorMaps.NoValueColor, colors[0]);
+        Assert.Equal(ColorMaps.Sample(FieldColorMap.Viridis, 0.0), colors[1]);
+        Assert.NotEqual(colors[0], colors[1]);
     }
 
     [Fact]
