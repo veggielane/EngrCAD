@@ -10132,10 +10132,13 @@ COINCIDE rather than cross, so the transversal narrow phase rightly reports no c
 all — a refusing configuration and a detectable clash are different properties. And the
 OTHER named refusal, the tangent bicylinder, turned out to be hostile to the MESH
 boolean too: `MeshBoolean.Intersection` of the Ø4 degenerate Steinmetz pair returns
-10.56 against the analytic 42.67 — almost exactly a quarter, whole lobes dropped by
-per-patch winding classification at the two tangent points where the intersection
-ellipses cross (the winding number sits at ½ there, the recorded hostile family, now
-MEASURED on a volume rather than suspected; filed in todo). So the fallback fixture is
+10.56 against the analytic 42.67 for the B-Rep-route tessellation — and the follow-up
+diagnosis overturned the mechanism TWICE (see the todo entry): not dropped patches
+(inclusion–exclusion and the partition identity hold to round-off, every result
+closed — the classification is perfectly consistent) but the IMPRINT's seam topology
+where the surfaces GRAZE, and ALIGNMENT-dependent at that — the same geometry through
+`MeshPrimitives.Cylinder` and its exact quarter-turn copy measures 42.26, correct
+within chord grade. Both alignments are pinned by test so a fix announces itself. So the fallback fixture is
 a NON-RIGID placement instead — a z-scaled post, which `Transformed` refuses while the
 mesh boolean of boxes stays exact — and the test asserts the same 8 through the mesh
 grade's name, the deliberate act of proving the two roads meet where both are exact.

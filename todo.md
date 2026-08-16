@@ -216,21 +216,28 @@ ordered in normal terms; and the helical pair's conjugate test as the
 transverse-section argument measured against a derived bound).
 Remaining follow-ups:
 
-- [ ] **The exact MESH boolean misclassifies the tangent bicylinder, measured on the
-  volume** (found building the B-Rep-exact interference volumes, which ✅ landed —
-  `InterferenceVolumeSource`, the B-Rep intersection of the POSED solids where both
-  parts lower and the boolean accepts, named fallback to the mesh grade otherwise):
+- [ ] **The exact MESH boolean's tangent-bicylinder defect is the IMPRINT, and it is
+  ALIGNMENT-dependent — the diagnosis overturned its own first guess twice** (pinned
+  from BOTH sides: `TangentBicylinderBooleanTests` in Mesh.Tests holds the healthy
+  alignment at the Steinmetz volume, `TangentBicylinderDefectTests` in Modeling.Tests
+  pins the defective one at its measured value so a fix announces itself).
   `MeshBoolean.Intersection` of two equal-radius perpendicular crossed cylinders
-  through one axis point (Ø4, the degenerate Steinmetz solid, analytic 16r³/3 = 42.67)
-  returns **10.56 — almost exactly ONE QUARTER**, i.e. whole patches dropped, not a
-  tolerance error. This is the recorded near-tangency hostile family (the winding
-  number sits at ½ along the two tangent points where the intersection ellipses cross,
-  and per-patch classification decides whole lobes by that coin flip) — the same
-  configuration the B-Rep boolean REFUSES BY NAME, so the mesh engine currently
-  answers it confidently and wrong where the B-Rep engine answers honestly. A fix
-  needs tangent-aware patch flooding or a multi-probe vote; until then the fixture is
-  pinned only as "the B-Rep tier refuses it", and any consumer measuring volumes near
-  a tangency should treat the mesh answer as suspect.
+  through one axis point (Ø4, degenerate Steinmetz, analytic 16r³/3 = 42.67) returns
+  **10.56 — a quarter** — for the B-REP-ROUTE tessellation (`Shape.Cylinder(2,8)`,
+  one rotated a quarter turn), while `MeshPrimitives.Cylinder` and its own exact
+  quarter-turn copy measure **42.26** — correct within chord grade. The first guess
+  ("whole lobes dropped by winding classification") is WRONG: inclusion–exclusion AND
+  the A = (A∩B) ∪ (A−B) partition hold to round-off on BOTH fixtures, every result is
+  closed — the classification is perfectly consistent, which is exactly what makes the
+  defect invisible to every downstream identity a consumer could check. The mechanism
+  is the IMPRINT's seam topology where the two surfaces GRAZE: whether the facet
+  crossings near the two tangent points join the intersection ellipses correctly is
+  decided by the tessellations' phase alignment (the recorded alignment-not-tolerance
+  family), and the wrong joining yields a self-consistent boolean of a WRONG partition.
+  A fix needs the imprint hardened at grazing contact (seam-chain topology near
+  near-parallel facet crossings), verified over an alignment FAMILY sweep, never one
+  phase; until then a consumer measuring volumes near a tangency should treat the mesh
+  answer as suspect and the B-Rep boolean's refusal-by-name as the honest tier.
 
 - [ ] **Flexible sub-assemblies in mechanisms** — inherited from the mates layer: a
   deep occurrence whose owning sub-assembly is placed more than once is refused (one
