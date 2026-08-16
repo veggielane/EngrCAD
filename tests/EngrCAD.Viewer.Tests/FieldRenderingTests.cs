@@ -321,6 +321,42 @@ public class FieldRenderingTests
     }
 
     [Fact]
+    public void SourceColors_LogScale_MapsTheDecadeMidpointToTheMapsMiddle()
+    {
+        // 10^3 is the LOG midpoint of [10, 10^5]; linearly it sits at t = 0.0099, so
+        // the two mappings measurably disagree there while agreeing at both ends.
+        var field = MeshField.Scalar("life", "cycles", [10, 1e3, 1e5]);
+        var range = new FieldRange(10, 1e5);
+        var log = FieldRendering.SourceColors(field, range, FieldColorMap.Viridis, logScale: true);
+
+        Assert.Equal(ColorMaps.Sample(FieldColorMap.Viridis, 0.0), log[0]);
+        Assert.Equal(ColorMaps.Sample(FieldColorMap.Viridis, 0.5), log[1]);
+        Assert.Equal(ColorMaps.Sample(FieldColorMap.Viridis, 1.0), log[2]);
+
+        var linear = FieldRendering.SourceColors(field, range, FieldColorMap.Viridis);
+        Assert.Equal(linear[0], log[0]);
+        Assert.Equal(linear[2], log[2]);
+        Assert.NotEqual(linear[1], log[1]);
+    }
+
+    [Fact]
+    public void SourceColors_LogScale_ANonPositiveValueTakesTheBottomStop()
+    {
+        // A log scale has no position for zero or a negative value: it maps to NaN,
+        // which ColorMaps.Sample's !(t > 0) sends to the map's FIRST stop — the same
+        // "no value here" convention NaN already takes on a linear display.
+        var field = MeshField.Scalar("life", "cycles", [0.0, -5, double.NaN, 10]);
+        var range = new FieldRange(10, 1e5);
+        var colors = FieldRendering.SourceColors(field, range, FieldColorMap.Viridis, logScale: true);
+
+        var bottom = ColorMaps.Sample(FieldColorMap.Viridis, double.NaN);
+        Assert.Equal(bottom, colors[0]);
+        Assert.Equal(bottom, colors[1]);
+        Assert.Equal(bottom, colors[2]);
+        Assert.Equal(ColorMaps.Sample(FieldColorMap.Viridis, 0.0), colors[3]);
+    }
+
+    [Fact]
     public void TryBuild_NamesAResultOfTheWrongLength()
     {
         var part = new Part("plate", Shape.Box(20, 10, 2));

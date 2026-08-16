@@ -206,6 +206,32 @@ if (FieldLegend.Title(display) != "LIFE [CYCLES, LOG SCALE]")
     throw new Exception("the title must state the base units and the scale");
 ```
 
+A field carrying **real values** that span decades (raw cycle counts, contact
+pressure) takes the other spelling: **`FieldDisplay.LogScale`**. The colour position
+becomes `(log₁₀v − log₁₀min)/(log₁₀max − log₁₀min)`, so a value one decade up the
+range moves one decade up the ramp; a non-positive value has no log position and
+paints as the map's bottom stop (NaN's own "no value" convention); the legend prints
+the **same decade ticks** the units spelling prints for the same data — the two
+share one tick builder, so they cannot drift — and the title tags the field's own
+units `LOG SCALE`. A log display needs a **strictly positive range** and is refused
+by name when it resolves otherwise; the flag rides in the document file
+write-only-when-set, so a file that never uses it is byte-identical. A display wants
+one spelling or the other, never both: the units string says the *values* are
+already logged, the flag says the *colours* should log them.
+
+```csharp run:field-logscale-flag
+var life = MeshField.Scalar("life", "cycles", [10.0, 1e3, 1e5]);
+var display = new ResolvedFieldDisplay(
+    life, new FieldRange(10, 1e5), FieldColorMap.Viridis, null, 1, true, LogScale: true);
+
+// 10^3 is the LOG midpoint of [10, 10^5] — linearly it would sit at t = 0.0099.
+var colors = FieldRendering.SourceColors(life, display.Range, display.ColorMap, logScale: true);
+if (colors[1] != ColorMaps.Sample(FieldColorMap.Viridis, 0.5))
+    throw new Exception("the decade midpoint must take the map's middle colour");
+if (FieldLegend.Title(display) != "LIFE [CYCLES, LOG SCALE]")
+    throw new Exception("the title must tag the scale");
+```
+
 ```csharp run:field-range
 if (new FieldRange(4, 4).Normalize(4) != 0.5) throw new Exception("a constant field sits mid-map");
 if (!FieldRange.Of([1, double.NaN, 5]).Equals(new FieldRange(1, 5)))

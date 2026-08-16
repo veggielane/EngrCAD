@@ -78,6 +78,17 @@ public sealed record FieldDisplay
     /// one (default true; ignored without <see cref="Deform"/>). The comparison is the
     /// point of a deformed-shape plot.</summary>
     public bool ShowUndeformed { get; init; } = true;
+
+    /// <summary>Colour the field on a base-10 LOGARITHMIC scale — for a field carrying
+    /// REAL values spanning decades (fatigue cycles, contact pressure). The colour
+    /// position becomes <c>(log₁₀v − log₁₀min)/(log₁₀max − log₁₀min)</c>, the legend
+    /// prints decade ticks and tags LOG SCALE, and a non-positive value maps to NaN
+    /// (the colour map's bottom stop — a log scale has no position for it). This is the
+    /// complement of the <c>log10(…)</c> UNITS convention, whose values are ALREADY
+    /// logged and whose colours stay linear over them; a display needs one or the
+    /// other, never both. Requires a strictly positive range; refused otherwise when
+    /// the display resolves.</summary>
+    public bool LogScale { get; init; }
 }
 
 /// <summary>
@@ -91,13 +102,16 @@ public sealed record FieldDisplay
 /// <param name="Deform">The displacement result, or null.</param>
 /// <param name="DeformScale">Exaggeration for <paramref name="Deform"/>.</param>
 /// <param name="ShowUndeformed">Whether to ghost the undeformed shape.</param>
+/// <param name="LogScale">Colour on a log10 scale (see
+/// <see cref="FieldDisplay.LogScale"/>); the range is strictly positive when set.</param>
 public readonly record struct ResolvedFieldDisplay(
     MeshField Field,
     FieldRange Range,
     FieldColorMap ColorMap,
     MeshField? Deform,
     double DeformScale,
-    bool ShowUndeformed)
+    bool ShowUndeformed,
+    bool LogScale = false)
 {
     /// <summary>Legend title: the field's name and units.</summary>
     public string Label => Field.Label;

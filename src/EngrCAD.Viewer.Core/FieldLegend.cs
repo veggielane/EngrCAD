@@ -1,5 +1,6 @@
 using System.Globalization;
 using EngrCAD.Core;
+using EngrCAD.Mesh;
 using EngrCAD.Modeling;
 
 namespace EngrCAD.Viewer;
@@ -222,6 +223,16 @@ public static class FieldLegend
         var range = display.Range;
         bool log = TryLogUnits(display.Field.Units, out _);
 
+        // The first-class LogScale flag carries RAW values; converting its range to
+        // log10 makes it EXACTLY the units-declared case's arithmetic (whose values are
+        // already logged), so the two spellings share one decade-tick builder and print
+        // the same ticks for the same data.
+        if (display.LogScale && range.Min > 0)
+        {
+            range = new FieldRange(Math.Log10(range.Min), Math.Log10(range.Max));
+            log = true;
+        }
+
         if (log && range.Span >= 2)
         {
             var ticks = new List<(double, string)> { (0, Format(Math.Pow(10, range.Min))) };
@@ -288,7 +299,11 @@ public static class FieldLegend
     {
         string title = TryLogUnits(display.Field.Units, out string baseUnits)
             ? $"{display.Field.Name} [{baseUnits}, LOG SCALE]"
-            : display.Label;
+            : display.LogScale
+                ? (display.Field.Units.Length == 0
+                    ? $"{display.Field.Name} [LOG SCALE]"
+                    : $"{display.Field.Name} [{display.Field.Units}, LOG SCALE]")
+                : display.Label;
         if (display.Deform is not null && display.DeformScale != 0)
         {
             // Plain "X" rather than the multiplication sign: this string is uppercased

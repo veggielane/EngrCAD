@@ -2029,7 +2029,10 @@ validity anyway — the floor errs conservative and covers the static-failure br
 (mean at or beyond S_ut, where the corrected amplitude is +infinity). **Life publishes
 as log10(cycles), stated in the units string**, because lives spread over decades and
 `FieldRange.Normalize` is linear — raw cycles would spend the whole legend on the
-longest-lived node. A native log-scale display mode is filed rather than half-built.
+longest-lived node. The native log-scale display mode has since landed as
+`FieldDisplay.LogScale` (see the field-display record in §6b's neighbourhood), the
+complementary spelling for a field carrying RAW decade-spanning values; the fatigue
+convention stands unchanged, since a field already publishing logs wants linear colours.
 
 The corrections carry their own exactness anchors: zero mean is the identity EXACTLY
 (the non-tensile branch returns the amplitude verbatim — no division that happens to be
@@ -5595,9 +5598,23 @@ Design decisions:
   persistence comes free. And it does not violate the `SymmetricAboutZero`
   never-apply-silently rule, because no colour moves — linear colour over log values IS
   log-colour — the legend is typesetting what the field itself states, where re-centring
-  a range changes what the numbers mean. The residual first-class mode (the field
-  carrying REAL cycles with `FieldRange.Normalize` going logarithmic) stays filed in
-  todo.md; it composes with this — such a display would print the same decade ticks.
+  a range changes what the numbers mean. *The first-class mode has since landed beside
+  it* — `FieldDisplay.LogScale` for a field carrying REAL decade-spanning values (raw
+  cycles, contact pressure) — and landing it did NOT reopen the flag-vs-units argument,
+  because the two spellings answer different questions: the units string says the
+  VALUES are already logged (colours stay linear over them), the flag says the COLOURS
+  should log raw values, and a display wants one or the other, never both. The colour
+  position becomes `(log₁₀v − log₁₀min)/(log₁₀max − log₁₀min)` in the shared
+  `FieldRendering.SourceColors` (CPU-side, so all three front ends and the glTF
+  `COLOR_0` export inherit it with no shader change); a non-positive value maps to NaN
+  and hence the map's bottom stop, the "no value" convention it already owns, and a
+  display whose range is not strictly positive is refused BY NAME when it resolves —
+  painting every node the bottom stop would be the silent version. The composition
+  claim was made checkable rather than trusted: `FieldLegend.TickMarks` converts the
+  flag case's raw range to log10 and then runs the units case's OWN decade-tick
+  arithmetic — one tick builder, so the two spellings provably print the same ticks
+  for the same data (asserted as array equality) — and the flag rides the document
+  file write-only-when-set, the persistence rule everywhere else follows.
 
 ### Animating a deformed result — and the exception that turned out not to be one
 

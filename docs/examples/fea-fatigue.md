@@ -270,7 +270,10 @@ logarithm, which is where its colour is. Where a log field's range spans **less 
 two decades** the even five-tick layout stays (an interval that short may hold as few
 as no interior decades — too few ticks to describe a range), still labelled with
 anti-logged values; and the two end ticks always print the true range, whatever the
-decades do — a legend that hides its endpoints lies about its range.
+decades do — a legend that hides its endpoints lies about its range. A field carrying
+**raw** decade-spanning values takes the complementary spelling,
+`FieldDisplay.LogScale` (see [the fields page](fields.md)), which logs the colours
+instead of the values and prints the same decade ticks.
 
 ## What this deliberately is not
 

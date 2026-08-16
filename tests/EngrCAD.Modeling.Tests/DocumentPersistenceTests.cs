@@ -369,6 +369,32 @@ public class DocumentPersistenceTests
     }
 
     [Fact]
+    public void FieldDisplay_LogScale_RoundTripsAndIsWriteOnlyWhenSet()
+    {
+        var doc = Fixture();
+        // Default off writes NO key, so a document predating the flag is byte-identical.
+        Assert.DoesNotContain("logScale", doc.Save());
+
+        var plate = doc.Scene.Tabs[0].Parts[0];
+        plate.FieldDisplay = plate.FieldDisplay! with
+        {
+            LogScale = true, Range = new FieldRange(1, 1000),
+        };
+        string saved = doc.Save();
+        Assert.Contains("logScale", saved);
+
+        var reloaded = Document.Load(saved);
+        Assert.True(reloaded.Scene.Tabs[0].Parts[0].FieldDisplay!.LogScale);
+        // save -> load -> save is a byte fixed point (the field written but never read,
+        // and the default that reloads differently, are what this catches). The fixture
+        // carries opaque records the first load reports and drops, so the fixed point
+        // is asserted from the second save on — the documented envelope contract.
+        string second = reloaded.Document.Save();
+        Assert.Contains("logScale", second);
+        Assert.Equal(second, Document.Load(second).Document.Save());
+    }
+
+    [Fact]
     public void ResultsCanBeLeftOut()
     {
         var json = Fixture().Save(new DocumentSaveOptions { IncludeResults = false });

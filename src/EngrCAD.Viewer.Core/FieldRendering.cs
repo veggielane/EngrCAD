@@ -160,7 +160,8 @@ public static class FieldRendering
             return false;
         }
 
-        var colors = Colors(display.Field, display.Range, display.ColorMap, render);
+        var colors = Colors(
+            display.Field, display.Range, display.ColorMap, render, display.LogScale);
         // The buffer carries the displacement per UNIT scale: the exaggeration is the
         // uDeformScale uniform, which is what makes animating it free. A zero scale gets
         // no buffer at all, so "shows no deformed shape" stays one question.
@@ -233,11 +234,12 @@ public static class FieldRendering
     /// attribute.
     /// </summary>
     public static float[] Colors(
-        MeshField field, in FieldRange range, FieldColorMap map, RenderMesh render)
+        MeshField field, in FieldRange range, FieldColorMap map, RenderMesh render,
+        bool logScale = false)
     {
         ArgumentNullException.ThrowIfNull(field);
         ArgumentNullException.ThrowIfNull(render);
-        var perSource = SourceColors(field, range, map);
+        var perSource = SourceColors(field, range, map, logScale);
 
         // A cell field looks up by the render vertex's source FACE — every duplicate of
         // a face's corners takes that face's value, so the cell renders flat with no
@@ -267,10 +269,28 @@ public static class FieldRendering
     /// cannot compute different colours for one field.</para>
     /// </summary>
     public static (float R, float G, float B)[] SourceColors(
-        MeshField field, in FieldRange range, FieldColorMap map)
+        MeshField field, in FieldRange range, FieldColorMap map, bool logScale = false)
     {
         ArgumentNullException.ThrowIfNull(field);
         var perSource = new (float R, float G, float B)[field.Count];
+        if (logScale)
+        {
+            // Log colour position: (log v − log min)/(log max − log min). The display
+            // resolution has already required a strictly positive range; a non-positive
+            // VALUE has no log position and maps to NaN — the colour map's bottom stop,
+            // its own "no value here" convention.
+            double logMin = Math.Log10(range.Min);
+            double logSpan = Math.Log10(range.Max) - logMin;
+            for (int v = 0; v < perSource.Length; v++)
+            {
+                double value = field.ScalarAt(v);
+                double t = value > 0 && logSpan > 0
+                    ? (Math.Log10(value) - logMin) / logSpan
+                    : double.NaN;
+                perSource[v] = ColorMaps.Sample(map, t);
+            }
+            return perSource;
+        }
         for (int v = 0; v < perSource.Length; v++)
             perSource[v] = ColorMaps.Sample(map, range, field.ScalarAt(v));
         return perSource;

@@ -248,7 +248,8 @@ public static class GltfScene
                 return null;
             if (display.Field.Count != mesh.VertexCount)
                 return null;
-            return FieldRendering.SourceColors(display.Field, display.Range, display.ColorMap);
+            return FieldRendering.SourceColors(
+                display.Field, display.Range, display.ColorMap, display.LogScale);
         }
     }
 

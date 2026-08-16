@@ -684,8 +684,16 @@ public sealed class Part
                 error = $"Part '{Name}': result '{field.Name}' has no finite values to map.";
                 return false;
             }
+            if (display.LogScale && !(range.Min > 0))
+            {
+                error = $"Part '{Name}': a log-scale display needs a strictly positive "
+                    + $"range, and '{field.Name}' spans [{range.Min:G4}, {range.Max:G4}]. "
+                    + "State an explicit positive Range, or drop LogScale.";
+                return false;
+            }
             resolved = new ResolvedFieldDisplay(
-                field, range, display.ColorMap, deform, display.DeformScale, display.ShowUndeformed);
+                field, range, display.ColorMap, deform, display.DeformScale,
+                display.ShowUndeformed, display.LogScale);
             return true;
         }
     }

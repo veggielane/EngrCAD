@@ -460,6 +460,8 @@ internal static class DocumentWriter
                 record["deformScale"] = display.DeformScale;
                 record["showUndeformed"] = display.ShowUndeformed;
             }
+            if (display.LogScale)
+                record["logScale"] = true;           // write-only-when-set
             json["fieldDisplay"] = record;
         }
 
@@ -962,6 +964,8 @@ internal static class DocumentReader
                 DeformScale = display.TryGetProperty("deformScale", out var scale) ? scale.GetDouble() : 1,
                 ShowUndeformed = !display.TryGetProperty("showUndeformed", out var undeformed)
                     || undeformed.GetBoolean(),
+                LogScale = display.TryGetProperty("logScale", out var logScale)
+                    && logScale.GetBoolean(),
             };
         }
 

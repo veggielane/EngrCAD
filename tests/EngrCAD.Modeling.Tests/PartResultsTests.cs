@@ -77,6 +77,36 @@ public class PartResultsTests
     }
 
     [Fact]
+    public void TryResolveFieldDisplay_LogScale_ThreadsThroughTheResolution()
+    {
+        var part = PlateWithResults(out _, out _);
+        part.FieldDisplay = new FieldDisplay
+        {
+            Field = "von Mises", LogScale = true, Range = new FieldRange(10, 1e5),
+        };
+
+        Assert.True(part.TryResolveFieldDisplay(out var resolved, out string? error), error);
+        Assert.True(resolved.LogScale);
+    }
+
+    [Fact]
+    public void TryResolveFieldDisplay_LogScale_RefusesANonPositiveRangeByName()
+    {
+        // log10 of a non-positive bound has no value, so a log display whose range
+        // reaches zero is refused when it RESOLVES — naming the field and the range —
+        // rather than painting every node the bottom stop.
+        var part = PlateWithResults(out _, out _);
+        part.FieldDisplay = new FieldDisplay
+        {
+            Field = "von Mises", LogScale = true, Range = new FieldRange(0, 100),
+        };
+
+        Assert.False(part.TryResolveFieldDisplay(out _, out string? error));
+        Assert.Contains("strictly positive", error);
+        Assert.Contains("von Mises", error);
+    }
+
+    [Fact]
     public void TryResolveFieldDisplay_AnExplicitRangeWins()
     {
         var part = PlateWithResults(out _, out _);

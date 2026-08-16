@@ -251,6 +251,33 @@ public class FieldLegendTests
     }
 
     [Fact]
+    public void TickMarks_LogScaleFlag_PrintsTheSameDecadeTicksAsTheUnitsDeclaration()
+    {
+        // The flag carries RAW values where the units convention carries logged ones;
+        // the same data spelled both ways must print the same ticks, or the two
+        // spellings drift apart.
+        var flag = new ResolvedFieldDisplay(
+            MeshField.Scalar("Fatigue life", "cycles", [1, 1e8]),
+            new FieldRange(1, 1e8), FieldColorMap.Viridis, null, 1, true, LogScale: true);
+
+        Assert.Equal(FieldLegend.TickMarks(LogDisplay(0, 8)), FieldLegend.TickMarks(flag));
+    }
+
+    [Fact]
+    public void Title_LogScaleFlag_TagsTheScaleInTheFieldsOwnUnits()
+    {
+        var flag = new ResolvedFieldDisplay(
+            MeshField.Scalar("Fatigue life", "cycles", [1, 1e8]),
+            new FieldRange(1, 1e8), FieldColorMap.Viridis, null, 1, true, LogScale: true);
+        Assert.Equal("FATIGUE LIFE [CYCLES, LOG SCALE]", FieldLegend.Title(flag));
+
+        var unitless = new ResolvedFieldDisplay(
+            MeshField.Scalar("count", "", [1, 100]),
+            new FieldRange(1, 100), FieldColorMap.Viridis, null, 1, true, LogScale: true);
+        Assert.Equal("COUNT [LOG SCALE]", FieldLegend.Title(unitless));
+    }
+
+    [Fact]
     public void EveryLogLabelCharacterIsInTheStrokeFont()
     {
         var display = LogDisplay(-3.2, 8.6);

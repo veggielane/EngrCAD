@@ -290,23 +290,16 @@ Remaining follow-ups:
     little per step, so the seed is good) — a different mechanism that attacks the numeric cost,
     not the symbolic one.
 
-- [ ] **Log-scale colour mapping residuals** (the LEGEND half ✅ landed: `FieldLegend`
-  reads the `log10(…)` units declaration — `TryLogUnits`/`TickMarks` — and prints
-  anti-logged decade ticks, end ticks stating the true range, title in the base units
-  tagged LOG SCALE; docs `fields.md`/`fea-fatigue.md`, design.md §6b's field-display
-  bullet records why the units string and not a boolean is the opt-in). Remaining:
-  **(a)** the first-class `FieldDisplay.LogScale` for a field carrying REAL cycles —
-  `FieldRange.Normalize` goes logarithmic for the colour mapping itself, the flag
-  round-trips write-only-when-set, and the properties-panel min/max readout follows;
-  Modeling-owned (`Results.cs` + `DocumentFile.cs`), deliberately not landed from the
-  viewer fence. It composes with the landed half: such a display prints the same decade
-  ticks. **(b)** **NaN colours as the map's FIRST stop** — `FieldRange.Normalize(NaN)`
-  is NaN and `ColorMaps.Sample`'s `!(t > 0)` catches it — so an infinite-life node
-  (NaN = "no value" by the VTU convention) paints as the BOTTOM of the ramp,
-  indistinguishable from the shortest finite life: the honest render is a distinct
-  neutral (grey), which touches `SourceColors` and possibly the legend (a "no value"
-  swatch). The fatigue docs page sidesteps it today by plotting an aluminium life
-  field, where every node is finite — that choice is documented on the page.
+- [ ] **Log-scale colour residual: NaN colours as the map's FIRST stop** (the legend
+  half and the first-class `FieldDisplay.LogScale` flag both ✅ landed; what remains) —
+  `FieldRange.Normalize(NaN)` is NaN and `ColorMaps.Sample`'s `!(t > 0)` catches it —
+  so an infinite-life node (NaN = "no value" by the VTU convention) paints as the
+  BOTTOM of the ramp, indistinguishable from the shortest finite life: the honest
+  render is a distinct neutral (grey), which touches `SourceColors` and possibly the
+  legend (a "no value" swatch). The fatigue docs page sidesteps it today by plotting
+  an aluminium life field, where every node is finite — that choice is documented on
+  the page. A LogScale display's non-positive values land in the same place for the
+  same reason, so one fix covers both.
 
 FEA as a first-class citizen of the hybrid kernel: the CAD model (any representation)
 feeds the mesher, results feed back into the viewer as fields on the mesh. The mesh
@@ -707,13 +700,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   `VtuWriter` in EngrCAD.Mesh, `Part.Results`/`FieldDisplay`/`TryResolveFieldDisplay` in
   Modeling, `ColorMaps`/`FieldRendering`/`FieldLegend` in Viewer.Core, drawn in all
   three front ends with `--export .vtu` and `docs/examples/fields.md`):
-  - [ ] **A solver's results are on ITS vertex set, not the display mesh.** The seam
-    task #27 publishes through requires `field.Count == part.GetMesh().VertexCount`.
-    A tet solve's surface vertices need not coincide with the tessellation's, so the
-    missing piece is a sampling step (nearest, or barycentric within the surface
-    triangle a display vertex lands in) that maps a solution onto the display mesh —
-    deliberately NOT guessed at here, since the tet mesher's own vertex conventions
-    decide what is cheap.
   - [ ] **Points/wireframe view styles ignore field colour.** The point and line
     programs are flat-colour; a field-coloured part drawn in Points or Wireframe falls
     back to its part colour. The attribute is already uploaded, so this is a per-vertex
