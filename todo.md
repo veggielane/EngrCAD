@@ -70,11 +70,6 @@ design.md §2). Residuals:
     z_min = 2(h_a* − x)/sin²α by name; drawing the actual generated trochoid would
     admit z ≥ ~12 if it can be VERIFIED (the conjugate-contact instrument exists and
     measurably sees a 5e-2 flank error as 5.6e-4 rad of transmission wobble).
-  - **Internal gears** — the GEOMETRY landed as `PlanetaryGears.RingProfile` (the
-    ring's bore is exactly the outline of a cutter gear with addendum and dedendum
-    swapped — lines and arcs, exact in all three representations); what remains is only
-    surfacing it as a first-class `Gears` entry with its own spec, outside a planetary
-    set.
   - **Keyway on the bore** (DIN 6885 parallel key seat as a sketch boolean on the
     blank), set screw boss, web/spoke lightening.
   - **The apex relief groove on a herringbone** (`HerringboneGears`) — the one part
