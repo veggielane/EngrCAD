@@ -416,6 +416,47 @@ public sealed class Bvh
         return true;
     }
 
+    /// <summary>
+    /// Appends the indices of all items whose box, expanded by
+    /// <paramref name="inflate"/> on every side, the ray passes through — the
+    /// conservative broad phase for geometry whose TRUE positions sit within
+    /// <paramref name="inflate"/> of the indexed boxes (a deformed part picked at a
+    /// factor its BVH was not built at). Expansion can only ADD candidates, so a
+    /// caller's exact narrow phase stays the decider; zero asks the incumbent
+    /// arithmetic (expanding a box by exactly 0.0 changes no comparison).
+    /// </summary>
+    public void Query(in Ray3d ray, double inflate, List<int> results)
+    {
+        if (_items.Length == 0)
+            return;
+
+        Span<int> stack = stackalloc int[64];
+        int top = 0;
+        stack[top++] = 0;
+
+        while (top > 0)
+        {
+            ref readonly var node = ref _nodes[stack[--top]];
+            if (!ray.Intersects(node.Bounds.Expanded(inflate)))
+                continue;
+
+            if (node.Left < 0)
+            {
+                for (int i = node.First; i < node.First + node.Count; i++)
+                {
+                    int item = _items[i];
+                    if (ray.Intersects(_boxes[item].Expanded(inflate)))
+                        results.Add(item);
+                }
+            }
+            else
+            {
+                stack[top++] = node.Left;
+                stack[top++] = node.Left + 1;
+            }
+        }
+    }
+
     /// <summary>Appends the indices of all items whose box the ray passes through.</summary>
     public void Query(in Ray3d ray, List<int> results)
     {

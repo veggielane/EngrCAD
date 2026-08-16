@@ -10071,10 +10071,12 @@ outline FOLLOW the shape rather than merely exist. What deliberately did NOT cha
 picking stays built once at the part's own scale (the spatial-index-cannot-be-a-uniform
 reason stands), and the factor-0 frame of an animation still differs from a scale-0
 still — by the ghost alone now, which is the difference that was always real. **The
-hover affordance now refuses where that index is stale** (`FieldRendering.HoverIsStale`,
-asked by the window's and the browser's one hover funnel each): a displaced part at any
-effective factor other than exactly 1 is drawn where its pick BVH is not, so
-highlighting it would be an ambient claim answered from stale geometry — and the rule
+hover affordance refused where that index was stale** (`FieldRendering.HoverIsStale`,
+asked by the window's and the browser's one hover funnel each — SINCE RETIRED by the
+deformed-ray correction, which makes the pick exact at every factor; see the later
+record): a displaced part at any
+effective factor other than exactly 1 was drawn where its pick BVH is not, so
+highlighting it would have been an ambient claim answered from stale geometry — and the rule
 is deliberately playback-INDEPENDENT, since a still scrubbed to factor 0.5 answers from
 the same index the filed "while playback is running" framing would have exempted.
 Clicking still selects (a deliberate act, staleness documented); exact comparisons
@@ -10277,6 +10279,30 @@ copy described as 8 points pairs corners with corners and midpoints with midpoin
 every strip is half of the unsplit frustum's planar wall and Frustum(4, 1, 3) stays a
 nine-decimal identity of the tessellation — a split placed wrongly by even one index
 breaks it. The NURBS degree-elevation route (A5.9) stays filed as the remaining half.
+
+**Deformed-ray picking landed, and it retires the stale-hover refusal by completing its
+own reasoning** (the displaced-edges pattern — the refusal existed because the pick
+index did not describe the drawn shape, and now the ANSWER does): a displaced part's
+pick BVH is still built exactly once, at the part's own `DeformScale` (the
+spatial-index-cannot-be-a-uniform reason stands untouched), and `ScenePick.Nearest`
+now takes the frame's `deformFactor` and corrects in two phases. The BROAD phase
+queries the once-built index through the new `Bvh.Query(ray, inflate, hits)` with every
+box expanded by `MaxDisplacement·|BuiltScale·(factor−1)|` — conservative BY
+CONSTRUCTION, since every vertex moves at most that far from its indexed position and
+expansion can only ADD candidates, the cross-plane-hole-validation sound-in-the-accept
+direction. The NARROW phase then tests the EXACTLY-displaced triangles: `PickMesh`
+carries the raw per-render-vertex displacement vectors (unscaled, so the displayed
+vertex is the indexed one plus `BuiltScale·(factor−1)` times it), and Möller–Trumbore
+runs on those — so the hit is exact at every factor, not approximated, and the world
+point lands on the drawn surface. A delta of exactly zero — an undisplaced part at any
+factor, or any part at factor 1 — takes the incumbent arithmetic bit for bit (the
+exact-zero family). The test with teeth is the broad-phase discriminator: a part whose
+displacement carries it 20 units clear of its indexed boxes is FOUND at factor 3 by a
+ray that misses every indexed box (only the inflation can see it) and honestly MISSED
+at factor 1 by the same ray. Both hover funnels simply pass the factor now;
+`FieldRendering.HoverIsStale` is deleted rather than kept answering a question that no
+longer arises. What deliberately did NOT change: the index is never rebuilt (the cost
+the design exists to avoid), and the ghost/legend/uniform machinery is untouched.
 
 ## 7. Query layer
 

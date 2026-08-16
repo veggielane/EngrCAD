@@ -79,21 +79,6 @@ public static class FieldRendering
     /// </summary>
     public const float GhostAlpha = 0.18f;
 
-    /// <summary>
-    /// Whether a hover highlight would answer from STALE pick geometry: the pick BVH is
-    /// built once at the part's own <c>DeformScale</c> — the factor-1 configuration,
-    /// since a spatial index cannot be a uniform — so for a displaced part any other
-    /// effective factor draws a shape the index does not describe, and the hover
-    /// affordance refuses rather than silently answering from it. Exact comparisons
-    /// deliberately (the exact-zero family: the factor 1 and a scale of 0 are ASSIGNED,
-    /// never computed): at factor exactly 1 the index is exact and hover stays, and a
-    /// part with no displacement is never stale. Clicking still selects with the
-    /// documented staleness — a selection is a deliberate act where a hover is an
-    /// ambient claim about what is under the cursor.
-    /// </summary>
-    public static bool HoverIsStale(double deformScale, double deformFactor) =>
-        deformScale != 0 && deformFactor != 1;
-
     /// <summary>The colour every mesh vertex reads when no field-colour buffer is
     /// attached. White, because the shader multiplies nothing by it — the strength
     /// uniform is 0 there, so this only has to be a defined finite value; it is white
@@ -229,11 +214,11 @@ public static class FieldRendering
     /// <para><b>This is the one place the CPU displacement survives, and it is not a
     /// second render path.</b> Picking is a spatial index, not a draw call, so it cannot
     /// ride a uniform — a click must be answered against triangles that exist somewhere.
-    /// The index is therefore built at the part's OWN <c>DeformScale</c>, which is the
-    /// animation's factor-1 configuration: a pick is exact on a static plot and at a load
-    /// ramp's peak, and off by the difference in exaggeration at intermediate frames.
-    /// Rebuilding a BVH per frame is precisely the cost this design exists to avoid, so
-    /// the mismatch is stated rather than paid for.</para>
+    /// The index is built at the part's OWN <c>DeformScale</c>, the animation's factor-1
+    /// configuration, and is never rebuilt: at any OTHER factor <c>ScenePick</c> applies
+    /// the deformed-ray correction — a conservatively inflated broad phase over this
+    /// index, then the exactly-displaced triangles — so the pick is exact at every
+    /// frame of a deformation animation.</para>
     /// </summary>
     public static RenderMesh PickShape(RenderMesh render, in FieldMeshData data)
     {

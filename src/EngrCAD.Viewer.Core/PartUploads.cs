@@ -210,12 +210,12 @@ public static class PartUploads
             request.WireEdges ? WireframeEdges.Extract(mesh) : [],
             request.WireEdges ? BuildWireColors(mesh, field) : null,
             request.WireEdges ? BuildWireDeformation(mesh, field) : null,
-            // Picking follows what is DRAWN at the part's own exaggeration: a BVH is a
-            // spatial index, so unlike the shading it cannot be a uniform, and it is built
-            // once over the displaced triangles (FieldRendering.PickShape states what that
-            // costs while an animation is running).
+            // Picking follows what is DRAWN: the BVH is built once over the triangles
+            // displaced at the part's own exaggeration, and the raw displacement rides
+            // along so ScenePick answers EXACTLY at any animation factor (the
+            // deformed-ray correction) with the index never rebuilt.
             request.Pick
-                ? PickMesh.Build(field is { } f ? FieldRendering.PickShape(render, f) : render)
+                ? field is { } f ? PickMesh.Build(render, f) : PickMesh.Build(render)
                 : null);
     }
 

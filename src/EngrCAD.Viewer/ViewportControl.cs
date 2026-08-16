@@ -1193,11 +1193,6 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private void SetHovered(int index)
     {
-        // A displaced part mid-exaggeration is drawn where its pick BVH is not
-        // (FieldRendering.HoverIsStale states the whole rule) — refuse the affordance
-        // rather than highlight from stale geometry.
-        if (index >= 0 && FieldRendering.HoverIsStale(_meshes[index].DeformScale, _deformFactor))
-            index = -1;
         if (index == _hovered)
             return;
         _hovered = index;
@@ -1433,7 +1428,10 @@ public sealed class ViewportControl : OpenGlControlBase
 
         var hit = ScenePick.Nearest(
             pixel.X, pixel.Y, width, height, viewProjection, _pickInstances,
-            _sectionEnabled, _sectionPlanes, _sectionCombine, _hitScratch);
+            _sectionEnabled, _sectionPlanes, _sectionCombine,
+            // The frame's deformation factor: ScenePick's deformed-ray correction makes
+            // the pick (and hence hover) exact at any factor from the once-built index.
+            _deformFactor, _hitScratch);
         worldPoint = hit.World;
         return hit.Index;
     }
@@ -1809,9 +1807,11 @@ public sealed class ViewportControl : OpenGlControlBase
     /// the property that lets <c>SetInstancePoses</c> animate an exploded view with
     /// matrices alone. A <c>DeformationTrack</c> on an <see cref="Animation"/> drives it.
     /// </para>
-    /// <para>What deliberately does NOT follow it: the pick BVH, which is built once at
-    /// each part's own scale (see <c>FieldRendering.PickShape</c>), and the feature-edge
-    /// overlay, which a part carrying a displacement never draws at any factor.</para>
+    /// <para>The pick BVH deliberately does not follow it either — it is built once at
+    /// each part's own scale (see <c>FieldRendering.PickShape</c>) — and yet picking IS
+    /// exact at every factor: <c>ScenePick</c> inflates the broad phase conservatively
+    /// and tests the exactly-displaced triangles (the deformed-ray correction), so the
+    /// index is never rebuilt and never wrong.</para>
     /// </summary>
     public double DeformFactor
     {

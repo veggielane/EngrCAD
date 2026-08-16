@@ -324,9 +324,10 @@ The undeformed shape goes up under its own `.ghost` key (it must look like the u
 part, so it keeps that part's face normals) and draws blended with depth writes off after
 every fill; a part carrying a displacement uploads no feature edges at any factor, since
 they describe geometry that has moved and deciding it per frame would make the draw list
-depend on `t`. Picking follows the part's own exaggeration and deliberately **not** an
-animation's factor — the BVH is built once over `FieldRendering.PickShape`, because a
-spatial index cannot be a uniform.
+depend on `t`. Picking is exact at ANY animation factor from a BVH built ONCE over
+`FieldRendering.PickShape` (a spatial index cannot be a uniform): `ScenePick` takes the
+frame's factor and applies the deformed-ray correction — a conservatively inflated
+broad phase over the once-built index, then the exactly-displaced triangles.
 
 The legend is `FieldLegend`'s geometry uploaded under two keys and drawn one call per
 band (each needs its own colour, exactly as the cube's faces are drawn), with its own

@@ -432,4 +432,38 @@ public class BvhTests
         // nothing per-iteration (a single closure would already cost ~88 B × 2000).
         Assert.True(delta < 1024, $"BVH queries allocated {delta} bytes over 2000 iterations");
     }
+
+    [Fact]
+    public void InflatedRayQuery_IsConservative_AndZeroIsTheIncumbentQuery()
+    {
+        // Ten unit boxes along x at y = 0; a ray running along x at y = 1.4 misses every
+        // box (they span y in [-0.5, 0.5]) but passes within 0.9 of all of them.
+        var boxes = new Aabb[10];
+        for (int i = 0; i < boxes.Length; i++)
+            boxes[i] = new Aabb((i * 2 - 0.5, -0.5, -0.5), (i * 2 + 0.5, 0.5, 0.5));
+        var bvh = Bvh.Build(boxes);
+        var ray = new Ray3d((-5, 1.4, 0), (1, 0, 0));
+
+        var thin = new List<int>();
+        bvh.Query(ray, thin);
+        Assert.Empty(thin);
+
+        // Inflation can only ADD candidates: at 0 the results are the incumbent query's
+        // exactly, and past the miss distance every box appears.
+        var zero = new List<int>();
+        bvh.Query(ray, 0.0, zero);
+        Assert.Equal(thin, zero);
+
+        var fat = new List<int>();
+        bvh.Query(ray, 1.0, fat);
+        Assert.Equal(boxes.Length, fat.Count);
+
+        // A hit ray keeps its results under any inflation (a superset, never a trade).
+        var hitRay = new Ray3d((-5, 0, 0), (1, 0, 0));
+        var hit = new List<int>();
+        bvh.Query(hitRay, hit);
+        var hitFat = new List<int>();
+        bvh.Query(hitRay, 0.25, hitFat);
+        Assert.True(hit.All(hitFat.Contains));
+    }
 }

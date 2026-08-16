@@ -1448,6 +1448,9 @@
         return ScenePick.Nearest(
             x, y, width, height, viewProjection, _pick,
             sectionEnabled: planes is not null, sectionPlanes: planes, combine: SectionCombine,
+            // The frame's deformation factor: the deformed-ray correction makes the
+            // pick exact at any factor from the once-built index.
+            deformFactor: Animation?.At(AnimationTime).DeformFactor ?? 1,
             scratch: _pickScratch);
     }
 
@@ -1545,10 +1548,6 @@
 
     private Task SetHoveredAsync(int index)
     {
-        // The window's stale-hover rule, asked with the browser's own effective factor.
-        if (index >= 0 && index < _drawn.Count && FieldRendering.HoverIsStale(
-                _drawn[index].DeformScale, Animation?.At(AnimationTime).DeformFactor ?? 1))
-            index = -1;
         if (index == _hovered)
             return Task.CompletedTask;
         _hovered = index;

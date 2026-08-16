@@ -274,4 +274,76 @@ public class ScenePickTests
         var ndc = viewProjection.TransformPoint(world);
         return ((ndc.X + 1) * width / 2, (1 - ndc.Y) * height / 2);
     }
+
+    // ---- the deformed-ray correction ----
+    //
+    // A displaced part's pick BVH is built ONCE at the part's own DeformScale; at any
+    // other animation factor ScenePick inflates the broad phase by the largest possible
+    // vertex move (conservative) and tests the exactly-displaced triangles. These pin
+    // both halves: the narrow phase's exactness, and the broad phase finding a part the
+    // un-inflated query cannot see at all.
+
+    /// <summary>A box whose every vertex is displaced by <paramref name="direction"/>
+    /// (a constant unit field) at the given stated exaggeration.</summary>
+    private static PickMesh DeformedBox(Vector3d direction, double scale)
+    {
+        var part = new Part("box", Shape.Box(
+            new Aabb((-Size / 2, -Size / 2, 0), (Size / 2, Size / 2, Height))));
+        var mesh = part.GetMesh();
+        part.AddResult(MeshField.SampleVector(mesh, "u", "mm", _ => direction));
+        part.FieldDisplay = new FieldDisplay { Field = "u", Deform = "u", DeformScale = scale };
+        var upload = PartUploads.Build(part, new PartUploadRequest { Fields = true, Pick = true });
+        return upload.RequirePick;
+    }
+
+    [Fact]
+    public void ADeformedPart_IsPickedWhereItIsDrawn_AtEveryFactor()
+    {
+        // Unit +Z displacement at 10x: the indexed top face is z = 4 + 10; at factor f
+        // the DRAWN top is z = 4 + 10f, and the hit must land exactly there.
+        var pick = DeformedBox(Vector3d.UnitZ, 10);
+        Assert.Equal(10, pick.BuiltScale);
+        Assert.Equal(1, pick.MaxDisplacement, 12);
+        var instances = new[] { new PickInstance(pick, Matrix4d.Identity) };
+
+        foreach (double factor in new[] { 1.0, 0.25, 0.0, 2.0 })
+        {
+            var hit = ScenePick.Nearest(
+                Centre, Centre, Width, Pixels, TopDown(), instances, deformFactor: factor);
+            Assert.True(hit.Hit, $"factor {factor} should hit");
+            Assert.Equal(Height + 10 * factor, hit.World.Z, 9);
+        }
+    }
+
+    [Fact]
+    public void TheBroadPhase_FindsAPartTheIndexedBoxesCannotSee()
+    {
+        // Unit +X displacement at 10x: the INDEX holds the box at x in [5, 15]; at
+        // factor 3 the drawn box sits at x in [25, 35]. A vertical ray at x = 30 misses
+        // every indexed box, so only the inflated broad phase can find it — and at
+        // factor 1 the same ray honestly misses.
+        var pick = DeformedBox(Vector3d.UnitX, 10);
+        var instances = new[] { new PickInstance(pick, Matrix4d.Identity) };
+
+        var displaced = ScenePick.Nearest(
+            (30, 0, 50), (30, 0, -50), instances, deformFactor: 3);
+        Assert.True(displaced.Hit);
+        Assert.Equal(30, displaced.World.X, 9);
+        Assert.Equal(Height, displaced.World.Z, 9);
+
+        var atOwnScale = ScenePick.Nearest((30, 0, 50), (30, 0, -50), instances);
+        Assert.False(atOwnScale.Hit);
+    }
+
+    [Fact]
+    public void AnUndeformedPart_IgnoresTheFactorBitForBit()
+    {
+        // A part with no displacement takes the incumbent path whatever the factor —
+        // the exact-zero branch, asserted as identical results.
+        var instances = new[] { new PickInstance(Box(), Matrix4d.Identity) };
+        var plain = ScenePick.Nearest(Centre, Centre, Width, Pixels, TopDown(), instances);
+        var factored = ScenePick.Nearest(
+            Centre, Centre, Width, Pixels, TopDown(), instances, deformFactor: 7);
+        Assert.Equal(plain, factored);
+    }
 }

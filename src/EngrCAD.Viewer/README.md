@@ -676,13 +676,14 @@ stating: the factor-0 frame of an animation is the undeformed *shape* without th
 undeformed part's chrome, so it is deliberately not the same picture as a still of a part
 whose own `DeformScale` is 0.
 
-**Picking follows the part's own exaggeration and does not follow an animation.** A pick
-BVH is a spatial index, not a uniform, so it is built once over the displaced mesh
-(`FieldRendering.PickShape`) at the scale the part states — which is the animation's
-factor-1 configuration. A click is therefore exact on a static plot and at a load ramp's
-peak, and off by the difference in exaggeration at intermediate frames; rebuilding a
-spatial index per frame is precisely the cost this design exists to avoid, so the
-mismatch is documented rather than paid for.
+**The pick BVH does not follow an animation — and picking is exact at every factor
+anyway.** A pick BVH is a spatial index, not a uniform, so it is built once over the
+displaced mesh (`FieldRendering.PickShape`) at the scale the part states — the
+animation's factor-1 configuration — and never rebuilt (precisely the cost this design
+exists to avoid). At any other factor `ScenePick` applies the deformed-ray correction:
+the broad phase queries the once-built index with every box conservatively inflated by
+the largest possible vertex move, and the narrow phase tests the exactly-displaced
+triangles, so a click and the hover answer from the drawn shape at every frame.
 
 The legend follows the effective factor (`ViewportControl.ActiveFieldDisplay` multiplies
 it in), because its title states the number: a bar reading `40X DEFORMED` over a frame

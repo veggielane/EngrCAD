@@ -15,10 +15,15 @@ namespace EngrCAD.Viewer;
 /// </summary>
 public sealed class PickMesh
 {
-    private PickMesh(RenderMesh mesh, Bvh bvh)
+    private PickMesh(
+        RenderMesh mesh, Bvh bvh,
+        float[]? displacements = null, double builtScale = 0, double maxDisplacement = 0)
     {
         Mesh = mesh;
         Bvh = bvh;
+        Displacements = displacements;
+        BuiltScale = builtScale;
+        MaxDisplacement = maxDisplacement;
     }
 
     /// <summary>The display mesh the BVH indexes (positions are read straight out of it).</summary>
@@ -26,6 +31,21 @@ public sealed class PickMesh
 
     /// <summary>Triangle BVH: leaf items are triangle indices into <see cref="Mesh"/>.</summary>
     public Bvh Bvh { get; }
+
+    /// <summary>The UNSCALED displacement field per render vertex (3 floats each), or
+    /// null for a part showing no deformed shape. What lets a pick answer EXACTLY at a
+    /// factor the BVH was not built at: the displayed vertex is the indexed one plus
+    /// <c>BuiltScale·(factor − 1)</c> times this vector.</summary>
+    public float[]? Displacements { get; }
+
+    /// <summary>The exaggeration the indexed positions carry — the part's own
+    /// <c>DeformScale</c>, i.e. the animation's factor-1 configuration.</summary>
+    public double BuiltScale { get; }
+
+    /// <summary>The largest displacement magnitude over the vertices — what bounds how
+    /// far any triangle can sit from its indexed box, hence the broad phase's
+    /// conservative inflation.</summary>
+    public double MaxDisplacement { get; }
 
     /// <summary>Builds the triangle BVH for a display mesh.</summary>
     public static PickMesh Build(RenderMesh mesh)
@@ -44,10 +64,51 @@ public sealed class PickMesh
         return new PickMesh(mesh, Bvh.Build(boxes));
     }
 
+    /// <summary>
+    /// Builds pick geometry for a part with a field display: the BVH indexes the
+    /// displaced-at-own-scale shape (<see cref="FieldRendering.PickShape"/>), and the
+    /// raw displacement vectors ride along so <see cref="ScenePick.Nearest"/> can
+    /// answer exactly at any animation factor. An undeformed display reduces to
+    /// <see cref="Build(RenderMesh)"/> verbatim.
+    /// </summary>
+    public static PickMesh Build(RenderMesh render, in FieldMeshData data)
+    {
+        ArgumentNullException.ThrowIfNull(render);
+        if (!data.Deformed || data.Display.Deform is not { } field)
+            return Build(render);
+
+        var displaced = Build(FieldRendering.PickShape(render, data));
+        var displacements = new float[render.VertexCount * 3];
+        double max = 0;
+        for (int v = 0; v < render.VertexCount; v++)
+        {
+            var d = field.VectorAt(render.SourceVertices[v]);
+            displacements[v * 3] = (float)d.X;
+            displacements[v * 3 + 1] = (float)d.Y;
+            displacements[v * 3 + 2] = (float)d.Z;
+            max = Math.Max(max, d.Length);
+        }
+        return new PickMesh(displaced.Mesh, displaced.Bvh, displacements, data.DeformScale, max);
+    }
+
     internal static Vector3d Vertex(RenderMesh mesh, uint index) => new(
         mesh.Positions[index * 3],
         mesh.Positions[index * 3 + 1],
         mesh.Positions[index * 3 + 2]);
+
+    /// <summary>A triangle corner at the pick's own displacement delta: the indexed
+    /// position plus <paramref name="deltaScale"/> times the raw displacement. Exactly
+    /// the indexed position at a delta of zero — the bit-identity branch.</summary>
+    internal Vector3d DisplacedVertex(uint index, double deltaScale)
+    {
+        var p = Vertex(Mesh, index);
+        if (deltaScale == 0 || Displacements is not { } d)
+            return p;
+        return new(
+            p.X + deltaScale * d[index * 3],
+            p.Y + deltaScale * d[index * 3 + 1],
+            p.Z + deltaScale * d[index * 3 + 2]);
+    }
 }
 
 /// <summary>
@@ -148,6 +209,11 @@ public static class ScenePick
     /// <param name="sectionEnabled">Whether section planes are active.</param>
     /// <param name="sectionPlanes">The active planes (null or empty = none).</param>
     /// <param name="combine">How several planes combine (see <see cref="SectionClip"/>).</param>
+    /// <param name="deformFactor">The animation's deformation factor for the frame
+    /// being picked (1 = each part at its own stated exaggeration). A displaced part's
+    /// pick BVH is built once at its OWN scale; the pick answers EXACTLY at any other
+    /// factor by inflating the broad phase conservatively and testing the
+    /// exactly-displaced triangles — never by rebuilding the index.</param>
     /// <param name="scratch">Optional reusable BVH candidate list — hover re-picks on
     /// every few pixels of pointer travel, and this keeps that allocation-free.</param>
     public static PickResult Nearest(
@@ -157,12 +223,13 @@ public static class ScenePick
         bool sectionEnabled = false,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine combine = SectionCombine.Intersection,
+        double deformFactor = 1,
         List<int>? scratch = null)
     {
         ArgumentNullException.ThrowIfNull(instances);
         if (!TryRay(pixelX, pixelY, width, height, viewProjection, out var near, out var far))
             return PickResult.None;
-        return Nearest(near, far, instances, sectionEnabled, sectionPlanes, combine, scratch);
+        return Nearest(near, far, instances, sectionEnabled, sectionPlanes, combine, deformFactor, scratch);
     }
 
     /// <summary>
@@ -176,6 +243,7 @@ public static class ScenePick
         bool sectionEnabled = false,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine combine = SectionCombine.Intersection,
+        double deformFactor = 1,
         List<int>? scratch = null)
     {
         ArgumentNullException.ThrowIfNull(instances);
@@ -200,14 +268,29 @@ public static class ScenePick
             var direction = toLocal.TransformPoint(far) - origin;
             var ray = new Ray3d(origin, direction);
 
+            // The deformed-ray correction: the BVH indexes the factor-1 shape, and at
+            // any other factor every vertex has moved by BuiltScale·(factor − 1) times
+            // its own displacement. The broad phase inflates by the largest such move
+            // (conservative — expansion only ADDS candidates), and the narrow phase
+            // tests the exactly-displaced triangles, so the answer is exact at every
+            // factor with the index never rebuilt. Delta zero is the incumbent
+            // arithmetic bit for bit (the exact-zero family).
+            var pick = instance.Mesh;
+            double deltaScale = pick.Displacements is null
+                ? 0
+                : pick.BuiltScale * (deformFactor - 1);
+
             hits.Clear();
-            instance.Mesh.Bvh.Query(ray, hits);
-            var mesh = instance.Mesh.Mesh;
+            if (deltaScale == 0)
+                pick.Bvh.Query(ray, hits);
+            else
+                pick.Bvh.Query(ray, pick.MaxDisplacement * Math.Abs(deltaScale), hits);
+            var mesh = pick.Mesh;
             foreach (int triangle in hits)
             {
-                var a = PickMesh.Vertex(mesh, mesh.Indices[triangle * 3]);
-                var b = PickMesh.Vertex(mesh, mesh.Indices[triangle * 3 + 1]);
-                var c = PickMesh.Vertex(mesh, mesh.Indices[triangle * 3 + 2]);
+                var a = pick.DisplacedVertex(mesh.Indices[triangle * 3], deltaScale);
+                var b = pick.DisplacedVertex(mesh.Indices[triangle * 3 + 1], deltaScale);
+                var c = pick.DisplacedVertex(mesh.Indices[triangle * 3 + 2], deltaScale);
                 // Minimum hit distance (direction-length units): rejects self-hits at
                 // the ray origin; a UI-picking threshold, not a kernel tolerance.
                 if (!Intersect3d.RayTriangle(ray, a, b, c, out double t) || t <= 1e-9 || t >= bestT)

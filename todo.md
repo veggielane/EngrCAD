@@ -688,17 +688,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
     undoable edit keeping the rest of the display; a CONTINUOUS slider stays declined,
     results being named states. Result persistence already rides the document
     envelope.)
-- [ ] **Picking during a deformation animation** (the EDGES half ✅ landed — displaced
-  feature edges/wireframe on the line program's own attribute — and the stated MINIMUM
-  ✅ landed too, made precise: `FieldRendering.HoverIsStale` refuses the hover
-  affordance for a displaced part at any effective factor other than exactly 1, in the
-  window AND the browser — playback-independent, since a still scrubbed off factor 1
-  answers from the same stale index; clicking still selects, a deliberate act with the
-  staleness documented): what remains is the real fix — the pick BVH is built once at
-  the part's own `DeformScale`, and rebuilding a spatial index per frame is the cost
-  the design avoids. A *deformed-ray* trick may exist for small displacements
-  (iteratively pull the ray back through the displacement field, the
-  `SdfProjectionTarget` shape of idea).
 - [ ] **A dependency-free MP4 route is FLAGGED, not promised** (the Reel/Short presets
   ✅ landed — `ReelFormat`/`ReelFraming`/`ReelExport.RenderReel`/`RenderReelPoster`, safe-area
   framing as a geometric assertion, duration caps as refusals naming the platform, the
