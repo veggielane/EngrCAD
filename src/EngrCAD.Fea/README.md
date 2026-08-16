@@ -3138,3 +3138,13 @@ domain's, not the material's), the sink a ZERO prescribed temperature; convectio
 nonzero prescribed temperatures refused by name (design-dependent loads — not self-adjoint).
 Verified: p = 1/3 uniform closed forms exact, FD sensitivity 9.2e-8 through the production
 evaluator, f'T = sum(rho^p*E_e) to twelve digits, the dendrite at 25% of the uniform design.
+
+## Heatsink sizing (`NaturalConvection`, `HeatsinkSizing`)
+
+Vertical-fin natural-convection sizing from the Bar-Cohen & Rohsenow composite (Elenbaas
+optimum El = 54.3, Nu = 1.31 DERIVED from the composite rather than stored; dry-air
+constants at 300 K, all datasheet-form transcriptions) + fin efficiency tanh(mH)/(mH).
+SI at the correlation boundary, converted once and visibly. The two-route verification is
+the point: the closed form vs an independent FD solve of the 1D fin equation (8 digits) and
+vs a real 3D ThermalSolver conduction solve of the same fin (ratio 1.0001); an impossible
+envelope refuses naming asked vs achievable watts.

@@ -2440,6 +2440,57 @@ stage volume deltas add up to the whole iso-to-deliverable difference exactly; a
 is checked by the property it must have — left–right SYMMETRY, which a wrong support breaks by
 3× — plus a fixed-`r_min` refinement study onto the same structure.
 
+### Thermal SIMP: the loop measured physics-blind
+
+`MinimizeThermal` is the same OC iteration over a density-scaled CONDUCTANCE:
+`FeaAssembly.Conductance` learned the optional per-element scale `Stiffness` already
+carried (null skips the multiply, incumbent assemblies bit-identical), and the loop itself
+was extracted into one shared `RunOptimization` behind an `ITopologyEvaluator` seam — the
+structural path routes through it verbatim, so its 59 committed topology tests
+(continuation determinism included) are the extraction's regression oracle, and all passed
+unchanged. The thermal evaluator mirrors the structural one point for point
+(symbolic-factorization reuse included), with the per-element THERMAL energy
+`E_e = T_e'·k0_e·T_e` built from the SAME `ThermalElement.Conductivity` arithmetic the
+assembly uses — which is what makes `f'T = Σρᵖ·E_e` structural rather than approximate
+(measured equal to twelve digits). The refusals carry the self-adjointness argument to its
+thermal spellings: CONVECTION is a film on a boundary the optimisation is reshaping (the
+load moves with the design — the self-weight refusal one physics over), and a NONZERO
+prescribed temperature makes the coupling term `K_fc·T_c` scale with the density of the
+elements touching the sink; a ZERO sink contributes nothing and IS the volume-to-point
+convention, with GENERATION staying fixed because the heat is the DOMAIN's, not the
+material's. Verified in the incumbent style: the p = 1 and p = 3 uniform closed forms
+(`c = Q²L/(kA)/fᵖ`) met EXACTLY (ratio 1.0), the FD sensitivity through the production
+evaluator at 9.2e-8 unfiltered and 6.5e-8 through the density filter's chain rule, and the
+volume-to-point fixture's dendrite at 25.3% of the uniform design's compliance in 80
+iterations with zero rises and the volume met to 1e-10. `TopologyResult` carries its mesh
+directly with `Model`/`ThermalModel` nullable twins (exactly one set), so `Release` serves
+both physics unchanged. A process note recorded by being bitten: the record you are
+reading missed its own commit once, because the patch that wrote it threw inside a
+BACKGROUND gate chain whose heredoc newline broke the `&&` sequencing — the suite and
+DocsGen still ran and the wait keyed on their markers, so the failure was silent. Patches
+run in the FOREGROUND now, and their prints are checked before the gate starts.
+
+### Heatsink sizing: the correlations with the FEA as their referee
+
+`NaturalConvection` + `HeatsinkSizing`: the sizing side is the Bar-Cohen & Rohsenow
+composite Nusselt over the Elenbaas optimum (El = 54.3, with the classic Nu = 1.31 DERIVED
+from the composite at that optimum rather than stored — a second copy could only drift)
+and the adiabatic-tip fin efficiency tanh(mH)/(mH), every constant a ⚠ datasheet-form
+transcription; units are SI at the correlation boundary (the form a datasheet states and a
+human checks) and converted once, visibly, at the mm-world edges. The verification is the
+feature: the fin efficiency is held against an INDEPENDENT finite-difference solve of the
+1D fin equation (equal to eight digits — two constructions sharing no line), and the
+discriminating row puts the 1D closed form against a REAL 3D conduction solve of the same
+fin through `ThermalSolver`'s own Convection films (base at the rise, films on the two
+faces, tip adiabatic so both constructions describe ONE fin): measured η = 0.9594, closed
+form 2.21048 W against FEA 2.21071 W, ratio 1.0001. The Elenbaas spacing pins its own
+quarter-power scaling exactly where it is exact (S(16L) = 2·S(L) to twelve digits; the ΔT
+quarter-power drifts through the film-temperature β and is asserted as the 1.9–2.1 band it
+honestly is), fin height is found by bisection on a PROVABLY monotone quantity
+(d/dH[tanh(mH)/m] = sech² > 0), and an envelope that cannot meet the rise refuses naming
+both the asked and the achievable watts. Orientation is VERTICAL only — the transcribed
+case, offered by name.
+
 ### Penalty continuation, and the finding that a ramp with no dwell is not one
 
 `PenaltyContinuation` (opt-in, `TopologyOptions`) starts the penalty at 1 and steps it up to the

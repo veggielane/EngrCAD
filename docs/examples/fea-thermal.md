@@ -583,3 +583,44 @@ quarter of `E·alpha·dT`). A statically determinate 3-2-1 restraint gives 1e-10
   why row-sum lumping is not available for 10-node elements.
 - **Sliver elements are the real constraint, and they belong to the mesher** — the same
   limitation the structural page records, refused by name here by the same shared guard.
+
+## Heatsink sizing (correlations checked by the solver)
+
+`HeatsinkSizing.Size` is the spreadsheet a natural-convection heatsink is chosen by, with
+the one thing no spreadsheet has: the answer can be **checked** against this repo's own
+thermal FEA. The sizing side is closed form — the Bar-Cohen & Rohsenow composite Nusselt
+correlation with the Elenbaas optimum spacing (`El = 54.3`; the classic `Nu = 1.31` is
+*derived* from the composite rather than stored), fin efficiency `tanh(mH)/(mH)`, dry-air
+properties at 300 K — every constant a ⚠ verify-against-datasheet transcription asserted in
+datasheet form. Orientation is **vertical fins only** (the transcribed case, offered by
+name); forced convection wants a stated film coefficient.
+
+```csharp run:fea-heatsink
+var spec = new HeatsinkSpec(
+    PowerWatts: 12, AllowableRise: 35, BaseWidth: 80, BaseDepth: 80, MaxFinHeight: 40);
+var design = HeatsinkSizing.Size(spec);
+Console.WriteLine($"{design.FinCount} fins at {design.FinSpacing:0.0} mm spacing, "
+    + $"height {design.FinHeight:0.0} mm");
+Console.WriteLine($"h = {design.FilmCoefficient:0.0} W/(m2 K), eta = {design.FinEfficiency:0.000}, "
+    + $"R = {design.ThermalResistance:0.00} K/W -> rise {design.PredictedRise:0.0} K");
+
+// The solid the design describes: a base plate plus the fin pattern - the geometry is
+// the easy half in this kernel.
+var sink = Shape.Box(spec.BaseWidth, spec.BaseDepth, spec.BaseThickness);
+double pitch = design.FinSpacing + spec.FinThickness;
+double firstX = -(design.FinCount - 1) * pitch / 2;
+var fin = Shape.Box(spec.FinThickness, spec.BaseDepth, design.FinHeight)
+    .Translate(firstX, 0, (spec.BaseThickness + design.FinHeight) / 2);
+sink = sink | fin.PatternLinear(design.FinCount, new Vector3d(pitch, 0, 0));
+Console.WriteLine($"solid: {sink.ToMesh().FaceCount} facets, "
+    + $"volume {sink.ToMesh().Volume():0} mm^3");
+```
+
+**The verification is the deliverable**: the fin-efficiency closed form is held against an
+*independent* finite-difference solve of the 1D fin equation (equal to eight digits), and —
+the discriminating row — against a real **3D conduction solve of the same fin** through
+`ThermalSolver`'s own `Convection` film BCs: base held at the rise, the film on the two
+faces, tip adiabatic so both constructions describe one fin. Measured: η = 0.959, closed
+form 2.2105 W against FEA 2.2107 W — **ratio 1.0001**. The Elenbaas spacing carries its own
+quarter-power scalings (S(16L) = 2·S(L) to twelve digits), and an envelope that cannot meet
+the rise refuses naming both the asked and the achievable power.

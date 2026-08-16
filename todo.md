@@ -2665,8 +2665,16 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     (PrusaLink/OctoPrint/Connect), printer accounts, the config wizard's profile
     bundles, paint-ON-mesh UI (the code-first equivalent is modifier shapes above),
     third-party repair services.
-- [ ] **Heatsink design tool (the natsink shape): correlation-sized fin arrays VERIFIED
-  against the repo's own thermal FEA.** Given a power, an allowable rise, an orientation
+- **Heatsink design tool LANDED** (`NaturalConvection`/`HeatsinkSizing` in Fea +
+  the `fea-thermal.md` example building the solid): Bar-Cohen & Rohsenow composite with
+  Nu = 1.31 DERIVED from the composite (a second stored copy could only drift), Elenbaas
+  El = 54.3 and air constants ⚠ datasheet-form; fin efficiency held against an
+  independent FD solve (8 digits) AND a real 3D conduction solve of the same fin
+  (ratio 1.0001 — the discriminating row); S(16L) = 2·S(L) to twelve digits; impossible
+  envelopes refuse naming asked vs achievable watts. Still open below: the design-study
+  loop over a generated `Feature` and horizontal-orientation correlations.
+- [ ] **Heatsink follow-ups: the parametric `Feature` + design-study loop, and
+  horizontal-orientation correlations** (was part of the correlation-tool entry).** Given a power, an allowable rise, an orientation
   and an envelope, size a natural-convection fin array and generate the solid — the
   geometry is trivial for this kernel (a base plate + a fin pattern is `Shape.Extrude` +
   `PatternLinear`/`LocationSet`, parametric through a `Feature` so a study can drive it),
