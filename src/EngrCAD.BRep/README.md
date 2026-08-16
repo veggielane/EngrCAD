@@ -1626,7 +1626,9 @@ section lofts into its own inner skin, aligned by the outer's least-twist rules 
 reversed so winding carries orientation, sharing the outer's global v; the caps gain
 hole loops). Integer-ratio segment counts split the coarser section automatically (equal-parameter
 `CurveSegment` pieces, per family — holes included; non-integer ratios refuse by name).
-Remaining loft gaps: single-NURBS sections need degree elevation / knot merging,
+A circular closed section against a NURBS one re-expresses the circle as its exact
+rational NURBS full circle automatically (the old refusal's own remedy — only the
+tessellation density had to agree). Remaining loft gaps:
 open (uncapped) skins, periodic lofts that
 close back on the first section, guide curves / spine, and the "pipe shell with evolution
 law" generalization (a section scaled and twisted along a spine — which is a loft whose

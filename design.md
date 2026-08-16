@@ -10333,6 +10333,30 @@ wrapper multiplies `Density` by the returned c — the same product the material
 and the overlay branch feeds `ThermalElement.Capacity` the same double, so the
 degeneration is arithmetic, not tolerance).
 
+**The loft's circular-vs-NURBS closed-section refusal resolved by CONVERSION, and the
+filed degree-elevation route is retired as answering a design the loft never took**:
+the backlog held "single-NURBS sections want degree elevation + knot merging (A5.9)"
+— but `LoftedSurface` samples every section curve by its own NORMALIZED parameter, so
+sections never needed a shared basis at all; the only real incompatibility was
+tessellation DENSITY (a `Circle3d` samples angularly at `segmentsPerCircle`, a NURBS
+at `curveSamples`, so the rim and the skin grid could not weld), which is exactly what
+the old refusal's remedy prescribed to the caller — "rebuild the circle as a NURBS
+section" — and `UnifyLoftSectionSampling` now does automatically: a mixed family's
+circle-backed members are re-expressed as their EXACT rational NURBS full circles
+(`NurbsCurve.Arc` over the full turn — the guard's 1e-12 slack admits 2π — with the
+last control point ASSIGNED the first, since the trig round-off between `cos(0)` and
+`cos(2π)` puts the arc's end a few ulps from its start and a closed curve's end must
+be its start exactly). A rigid `TransformedCurve` over a circle converts through its
+transform's image; a non-rigid one (an ellipse image) and any other carrier refuse
+naming the type. Two constructions check each other in the tests: the fixture builds
+its own NURBS circle independently through the public Arc factory, and a circle lofted
+to that spelling of ITSELF is a closed cylinder within chord error of πr²h, while a
+circle-to-circle loft (no mix) keeps the incumbent angular path bit for bit. With
+this, the loft compatibility story is complete: equal counts loft directly,
+integer-ratio counts split, circles convert against NURBS partners, and what remains
+refused (non-integer ratios, mixed chain/closed families) is refused because no
+canonical correspondence exists, not because machinery is missing.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

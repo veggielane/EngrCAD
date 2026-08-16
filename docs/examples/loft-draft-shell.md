@@ -17,8 +17,10 @@ skins a closed solid through them. Sections correspond by segment index: matchin
 counts loft directly, and an *integer-ratio* count splits the coarser section's
 segments automatically (equal-parameter pieces, no geometry moved — a square lofting
 to an octagon splits each side once), while a non-integer ratio fails at the call.
-Winding and starting segment are aligned automatically to the least-twist match, and
-the ends are capped. Here a rectangle (four lines) becomes a slot (two lines, two
+A circular closed section lofting to a NURBS one is re-expressed as its exact rational
+NURBS full circle automatically, so the two tessellate at one density and the skin
+welds. Winding and starting segment are aligned automatically to the least-twist match,
+and the ends are capped. Here a rectangle (four lines) becomes a slot (two lines, two
 arcs):
 
 ```csharp render:loft-transition

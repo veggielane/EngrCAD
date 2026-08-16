@@ -940,11 +940,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 
 - [ ] **Loft follow-ups** (`SolidFactory.Loft` + `Shape.Loft`/`LoftAlong` landed; each
   gap below is rejected by name today — assessed during the Shape wiring, none started):
-  - [ ] **Mismatched single-NURBS sections** — degree elevation + knot merging (The
-    NURBS Book A5.9; `BSplineBasis` is public), the second compatibility route. The
-    first — integer-ratio counts splitting the coarser section's segments with
-    `CurveSegment` — ✅ landed (per family, holes included; non-integer ratios stay
-    rejected by name, since they have no canonical correspondence).
   - [ ] **Open (uncapped) skins** — structurally blocked: `BrepSolid.Validate` requires
     two-manifold edge use, so this needs a sheet-body concept first, not a loft change.
   - [ ] **Periodic lofts** closing back on the first section — `LoftedSurface` needs a

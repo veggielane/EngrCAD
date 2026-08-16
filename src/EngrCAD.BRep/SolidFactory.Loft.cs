@@ -194,6 +194,54 @@ public static partial class SolidFactory
         return result;
     }
 
+    /// <summary>
+    /// A circle-backed closed section as its exact rational NURBS full circle. The
+    /// carrier may be the <see cref="Circle3d"/> itself or a rigid
+    /// <see cref="TransformedCurve"/> over one (what a placed profile carries); a
+    /// wrapper this cannot see through refuses naming it. The full-turn
+    /// <see cref="NurbsCurve.Arc"/>'s end point differs from its start by trig
+    /// round-off, so the last control point is ASSIGNED the first — a closed curve's
+    /// end must be its start exactly, never merely near it.
+    /// </summary>
+    private static NurbsCurve CircleAsNurbs(Curve3d curve)
+    {
+        Circle3d circle;
+        switch (curve)
+        {
+            case Circle3d direct:
+                circle = direct;
+                break;
+            case TransformedCurve { Base: Circle3d based } transformed:
+            {
+                var m = transformed.Transform;
+                var x = m.TransformVector(based.XDirection);
+                var y = m.TransformVector(based.YDirection);
+                // Rigid images only: a shear or non-uniform scale makes an ellipse,
+                // which is not this conversion's claim.
+                if (Math.Abs(x.Length - 1) > 1e-9 || Math.Abs(y.Length - 1) > 1e-9
+                    || Math.Abs(x.Dot(y)) > 1e-9)
+                    throw new NotSupportedException(
+                        "Lofting a circular closed section to a non-circular one needs the "
+                        + "circle re-expressed as a NURBS full circle, and this section's "
+                        + "circle is carried through a non-rigid transform (its image is an "
+                        + "ellipse). Rebuild the section as a NURBS curve.");
+                circle = new Circle3d(m.TransformPoint(based.Center), x, y, based.Radius);
+                break;
+            }
+            default:
+                throw new NotSupportedException(
+                    "Lofting a circular closed section to a non-circular one needs the "
+                    + $"circle re-expressed as a NURBS full circle, and a {curve.GetType().Name} "
+                    + "carrier cannot be converted. Rebuild the section as a NURBS curve.");
+        }
+
+        var arc = NurbsCurve.Arc(
+            circle.Center, circle.XDirection, circle.YDirection, circle.Radius, 0, 2 * Math.PI);
+        var points = arc.ControlPoints.ToArray();
+        points[^1] = points[0];
+        return new NurbsCurve(arc.Degree, points, [.. arc.Weights], [.. arc.Knots]);
+    }
+
     /// <summary>Two-section convenience overload.</summary>
     public static BrepSolid Loft(Profile first, Profile second, LoftStyle style = LoftStyle.Smooth) =>
         Loft([first, second], style);
@@ -470,12 +518,29 @@ public static partial class SolidFactory
         if (sections[0].IsSingleClosedCurve)
         {
             int circular = sections.Count(s => s.Segments[0].Underlying is Circle3d);
-            if (circular != 0 && circular != m)
-                throw new NotSupportedException(
-                    "Lofting a circular closed section to a non-circular one is not supported: the two " +
-                    "are tessellated at different densities and the skin would not weld. Rebuild the " +
-                    "circle as a NURBS section (or split both sections into matching arc chains).");
-            return sections;
+            if (circular == 0 || circular == m)
+                return sections;
+
+            // A circular section against a non-circular closed one: the two would
+            // tessellate at different densities (a circle samples angularly at
+            // segmentsPerCircle, a NURBS at curveSamples) and the skin would not weld —
+            // so the circle members are re-expressed as their EXACT rational NURBS
+            // full circles, which is the remedy the old refusal prescribed to the
+            // caller, done automatically. The filed degree-elevation route (A5.9) was
+            // never what this gap needed: LoftedSurface samples every section by its
+            // own normalized parameter, so only the DENSITY has to agree.
+            var converted = new Profile[m];
+            for (int k = 0; k < m; k++)
+            {
+                var curve = sections[k].Segments[0];
+                if (curve.Underlying is not Circle3d)
+                {
+                    converted[k] = sections[k];
+                    continue;
+                }
+                converted[k] = new Profile([CircleAsNurbs(curve)]);
+            }
+            return converted;
         }
 
         var replacement = new Curve3d[m][];

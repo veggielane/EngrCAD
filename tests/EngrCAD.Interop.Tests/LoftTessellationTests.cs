@@ -265,6 +265,42 @@ public class LoftTessellationTests
     }
 
     [Fact]
+    public void Loft_CircleToNurbsClosedSection_UnifiesAutomatically()
+    {
+        // The old refusal's own remedy, done automatically: the circular section is
+        // re-expressed as its exact rational NURBS full circle, so both sections
+        // tessellate at the NURBS density and the skin welds. The top is a rounded
+        // closed interpolation — a genuinely non-circular shape.
+        var top = NurbsCurve.InterpolatePoints(
+        [
+            new Vector3d(2, 0, 4), new Vector3d(0, 1.4, 4),
+            new Vector3d(-2, 0, 4), new Vector3d(0, -1.4, 4),
+        ], closed: true);
+        var solid = SolidFactory.Loft(Circle(1.5, 0), new Profile([top]));
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+    }
+
+    [Fact]
+    public void Loft_CircleToItsOwnNurbsSpelling_IsTheCylinder()
+    {
+        // A circle lofted to the SAME circle spelled as a NURBS: the conversion makes
+        // both sections the identical rational curve, so the solid is a cylinder at
+        // the NURBS tessellation density — closed, and within the chord error of
+        // pi r^2 h.
+        var top = SolidFactoryProbe.CircleAsNurbs(1.5, 4);
+        var solid = SolidFactory.Loft(Circle(1.5, 0), new Profile([top]));
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid);
+        Assert.True(mesh.IsClosed);
+        double exact = Math.PI * 1.5 * 1.5 * 4;
+        Assert.InRange(mesh.Volume(), exact * 0.98, exact);
+    }
+
+    [Fact]
     public void Loft_TwistAlignedSections_WeldAndKeepTheirVolume()
     {
         // Sections listed from different corners and wound oppositely: alignment must
@@ -277,6 +313,21 @@ public class LoftTessellationTests
             mesh.Validate();
             Assert.True(mesh.IsClosed);
             Assert.Equal(8.0, mesh.Volume(), 9);
+        }
+    }
+
+    /// <summary>An exact rational NURBS full circle for the fixtures — built through
+    /// the public Arc factory with the seam closed by assignment, INDEPENDENTLY of the
+    /// kernel's internal conversion, so the two constructions check each other.</summary>
+    private static class SolidFactoryProbe
+    {
+        public static NurbsCurve CircleAsNurbs(double radius, double z)
+        {
+            var arc = NurbsCurve.Arc(
+                (0, 0, z), Vector3d.UnitX, Vector3d.UnitY, radius, 0, 2 * Math.PI);
+            var points = arc.ControlPoints.ToArray();
+            points[^1] = points[0];
+            return new NurbsCurve(arc.Degree, points, [.. arc.Weights], [.. arc.Knots]);
         }
     }
 }
