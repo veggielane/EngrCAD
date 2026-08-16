@@ -1645,7 +1645,10 @@ film overlay — a radiating facet counts as driven; the plain Picard map measur
 oscillates); the oracle is the lumped Stefan-Boltzmann equilibrium solved independently
 by bisection, and temperatures must be ABSOLUTE (a celsius model refuses by name at the
 surroundings). Transients stream: `OnState` sees exactly the states a retained run stores
-(bit-identical, asserted) and `RetainStates = false` caps memory at the two ends.
+(bit-identical, asserted) and `RetainStates = false` caps memory at the two ends — and
+the STRUCTURAL transient streams the same way (`TransientSolveOptions.OnState`, the
+heaviest states of all), with the summary peaks/energies tracked from every streamed
+state so they are identical either way.
 
 ## Verification
 

@@ -9711,6 +9711,15 @@ at the two ends so the callback is the record and the run's memory is O(nodes). 
 assertion is the bit-for-bit correspondence against a retained twin, which is what stops a
 streaming path from quietly seeing different states than the list holds.
 
+**The structural transient streams too** (`TransientSolveOptions.OnState` +
+`RetainStates`, the thermal twin's pattern on the solver whose states are HEAVIEST — each
+carries a full `StructuralResults`): the callback sees exactly the states a retained run
+stores, bit for bit, on the constant-step and adaptive paths both, and the run's summary
+numbers (peaks, worst equilibrium, energies) are tracked from every streamed state rather
+than from the retained list, so they are identical either way — asserted, since a summary
+quietly computed over a two-entry list would be the silent regression this feature
+invites.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

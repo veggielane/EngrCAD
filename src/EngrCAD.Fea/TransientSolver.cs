@@ -193,6 +193,24 @@ public sealed record TransientSolveOptions
     /// of freedom, since a support held at a constant value does not move.</summary>
     public IReadOnlyList<Vector3d>? InitialVelocity { get; init; }
 
+    /// <summary>Streams each state the run would store — the same states, in the same
+    /// order, that <see cref="TransientResults.States"/> would hold (step 0 and the final
+    /// step included, <see cref="StoreEvery"/> honoured) — so a run of any length can
+    /// write each state to a `.vtu` and discard it. Combine with
+    /// <see cref="RetainStates"/> = false to cap the run's memory (each retained state
+    /// carries a full <see cref="StructuralResults"/>, which is why the streaming form
+    /// matters more here than anywhere): the returned results then keep only the initial
+    /// and final states, and the callback is the record.</summary>
+    public Action<TransientState>? OnState { get; init; }
+
+    /// <summary>False drops every intermediate state from the returned
+    /// <see cref="TransientResults.States"/> (the initial and final states are always
+    /// kept); the per-state record is then <see cref="OnState"/>'s to keep. True (the
+    /// default) retains everything StoreEvery says, as ever. The run's summary numbers
+    /// (peaks, worst equilibrium, energies) are identical either way — they are tracked
+    /// from every stored-or-streamed state, not from the retained list.</summary>
+    public bool RetainStates { get; init; } = true;
+
     /// <summary>Store every n-th step (default 1 = every step). Step 0 and the final step are
     /// always stored.</summary>
     public int StoreEvery
@@ -594,6 +612,7 @@ public static class TransientSolver
             fullMass, fullStiffness, modelDamping, dampA, dampB, alpha,
             velocity, displacement, effective, 0, true, options, scratch);
         states.Add(initial);
+        transient.OnState?.Invoke(initial);
 
         double peakEnergy = initial.TotalEnergy;
         double peakDisplacement = initial.MaxDisplacement;
@@ -685,7 +704,9 @@ public static class TransientSolver
                 fullMass, fullStiffness, modelDamping, dampA, dampB, alpha,
                 nextVelocity, nextDisplacement, effective, worstResidual, converged,
                 options, scratch);
-            states.Add(state);
+            transient.OnState?.Invoke(state);
+            if (transient.RetainStates || step == transient.Steps)
+                states.Add(state);
             peakEnergy = Math.Max(peakEnergy, state.TotalEnergy);
             worstEquilibrium = Math.Max(
                 worstEquilibrium, state.Results.Report.EquilibriumResidual);
@@ -950,6 +971,7 @@ public static class TransientSolver
             fullMass, fullStiffness, modelDamping, dampA, dampB, alpha,
             velocity, displacement, Level(0).Effective, 0, true, options, scratch);
         states.Add(initial);
+        transient.OnState?.Invoke(initial);
 
         double peakEnergy = initial.TotalEnergy;
         double peakDisplacement = initial.MaxDisplacement;
@@ -1054,7 +1076,9 @@ public static class TransientSolver
                 fullMass, fullStiffness, modelDamping, dampA, dampB, alpha,
                 nextVelocity, nextDisplacement, data.Effective, worstResidual, converged,
                 options, scratch);
-            states.Add(state);
+            transient.OnState?.Invoke(state);
+            if (transient.RetainStates || stepIndex == stepsFine)
+                states.Add(state);
             peakEnergy = Math.Max(peakEnergy, state.TotalEnergy);
             worstEquilibrium = Math.Max(
                 worstEquilibrium, state.Results.Report.EquilibriumResidual);

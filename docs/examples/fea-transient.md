@@ -537,3 +537,9 @@ body; the effective stiffness carries `a0·M` with `a0 = 1/(beta·dt²) > 0`, an
 mass matrix is positive definite, so the stepping matrix is positive definite whatever the
 supports do. A free body under a transient load flies away, and that is the answer — the same
 exemption [the thermal solver](fea-thermal.md) makes for an insulated body.
+
+## Streaming long runs
+
+`OnState` sees exactly the states a retained run stores (bit-identical, asserted against
+a retained twin) and `RetainStates = false` caps the returned list at the two ends — the
+summary peaks and energies are identical either way, tracked from every streamed state.
