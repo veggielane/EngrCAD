@@ -157,6 +157,27 @@ public static class ParamEditors
     /// <summary>The label a <see cref="MaterialChoices"/> row shows.</summary>
     public static string MaterialLabel(Material? material) => material?.Name ?? NoneLabel;
 
+    /// <summary>
+    /// The rows a RESULT dropdown offers: "(none)" first, then the part's results in
+    /// their own order, then the CURRENT display's field when it is not among them
+    /// (a display can legitimately name a result an edit has since removed, and a
+    /// control that cannot show the current value reads as "not set" — the
+    /// <see cref="MaterialChoices"/> rule). Pure, so both front ends ask one rule.
+    /// </summary>
+    public static IReadOnlyList<string?> ResultChoices(
+        IEnumerable<string> resultNames, string? currentField)
+    {
+        ArgumentNullException.ThrowIfNull(resultNames);
+        var choices = new List<string?> { null };
+        choices.AddRange(resultNames);
+        if (currentField is not null && !choices.Contains(currentField))
+            choices.Add(currentField);
+        return choices;
+    }
+
+    /// <summary>The label a <see cref="ResultChoices"/> row shows.</summary>
+    public static string ResultLabel(string? field) => field ?? NoneLabel;
+
     private static bool IsNumeric(Type type) =>
         type == typeof(double) || type == typeof(float) || type == typeof(int) || type == typeof(long);
 }

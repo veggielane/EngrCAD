@@ -2316,7 +2316,7 @@ internal sealed class SceneHost
         // the HasMesh gate below and appears even while the part is still tessellating.
         if (part.Results.Count > 0)
         {
-            AddProperty("Results", string.Join(", ", part.Results.Select(f => f.Label)));
+            AddResultEditor(part);
             if (part.TryResolveFieldDisplay(out var display, out string? fieldError))
             {
                 AddProperty("Showing", display.Label);
@@ -2415,6 +2415,59 @@ internal sealed class SceneHost
         };
 
         _properties.Children.Add(new TextBlock { Text = "Material", Foreground = DimText, FontSize = 10 });
+        _properties.Children.Add(combo);
+    }
+
+    /// <summary>
+    /// The result selector: which of the part's results its <c>FieldDisplay</c> shows —
+    /// the material editor's shape exactly (rows from a pure Viewer.Core rule, the write
+    /// through one undoable seam), and the load-step/frequency "slider" in its honest
+    /// discrete form: results are NAMED states, so the control is a choice, not a range.
+    /// Switching a result KEEPS the rest of the display (deformation, range, map — a
+    /// user stepping through load cases has not changed their mind about the
+    /// exaggeration); "(none)" clears the display outright. Unlike the material row this
+    /// REPUBLISHES: a display change moves colours, which live in the upload.
+    /// </summary>
+    private void AddResultEditor(Part part)
+    {
+        var options = ParamEditors.ResultChoices(
+            part.Results.Select(f => f.Name), part.FieldDisplay?.Field);
+        int selected = 0;
+        for (int i = 0; i < options.Count; i++)
+        {
+            if (string.Equals(options[i], part.FieldDisplay?.Field, StringComparison.Ordinal))
+            {
+                selected = i;
+                break;
+            }
+        }
+
+        var combo = new ComboBox
+        {
+            ItemsSource = options.Select(ParamEditors.ResultLabel).ToList(),
+            SelectedIndex = selected,
+            FontSize = 12,
+            Padding = new Thickness(4, 2),
+            Margin = new Thickness(0, 0, 0, 4),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        ToolTip.SetTip(combo, "Which simulation result colours this part");
+        combo.SelectionChanged += (_, _) =>
+        {
+            int index = combo.SelectedIndex;
+            if (index < 0 || index >= options.Count
+                || string.Equals(options[index], part.FieldDisplay?.Field, StringComparison.Ordinal))
+                return;
+            var display = options[index] is { } field
+                ? part.FieldDisplay is { } current
+                    ? current with { Field = field }
+                    : new FieldDisplay { Field = field }
+                : null;
+            var edit = DocumentEdits.SetFieldDisplay(part, display);
+            RunEdit(edit.Description, () => _undo.Do(edit), republish: true);
+        };
+
+        _properties.Children.Add(new TextBlock { Text = "Result", Foreground = DimText, FontSize = 10 });
         _properties.Children.Add(combo);
     }
 

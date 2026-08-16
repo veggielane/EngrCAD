@@ -676,8 +676,11 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   step through `updateFieldColors`, a colours-only `gl.bufferData` into the mesh's
   field buffer, driven from the same `TryDisplayFor` rule and verified by the `?report`
   A→B→A pixel check — `fieldStepPixels > 0`, `fieldStepReturn == 0`):
-  - **A frequency/load-step slider** driving `Part.Results` is the same shape of problem;
-    result persistence beside `FeatureHistory.SaveParameters` is a third neighbour.
+  - (The frequency/load-step selector ✅ landed as the properties panel's **Result
+    dropdown** — `DocumentEdits.SetFieldDisplay` + `ParamEditors.ResultChoices`, one
+    undoable edit keeping the rest of the display; a CONTINUOUS slider stays declined,
+    results being named states. Result persistence already rides the document
+    envelope.)
 - [ ] **Picking during a deformation animation** (the EDGES half ✅ landed — displaced
   feature edges/wireframe on the line program's own attribute — and the stated MINIMUM
   ✅ landed too, made precise: `FieldRendering.HoverIsStale` refuses the hover

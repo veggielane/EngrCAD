@@ -397,7 +397,11 @@ if (error is null || !error.Contains("stress")) throw new Exception("the error s
 
 In the viewer the **Fields** toolbar toggle switches the whole thing off (every part back
 to its own colour and undeformed shape) and the properties panel shows the selected part's
-results, the one being displayed, its range and any deformation scale. Headlessly,
+results, the one being displayed, its range and any deformation scale — with a **Result
+dropdown** switching which result the part shows (the load-step/frequency selector in its
+honest discrete form: results are named states, so the control is a choice, not a range).
+Switching keeps the rest of the display — deformation, range, map — and it is one
+undoable edit through the same seam saving and MCP share. Headlessly,
 `EngrCad.RenderToImage(scene, path, fields: false)` does the same — which is how a
 geometry figure is taken of a model that also carries results.
 

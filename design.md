@@ -10024,7 +10024,14 @@ A→B→A oracle at the pixel level — stepping forward must change pixels
 (`fieldStepPixels > 0`) and stepping back must restore the first capture EXACTLY
 (`fieldStepReturn == 0`), which a re-upload leaking into any other buffer or a stale
 colour array fails from one side or the other. Scope: window + stills + batched
-export/APNG + web — the playback ladder is complete.
+export/APNG + web — the playback ladder is complete. The filed frequency/load-step
+"slider" neighbour landed as the properties panel's RESULT DROPDOWN
+(`DocumentEdits.SetFieldDisplay` + the pure `ParamEditors.ResultChoices`, the material
+editor's shape exactly): results are NAMED states, so the honest control is a choice —
+switching keeps the rest of the display (a user stepping load cases has not changed
+their mind about the exaggeration), "(none)" clears it, a display naming a removed
+result stays LISTED (the current-value rule) and legal (resolution reports it), and the
+edit rides the undo stack's byte-identity oracle like every other document edit.
 
 **A displaced part's feature edges and wireframe landed as ONE line-program attribute,
 and retiring the no-edges rule kept both halves of its own reasoning**

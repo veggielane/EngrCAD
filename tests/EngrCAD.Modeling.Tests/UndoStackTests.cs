@@ -55,7 +55,7 @@ public class UndoStackTests
     /// </summary>
     public static TheoryData<string> EditNames => new(
         "parameter", "parameters-json", "suppress", "add-feature", "remove-feature",
-        "rename", "colour", "material", "transform", "display-mode", "clipped",
+        "rename", "colour", "material", "field-display", "transform", "display-mode", "clipped",
         "add-occurrence", "remove-occurrence", "repose", "explode",
         "add-annotation", "remove-annotation", "add-mate", "remove-mate");
 
@@ -99,6 +99,11 @@ public class UndoStackTests
             "rename" => DocumentEdits.Rename(rig.Scene, rig.Plate, "base-plate"),
             "colour" => DocumentEdits.SetColor(rig.Plate, Palette.Coral),
             "material" => DocumentEdits.SetMaterial(rig.Plate, Materials.Titanium6Al4V),
+            // A display naming a result the part does not carry is legal document
+            // state, which is exactly what lets the byte-identity oracle run on the
+            // shared rig without attaching a field first.
+            "field-display" => DocumentEdits.SetFieldDisplay(
+                rig.Plate, new FieldDisplay { Field = "stress" }),
             "transform" => DocumentEdits.SetTransform(rig.Plate, Matrix4d.CreateTranslation((1, 2, 3))),
             "display-mode" => DocumentEdits.SetDisplayMode(rig.Plate, DisplayMode.Wireframe),
             "clipped" => DocumentEdits.SetClippedBySection(rig.Plate, false),

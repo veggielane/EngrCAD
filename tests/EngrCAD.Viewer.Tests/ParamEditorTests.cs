@@ -199,4 +199,25 @@ public class ParamEditorTests
         Assert.Equal(screw.Material, screwChoices[^1]);
         Assert.True(screwChoices.ToList().IndexOf(screw.Material) > 0, "selectable, not lost");
     }
+
+    [Fact]
+    public void ResultChoices_ListNonePlusTheResults_AndKeepACurrentTheEditRemoved()
+    {
+        // "(none)" first, the results in their own order — and a current display whose
+        // result an edit has since removed is LISTED (the MaterialChoices rule: a
+        // control that cannot show the current value reads as "not set", and one idle
+        // click would discard it).
+        var plain = ParamEditors.ResultChoices(["T@0", "T@5"], currentField: null);
+        Assert.Equal([null, "T@0", "T@5"], plain);
+
+        var current = ParamEditors.ResultChoices(["T@0"], currentField: "removed");
+        Assert.Equal([null, "T@0", "removed"], current);
+
+        // A current that IS among the results appears once, not twice.
+        var listed = ParamEditors.ResultChoices(["T@0", "T@5"], currentField: "T@5");
+        Assert.Equal([null, "T@0", "T@5"], listed);
+
+        Assert.Equal("(none)", ParamEditors.ResultLabel(null));
+        Assert.Equal("T@5", ParamEditors.ResultLabel("T@5"));
+    }
 }

@@ -214,6 +214,19 @@ public static class DocumentEdits
             () => part.Material, m => part.Material = m, material);
     }
 
+    /// <summary>Changes which simulation result a part displays (or clears the display
+    /// with null) — the load-step/frequency selector in its honest discrete form. A
+    /// display naming a result the part does not carry is legal document state:
+    /// resolution reports it rather than this edit refusing it, exactly as a saved
+    /// document whose result was removed reloads with the display intact.</summary>
+    public static DocumentEdit SetFieldDisplay(Part part, FieldDisplay? display)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        return new ValueEdit<FieldDisplay?>(
+            display is null ? $"Clear {part.Name}'s result display" : $"{part.Name}: show {display.Field}",
+            () => part.FieldDisplay, d => part.FieldDisplay = d, display);
+    }
+
     /// <summary>Re-places a part (its own transform, not an occurrence pose).</summary>
     public static DocumentEdit SetTransform(Part part, Matrix4d transform)
     {
