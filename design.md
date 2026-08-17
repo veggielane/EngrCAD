@@ -10399,6 +10399,19 @@ built page stayed stale, and deleting the `.astro` store (or building with the c
 cleared) is what makes a pipeline change actually re-render; the tell was the new CSS
 appearing (the layout re-renders) while no figure changed.
 
+**Live-example cache-busting landed with the filed fix overturned by the manifest's own
+design rule**: the filed remedy — a content hash per example in the committed manifest
+and filename — would churn ~150 manifest lines on every kernel commit, which is
+precisely why byte counts were excluded from the manifest in the first place (it is
+deliberately a deterministic function of the SOURCE, not of the binaries). The demo
+instead stamps the fetch URL itself: `examples/<id>.dll?v=<stamp>`, where the stamp is
+a fold of the shipped EngrCAD assemblies' MVIDs (one anchor type per assembly in the
+live-example reference set), content-stable under deterministic compilation — so the
+reader's HTTP cache is busted exactly when a deploy changes the geometry an example
+would build, and never otherwise, with zero committed churn. Verified through a real
+headless-browser fetch against a clean publish: the server log shows
+`GET /examples/annotations.dll?v=aa4632277efad8041f87cf22994d7b4a`.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

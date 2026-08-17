@@ -1699,12 +1699,6 @@ UI dependencies, which makes this unusually feasible.
     `EngrCAD.Viewer` rather than `Viewer.Core`. Moving it down is the same
     shared-render-model step the camera and the cube already took, and the browser has no
     construction-tree rows to preview from yet anyway (the parity rung above).
-- [ ] **A live example's assembly has no cache-busting name.** `examples/<id>.dll` is
-  fetched by a stable path, so a reader who ran an example before a docs deploy can get the
-  previous build's geometry from their HTTP cache while looking at the new screenshot. The
-  framework assets are fingerprinted and these are not, because they are ordinary wwwroot
-  content. Fix by putting the content hash in the manifest and in the filename — the
-  manifest is already the thing the page reads to build the URL, so nothing else changes.
 - [ ] **The browser's per-draw GL state is never reset, and only one of its consequences
   has been found.** The depth-clear defect (Web README, "The number that went stale") came
   from `engrcad-gl.js` applying each draw's state and leaving it set, so the NEXT frame

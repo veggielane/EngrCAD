@@ -72,6 +72,42 @@
 
     private static readonly Regex SafeId = new("^[a-z0-9][a-z0-9-]*$", RegexOptions.Compiled);
 
+    // The example assemblies are ordinary wwwroot content, so unlike the framework
+    // assets they are not fingerprinted -- a reader who ran an example before a docs
+    // deploy could get the previous build's geometry from their HTTP cache while
+    // looking at the new screenshot. The cache key therefore carries a stamp of the
+    // KERNEL this app ships: a fold of the EngrCAD assemblies' MVIDs, which
+    // deterministic builds make content-stable, so the URL changes exactly when a
+    // deploy changes the geometry an example would build and never otherwise. (The
+    // filed alternative -- a content hash per example in the committed manifest -- was
+    // rejected for the reason byte counts already were: it churns ~150 manifest lines
+    // on every kernel commit, and the manifest is deliberately a deterministic
+    // function of the SOURCE, not of the binaries.)
+    private static readonly string CacheStamp = ComputeCacheStamp();
+
+    private static string ComputeCacheStamp()
+    {
+        Span<byte> fold = stackalloc byte[16];
+        foreach (var anchor in new[]
+        {
+            typeof(EngrCAD.Core.Vector3d),           // Core
+            typeof(EngrCAD.Mesh.HalfEdgeMesh),       // Mesh
+            typeof(EngrCAD.Implicit.Sdf),            // Implicit
+            typeof(EngrCAD.BRep.BrepSolid),          // BRep
+            typeof(EngrCAD.Interop.BRepTessellator), // Interop
+            typeof(Shape),                           // Modeling
+            typeof(ViewerShaders),                   // Viewer.Core
+            typeof(EngrCadViewport),                 // Web (the viewport the example renders in)
+        })
+        {
+            Span<byte> mvid = stackalloc byte[16];
+            anchor.Assembly.ManifestModule.ModuleVersionId.TryWriteBytes(mvid);
+            for (int i = 0; i < 16; i++)
+                fold[i] ^= mvid[i];
+        }
+        return Convert.ToHexStringLower(fold);
+    }
+
     private EngrCadSceneView? _view;
     private Scene? _scene;
     private LiveExampleScene? _example;
@@ -105,7 +141,7 @@
         try
         {
             var clock = Stopwatch.StartNew();
-            byte[] assembly = await Http.GetByteArrayAsync($"examples/{Id}.dll");
+            byte[] assembly = await Http.GetByteArrayAsync($"examples/{Id}.dll?v={CacheStamp}");
             _fetchMs = clock.Elapsed.TotalMilliseconds;
             _bytes = assembly.Length;
 
