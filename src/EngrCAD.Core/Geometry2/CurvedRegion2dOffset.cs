@@ -83,6 +83,178 @@ public static class CurvedRegion2dOffset
             : Shrink(regions, -delta, join, miterLimit);
     }
 
+    /// <summary>Default fit tolerance for the variable offset's spiral boundaries: no
+    /// fitted arc departs from the true swept boundary by more than 1 µm (model units are
+    /// millimetres by convention). Matches <see cref="Region2dOffset.DefaultArcTolerance"/>;
+    /// a default parameter must be a constant, so the two cannot share one symbol.</summary>
+    public const double DefaultFitTolerance = 1e-3;
+
+    /// <summary>
+    /// The result of a VARIABLE curved offset: the regions, and the largest distance any
+    /// fitted boundary departs from the true swept set.
+    ///
+    /// <para><b>The deviation is part of the answer, not a footnote.</b> Every other
+    /// primitive in this file is exact, and a caller is entitled to know that this one tier
+    /// is not — so the number rides with the regions the way
+    /// <c>BiArcFit.MaxDeviation</c> and <c>GearProfile.MaxFitDeviation</c> do. It is exactly
+    /// <b>zero</b> when the region carries no circular arcs, because a straight edge's
+    /// varying-offset boundary is a straight TANGENT LINE and a vertex join is an exact
+    /// sector: a polygonal outline offset through this tier is exact, and better than the
+    /// polygonal tier's own answer, which inscribes its joins.</para>
+    /// </summary>
+    /// <param name="Regions">The offset regions (possibly several, possibly none).</param>
+    /// <param name="MaxDeviation">Largest measured departure of a fitted arc from the true
+    /// swept boundary, in model units; 0 when nothing was fitted.</param>
+    /// <param name="FitTolerance">The tolerance the fit was asked for.</param>
+    public sealed record CurvedVariableOffset(
+        IReadOnlyList<CurvedRegion2d> Regions, double MaxDeviation, double FitTolerance);
+
+    /// <summary>
+    /// Variable offset of a hole-free curved region: one distance per EDGE JOINT (value at
+    /// edge i's start), interpolated linearly in arc length along each edge. Positive
+    /// dilates, negative erodes; see the per-loop overload for the whole contract.
+    /// </summary>
+    public static CurvedVariableOffset Offset(
+        CurvedRegion2d region, IReadOnlyList<double> distances,
+        double fitTolerance = DefaultFitTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        ArgumentNullException.ThrowIfNull(distances);
+        if (region.Holes.Count > 0)
+            throw new ArgumentException(
+                $"This overload takes one distance per OUTLINE edge and the region carries "
+                + $"{region.Holes.Count} hole(s). Use the per-loop overload, which takes one list per "
+                + "loop in AllLoops order (outer first).", nameof(region));
+        if (distances.Count != region.Outer.Count)
+            throw new ArgumentException(
+                $"{distances.Count} distances for {region.Outer.Count} outline edges; supply one per "
+                + "edge, being the offset at that edge's START.", nameof(distances));
+        return Offset(region, [distances], fitTolerance);
+    }
+
+    /// <summary>
+    /// Variable offset of a curved region, one distance list per loop in
+    /// <see cref="CurvedRegion2d.AllLoops"/> order (outer first, then the holes).
+    ///
+    /// <para><b>What is exact and what is fitted, stated rather than blurred.</b> A STRAIGHT
+    /// edge's varying-offset boundary is the external TANGENT LINE of its two end circles —
+    /// still a straight line, so its slab is an exact quadrilateral — and a vertex join is
+    /// still an exact circular sector of that vertex's own radius. What is NOT exact is an
+    /// ARC's: substituting the arc into the tangency condition gives
+    /// <c>q(u) = C + (R + σ·r(u)·cos φ)·û − sign(Δ)·r(u)·sin φ·t̂</c> with
+    /// <c>sin φ = Δr/L</c> constant along the edge, which is a SPIRAL — not an arc of any
+    /// radius, and not representable in a tier whose vocabulary is lines and circles. So it
+    /// is fitted by recursive bisection with a circle through three points per span, and the
+    /// measured departure is REPORTED (<see cref="CurvedVariableOffset.MaxDeviation"/>).
+    /// The fit is over ONE curve family whose points and tangents are closed form, which is
+    /// why it is not a second copy of a general fitter.</para>
+    ///
+    /// <para><b>The sign carries the direction</b> exactly as everywhere else in this file —
+    /// all positive dilates, all negative erodes, and the erosion is
+    /// <c>region ∖ inward collar</c> with no frame (the frame of the classical complement
+    /// trick cancels identically; see <c>Region2dOffset</c>'s per-loop overload for the
+    /// derivation). A distance is how far the material advances into the VOID on every loop
+    /// alike, so one positive law grows the outline and shrinks each hole.</para>
+    ///
+    /// <para>Refused BY NAME: a mixed-sign law (the swept set is undefined where the radius
+    /// passes through zero), a zero or non-finite distance, a cubic Bézier edge (the
+    /// constant tier's own refusal — a cubic's offset is a degree-10 algebraic curve), an
+    /// edge whose distance changes by more than its own LENGTH (no external tangent exists;
+    /// the larger end's disc swallows the sweep), and an arc whose offset reaches its own
+    /// CENTRE — there the swept boundary has a cusp rather than a spiral, and the constant
+    /// tier's pie-slice degeneration has no varying-radius counterpart.</para>
+    /// </summary>
+    public static CurvedVariableOffset Offset(
+        CurvedRegion2d region, IReadOnlyList<IReadOnlyList<double>> distancesPerLoop,
+        double fitTolerance = DefaultFitTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        ArgumentNullException.ThrowIfNull(distancesPerLoop);
+        if (!(fitTolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(fitTolerance), "The fit tolerance must be positive.");
+
+        var loops = region.AllLoops().ToList();
+        if (distancesPerLoop.Count != loops.Count)
+            throw new ArgumentException(
+                $"{distancesPerLoop.Count} distance lists for {loops.Count} loops (1 outline + "
+                + $"{region.Holes.Count} hole(s)); supply one list per loop in AllLoops order.",
+                nameof(distancesPerLoop));
+
+        bool? inward = null;
+        var magnitudes = new double[loops.Count][];
+        for (int l = 0; l < loops.Count; l++)
+        {
+            var stated = distancesPerLoop[l];
+            ArgumentNullException.ThrowIfNull(stated);
+            if (stated.Count != loops[l].Count)
+            {
+                throw new ArgumentException(
+                    $"Loop {l} has {loops[l].Count} edges and {stated.Count} distances; supply one per "
+                    + "edge, being the offset at that edge's START.", nameof(distancesPerLoop));
+            }
+            magnitudes[l] = new double[stated.Count];
+            for (int i = 0; i < stated.Count; i++)
+            {
+                double d = stated[i];
+                // Exact-zero semantic test: a zero-radius disc sweeps nothing.
+                if (!double.IsFinite(d) || d == 0)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(distancesPerLoop),
+                        $"Distance {i} on loop {l} is {d}; every distance must be finite and non-zero.");
+                }
+                bool here = d < 0;
+                if (inward is { } already && already != here)
+                {
+                    throw new ArgumentException(
+                        $"Distance {i} on loop {l} is {d}, which disagrees in SIGN with an earlier one: a "
+                        + "variable offset moves the whole boundary one way, and a law that grew in places "
+                        + "and shrank in others would pass through a zero-radius disc where the swept set "
+                        + "is not defined.", nameof(distancesPerLoop));
+                }
+                inward = here;
+                magnitudes[l][i] = Math.Abs(d);
+            }
+            foreach (var edge in loops[l])
+                RequireOffsettable(edge, nameof(region));
+        }
+        if (inward is null)
+            return new CurvedVariableOffset([region], 0, fitTolerance);
+
+        double first = magnitudes[0][0];
+        bool allEqual = true;
+        foreach (var loop in magnitudes)
+        {
+            foreach (double d in loop)
+                allEqual &= d == first;
+        }
+        if (allEqual)
+        {
+            // All equal is the CONSTANT offset, delegated so it is bit-identical by
+            // construction — and exact, so the reported deviation is exactly zero.
+            var constant = Offset(
+                [region], inward.Value ? -first : first, OffsetJoin.Round, Region2dOffset.DefaultMiterLimit);
+            return new CurvedVariableOffset(constant, 0, fitTolerance);
+        }
+
+        var collar = new List<CurvedRegion2d>();
+        double deviation = 0;
+        for (int l = 0; l < loops.Count; l++)
+        {
+            deviation = Math.Max(
+                deviation,
+                AddVariableLoopPrimitives(
+                    loops[l], region.IsCounterClockwise, magnitudes[l], inward.Value, fitTolerance, collar));
+        }
+        if (collar.Count == 0)
+            return new CurvedVariableOffset([region], deviation, fitTolerance);
+
+        var regions = inward.Value
+            ? CurvedRegion2dBoolean.Difference([region], CurvedRegion2dBoolean.UnionAll(collar))
+            : CurvedRegion2dBoolean.UnionAll([region, .. collar]);
+        return new CurvedVariableOffset(regions, deviation, fitTolerance);
+    }
+
     /// <summary>
     /// Strokes an open chain of lines and arcs into a region of the given
     /// <paramref name="width"/> — a toolpath's swept footprint, a slot from its centre line,
@@ -510,6 +682,243 @@ public static class CurvedRegion2dOffset
 
     private static Vector2d OnCircle(in Vector2d center, double radius, double angle) =>
         new(center.X + radius * Math.Cos(angle), center.Y + radius * Math.Sin(angle));
+
+    // ---- the VARIABLE primitives ----
+
+    /// <summary>
+    /// One slab per edge and one exact sector per joint, for a per-joint distance law.
+    /// Returns the largest measured departure of a fitted spiral boundary from the true
+    /// swept set (0 when the loop carries no arcs).
+    /// </summary>
+    private static double AddVariableLoopPrimitives(
+        IReadOnlyList<CurvedEdge2d> loop, bool materialOnLeft, IReadOnlyList<double> distances,
+        bool inward, double fitTolerance, List<CurvedRegion2d> into)
+    {
+        int count = loop.Count;
+        var footAtStart = new Vector2d[count];
+        var footAtEnd = new Vector2d[count];
+        double deviation = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            double r0 = distances[i], r1 = distances[(i + 1) % count];
+            deviation = Math.Max(
+                deviation,
+                AddVariableSlab(
+                    loop[i], materialOnLeft, r0, r1, inward, fitTolerance, i, into,
+                    out footAtStart[i], out footAtEnd[i]));
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            int previous = (i - 1 + count) % count;
+            // Outward fills the wedge the boundary turns AWAY from; inward fills the one a
+            // reflex corner opens on the material side. Since Cross(−a, −b) == Cross(a, b)
+            // exactly, negating both feet does NOT swap which corners the gate admits — the
+            // reversed ORDER does (the same derivation Region2dOffset's per-loop overload
+            // states).
+            var (from, to) = inward
+                ? (footAtStart[i], footAtEnd[previous])
+                : (footAtEnd[previous], footAtStart[i]);
+            AddCornerJoin(
+                loop[i].Start, from, to, distances[i],
+                OffsetJoin.Round, Region2dOffset.DefaultMiterLimit, into);
+        }
+        return deviation;
+    }
+
+    /// <summary>
+    /// The band swept by one edge under a linearly varying offset, plus the two tangency
+    /// FOOT directions its neighbours' joins hand over. A straight edge's band is the exact
+    /// external-tangent quadrilateral; an arc's far boundary is a spiral and is fitted.
+    /// </summary>
+    private static double AddVariableSlab(
+        in CurvedEdge2d edge, bool materialOnLeft, double r0, double r1, bool inward,
+        double fitTolerance, int index, List<CurvedRegion2d> into,
+        out Vector2d footStart, out Vector2d footEnd)
+    {
+        double length = edge.Length;
+        if (!(length > 0))
+        {
+            // Exact-zero guard: a zero-length edge carries no direction, so it raises no
+            // slab; its joint still gets a join from its neighbours' feet.
+            footStart = footEnd = default;
+            return 0;
+        }
+        if (Math.Abs(r1 - r0) >= length)
+        {
+            throw new ArgumentException(
+                $"The offset changes by |{r1} − {r0}| = {Math.Abs(r1 - r0)} over edge {index}, whose "
+                + $"length is only {length}: the larger end's disc swallows the whole edge sweep and no "
+                + "external tangent exists. Split the edge or ease the step.", "distancesPerLoop");
+        }
+        double sin = (r1 - r0) / length;
+        double cos = Math.Sqrt(1 - sin * sin);
+
+        if (!edge.IsArc)
+        {
+            var direction = edge.TangentAt(0);
+            var normal = OutwardNormal(direction, materialOnLeft);
+            if (inward)
+                normal = -normal;
+            var foot = normal * cos - direction * sin;
+            footStart = footEnd = foot;
+            var far0 = edge.Start + foot * r0;
+            var far1 = edge.End + foot * r1;
+            AddIfNonDegenerate(
+                [
+                    CurvedEdge2d.Line(edge.Start, edge.End),
+                    CurvedEdge2d.Line(edge.End, far1),
+                    CurvedEdge2d.Line(far1, far0),
+                    CurvedEdge2d.Line(far0, edge.Start),
+                ], into);
+            return 0;
+        }
+
+        // A full turn's band would be an annulus (a hole, not a simple loop) and a major arc
+        // makes the three-point circle fit choose branches; halve until every piece is at
+        // most a half turn, interpolating the radius EXACTLY (r is linear in arc length, and
+        // a half of a half is a half).
+        if (Math.Abs(edge.SweepAngle) > Math.PI)
+        {
+            double mid = (r0 + r1) / 2;
+            double worst = AddVariableSlab(
+                edge.Sub(0, 0.5), materialOnLeft, r0, mid, inward, fitTolerance, index, into,
+                out footStart, out _);
+            worst = Math.Max(worst, AddVariableSlab(
+                edge.Sub(0.5, 1), materialOnLeft, mid, r1, inward, fitTolerance, index, into,
+                out _, out footEnd));
+            return worst;
+        }
+
+        int turn = Math.Sign(edge.SweepAngle);
+        int sigma = turn * (materialOnLeft ? 1 : -1) * (inward ? -1 : 1);
+        double radius = edge.Radius;
+        // The offset boundary's radial component is R + σ·r·cos φ; the disc at a boundary
+        // point swallows the CENTRE once r reaches R, and there the swept set has a cusp
+        // rather than a spiral. The constant tier degenerates to a pie slice there; a
+        // varying radius has no such degeneration, so it is refused by name.
+        if (sigma < 0 && Math.Max(r0, r1) >= radius)
+        {
+            throw new ArgumentException(
+                $"Edge {index} is an arc of radius {radius} offset inward by up to "
+                + $"{Math.Max(r0, r1)}, which reaches its own centre: the swept boundary has a cusp "
+                + "there rather than a spiral, and the constant offset's pie-slice degeneration has no "
+                + "varying-radius counterpart. Split the edge or ease the law.", "distancesPerLoop");
+        }
+
+        // An edge whose law is locally CONSTANT has an exactly concentric offset — the spiral
+        // degenerates to an arc — so the fit is skipped entirely and the primitive is the
+        // constant tier's own annular sector. Exact comparison: equal INPUTS, the same rule
+        // the all-equal delegation uses, so a hole under a single stated distance stays exact.
+        if (r0 == r1)
+        {
+            double concentric = radius + sigma * r0;
+            double a0 = edge.StartAngle;
+            double a1 = edge.StartAngle + edge.SweepAngle;
+            var near0 = OnCircle(edge.Center, concentric, a0);
+            var near1 = OnCircle(edge.Center, concentric, a1);
+            footStart = (near0 - edge.Start) / r0;
+            footEnd = (near1 - edge.End) / r1;
+            AddIfNonDegenerate(
+                [
+                    edge,
+                    CurvedEdge2d.Line(edge.End, near1),
+                    CurvedEdge2d.Arc(edge.Center, concentric, a1, -edge.SweepAngle)
+                        .WithEndpoints(near1, near0),
+                    CurvedEdge2d.Line(near0, edge.Start),
+                ], into);
+            return 0;
+        }
+
+        var arc = edge;   // an `in` parameter cannot be captured by the local function
+        Vector2d Boundary(double u)
+        {
+            double angle = arc.AngleAt(u);
+            var radial = new Vector2d(Math.Cos(angle), Math.Sin(angle));
+            var tangential = new Vector2d(-radial.Y, radial.X) * turn;
+            double r = r0 + (r1 - r0) * u;
+            var foot = radial * (sigma * cos) - tangential * sin;
+            return arc.Center + radial * radius + foot * r;
+        }
+
+        footStart = (Boundary(0) - edge.Start) / r0;
+        footEnd = (Boundary(1) - edge.End) / r1;
+
+        var spiral = new List<CurvedEdge2d>();
+        double fit = FitSpiral(Boundary, 0, 1, fitTolerance, 18, spiral);
+        var chain = new List<CurvedEdge2d>(spiral.Count + 3)
+        {
+            edge,
+            CurvedEdge2d.Line(edge.End, Boundary(1)),
+        };
+        for (int k = spiral.Count - 1; k >= 0; k--)
+            chain.Add(spiral[k].Reversed());
+        chain.Add(CurvedEdge2d.Line(Boundary(0), edge.Start));
+        AddIfNonDegenerate(chain, into);
+        return fit;
+    }
+
+    /// <summary>
+    /// Fits the spiral <paramref name="curve"/> over [u0, u1] with circular arcs (or lines
+    /// where it is straight to within round-off), by recursive bisection with a circle
+    /// through the span's two ends and its midpoint; returns the largest measured departure.
+    ///
+    /// <para>Every span's ENDPOINTS are exact points of the spiral, so consecutive pieces
+    /// share their joints bit-for-bit and the slab closes by construction — the fit spends
+    /// its tolerance strictly between the joints, never at a weld. The deviation is MEASURED
+    /// against the true curve rather than bounded by a formula, which is also what catches a
+    /// three-point circle that picked the wrong branch.</para>
+    /// </summary>
+    private static double FitSpiral(
+        Func<double, Vector2d> curve, double u0, double u1, double tolerance, int depth,
+        List<CurvedEdge2d> into)
+    {
+        var p0 = curve(u0);
+        var p1 = curve(u1);
+        double um = (u0 + u1) / 2;
+        var pm = curve(um);
+        var candidate = ThroughThreePoints(p0, pm, p1);
+
+        double worst = 0;
+        const int samples = 9;
+        for (int k = 1; k <= samples; k++)
+        {
+            var p = curve(u0 + (u1 - u0) * k / (samples + 1.0));
+            worst = Math.Max(worst, candidate.DistanceTo(p));
+        }
+        if (worst <= tolerance || depth == 0)
+        {
+            into.Add(candidate);
+            return worst;
+        }
+        double first = FitSpiral(curve, u0, um, tolerance, depth - 1, into);
+        double second = FitSpiral(curve, um, u1, tolerance, depth - 1, into);
+        return Math.Max(first, second);
+    }
+
+    /// <summary>The circular arc through three points, or the chord when they are collinear.
+    /// Straightness is a RELATIVE test — the dimensionless sine of the turn — so it reads the
+    /// same at micron and kilometre scale.</summary>
+    private static CurvedEdge2d ThroughThreePoints(in Vector2d a, in Vector2d b, in Vector2d c)
+    {
+        var ab = b - a;
+        var ac = c - a;
+        double cross = ab.Cross(ac);
+        double scale = ab.Length * ac.Length;
+        if (!(scale > 0) || Math.Abs(cross) <= 1e-12 * scale)
+            return CurvedEdge2d.Line(a, c);
+
+        double d = 2 * cross;
+        double aa = a.LengthSquared, bb = b.LengthSquared, cc = c.LengthSquared;
+        var center = new Vector2d(
+            (aa * (b.Y - c.Y) + bb * (c.Y - a.Y) + cc * (a.Y - b.Y)) / d,
+            (aa * (c.X - b.X) + bb * (a.X - c.X) + cc * (b.X - a.X)) / d);
+        double radius = (a - center).Length;
+        if (!(radius > 0) || !double.IsFinite(radius))
+            return CurvedEdge2d.Line(a, c);
+        return CurvedEdge2d.ArcBetween(a, c, center, radius, Math.Sign(cross));
+    }
 
     /// <summary>A primitive that encloses no area contributes nothing to the union and would
     /// be rejected by <see cref="CurvedRegion2d"/>'s constructor.</summary>

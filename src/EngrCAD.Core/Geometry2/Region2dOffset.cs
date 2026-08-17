@@ -139,12 +139,15 @@ public static class Region2dOffset
     /// <para>Same union-of-primitives construction as the constant
     /// <see cref="Offset(Region2d, double, OffsetJoin, double, double)"/>; ALL-EQUAL
     /// distances DELEGATE to it outright, so the constant case is bit-identical by
-    /// construction rather than by luck. Refused by name: a hole-carrying region (v1 —
-    /// offset outer and holes separately and compose), a non-positive or non-finite
-    /// distance (outward dilation; variable erosion is filed), and an edge whose
-    /// distance CHANGES BY MORE THAN ITS LENGTH — there the larger end's disc swallows
-    /// the whole edge sweep and no tangent exists; the offset is growing faster than
-    /// the outline advances, so the caller splits the edge or eases the step.</para>
+    /// construction rather than by luck. The SIGN carries the direction exactly as the
+    /// constant overload's does — all positive dilates, all negative erodes — with
+    /// refusals by name for a MIXED law (see the per-loop overload), a zero or
+    /// non-finite distance, and an edge whose distance CHANGES BY MORE THAN ITS LENGTH,
+    /// where the larger end's disc swallows the whole edge sweep and no tangent exists;
+    /// the offset is growing faster than the outline advances, so the caller splits the
+    /// edge or eases the step.</para>
+    /// <para>A region with HOLES takes the per-loop overload — one distance list per
+    /// loop — since one flat list cannot say which vertices belong to which loop.</para>
     /// </summary>
     public static IReadOnlyList<Region2d> Offset(
         Region2d region, IReadOnlyList<double> distances,
@@ -152,37 +155,135 @@ public static class Region2dOffset
     {
         ArgumentNullException.ThrowIfNull(region);
         ArgumentNullException.ThrowIfNull(distances);
-        if (!(arcTolerance > 0))
-            throw new ArgumentOutOfRangeException(nameof(arcTolerance), "The arc tolerance must be positive.");
         if (region.Holes.Count > 0)
             throw new ArgumentException(
-                "Variable offset takes a hole-free region in v1; offset the outer boundary and the holes "
-                + "separately and compose them.", nameof(region));
-        var loop = region.Outer;
-        if (distances.Count != loop.Count)
+                $"This overload takes one distance per OUTLINE vertex and the region carries "
+                + $"{region.Holes.Count} hole(s). Use the per-loop overload, which takes one list per "
+                + "loop in AllLoops order (outer first): a hole's distances mean exactly what the "
+                + "outline's do — how far the material advances into the void — so a positive law "
+                + "shrinks a hole and a negative one opens it.", nameof(region));
+        if (distances.Count != region.Outer.Count)
             throw new ArgumentException(
-                $"{distances.Count} distances for {loop.Count} outline vertices; supply one per vertex.",
+                $"{distances.Count} distances for {region.Outer.Count} outline vertices; supply one per vertex.",
                 nameof(distances));
-        for (int i = 0; i < distances.Count; i++)
+        return Offset(region, [distances], arcTolerance);
+    }
+
+    /// <summary>
+    /// The variable offset of a region WITH HOLES: one distance list per loop, in
+    /// <see cref="Region2d.AllLoops"/> order (outer first, then the holes in order).
+    ///
+    /// <para><b>A distance is how far the material advances into the VOID</b>, on every
+    /// loop alike — so one positive law grows the outline outward and shrinks each hole,
+    /// and one negative law does the reverse. That uniformity is not a convention chosen
+    /// here: the canonical form keeps material on the LEFT of every loop, so "away from
+    /// the material" is already one direction per loop and the outer boundary and a hole
+    /// need no separate rule.</para>
+    ///
+    /// <para><b>Erosion needs no frame, and that is the finding rather than the
+    /// feature.</b> The constant erosion is the complement trick
+    /// <c>B \ dilate(B \ R, d)</c>, which for a variable law appears to need distances
+    /// for the FRAME's own boundary — but the frame CANCELS: dilating <c>B \ R</c> gives
+    /// <c>(B \ R) ∪ collar ∪ frameCollar</c>, and subtracting that from B leaves
+    /// <c>R \ collar</c> exactly, since the frame sits farther from R than any distance
+    /// reaches. So the erosion is the region minus the INWARD collar, built from the same
+    /// tangent slabs and round joins with the normal flipped — no frame, no frame
+    /// distances, and the design question the backlog filed does not arise.</para>
+    ///
+    /// <para><b>Which corners take a join swaps with the direction, and it is a
+    /// derivation.</b> A point just outside a REFLEX corner has no nearest boundary point
+    /// at the vertex (the outward normal cone is empty there), which is why the outward
+    /// pass fills convex corners only; inside, the same argument runs the other way — a
+    /// point just inside a CONVEX corner projects onto one of the two edges, while a
+    /// reflex corner's inward cone spans <c>α − 180°</c>. Since
+    /// <c>Cross(−a, −b) == Cross(a, b)</c> exactly, negating both normals does NOT flip
+    /// which corners the gate admits; the inward pass hands the pair to
+    /// <see cref="AddCornerJoin"/> in the REVERSED ORDER, which does.</para>
+    /// </summary>
+    public static IReadOnlyList<Region2d> Offset(
+        Region2d region, IReadOnlyList<IReadOnlyList<double>> distancesPerLoop,
+        double arcTolerance = DefaultArcTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        ArgumentNullException.ThrowIfNull(distancesPerLoop);
+        if (!(arcTolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(arcTolerance), "The arc tolerance must be positive.");
+
+        var loops = region.AllLoops().ToList();
+        if (distancesPerLoop.Count != loops.Count)
+            throw new ArgumentException(
+                $"{distancesPerLoop.Count} distance lists for {loops.Count} loops (1 outline + "
+                + $"{region.Holes.Count} hole(s)); supply one list per loop in AllLoops order.",
+                nameof(distancesPerLoop));
+
+        bool? inward = null;
+        var magnitudes = new double[loops.Count][];
+        for (int l = 0; l < loops.Count; l++)
         {
-            if (!double.IsFinite(distances[i]) || !(distances[i] > 0))
-                throw new ArgumentOutOfRangeException(
-                    nameof(distances),
-                    $"Distance {i} is {distances[i]}; every distance must be positive and finite "
-                    + "(this is the outward dilation — variable erosion is filed).");
+            var stated = distancesPerLoop[l];
+            ArgumentNullException.ThrowIfNull(stated);
+            if (stated.Count != loops[l].Count)
+            {
+                throw new ArgumentException(
+                    $"Loop {l} has {loops[l].Count} vertices and {stated.Count} distances; supply one "
+                    + "per vertex.", nameof(distancesPerLoop));
+            }
+            magnitudes[l] = new double[stated.Count];
+            for (int i = 0; i < stated.Count; i++)
+            {
+                double d = stated[i];
+                // Exact-zero semantic test: a zero-radius disc sweeps nothing, so "no offset
+                // here" is not a direction the law can carry alongside a real one.
+                if (!double.IsFinite(d) || d == 0)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(distancesPerLoop),
+                        $"Distance {i} on loop {l} is {d}; every distance must be finite and non-zero.");
+                }
+                bool here = d < 0;
+                if (inward is { } already && already != here)
+                {
+                    throw new ArgumentException(
+                        $"Distance {i} on loop {l} is {d}, which disagrees in SIGN with an earlier one: a "
+                        + "variable offset moves the whole boundary one way. A law that grew in places and "
+                        + "shrank in others would pass through a zero-radius disc, where the swept set is "
+                        + "not defined, so there is no honest set to return — offset the two stretches "
+                        + "separately and compose them.", nameof(distancesPerLoop));
+                }
+                inward = here;
+                magnitudes[l][i] = Math.Abs(d);
+            }
         }
+        if (inward is null)
+            return [region];   // no vertices at all: nothing to move
 
         // All equal is the constant offset, delegated so it is bit-identical by
         // construction (exact comparison: equal INPUTS, not a tolerance).
+        double first = magnitudes[0][0];
         bool allEqual = true;
-        for (int i = 1; i < distances.Count && allEqual; i++)
-            allEqual = distances[i] == distances[0];
+        foreach (var loop in magnitudes)
+        {
+            foreach (double d in loop)
+                allEqual &= d == first;
+        }
         if (allEqual)
-            return Offset(region, distances[0], OffsetJoin.Round, DefaultMiterLimit, arcTolerance);
+        {
+            return Offset(
+                region, inward.Value ? -first : first, OffsetJoin.Round, DefaultMiterLimit, arcTolerance);
+        }
 
-        var primitives = new List<Region2d> { region };
-        AddVariableLoopPrimitives(loop, region.IsCounterClockwise, distances, arcTolerance, primitives);
-        return Region2dBoolean.UnionAll(primitives);
+        var collar = new List<Region2d>();
+        for (int l = 0; l < loops.Count; l++)
+        {
+            AddVariableLoopPrimitives(
+                loops[l], region.IsCounterClockwise, magnitudes[l], inward.Value, arcTolerance, collar);
+        }
+        if (collar.Count == 0)
+            return [region];
+
+        if (!inward.Value)
+            return Region2dBoolean.UnionAll([region, .. collar]);
+        return Region2dBoolean.Difference([region], Region2dBoolean.UnionAll(collar));
     }
 
     /// <summary>
@@ -444,10 +545,16 @@ public static class Region2dOffset
     /// join per vertex at that vertex's own radius, spanning the adjacent tangent-foot
     /// directions — <see cref="AddCornerJoin"/> already arcs between whatever unit
     /// normals it is handed, which is what makes the reuse exact rather than
-    /// approximate.</summary>
+    /// approximate.
+    /// <para><paramref name="inward"/> builds the same collar on the MATERIAL side, for
+    /// the erosion. The tangency derivation is indifferent to which unit normal it is
+    /// given — <c>m̂·(L·d̂ + Δr·m̂) = 0</c> holds for any n̂ ⊥ d̂ — so the slab needs only
+    /// the flipped normal, while the JOINS must be offered in the reversed order because
+    /// negating both normals leaves the cross product exactly unchanged and would fill
+    /// the convex corners rather than the reflex ones.</para></summary>
     private static void AddVariableLoopPrimitives(
         IReadOnlyList<Vector2d> loop, bool materialOnLeft, IReadOnlyList<double> distances,
-        double arcTolerance, List<Region2d> into)
+        bool inward, double arcTolerance, List<Region2d> into)
     {
         int count = loop.Count;
         var tangentNormals = new Vector2d[count];
@@ -468,6 +575,8 @@ public static class Region2dOffset
 
             var direction = edge / length;
             var normal = OutwardNormal(direction, materialOnLeft);
+            if (inward)
+                normal = -normal;
             // The external tangent line tilts off the normal by sin φ = (rb − ra)/L,
             // rotating AGAINST the direction of travel toward the smaller end; the foot
             // direction m̂ = n̂·cos φ − d̂·sin φ satisfies the tangency condition
@@ -485,8 +594,14 @@ public static class Region2dOffset
             int previous = PreviousLive(live, i);
             if (previous < 0 || !live[i])
                 continue;
+            // Outward fills the wedge left open where the loop turns AWAY from the material;
+            // inward fills the one a REFLEX corner opens on the material side, which is the
+            // same gate asked the other way round — hence the swapped pair, not a negation.
+            var (from, to) = inward
+                ? (tangentNormals[i], tangentNormals[previous])
+                : (tangentNormals[previous], tangentNormals[i]);
             AddCornerJoin(
-                loop[i], tangentNormals[previous], tangentNormals[i], distances[i],
+                loop[i], from, to, distances[i],
                 OffsetJoin.Round, DefaultMiterLimit, arcTolerance, into);
         }
     }
