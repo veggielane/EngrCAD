@@ -328,8 +328,47 @@ public sealed class PdfDrawing
         sb.Append(')');
     }
 
-    private static byte[] EncodeWinAnsi(string text)
+    /// <summary>
+    /// The drafting symbols WinAnsi cannot spell as a single character, replaced by the WORD
+    /// forms ASME Y14.5 itself permits — the diameter sign's substitution generalised to the
+    /// three symbols that have no glyph to stand in for them.
+    ///
+    /// <para>It is a substitution rather than a refusal for the same reason U+2300 is: the
+    /// rule protects a reader from a silent "?" in a dimension, and "DEEP 12" says exactly
+    /// what the arrow said. It can only turn a REFUSAL into output — every one of these
+    /// threw before — so no PDF that exists today moves a byte, which is what makes it safe
+    /// to add to a format whose whole claim is a byte fixed point.</para>
+    /// </summary>
+    public static IReadOnlyDictionary<char, string> DraftingWords { get; } =
+        new Dictionary<char, string>
+        {
+            ['\u21A7'] = "DEEP ",     // depth
+            ['\u2334'] = "CBORE ",    // counterbore
+            ['\u2335'] = "CSK ",      // countersink
+        };
+
+    /// <summary>The text a PDF actually carries: the drafting symbols above spelled out,
+    /// everything else verbatim (a string with none of them is returned by reference).</summary>
+    public static string SubstituteDraftingWords(string text)
     {
+        ArgumentNullException.ThrowIfNull(text);
+        int at = text.AsSpan().IndexOfAny('\u21A7', '\u2334', '\u2335');
+        if (at < 0)
+            return text;
+        var sb = new System.Text.StringBuilder(text.Length + 8);
+        foreach (char c in text)
+        {
+            if (DraftingWords.TryGetValue(c, out string? word))
+                sb.Append(word);
+            else
+                sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private static byte[] EncodeWinAnsi(string source)
+    {
+        string text = SubstituteDraftingWords(source);
         var bytes = new byte[text.Length];
         for (int i = 0; i < text.Length; i++)
         {

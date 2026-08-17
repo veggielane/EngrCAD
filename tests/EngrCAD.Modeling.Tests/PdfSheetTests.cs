@@ -267,10 +267,38 @@ public class PdfSheetTests
 
         // Anything else outside WinAnsi refuses AT THE ADD, naming the character —
         // never a silent '?' in a manufacturer's drawing.
-        char counterbore = (char)0x2334;
+        char omega = (char)0x03A9;
         var refusal = Assert.Throws<NotSupportedException>(
-            () => pdf.AddText(new Vector2d(0, 0), counterbore.ToString(), 3.5));
-        Assert.Contains("U+2334", refusal.Message, StringComparison.Ordinal);
+            () => pdf.AddText(new Vector2d(0, 0), omega.ToString(), 3.5));
+        Assert.Contains("U+03A9", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The three drafting symbols with no WinAnsi glyph to stand in for them — depth,
+    /// counterbore, countersink — are spelled out in the WORD forms ASME Y14.5 permits, which is
+    /// the diameter sign's substitution generalised to the symbols that have no single character
+    /// to become. It can only turn a REFUSAL into output, so no PDF that already existed moves.
+    /// </summary>
+    [Fact]
+    public void TheDraftingSymbolsWithNoGlyphAreSpelledOut()
+    {
+        var pdf = new PdfDrawing();
+        // Exactly what HoleCallout emits for a counterbored hole, continuation and all.
+        string callout = HoleCallout.Text(StandardHoles.Counterbored(6), 14).Replace('\n', ' ');
+        pdf.AddText(new Vector2d(0, 0), callout, 3.5);
+
+        string value = Assert.Single(PdfReadback.Parse(pdf.ToPdf()).Texts).Value;
+        Assert.Contains("DEEP ", value, StringComparison.Ordinal);
+        Assert.Contains("CBORE ", value, StringComparison.Ordinal);
+        Assert.DoesNotContain('\u21A7', value);
+        Assert.DoesNotContain('\u2334', value);
+
+        // The countersink word too, from the same table.
+        Assert.Equal("CSK ", PdfDrawing.DraftingWords['\u2335']);
+
+        // A string carrying none of them is returned untouched, so nothing else can shift.
+        const string plain = "SECTION A-A";
+        Assert.Same(plain, PdfDrawing.SubstituteDraftingWords(plain));
     }
 
     [Fact]
