@@ -4,13 +4,13 @@ title: "Fits & tolerance stackups"
 
 `Iso286` answers the question every mating pair raises — *what limits do I put on
 this bore and this shaft?* — from the ISO 286-1 tables: standard tolerance grades
-IT5–IT12 and the fundamental deviations of the common shaft letters (d, e, f, g, h,
-js, k, m, n, p) plus the basic hole H, for sizes over 1 up to 500 mm. That is the
-**hole-basis system** the standard itself prefers, and it covers the preferred fits
-(H7/g6, H7/h6, H8/f7, H9/d9, H7/k6, H7/n6, H7/p6). The tables are transcriptions
-carrying the ⚠ verify-against-datasheet flag (`StandardHoles`' convention): they are
-stored in the standard's own micrometres — the form a human checks against the
-printed chart — and converted to model millimetres at the API.
+IT5–IT12 and the fundamental deviations of shaft letters **a through h, js, k, m,
+n, p and r through z**, plus the holes of **both systems** — the basic hole H and
+JS, and the shaft-basis holes A–G — for sizes over 1 up to 500 mm. That covers the
+whole preferred-fit range, from H11/c11 loose running to H7/u6 force. The tables are
+transcriptions carrying the ⚠ verify-against-datasheet flag (`StandardHoles`'
+convention): they are stored in the standard's own micrometres — the form a human
+checks against the printed chart — and converted to model millimetres at the API.
 
 ```csharp run:fits-limits
 // The classic sliding fit at Ø40: H7 bore +25/0 µm, g6 shaft −9/−25 µm.
@@ -36,10 +36,75 @@ if (locational.Kind != FitKind.Transition)
     throw new Exception("H7/k6 can do either");
 ```
 
-Letters a–c and r–z split their deviations at sub-range boundaries the main table
-does not have, so they are **refused by name** rather than approximated — as are
-holes other than H (the shaft-basis system) and sizes outside the 1–500 mm table.
-A refusal that names its reason beats a plausible number from the wrong row.
+## The wide-clearance and interference letters
+
+Letters a–c (large clearance) and r–z (interference) carry their deviations on the
+standard's own **finer size steps** — c changes at 40 *inside* the 30–50 range the
+grades use, and t, u, v, x, y, z each take a new value there too — so they read from
+a 25-row table rather than the grades' 13. Which letters split where is not uniform:
+r and s carry one value across 30–50 while their neighbours do not.
+
+```csharp run:fits-interference
+// H11/c11 — the loose running fit: at Ø40 the shaft sits 120 µm below the bore at
+// its closest and 440 µm at its loosest.
+var loose = Iso286.Fit(40, "H11", "c11");
+if (loose.Kind != FitKind.Clearance)
+    throw new Exception("H11/c11 always clears");
+if (Math.Abs(loose.MinClearance - 0.120) > 1e-12 || Math.Abs(loose.MaxClearance - 0.440) > 1e-12)
+    throw new Exception("the chart row: 120 to 440 microns");
+
+// H7/s6 — the medium drive fit: ALWAYS interference, 18 to 59 microns of it.
+var drive = Iso286.Fit(40, "H7", "s6");
+if (drive.Kind != FitKind.Interference)
+    throw new Exception("H7/s6 always binds");
+if (Math.Abs(drive.MinClearance - -0.059) > 1e-12 || Math.Abs(drive.MaxClearance - -0.018) > 1e-12)
+    throw new Exception("the chart row: 18 to 59 microns of interference");
+
+// The three interference letters ORDER as the standard intends at one size.
+var press = Iso286.Fit(40, "H7", "r6");   // light press
+var force = Iso286.Fit(40, "H7", "u6");   // force fit
+if (!(force.MaxClearance < drive.MaxClearance && drive.MaxClearance < press.MaxClearance))
+    throw new Exception("r lighter than s lighter than u");
+
+// The finer steps are visible: c takes a new cell at 40, s does not.
+if (Math.Abs(Iso286.Limits(45, "c11").Upper - -0.130) > 1e-12)
+    throw new Exception("c changes inside the 30-50 grade range");
+if (Iso286.Limits(45, "s6").Lower != Iso286.Limits(40, "s6").Lower)
+    throw new Exception("s carries one value across 30-50");
+```
+
+## Shaft basis
+
+Where a bought-in ground shaft is the fixed member, the fit is cut into the hole
+instead: the shaft is the basic **h** and the hole takes the letter. `Iso286` reads
+the shaft-basis holes **A–G** by the standard's own mirror rule — `EI = −es` of the
+same-letter shaft, with no correction at any grade — and that rule has a consequence
+worth checking rather than asserting: **G7/h6 carries exactly H7/g6's clearances**,
+because the two IT widths are the same two numbers added in the other order.
+
+```csharp run:fits-shaft-basis
+// The same joint, described from either side.
+var holeBasis  = Iso286.Fit(40, "H7", "g6");
+var shaftBasis = Iso286.Fit(40, "G7", "h6");
+if (holeBasis.MinClearance != shaftBasis.MinClearance ||
+    holeBasis.MaxClearance != shaftBasis.MaxClearance)
+    throw new Exception("the IT widths commute, so the two systems agree exactly");
+
+// G7 at Diameter 40 is +34/+9 microns — g6's -9 mirrored, plus IT7.
+var g7 = Iso286.Limits(40, "G7");
+if (Math.Abs(g7.Upper - 0.034) > 1e-12 || Math.Abs(g7.Lower - 0.009) > 1e-12)
+    throw new Exception("G7 at 40 is +0.034/+0.009");
+```
+
+What stays **refused by name**: the holes J and K–ZC, because those carry the
+`Δ = IT(n) − IT(n−1)` correction for fine grades — with tabulated exceptions and an
+IT3/IT4 dependence the grade table does not hold — and half-transcribing it is
+exactly the plausible-wrong-row failure the ⚠ flag exists to prevent; the
+hole-basis spelling of the same fit (H7/s6 for S7/h6) is supported. Also refused:
+the intermediate letters cd, ef, fg and j, the extreme za–zc, sizes outside the
+1–500 mm table, and **t, v and y below 24, 14 and 18 mm** — the standard's own
+empty cells, named as such rather than interpolated. A refusal that names its
+reason beats a plausible number from the wrong row.
 
 ## Stackups
 

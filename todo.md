@@ -1971,16 +1971,22 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     reported like any other ceiling, because the check knows the build DIRECTION and not
     where the plate is. Adding a plate is one plane plus a "within one layer of it" test
     — but it changes the reported area, so it is opt-in and stated, not a default.
-- [ ] **ISO 286 follow-ups** (v1 ✅ landed — `Iso286`/`FitLimits`/`IsoFit`/`FitKind` +
-  `ToleranceStackup`, docs `examples/fits.md`: IT5–IT12 × 13 ranges and shaft letters
-  d–p + hole H transcribed in the standard's own µm, the kind DERIVED from the
-  clearance extremes, worst-case + RSS with asymmetric bands re-centred on their mids):
-  - [ ] **Letters a–c and r–z, and shaft-basis holes.** The large-clearance and
-    heavier-interference letters split their fundamental deviations at sub-range
-    boundaries (c at 40, 65, 100…; r/s/t likewise), so their table is roughly double
-    the d–p one and was deferred rather than half-transcribed — H11/c11 and H7/s6 are
-    preferred fits, so this is the first row to add. Shaft-basis holes (F8 and
-    friends) are the same rows applied with the opposite sign convention.
+- [ ] **ISO 286 follow-ups** (v1 + the deviation alphabet ✅ landed —
+  `Iso286`/`FitLimits`/`IsoFit`/`FitKind` + `ToleranceStackup`, docs `examples/fits.md`:
+  IT5–IT12 × 13 ranges, shaft letters a–h/js/k/m/n/p/r–z over the standard's own finer
+  25-row table where they split, and the holes of both systems — H, JS and the
+  shaft-basis A–G by the mirror rule — transcribed in the standard's own µm, the kind
+  DERIVED from the clearance extremes, worst-case + RSS with asymmetric bands re-centred
+  on their mids):
+  - [ ] **The holes J and K–ZC — the correction-carrying half of the shaft-basis
+    system.** K, M and N (grades ≤ IT8) and P–ZC (grades ≤ IT7) take the
+    `Δ = IT(n) − IT(n−1)` correction, which has tabulated exceptions (ISO 286-1 Table 2
+    note b: M6 over 250–315 is −9 µm, not the derived −11) and an IT3/IT4 dependence the
+    IT5–IT12 grade table does not carry, so landing it means transcribing the Δ columns
+    for IT3–IT8 as their own table plus the exception rows — refused by name today, with
+    the hole-basis spelling of the same fit (H7/s6 for S7/h6) named in the refusal, so
+    nothing is unreachable meanwhile. J's per-grade special values are the same shape of
+    job and much smaller.
   - [ ] **A stackup derived from the model.** The v1 finding, recorded in the class
     doc: mates constrain POSES and carry no toleranced dimensions, so a chain walked
     off the mate graph would be a guess about intent — deriving one needs a dimension
