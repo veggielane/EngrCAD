@@ -1297,9 +1297,20 @@ and curved wires are reported and skipped/flattened by name: the covered copper
 subset is the two-layer board, and the board thickness is assumed 1.6 mm with a note, since a
 `.brd` does not state it); and **IPC-7351 footprint GENERATION landed as the importers'
 complement** (`Ipc7351` + `StandardBodies` — a land pattern from the component's own datasheet
-dimensions rather than a library file; see the section above). What stays filed is EDIF, the newer
-Eagle/Fusion XML variants beyond the classic `.lbr`, and Eagle 3D package models (Eagle's
-`<packages3d>` reference a model by URN — materially more work than the classic `.lbr` carries). The **KiCad 3D model reference now imports** (the footprint's `(model …)` becomes the definition's `Model`) **and a `.wrl` model LOADS** (the mesh tier's `VrmlReader` + the KiCad 2.54 unit convention at the consumer); what stays filed on the model side is IGES (`.igs`/`.iges`) 3D-model loading (a face soup needing `ShapeHealing`) — refused by name, the reference recorded. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
+dimensions rather than a library file; see the section above). **The newer Eagle 9 / Fusion
+MANAGED format reads too**: its schema drift is additive `urn`/`library_version` attributes a
+reader that asks by name never sees, plus the `<packages3d>` vocabulary — a `<package3d>` is a
+NAME + a URN + the packages its `<packageinstance>`s bind (`EagleLibrary.Packages3d`,
+`EagleDeviceInfo.Package3dUrn`), and since the model FILE is Fusion cloud content a
+`ComponentModel3D` is attached ONLY when a caller's resolver
+(`EagleLibrary.Load(device, modelResolver)`) returns a local file that exists; every other
+outcome — no resolver, no local copy, a missing file, an undeclared URN, a package3d whose
+instance names a package the library lacks, a second binding — is recorded in the diagnostics BY
+NAME, and a `<package3d>` with no `urn` (its identity) is dropped by name. A version-9+ file also
+gets a diagnostic naming the version, in all three readers; a classic file gets none and its
+diagnostics are exactly what they always were. What stays filed is EDIF, and fetching a URN's
+model from the cloud (a reader that reached the network would make an import non-deterministic and
+unavailable offline — the URN is the key a caller needs to do it themselves). The **KiCad 3D model reference now imports** (the footprint's `(model …)` becomes the definition's `Model`) **and a `.wrl` model LOADS** (the mesh tier's `VrmlReader` + the KiCad 2.54 unit convention at the consumer); what stays filed on the model side is IGES (`.igs`/`.iges`) 3D-model loading (a face soup needing `ShapeHealing`) — refused by name, the reference recorded. Vias do not yet cut the 3D plate B-Rep (they are modelled in the copper / connectivity / DRC;
 drilling the plate is a later refinement). The drawn schematic **sheet** (`SchematicSheet` →
 SVG/DXF/PDF) has landed as a VIEW of the graph (see above); what stays open there is a real
 **auto-placer** (a good layout, not the grid placeholder) and an **obstacle-avoiding** wire

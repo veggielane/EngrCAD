@@ -256,6 +256,114 @@ Console.WriteLine($"R2.1 at ({r2Pad1.World.X}, {r2Pad1.World.Y})");
 Console.WriteLine($"SIG joined by the imported copper: {layout.Connectivity().Of("SIG").IsConnected}");
 ```
 
+## Managed Eagle libraries and their 3D packages (`<packages3d>`)
+
+Eagle 9 (and Fusion) keeps libraries **managed**: every library, package, symbol and deviceset
+carries a `urn`, and a new `<packages3d>` block declares **3D packages** that devices bind through
+`<package3dinstances>`. The additive `urn`/`library_version` attributes need no handling at all —
+a reader that asks for its attributes *by name* never sees them — so the classic subset (pads,
+pins, the `<connect>` map) reads exactly as it does from a pre-9 `.lbr`.
+
+The `<packages3d>` binding is the real difference, and it comes with one honest problem: **a
+managed library states an identity, not a path.** A `<package3d>` is a name plus a URN plus the 2D
+packages its `<packageinstance>`s bind; the model *file* lives in Fusion's cloud, keyed by that
+URN, and the `.lbr` does not carry it. So the reader **surfaces the binding as data** and attaches
+a `ComponentModel3D` only when a **resolver you supply** finds a local file that exists — never
+guessing a path into geometry:
+
+```csharp run:ecad-eagle-packages3d
+// A managed (Eagle 9) library: the classic content plus urn attributes and a <packages3d> block.
+var lbr = """
+<?xml version="1.0" encoding="utf-8"?>
+<eagle version="9.6.2">
+  <drawing>
+    <library urn="urn:adsk.eagle:library:325">
+      <packages>
+        <package name="R0805" urn="urn:adsk.eagle:footprint:23122/1" library_version="1">
+          <smd name="1" x="-0.9125" y="0" dx="1.025" dy="1.4" layer="1" roundness="25"/>
+          <smd name="2" x="0.9125" y="0" dx="1.025" dy="1.4" layer="1" roundness="25"/>
+        </package>
+      </packages>
+      <packages3d>
+        <package3d name="RESC2012X70N" urn="urn:adsk.eagle:package:23123/2" type="model" library_version="1">
+          <packageinstances><packageinstance name="R0805"/></packageinstances>
+        </package3d>
+      </packages3d>
+      <symbols>
+        <symbol name="R" urn="urn:adsk.eagle:symbol:16966/1">
+          <rectangle x1="-1.016" y1="-2.54" x2="1.016" y2="2.54" layer="94"/>
+          <pin name="1" x="0" y="3.81" length="short" direction="pas" rot="R270"/>
+          <pin name="2" x="0" y="-3.81" length="short" direction="pas" rot="R90"/>
+        </symbol>
+      </symbols>
+      <devicesets>
+        <deviceset name="R-EU_" prefix="R" urn="urn:adsk.eagle:component:23134/1">
+          <gates><gate name="G$1" symbol="R" x="0" y="0"/></gates>
+          <devices>
+            <device name="R0805" package="R0805">
+              <connects>
+                <connect gate="G$1" pin="1" pad="1"/>
+                <connect gate="G$1" pin="2" pad="2"/>
+              </connects>
+              <package3dinstances>
+                <package3dinstance package3d_urn="urn:adsk.eagle:package:23123/2"/>
+              </package3dinstances>
+            </device>
+          </devices>
+        </deviceset>
+      </devicesets>
+    </library>
+  </drawing>
+</eagle>
+""";
+
+var lib = EagleLibraryReader.Read(lbr);
+
+// The 3D packages are DATA: a name, the URN that identifies the model, its type, and the 2D
+// packages it binds.
+foreach (var p3d in lib.Packages3d)
+    Console.WriteLine($"{p3d.Name} [{p3d.Type}] {p3d.Urn} -> {string.Join(", ", p3d.PackageNames)}");
+if (lib.Packages3d.Count != 1) throw new Exception("expected one 3D package");
+
+// A device names the URN it binds, so a caller can resolve it however it likes.
+var device = lib.Devices.Single(d => d.Name == "R-EU_R0805");
+Console.WriteLine($"{device.Name} binds {device.Package3dUrn}");
+
+// With no resolver, the binding is RECORDED by name and no model is attached — the geometry is
+// cloud content this file does not carry, so inventing one would be a lie.
+var plain = lib.Load("R-EU_R0805");
+if (plain.Definition.Model is not null) throw new Exception("nothing should have been attached");
+Console.WriteLine(plain.Diagnostics.First(d => d.Contains("23123/2")));
+
+// A resolver is asked about the bound 3D package and answers with a LOCAL path, or null. Here it
+// has no local copy, so the binding is still only recorded — and it says so.
+string? asked = null;
+var resolved = lib.Load("R-EU_R0805", p3d => { asked = p3d.Urn; return null; });
+Console.WriteLine($"the resolver was asked about {asked}");
+if (resolved.Definition.Model is not null) throw new Exception("no local copy: nothing to attach");
+
+// The classic three representations are untouched by any of this.
+if (!resolved.Identity.Ok) throw new Exception(resolved.Identity.ToString());
+if (resolved.Definition.Footprint!.Pads[0].Center.X != -0.9125) throw new Exception("pad drifted");
+```
+
+Return a real path from the resolver — a `.stl`/`.obj`/`.off`/`.wrl`/`.step` file you have
+downloaded or keep beside the library — and the definition arrives with an ordinary
+`ComponentModel3D` at the **identity placement** (an Eagle `<package3d>` states no offset; Fusion
+aligns the model to the footprint origin), which then seats, exports and round-trips exactly like a
+KiCad-referenced model.
+
+Everything the reader cannot verify is reported **by name** rather than assumed: no resolver, a
+resolver with no local copy, a resolver naming a file that is not there, a device binding a URN the
+library never declares, a `<package3d>` whose `<packageinstance>` names a package the library
+lacks, and a device binding a *second* 3D package (a `PartDefinition` carries one model, so the
+first wins and the rest are named). A `<package3d>` with **no `urn`** is dropped by name — the URN
+*is* its identity, since that is what a device's binding references. A file declaring version 9 or
+newer also gets a diagnostic naming the version, in all three Eagle readers, so managed provenance
+is visible rather than silent; a classic file gets none. Fetching a URN's model from the cloud is
+deliberately **not** done: it would make an import non-deterministic and unavailable offline, and
+the URN is exactly the key you need to do it yourself.
+
 ## Loading a whole schematic (`.kicad_sch`)
 
 Loading a component gives one part; loading a `.kicad_sch` gives a whole **schematic** — the

@@ -7080,8 +7080,8 @@ footprint reader (`KiCadFootprintReader`, and the whole-board `KiCadPcbReader`) 
 mm (a legacy inch `at` is converted with a note), rotate in degrees, scale unitless — so a
 `ComponentLibrary.Load` part arrives with its 3D model REFERENCE, not force-loaded (an empty library
 directory is normal). What stays filed on the model side: IGES (`.igs`)
-3D-model loading, and Eagle 3D package models (Eagle's `<packages3d>` reference a model by URN —
-materially more than the classic `.lbr` carries); the VRML (`.wrl`) reader landed (above).
+3D-model loading; the VRML (`.wrl`) reader landed (above), and the Eagle managed-library
+`<packages3d>` BINDING landed as a binding rather than as geometry (below).
 
 **The Eagle `.lbr` reader is the SECOND interchange, and its structure — not effort — is the
 finding** (`EagleLibraryReader`, `EagleLibrary`; the KiCad reader's twin). An Eagle library is one
@@ -7150,9 +7150,38 @@ the fab profile), and a signal with copper but no resolvable terminal has its co
 note rather than thrown three calls later by the layout's own unknown-net gate. The DRC on an
 imported board runs at the KiCad-import convention (acute floor 45°, since a thin trace entering a
 pad makes near-90° junctions). All three Eagle readers signpost each other at the root, so a user
-holding any Eagle file is pointed at the right door (pinned by test in every direction). Still
-filed: Eagle 3D package models and the newer Eagle/Fusion XML variants beyond the classic schema.
-Docs `examples/ecad-library.md`. **IPC-7351 footprint GENERATION landed as the importers'
+holding any Eagle file is pointed at the right door (pinned by test in every direction).
+
+**The newer Eagle 9 / Fusion MANAGED format is read too, and the design is one honesty rule.** Its
+schema drift is additive — `urn`/`library_version` attributes on the library, packages, symbols and
+devicesets — which a reader that asks for its attributes BY NAME never sees, so the classic subset
+needed no change at all; what is genuinely new is the `<packages3d>` vocabulary, and there the model
+FILE is the thing the file does not carry. A `<package3d>` is a NAME plus a URN plus the 2D packages
+its `<packageinstance>`s bind, a device points at one through `<package3dinstances>`, and the
+geometry lives in Fusion's cloud keyed by that URN. **So the reader surfaces the BINDING as data
+(`EaglePackage3d`, `EagleLibrary.Packages3d`, `EagleDeviceInfo.Package3dUrn`) and attaches a
+`ComponentModel3D` only when a caller-supplied resolver
+(`EagleLibrary.Load(device, modelResolver)`) returns a LOCAL file that exists** — the KiCad
+`(model …)` precedent with the one difference the format forces, that KiCad states a path and Eagle
+states an identity. Everything else is recorded in the diagnostics BY NAME: no resolver, a resolver
+with no local copy, a resolver naming a file that is not there, a device binding a URN the library
+never declares, a `<package3d>` whose `<packageinstance>` names a package the library lacks, and a
+device binding a SECOND 3D package (a `PartDefinition` carries one model, so the first wins and the
+rest are named). A `<package3d>` with no `urn` is dropped by name rather than half-kept, because the
+URN IS its identity — it is what a device's binding references — so a nameless one could never be
+bound (the topological-naming rule at an interchange file). Two riders: the `type` token
+(`model`/`box`) rides VERBATIM as a string rather than an enum, so an unrecognised token is data
+rather than a refusal; and an Eagle `<package3d>` carries no placement at all (Fusion aligns the
+model to the footprint origin), so a resolved file seats at the IDENTITY `ModelPlacement`. A file
+declaring version 9 or newer also gets a diagnostic NAMING the version, in all three readers, so the
+managed provenance is visible rather than silent — and a classic (pre-9) file gets none, so its
+diagnostics are exactly what they always were. **The classic path is verified as UNCHANGED rather
+than assumed**: a pre-9 library carries no `Packages3d`, no device URN, no managed note, and loads
+with no model whether or not a resolver is supplied; and the managed fixture's pads, pins and
+connect map read exactly as the classic fixture's, which is the statement that the urn attributes
+disturb nothing. What is deliberately NOT done is fetch anything — a reader that reached the network
+would make an import non-deterministic and unavailable offline, and the URN is exactly the key a
+caller needs to do it themselves. Docs `examples/ecad-library.md`. **IPC-7351 footprint GENERATION landed as the importers'
 complement** (`Ipc7351` + `StandardBodies`; docs `examples/ecad-library.md`): a land pattern from
 the component's OWN datasheet dimensions rather than a library file — one formula family for every
 leaded shape (`Zmax = Lmin + 2·J_toe + √(C_L² + F² + P²)`, `Gmin = Smax − 2·J_heel − √(C_S² + F² +

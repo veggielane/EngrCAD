@@ -3127,9 +3127,13 @@ from what was already understood rather than from scratch.
     KiCad 2.54 unit convention applied at `ComponentModel3D`; `.wrl` now loads through
     `MeshReader`/`Shape.From` too). **3D-model residuals, filed by name** (each RECORDED as a
     reference but not loaded): **IGES (`.igs`/`.iges`) 3D-model loading** (an IGES import
-    is a face soup needing `ShapeHealing`, the 3-step read→heal→`Shape.From`), and **Eagle 3D
-    package models** (Eagle's `<packages3d>` reference a model by URN — materially more than the
-    classic `.lbr` carries, alongside the newer Eagle/Fusion XML variants). **Gerber/Excellon are FABRICATION formats** — copper artwork
+    is a face soup needing `ShapeHealing`, the 3-step read→heal→`Shape.From`), and **FETCHING an
+    Eagle managed-library 3D model from Fusion's cloud** — the `<packages3d>` BINDING itself has
+    landed (the URN, its bound packages and the device's `<package3dinstance>` are read as data,
+    and a `ComponentModel3D` is attached whenever a caller's resolver finds a LOCAL file), so what
+    remains is only the network half: a reader that fetched would make an import
+    non-deterministic and unavailable offline, and the URN is exactly the key a caller needs to
+    resolve it themselves. **Gerber/Excellon are FABRICATION formats** — copper artwork
     for a photoplotter, not a solid model — named here so nobody reaches for them thinking
     "PCB format"; the AUTOROUTER's output, however, does export to them, since that is what
     a fab house consumes.
