@@ -60,9 +60,14 @@ internal ref struct FontReader
         return BinaryPrimitives.ReadUInt32BigEndian(_data[at..]);
     }
 
-    /// <summary>F2Dot14 fixed point (composite-glyph scale factors): a signed 16-bit
-    /// value with 2 integer bits and 14 fraction bits.</summary>
+    /// <summary>F2Dot14 fixed point (composite-glyph scale factors, and every
+    /// normalized variation coordinate): a signed 16-bit value with 2 integer bits and
+    /// 14 fraction bits.</summary>
     public double ReadF2Dot14() => ReadInt16() / 16384.0;
+
+    /// <summary>Fixed 16.16 (the <c>fvar</c> axis and instance coordinates): a signed
+    /// 32-bit value with 16 fraction bits.</summary>
+    public double ReadFixed() => (int)ReadUInt32() / 65536.0;
 
     /// <summary>A 4-byte table tag as ASCII (e.g. <c>glyf</c>); non-printable bytes
     /// become <c>?</c> so error messages stay readable.</summary>
