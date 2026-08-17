@@ -452,74 +452,83 @@ public sealed class DxfDocument
 
     /// <summary>
     /// A SPLINE as exact sketch-vocabulary curves, or nothing plus a diagnostic.
-    /// <para>The tier is deliberately narrow and stated rather than widened by sampling:
-    /// a degree-1 spline is a polyline, and a NON-rational clamped cubic whose interior
-    /// knots all have multiplicity 3 is ALREADY a chain of Bézier segments, so its control
-    /// points split four-at-a-time with nothing computed. That covers what this writer
-    /// emits (one cubic Bézier per SPLINE) and what a polybezier exporter emits. A general
-    /// B-spline needs knot-insertion Bézier decomposition, which belongs in the NURBS
-    /// layer rather than in a file reader — so it is REPORTED, naming why, instead of
-    /// being flattened into a lie about exactness.</para>
+    ///
+    /// <para><b>Every polynomial spline of degree ≤ 3 converts, whatever its knot vector.</b>
+    /// A degree-1 spline is its own polyline; anything else goes through
+    /// <see cref="BSplineDecomposition.ToBezierSegments(NurbsCurve2d)"/>, which raises every
+    /// interior knot to full multiplicity (clamping an unclamped or uniform vector first) and
+    /// hands back one Bézier per knot span. That is a change of BASIS, so nothing is fitted
+    /// or sampled — and a spline already in Bézier form comes back bit-identical, because the
+    /// insertion loop never runs where the multiplicity already equals the degree. So the
+    /// narrow case this reader used to special-case is reached through the general one rather
+    /// than beside it.</para>
+    ///
+    /// <para><b>What is still refused is refused for the SKETCH's reason, not the
+    /// decomposition's</b>, and the messages say which. A RATIONAL spline decomposes
+    /// perfectly well (into rational Béziers) and a sketch has no rational segment type to
+    /// put them in; a spline of degree 4 or more decomposes perfectly well too, and a
+    /// sketch's highest polynomial segment is a cubic. Both are vocabulary limits, and
+    /// naming them as such is what stops the next reader assuming the kernel cannot do
+    /// it.</para>
     /// </summary>
-    private static IEnumerable<Curve2d> SplineCurves(DxfSpline spline, List<string> report)
+    private static IReadOnlyList<Curve2d> SplineCurves(DxfSpline spline, List<string> report)
     {
         if (spline.IsRational)
         {
             report.Add(
-                $"Skipped a rational degree-{spline.Degree} SPLINE on layer '{spline.Layer}': a sketch "
-                + "carries polynomial cubic Beziers, and a weighted curve has no exact one.");
-            yield break;
+                $"Skipped a rational degree-{spline.Degree} SPLINE on layer '{spline.Layer}': the "
+                + "decomposition carries weights, but a sketch's Bezier segment is POLYNOMIAL and has "
+                + "no exact rational form, so there is nowhere to put the result.");
+            return [];
         }
 
         if (spline.Degree == 1)
         {
+            var lines = new List<Curve2d>(spline.ControlPoints.Count - 1);
             for (int i = 0; i + 1 < spline.ControlPoints.Count; i++)
-                yield return new Line2d(spline.ControlPoints[i], spline.ControlPoints[i + 1]);
-            yield break;
+                lines.Add(new Line2d(spline.ControlPoints[i], spline.ControlPoints[i + 1]));
+            return lines;
         }
 
-        if (spline.Degree != 3 || !IsBezierForm(spline))
+        if (spline.Degree > 3)
         {
             report.Add(
-                $"Skipped a degree-{spline.Degree} SPLINE on layer '{spline.Layer}' with "
-                + $"{spline.ControlPoints.Count} control points: only degree 1, and degree 3 already in "
-                + "Bezier form (clamped ends, interior knots of multiplicity 3), convert exactly. "
-                + "Decomposing a general B-spline needs knot insertion.");
-            yield break;
+                $"Skipped a degree-{spline.Degree} SPLINE on layer '{spline.Layer}': it decomposes into "
+                + $"degree-{spline.Degree} Bezier segments exactly, but a sketch's highest polynomial "
+                + "segment is a CUBIC and degree reduction is not exact. Nothing here is a limit of the "
+                + "decomposition.");
+            return [];
         }
 
-        for (int i = 0; i + 3 < spline.ControlPoints.Count; i += 3)
+        IReadOnlyList<NurbsCurve2d> segments;
+        try
         {
-            yield return new BezierCurve2d(
-                spline.ControlPoints[i], spline.ControlPoints[i + 1],
-                spline.ControlPoints[i + 2], spline.ControlPoints[i + 3]);
+            segments = BSplineDecomposition.ToBezierSegments(
+                new NurbsCurve2d(spline.Degree, spline.ControlPoints, null, spline.Knots));
         }
-    }
+        catch (ArgumentException exception)
+        {
+            report.Add(
+                $"Skipped a degree-{spline.Degree} SPLINE on layer '{spline.Layer}': {exception.Message}");
+            return [];
+        }
 
-    /// <summary>Is this clamped cubic already a chain of Béziers? Control point count
-    /// 3k + 1, ends clamped (multiplicity 4) and every interior knot value repeated
-    /// exactly 3 times. Knot equality is EXACT: a knot vector is a list of parameters a
-    /// writer either repeated or did not, so a tolerance here would accept a curve that is
-    /// merely nearly in Bézier form and then split it at the wrong places.</summary>
-    private static bool IsBezierForm(DxfSpline spline)
-    {
-        int n = spline.ControlPoints.Count;
-        if (n < 4 || (n - 1) % 3 != 0)
-            return false;
-
-        var knots = spline.Knots;
-        for (int i = 1; i < 4; i++)
+        var curves = new List<Curve2d>(segments.Count);
+        foreach (var segment in segments)
         {
-            if (knots[i] != knots[0] || knots[^(i + 1)] != knots[^1])
-                return false;
+            var points = segment.ControlPoints;
+            // A quadratic elevates to a cubic EXACTLY, by the same arithmetic
+            // SketchBuilder.QuadraticTo already stores one with — asked rather than restated,
+            // so the two spellings of "a quadratic in a sketch" cannot drift.
+            curves.Add(points.Count == 3
+                ? new BezierCurve2d(
+                    points[0],
+                    points[0] + (points[1] - points[0]) * (2.0 / 3.0),
+                    points[2] + (points[1] - points[2]) * (2.0 / 3.0),
+                    points[2])
+                : new BezierCurve2d(points[0], points[1], points[2], points[3]));
         }
-        // Interior knots run in triples.
-        for (int i = 4; i < knots.Count - 4; i += 3)
-        {
-            if (knots[i] != knots[i + 1] || knots[i] != knots[i + 2])
-                return false;
-        }
-        return true;
+        return curves;
     }
 
     /// <summary>Convenience overload discarding diagnostics.</summary>

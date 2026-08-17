@@ -146,7 +146,22 @@ operations. Depends only on `EngrCAD.Core`.
   dimensionless sine, so it behaves the same at micron and kilometre scale).
   `NurbsCurve2d` shares the basis via **`BSplineBasis`** (now public: the A2.1/A2.2/A2.3
   algorithms depend only on knots and degree, so `NurbsCurve`, `NurbsCurve2d` and
-  `NurbsSurface` all use the one copy), and `NurbsCurve2d.InterpolatePoints` DELEGATES to
+  `NurbsSurface` all use the one copy). **`BSplineDecomposition.ToBezierSegments`** sits
+  beside it for the same reason — the arithmetic depends only on degree, knots and
+  homogeneous control points, so the 2D and 3D entry points share one core: it raises every
+  interior knot to full multiplicity (A5.6), clamping an unclamped or uniform vector first
+  by knot insertion (A5.1), and returns one clamped Bézier per non-empty knot span. It is a
+  CHANGE OF BASIS, so nothing is fitted, and it carries **any degree and rational curves**
+  (insertion runs on homogeneous coordinates, so weights ride along). **A curve already in
+  Bézier form comes back bit-identical** — the insertion loop never runs where the
+  multiplicity already equals the degree, so no arithmetic touches a control point, which
+  is what lets a consumer route every spline through the general path instead of keeping a
+  narrow special case beside it (`DxfDocument` does exactly that). It is the second exact
+  route to Bézier pieces: `NurbsCurve2d.TryToCurvedEdges` reads each span's HERMITE data
+  instead, which is exact for non-rational degree ≤ 3 and needs no insertion bookkeeping.
+  The two share no arithmetic — derivatives against interpolated control points — so the
+  tests cross-check them against each other rather than each against itself.
+  `NurbsCurve2d.InterpolatePoints` DELEGATES to
   the 3D interpolation on z = 0 rather than forking the collocation solve — every
   operation on the z component is 0·m, 0 − 0 or 0/d, so the control points come back with
   z exactly zero. Arc length is `Curve2d.ArcLength` (adaptive Simpson with Richardson

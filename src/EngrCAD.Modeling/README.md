@@ -3310,16 +3310,25 @@ DXF's polyline vocabulary has no cubic vertex — the reader re-closes it by end
 sketch with no cubics writes byte-for-byte the same file under either mode**, which is
 what makes the option safe to reach for and is asserted as a string comparison.
 
-Reading is deliberately NARROWER than writing: degree 1 (a polyline) and non-rational
-degree 3 already in Bézier form (clamped ends, interior knots of multiplicity 3 — so the
-control points split four at a time with nothing computed) convert exactly; a **rational**
-spline has no polynomial cubic form and a general B-spline needs knot-insertion Bézier
-decomposition, and both are REPORTED by name rather than sampled. The entity list is what
-the FILE says; the sketch list is what this kernel can carry exactly, and keeping the two
-apart is what keeps "sketches carry nothing flattened" true. Knot-multiplicity tests are
-**exact comparisons**, not tolerant ones: a knot vector is a list a writer either repeated
-or did not, and a tolerance would accept a curve merely NEARLY in Bézier form and then
-split it at the wrong places.
+**Reading now covers every polynomial spline of degree ≤ 3, whatever its knot vector.**
+Degree 1 is its own polyline; anything else goes through
+`BSplineDecomposition.ToBezierSegments` (BRep), which clamps an unclamped or uniform knot
+vector and raises every interior knot to full multiplicity, handing back one Bézier per
+knot span. That is a change of BASIS, so nothing is fitted or sampled — and a spline
+already in Bézier form comes back **bit-identical**, because the insertion loop never runs
+where the multiplicity already equals the degree. The reader therefore has ONE path where
+it used to have a narrow special case plus a refusal: uniform (periodic-exporter) splines
+and clamped ones with single interior knots both convert exactly. A degree-2 span elevates
+to a cubic by the same arithmetic `SketchBuilder.QuadraticTo` already stores one with.
+
+What is still refused is refused for the **sketch vocabulary's** reason rather than the
+decomposition's, and the messages say which — the distinction matters, because the old
+message ("needs knot insertion") read as a kernel gap: a **rational** spline decomposes
+perfectly well, into rational Béziers, and a sketch's Bézier segment is polynomial with no
+exact rational form; a **degree ≥ 4** spline decomposes perfectly well too, and a sketch's
+highest polynomial segment is a cubic with no exact degree reduction. The entity list is
+what the FILE says; the sketch list is what this kernel can carry exactly, and keeping the
+two apart is what keeps "sketches carry nothing flattened" true.
 
 **Units are declared and honoured** (`DxfDocument.Units`, `$INSUNITS`, default
 millimetres). This is the same duty the LTYPE table has, and it was learned the same way:

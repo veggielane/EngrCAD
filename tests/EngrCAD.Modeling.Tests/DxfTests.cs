@@ -1,3 +1,4 @@
+using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Modeling;
 using Xunit;
@@ -285,46 +286,199 @@ public class DxfTests
     }
 
     /// <summary>
-    /// What cannot convert EXACTLY is named, never sampled. A rational spline has no
-    /// polynomial cubic form, and a general B-spline needs knot insertion — reporting both
-    /// keeps the "sketches carry nothing flattened" claim true.
+    /// Two-sided agreement between a set of converted cubics and the source spline: the
+    /// largest distance from a point of the cubics to the spline, and the largest from a
+    /// point of the spline to the cubics. Set-wise on purpose — a sketch normalises its
+    /// winding, so which cubic covers which span and in which sense is its own business,
+    /// while "the same curve" is not.
+    /// </summary>
+    private static (double FromCurves, double FromSpline) Hausdorff(
+        IReadOnlyList<BezierCurve2d> cubics, NurbsCurve2d source, int samples = 200)
+    {
+        double fromCurves = 0, fromSpline = 0;
+        foreach (var cubic in cubics)
+        {
+            for (int i = 0; i <= samples; i++)
+            {
+                var p = cubic.PointAt((double)i / samples);
+                fromCurves = Math.Max(
+                    fromCurves, Nearest(p, source.PointAt, source.Domain.Start, source.Domain.End));
+            }
+        }
+        for (int j = 0; j <= samples; j++)
+        {
+            double u = source.Domain.Start + (source.Domain.End - source.Domain.Start) * j / samples;
+            var q = source.PointAt(u);
+            fromSpline = Math.Max(fromSpline, cubics.Min(c => Nearest(q, c.PointAt, 0, 1)));
+        }
+        return (fromCurves, fromSpline);
+
+        // Coarse scan then golden-section refinement — the true closest point, so the
+        // measurement carries no sampling error of its own and 1e-9 means 1e-9.
+        static double Nearest(Vector2d p, Func<double, Vector2d> eval, double a, double b)
+        {
+            const int scan = 64;
+            int best = 0;
+            double bestDistance = double.PositiveInfinity;
+            for (int i = 0; i <= scan; i++)
+            {
+                double d = p.DistanceTo(eval(a + (b - a) * i / scan));
+                if (d < bestDistance)
+                {
+                    (bestDistance, best) = (d, i);
+                }
+            }
+            double lo = a + (b - a) * Math.Max(best - 1, 0) / scan;
+            double hi = a + (b - a) * Math.Min(best + 1, scan) / scan;
+            const double phi = 0.6180339887498949;
+            for (int k = 0; k < 90; k++)
+            {
+                double m1 = hi - (hi - lo) * phi, m2 = lo + (hi - lo) * phi;
+                if (p.DistanceTo(eval(m1)) < p.DistanceTo(eval(m2)))
+                    hi = m2;
+                else
+                    lo = m1;
+            }
+            return Math.Min(bestDistance, p.DistanceTo(eval((lo + hi) / 2)));
+        }
+    }
+
+    /// <summary>
+    /// What cannot convert is refused for the SKETCH's reason rather than the
+    /// decomposition's, and the messages say so: both of these decompose into exact Bézier
+    /// segments, and neither result has a sketch segment to live in.
     /// </summary>
     [Fact]
-    public void SplinesWithNoExactSketchForm_AreReportedNotSampled()
+    public void SplinesWithNoExactSketchForm_AreReportedForTheSketchsOwnReason()
     {
         var rational = new DxfDocument();
         rational.Add(new DxfSpline(
             [(0, 0), (3, 4), (7, -4), (10, 0)], 3, [0, 0, 0, 0, 1, 1, 1, 1], [1, 2, 2, 1]));
         Assert.Empty(rational.ToSketches(out var rationalDiagnostics));
-        Assert.Contains(rationalDiagnostics, d => d.Contains("rational"));
+        var rationalMessage = Assert.Single(rationalDiagnostics);
+        Assert.Contains("rational", rationalMessage);
+        Assert.Contains("POLYNOMIAL", rationalMessage);
 
-        // A uniform (unclamped) cubic: five control points on a knot vector with no
-        // repeated interior values — a genuine B-spline, not a Bézier chain.
-        var general = new DxfDocument();
-        general.Add(new DxfSpline(
-            [(0, 0), (3, 4), (7, -4), (10, 0), (12, 3)], 3, [0, 1, 2, 3, 4, 5, 6, 7, 8]));
-        Assert.Empty(general.ToSketches(out var generalDiagnostics));
-        Assert.Contains(generalDiagnostics, d => d.Contains("knot insertion"));
+        // Degree 4: the decomposition handles any degree; a sketch's highest polynomial
+        // segment is a cubic, and degree reduction is not exact.
+        var quartic = new DxfDocument();
+        quartic.Add(new DxfSpline(
+            [(0, 0), (3, 4), (7, -4), (10, 0), (13, 4)], 4, [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]));
+        Assert.Empty(quartic.ToSketches(out var quarticDiagnostics));
+        var quarticMessage = Assert.Single(quarticDiagnostics);
+        Assert.Contains("CUBIC", quarticMessage);
+        Assert.Contains("Nothing here is a limit of the decomposition", quarticMessage);
     }
 
     /// <summary>
-    /// The dangerous case, and the one the KNOT test exists for rather than the count
-    /// test: seven control points is a Bézier-compatible COUNT (3k + 1), so a reader
-    /// checking only the count would split this into two cubics at the wrong places and
-    /// hand back a plausible, silently wrong profile. It is a genuine B-spline — clamped,
-    /// but with interior knots 1, 2, 3 rather than a triple — and is refused.
+    /// The dangerous shape, and the reason the old reader refused it rather than trusting
+    /// the control point COUNT: seven control points is Bézier-compatible (3k + 1), so a
+    /// reader splitting them four at a time hands back a plausible, silently wrong profile.
+    /// It is a genuine B-spline — clamped, interior knots 1, 2, 3 rather than triples — and
+    /// it now DECOMPOSES, into the four cubics its four spans carry.
+    ///
+    /// <para>The mutation is what gives this teeth: the naive split shares the curve's
+    /// endpoints, so only an interior sample separates them, and it is measured here rather
+    /// than assumed.</para>
     /// </summary>
     [Fact]
-    public void ClampedCubicWithSingleInteriorKnots_IsRefusedRatherThanMisSplit()
+    public void ClampedCubicWithSingleInteriorKnots_DecomposesRatherThanMisSplitting()
     {
-        var document = new DxfDocument();
-        document.Add(new DxfSpline(
-            [(0, 0), (3, 4), (7, -4), (10, 0), (13, 4), (17, -4), (20, 0)],
-            3,
-            [0, 0, 0, 0, 1, 2, 3, 4, 4, 4, 4]));
+        Vector2d[] control = [(0, 0), (3, 4), (7, -4), (10, 0), (13, 4), (17, -4), (20, 0)];
+        double[] knots = [0, 0, 0, 0, 1, 2, 3, 4, 4, 4, 4];
 
-        Assert.Empty(document.ToSketches(out var diagnostics));
-        Assert.Contains(diagnostics, d => d.Contains("knot insertion"));
+        var document = new DxfDocument();
+        document.Add(new DxfSpline(control, 3, knots));
+        document.Add(new DxfLine((20, 0), (20, -5)));
+        document.Add(new DxfLine((20, -5), (0, -5)));
+        document.Add(new DxfLine((0, -5), (0, 0)));
+
+        var sketch = Assert.Single(document.ToSketches(out var diagnostics));
+        Assert.Empty(diagnostics);
+
+        // Four spans -> four cubics, plus the three lines.
+        Assert.Equal(7, sketch.Segments.Count);
+
+        // The converted cubics ARE the source curve, asserted BOTH ways: nothing they carry
+        // is off the spline, and nothing of the spline is missing from them. A one-way check
+        // would pass a conversion that dropped a whole span.
+        var source = new NurbsCurve2d(3, control, null, knots);
+        var cubics = sketch.ToCurves().OfType<BezierCurve2d>().ToList();
+        Assert.Equal(4, cubics.Count);
+        var (fromCurves, fromSpline) = Hausdorff(cubics, source);
+        Assert.True(fromCurves < 1e-9, $"the converted cubics drift off the spline by {fromCurves}");
+        Assert.True(fromSpline < 1e-9, $"the spline is uncovered by up to {fromSpline}");
+
+        // The mutation: the naive four-at-a-time split shares the endpoints and is a
+        // different curve in between.
+        var naive = new BezierCurve2d(control[0], control[1], control[2], control[3]);
+        double naiveMiss = 0;
+        for (int i = 0; i <= 64; i++)
+            naiveMiss = Math.Max(naiveMiss, naive.PointAt(i / 64.0).DistanceTo(source.PointAt(i / 64.0)));
+        Assert.True(naiveMiss > 1, $"the naive split is only {naiveMiss} away — the fixture cannot see it");
+    }
+
+    /// <summary>
+    /// A UNIFORM (unclamped) cubic — the shape a periodic exporter emits, and the one the
+    /// reader used to leave on the floor. Its domain is the interior spans only, so the
+    /// converted chain starts and ends where the CURVE does rather than at the first and
+    /// last control points.
+    /// </summary>
+    [Fact]
+    public void AUniformUnclampedSpline_ConvertsExactly()
+    {
+        Vector2d[] control = [(0, 0), (3, 4), (7, -4), (10, 0), (12, 3)];
+        double[] knots = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+        var source = new NurbsCurve2d(3, control, null, knots);
+
+        var document = new DxfDocument();
+        document.Add(new DxfSpline(control, 3, knots));
+        // Two spans, so two cubics — an open chain, which the reader reports rather than
+        // inventing a closing segment for.
+        Assert.Empty(document.ToSketches(out var openDiagnostics));
+        Assert.Contains(openDiagnostics, d => d.Contains("do not close"));
+
+        // Close it with a line and read the geometry back.
+        var start = source.PointAt(source.Domain.Start);
+        var end = source.PointAt(source.Domain.End);
+        document.Add(new DxfLine(end, start));
+        var sketch = Assert.Single(document.ToSketches(out var closedDiagnostics));
+        Assert.Empty(closedDiagnostics);
+        Assert.Equal(3, sketch.Segments.Count);
+
+        var cubics = sketch.ToCurves().OfType<BezierCurve2d>().ToList();
+        Assert.Equal(2, cubics.Count);
+        var (fromCurves, fromSpline) = Hausdorff(cubics, source);
+        Assert.True(fromCurves < 1e-9, $"the converted cubics drift off the spline by {fromCurves}");
+        Assert.True(fromSpline < 1e-9, $"the spline is uncovered by up to {fromSpline}");
+    }
+
+    /// <summary>
+    /// The general decomposition reaches the narrow case bit-identically — no arithmetic
+    /// runs where an interior knot's multiplicity already equals the degree — which is why
+    /// routing every spline through it changed nothing for the files this library writes.
+    /// </summary>
+    [Fact]
+    public void ABezierFormSpline_ReadsBackWithBitIdenticalControlPoints()
+    {
+        Vector2d[] control = [(0, 0), (3.25, 4.5), (7.125, -4.75), (10, 0)];
+        var document = new DxfDocument();
+        document.Add(new DxfSpline(control, 3, [0, 0, 0, 0, 1, 1, 1, 1]));
+        document.Add(new DxfLine((10, 0), (10, -5)));
+        document.Add(new DxfLine((10, -5), (0, -5)));
+        document.Add(new DxfLine((0, -5), (0, 0)));
+
+        var sketch = Assert.Single(document.ToSketches(out var diagnostics));
+        Assert.Empty(diagnostics);
+        var cubic = Assert.Single(sketch.ToCurves().OfType<BezierCurve2d>());
+        Vector2d[] read = [cubic.PointAt(0), cubic.ControlPoints[1], cubic.ControlPoints[2], cubic.PointAt(1)];
+        bool forward = read[0] == control[0];
+        for (int i = 0; i < 4; i++)
+        {
+            var expected = control[forward ? i : 3 - i];
+            Assert.Equal(BitConverter.DoubleToInt64Bits(expected.X), BitConverter.DoubleToInt64Bits(read[i].X));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(expected.Y), BitConverter.DoubleToInt64Bits(read[i].Y));
+        }
     }
 
     [Fact]
