@@ -103,17 +103,6 @@ design.md §2). Residuals:
     - **Straight bevel residuals** (`BevelGears.cs` landed: `BevelPair` +
       `Straight`/`StraightGear`, spiral and hypoid refused by name; see the Modeling
       README for the projection measurements). What is left:
-      - **`BevelPair.PhaseFor(member)`** — the pair's TOOTH phasing is not solved, so a
-        caller placing two members must phase them by hand (the docs example asserts the
-        condition its own counts satisfy: contact at the pinion's 90° azimuth needs
-        z₁ % 4 == 0 and z₂ % 4 == 2). **`GearMeshing` is now the pattern rather than
-        `PlanetarySet`** — the tooth-index coordinate `u(θ) = z(θ − φ − τ)/2π` and the
-        rolling invariant it makes are stated once there, and the contact instrument to
-        verify a phase with already exists (`GearMeshingTests`). It was deliberately NOT
-        landed with the parallel-axis rules, because a bevel's mesh happens on the shared
-        cone ELEMENT rather than on a line of centres, so the invariant has to be derived
-        for spherical rolling and then pulled back through Tredgold's projection —
-        genuinely a fourth derivation, not a fourth call of the third.
       - **Conical end faces** — the loft's sections must be planar, so the ends are
         planes rather than the back and front cones, which makes the heel section
         deeper than the real tooth (×2.4 at δ = 65°) and is what caps the cone angle

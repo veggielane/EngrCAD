@@ -605,17 +605,21 @@ var wheel = BevelGears.StraightGear(
     new GearSpec(3, pair.WheelTeeth), pair.WheelConeAngleDegrees, 14, boreDiameter: 16);
 
 // Both apexes sit at the origin and the wheel's axis is the pinion's turned by the
-// shaft angle, so the two pitch cones share the element at delta1 from +Z. TOOTH
-// phasing across a bevel pair is the caller's (see below): contact here is at the
-// pinion's own 90 deg azimuth, where 20 teeth put a tooth centre and 30 teeth put a
-// space centre, so these two counts need no extra rotation.
-if (pair.PinionTeeth % 4 != 0 || pair.WheelTeeth % 4 != 2)
-    throw new Exception("this placement relies on the tooth counts phasing at 90 deg");
+// shaft angle, so the two pitch cones share the element at delta1 from +Z. PhaseFor
+// solves the tooth phasing: spin the wheel about its OWN axis, then tilt it onto its
+// mounted axis (azimuth pi/2 from +X, so the tilt is RotateX(-pi/2)).
+double phase = pair.PhaseFor(BevelMember.Wheel, azimuth: Math.PI / 2);
+
+// For THESE counts the answer is a whole number of wheel pitches - 27 of them - so
+// the wheel is where an unphased placement would have put it. That is the coincidence
+// this example used to rely on, now derived rather than assumed.
+if (Math.Abs(phase / (2 * Math.PI / pair.WheelTeeth) - 27) > 1e-9)
+    throw new Exception("the solved phase must be 27 wheel pitches for 20:30 at 90 deg");
 
 var scene = new Scene();
 var tab = scene.AddTab("bevel pair");
 tab.Add(new Part("pinion", pinion, Palette.Coral));
-tab.Add(new Part("wheel", wheel.RotateX(-Math.PI / 2), Palette.Sky));
+tab.Add(new Part("wheel", wheel.RotateZ(phase).RotateX(-Math.PI / 2), Palette.Sky));
 ```
 
 ![A 20-tooth bevel pinion meshing a 30-tooth wheel on perpendicular shafts](images/mechanism-bevel.png)
@@ -633,6 +637,33 @@ and δ 20–70°. Treat these as modelling-grade teeth — right pitch, right co
 angles, sound for kinematics, assembly, casting patterns and printing — and not as
 a substitute for a generated flank on a ground gear (production straight bevels
 are octoid, which is neither of these curves).
+
+**The pair's tooth phasing is solved, and the derivation lands somewhere worth
+stating.** `BevelPair.PhaseFor(member, azimuth, otherPhase)` gives the rotation a
+member needs about its own axis before it is tilted onto its mounted axis. The two
+members roll on their pitch *cones* rather than on a line of centres, so the
+condition has to be derived for spherical rolling — and it comes out to the
+parallel-axis **external** rule. Two facts do it: the shared cone element sits at
+azimuth ψ in the fixed member's frame and at ψ + π in the tilted member's own frame,
+for *every* shaft angle (the minimal rotation's Σ-dependence cancels); and rolling
+through the pitch radii `r = R·sin δ` makes the two spin as `ω₂ = −(z₁/z₂)·ω₁` in
+their own frames, so a bevel pair counter-rotates exactly as an external spur pair
+does. The rolling invariant is therefore `u₁ + u₂ ≡ ½ (mod 1)` in
+[`GearMeshing`](#putting-a-pair-in-mesh)'s tooth-index coordinate, and `PhaseFor`
+*delegates* to `GearMeshing.ExternalPhase` bit for bit rather than restating it.
+**So the shaft angle decides the cone angles and never the phase.**
+
+It is verified from **contact**, not from the formula it was built with: the wheel's
+outline is carried through the mounting and projected centrally from the shared apex
+onto the pinion's own section — exact, because every straight bevel flank is ruled
+through that apex, which also makes the whole question two-dimensional (both bodies
+are sets of rays from one point). At the solved phase the conjugate flanks *touch*,
+measuring 7×10⁻⁵ mm on the 20:30 pair at 90° and −1.6×10⁻⁴ mm on an 18:45 pair at 60°
+— 0.3 and 0.7 of the flank fit's own deviation, so the phase contributes nothing
+above the grade of the curves being measured — and the reading holds through tooth
+handover as the pinion is rolled. Half a tooth pitch of phase error reads **−2.577 mm
+and −2.581 mm**, some 12 000× that fit deviation; a *quarter* pitch still reads −2.27
+and −2.22 mm, so the instrument is not tuned to the deepest possible error.
 
 Two limits are reported rather than hidden. The end faces are **planes**, not the
 back and front cones, because a loft section must be planar — so the model's heel

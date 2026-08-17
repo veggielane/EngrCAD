@@ -6127,6 +6127,48 @@ approximation on top of a principled one, measure the two SEPARATELY before assu
 the cheap one is subordinate.** The flank fit sits two orders below the method's error
 by design, which is the relationship to aim for and the one the first attempt inverted.
 
+**The pair's tooth PHASING derives for spherical rolling and lands on the parallel-axis
+external rule**, which is the finding rather than a convenience. `BevelPair.PhaseFor`
+answers where a member must be turned about its own axis before it is tilted onto its
+mounted axis, and the derivation was filed as "genuinely a fourth derivation, not a
+fourth call of the third" — correct about the work and wrong about the answer. Two facts
+collapse it:
+
+- The two pitch cones roll along their shared ELEMENT, which sits at azimuth ψ in the
+  fixed member's frame and — for **every** shaft angle Σ — at ψ + π in the tilted
+  member's own frame. Writing the mounting as the minimal rotation by Σ about
+  `n̂ = ẑ × ŵ` and pushing the element through Rodrigues, the Σ-dependence cancels
+  identically: the element lands at `(−sin δ₂·cos ψ, −sin δ₂·sin ψ, cos δ₂)`, whose
+  azimuth is ψ + π whatever Σ is.
+- Rolling ties the spins through the pitch radii `r_i = R·sin δ_i`, so in the members'
+  OWN frames `ω₂ = −(z₁/z₂)·ω₁` — a bevel pair COUNTER-rotates exactly as an external
+  spur pair does.
+
+Those are precisely `GearMeshing`'s external hypotheses, so the rolling invariant is
+`u₁(ψ) + u₂(ψ+π)` and the mesh condition is `u₁ + u₂ ≡ ½ (mod 1)`. `PhaseFor` therefore
+DELEGATES to `GearMeshing.ExternalPhase` bit for bit (the `PlanetarySet.PlanetPhase`
+convention — one derivation, asked rather than restated), and the consequence worth
+stating is that **the shaft angle decides the cone angles and never the phase**; the
+delegation is what asserts it, since a Σ-dependent phase could not be spelled that way.
+
+Verification is from CONTACT, and the instrument is `GearContact.Clearance`'s bevel
+twin — SIGNED for the same reason, so one number separates "phased" (touching, ≈0) from
+"biting" (negative) AND from "never engaging" (a large positive gap), which an
+interpenetration depth reports identically as zero. **The whole question is
+two-dimensional and that is a property of the geometry rather than a simplification**:
+both members are cones about the shared apex, so each is a set of rays from that apex
+and their intersection is decided entirely by which rays they have in common — no
+sampling in depth is needed or meaningful. So the wheel's outline is carried through the
+mounting and projected centrally from the apex onto the pinion's own heel section
+(exact, because every straight bevel flank is ruled through that apex). At the solved
+phase the conjugate flanks touch, measuring **7.0e-5 mm** on a 20:30 pair at Σ = 90° and
+**−1.6e-4 mm** on an 18:45 pair at Σ = 60° — 0.3 and 0.7 of the flank fit's own
+deviation, so the phase contributes nothing above the grade of the curves being
+measured — and the reading holds through tooth handover as the pinion is rolled. Half a
+tooth pitch of error reads **−2.577 / −2.581 mm**, some 12 000× that deviation; a
+QUARTER pitch still reads −2.27 / −2.22 mm, so the instrument is not tuned to the
+deepest possible error.
+
 Two limits are consequences rather than omissions and are therefore *reported*. A loft
 section must be planar, so the end faces are planes and not the back and front cones —
 the teeth are the correct cones, so every angle and the pitch diameter are exact, but
