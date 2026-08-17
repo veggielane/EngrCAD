@@ -679,14 +679,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
     undoable edit keeping the rest of the display; a CONTINUOUS slider stays declined,
     results being named states. Result persistence already rides the document
     envelope.)
-- [ ] **A dependency-free MP4 route is FLAGGED, not promised** (the Reel/Short presets
-  ✅ landed — `ReelFormat`/`ReelFraming`/`ReelExport.RenderReel`/`RenderReelPoster`, safe-area
-  framing as a geometric assertion, duration caps as refusals naming the platform, the
-  half-step aliasing measurement, and the ffmpeg recipe on the result; design.md §6b has
-  the record): linking ffmpeg is ruled out by the dependency-free ethos and a hand-rolled
-  H.264 encoder is a product-sized campaign — the smaller intermediate worth COSTING
-  first is Motion-JPEG-in-MP4 or a minimal MPEG-4-container muxer, recorded so nobody
-  starts H.264 from scratch.
 
 ## OpenSCAD feature parity (open items)
 

@@ -49,8 +49,10 @@ public sealed record ReelFormat(
 
     /// <summary>
     /// The documented ffmpeg recipe turning an exported frame sequence into the MP4 the
-    /// platforms actually want — the honest v1, since a dependency-free H.264 encoder is
-    /// a product-sized campaign (see todo.md's assessment) and GIF/APNG are transcoded
+    /// platforms actually want — the honest route, and a MEASURED one: the dependency-free
+    /// alternative (Motion-JPEG-in-MP4) is refused by Chrome, Edge and the Windows media
+    /// stack while a hand-rolled H.264 encoder stays a product-sized campaign (design.md
+    /// §6b records the assessment), and GIF/APNG are transcoded
     /// or rejected by both platforms. <c>yuv420p</c> is what makes the file play
     /// everywhere; the scale filter is a no-op on frames this export rendered (already
     /// at the preset size) and a safety net on foreign ones.

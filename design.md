@@ -10157,9 +10157,53 @@ knows a tooth count — so `MaxRotationPerFrameRadians` rides the result with
 the direction of rotation is gone. The safe-area overlay is CPU-drawn on the finished
 poster pixels (no shader, no three-front-end plumbing, and a poster without it is
 exactly the export's frame); MP4 stays the documented ffmpeg recipe carried ON the
-result (`libx264`/`yuv420p`), the dependency-free H.264 assessment staying filed. The
+result (`libx264`/`yuv420p`) — the dependency-free assessment the flag reserved has
+since been SETTLED as a measured refusal (the next record). The
 docs figure renders portrait through DocsGen's new `renderSize` snippet variable — the
 one generator change, following the declared-variable convention `camera` set.
+
+**The dependency-free MP4 route is settled as a REFUSAL, and the assessment was a
+MEASUREMENT rather than a survey** (2026-08-17, win-x64). The flagged intermediate was
+Motion-JPEG-in-MP4, and the COST was never the obstacle: a baseline JPEG encoder (DCT +
+the Annex K default Huffman tables + 4:2:0) is roughly 600–900 lines in the
+`PngWriter`/`GifWriter` culture, its independently written twin decoder ~400, and the
+ISO-BMFF muxer ~250 (`ftyp`/`mdat`/`moov` with `stts`/`stsc`/`stsz`/`stco`,
+`creation_time` 0 per the `PdfDrawing` no-clock rule) — well inside one campaign
+increment. The pairing is even LEGAL: MP4RA registers ObjectTypeIndication `0x6C`
+"Visual ISO/IEC 10918-1" (JPEG), and ffmpeg muxes MJPEG into MP4 as an `mp4v` sample
+entry carrying that OTI — which is exactly what makes the failure worth measuring,
+because the file is well-formed and mainstream players refuse the CODEC by allowlist,
+not the container by structure. Measured with a real ffmpeg-muxed MJPEG-in-MP4 beside
+an H.264 control (the control is the instrument's own proof), through real media
+pipelines rather than capability tables: **headless Chrome and Edge** both load the
+H.264 control to `readyState` 4 / `videoWidth` 320 and fail the MJPEG file with error
+code 4 (`MEDIA_ERR_SRC_NOT_SUPPORTED`) and Chromium's own words —
+`DEMUXER_ERROR_NO_SUPPORTED_STREAMS: FFmpegDemuxer: no supported streams`, i.e. the
+demuxer OPENED the container, FOUND the stream, and refused the codec —
+with `canPlayType('video/mp4; codecs="mp4v.6C"')` empty and
+`MediaSource.isTypeSupported` false (Chromium's published video-codec list is
+AV1/VP8/VP9 plus H.264/HEVC; MJPEG is not in it). The **Windows media stack** (WPF
+`MediaPlayer` over the legacy WMP plumbing) opens the H.264 control at 320×240 and
+fails MJPEG-in-MP4 with the misleading `"Cannot find the media file."` — worth quoting
+because it is what a shipped file would show users: a broken-path error, not a codec
+message. **The MOV and AVI rows are what sharpen the verdict**: the SAME MJPEG stream
+in a MOV or an AVI container opens and plays on the Windows stack (320×240 both), while
+Chrome/Edge refuse those too (MOV the same no-supported-streams, AVI
+`DEMUXER_ERROR_COULD_NOT_OPEN`) — so NO container carries MJPEG into a browser, and the
+one pairing the flag named, MP4, is precisely the one that fails on BOTH major stacks.
+ffmpeg decodes all ten frames of the same file back cleanly, so libav-family players
+(VLC, mpv, ffplay) play it — a gated-allowlist story, not a malformed-file story, which
+is why no epsilon of muxer care could change the outcome. The consumers decide the
+rest: the docs site is a BROWSER (APNG already serves it, losslessly), the Reel/Short
+platforms specify H.264 (the ffmpeg recipe on `ReelExportResult` stands), and a
+Windows-desktop-only MJPEG-AVI buys nothing over the APNG while failing everywhere
+else — and MJPEG measured **13× the H.264 size on the same clip** (97 KB against
+7.3 KB for one second of 320×240@10 at q=4), so even where it played it would be the
+wrong file to ship. The floor for a dependency-free file a browser's `<video>` element
+accepts is a REAL codec — H.264 Baseline is the smallest member and is the
+product-sized campaign the flag declined; VP8/VP9/AV1 are no smaller. An unplayable
+file is worse than none, so nothing was built: APNG stays the first-class animation
+format and the frame sequence + ffmpeg recipe stays the honest MP4 route.
 
 **B-Rep-exact interference volumes landed as a routed grade with the estimator NAMED,
 and the test fixture found a mesh-boolean defect the feature then had to route around**
