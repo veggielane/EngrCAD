@@ -1,6 +1,7 @@
 using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Implicit;
+using EngrCAD.Interop;
 using EngrCAD.Modeling;
 using Xunit;
 
@@ -290,6 +291,145 @@ public class GearTests
         Assert.Contains("overlap each other", Assert.Throws<ArgumentOutOfRangeException>(
             () => Gears.SpurGear(spec, 8, boreDiameter: 16,
                 lightening: new LighteningSpec(12, 12))).Message);
+    }
+
+    // ---- the set-screw hub ----
+
+    /// <summary>A hub is a boss proud of the web, so its solid must be the plain gear PLUS
+    /// exactly the hub annulus: the gear without a hub, plus (pi*R^2 - bore area) * projection.
+    /// That is the whole claim — the flush planar ring where boss meets web FUSED (one shell,
+    /// not two touching solids) and the bore continued through both levels rather than being
+    /// re-cut. Genus stays 1: a boss adds no handle.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Hub_AddsExactlyItsOwnAnnulus(bool keyed)
+    {
+        var spec = new GearSpec(module: 2.5, teeth: 30);
+        var keyway = keyed ? StandardKeys.For(16) : (KeywaySpec?)null;   // 5 x 5, t2 = 2.3
+        const double bore = 16, faceWidth = 16, hubDiameter = 32, projection = 16;
+
+        var flat = new Part("flat", Gears.SpurGear(spec, faceWidth, bore, keyway));
+        var boss = Gears.SpurGear(spec, faceWidth, bore, keyway,
+            hub: new GearHubSpec(hubDiameter, projection));
+
+        double boreArea = keyway is { } seat
+            ? Gears.KeyedBore(bore, seat).Area()
+            : Math.PI * bore * bore / 4;
+        double annulus = Math.PI * hubDiameter * hubDiameter / 4 - boreArea;
+        double expected = flat.MassProperties().Volume + annulus * projection;
+
+        var solid = boss.ToBrep();
+        solid.Validate();
+        Assert.Single(solid.Shells);                  // the flush ring fused
+        Assert.True(solid.SatisfiesEulerFormula(1),   // one bore, no handle from the boss
+            "a hubbed gear is genus 1");
+
+        double actual = BrepMassProperties.Compute(solid).Volume;
+        Assert.True(Math.Abs(actual - expected) <= 1e-6 * expected,
+            $"hub volume {actual} vs flat-plus-annulus {expected}");
+    }
+
+    /// <summary>The set-screw pilot crosses the hub wall INTO the bore, which is a
+    /// topological claim rather than a visual one: a blind pocket leaves the genus alone,
+    /// while a pilot that breaks through into the bore adds a handle — so genus 2 (and NOT
+    /// 1) is the assertion that the hole opened. The metal removed is the closed form
+    /// 2a^2 * INT cos^2 t (sqrt(R^2 - a^2 sin^2 t) - sqrt(r^2 - a^2 sin^2 t)) dt over
+    /// [-pi/2, pi/2] — the cylinder between the bore wall and the hub wall.</summary>
+    [Fact]
+    public void Hub_SetScrewOpensIntoTheBore_AndRemovesItsClosedForm()
+    {
+        var spec = new GearSpec(module: 2.5, teeth: 30);
+        const double bore = 16, faceWidth = 16, hubDiameter = 32, projection = 16, screw = 5;
+
+        var plain = Gears.SpurGear(spec, faceWidth, bore,
+            hub: new GearHubSpec(hubDiameter, projection)).ToBrep();
+        var drilled = Gears.SpurGear(spec, faceWidth, bore,
+            hub: new GearHubSpec(hubDiameter, projection, SetScrewDiameter: screw)).ToBrep();
+        drilled.Validate();
+
+        Assert.Single(drilled.Shells);
+        Assert.True(drilled.SatisfiesEulerFormula(2),
+            "the pilot breaks through into the bore, adding a handle");
+        Assert.False(drilled.SatisfiesEulerFormula(1),
+            "a genus-1 result would mean the pilot stopped blind in the wall");
+
+        double removed = BrepMassProperties.Compute(plain).Volume
+            - BrepMassProperties.Compute(drilled).Volume;
+        double exact = ScrewRemoval(screw / 2, bore / 2, hubDiameter / 2);
+        // 158.0596 exact; measured 157.2170 / 157.1192 / 157.2080 at 32 / 64 / 128
+        // segments per circle — a FLOOR rather than a chord error (it does not converge),
+        // because BOTH of the pilot's cut curves are perpendicular-cylinder pairs the
+        // marching tracer samples by its own arc-length step. One-sided: the tessellated
+        // cross hole is inscribed, so it can only under-remove.
+        Assert.InRange(removed, 0.98 * exact, exact);
+    }
+
+    /// <summary>Volume of a radius-a cylinder along x between two coaxial-with-z cylinders
+    /// of radii r and R. The substitution y = a sin t removes the endpoint singularity, so
+    /// a midpoint rule converges fast enough to serve as an oracle.</summary>
+    private static double ScrewRemoval(double a, double r, double outer)
+    {
+        int n = 8192;
+        double sum = 0;
+        for (int i = 0; i < n; i++)
+        {
+            double t = -Math.PI / 2 + Math.PI * (i + 0.5) / n;
+            double c = Math.Cos(t), s = a * Math.Sin(t);
+            sum += c * c * (Math.Sqrt(outer * outer - s * s) - Math.Sqrt(r * r - s * s));
+        }
+        return 2 * a * a * sum * (Math.PI / n);
+    }
+
+    /// <summary>A keyway and a set screw TOGETHER are refused by name. The combination is
+    /// not merely unbuilt: it produces a closed, Validate-clean, genus-correct solid that
+    /// silently keeps 69 of the pilot's 158 mm^3 of wall removal — the wrong-but-closed
+    /// boolean outcome no downstream check can see (the kernel finding is filed in
+    /// todo.md). Each half alone is exact, and this test pins that the gate is the
+    /// COMBINATION rather than either input.</summary>
+    [Fact]
+    public void Hub_KeywayWithSetScrew_IsRefusedByName()
+    {
+        var spec = new GearSpec(module: 2.5, teeth: 30);
+        var keyway = StandardKeys.For(16);
+        var withScrew = new GearHubSpec(32, 16, SetScrewDiameter: 5);
+
+        string message = Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 16, 16, keyway, hub: withScrew)).Message;
+        Assert.Contains("set screw and a keyway together", message);
+        Assert.Contains("wrong-but-closed", message);
+
+        // Each half on its own is fine.
+        Gears.SpurGear(spec, 16, 16, keyway, hub: new GearHubSpec(32, 16)).ToBrep().Validate();
+        Gears.SpurGear(spec, 16, 16, hub: withScrew).ToBrep().Validate();
+    }
+
+    [Fact]
+    public void Hub_RefusalsFireByName()
+    {
+        var spec = new GearSpec(module: 2.5, teeth: 30);
+        var keyway = StandardKeys.For(16);
+
+        Assert.Contains("gripping a shaft", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 16, hub: new GearHubSpec(32, 16))).Message);
+        Assert.Contains("does not clear the bore", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 16, 16, hub: new GearHubSpec(14, 16))).Message);
+        // The keyway's reach, not the bore's, is what a hub must clear.
+        Assert.Contains("keyway", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 16, 16, keyway, hub: new GearHubSpec(20.5, 16))).Message);
+        Assert.Contains("reaches the root circle", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 16, 16, hub: new GearHubSpec(72, 16))).Message);
+        Assert.Contains("projection must be positive", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 16, 16, hub: new GearHubSpec(32, 0))).Message);
+        Assert.Contains("smaller than the hub projection", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 16, 16,
+                hub: new GearHubSpec(32, 6, SetScrewDiameter: 6))).Message);
+        Assert.Contains("leaves the hub band", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 16, 16,
+                hub: new GearHubSpec(32, 16, SetScrewDiameter: 5, SetScrewOffset: 1))).Message);
+        Assert.Contains("blind them", Assert.Throws<ArgumentOutOfRangeException>(
+            () => Gears.SpurGear(spec, 16, 16, hub: new GearHubSpec(32, 16),
+                lightening: new LighteningSpec(4, 9, circleDiameter: 40))).Message);
     }
 
     // ---- the exact area identity ----

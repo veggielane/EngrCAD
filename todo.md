@@ -28,6 +28,53 @@ implementing. Ordered roughly by value-for-effort within each section.
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
+- [ ] **A keyed-prism bore against a cross-drilled hole is a REPRODUCIBLE
+  wrong-but-closed boolean — the recorded "`Verified` catches unclosed, not
+  wrong-but-closed" hazard finally has a fixture.** Every other instance of that hazard
+  in this repo is a hypothetical; this one is a construction anybody can run, and it is
+  why `Gears.SpurGear` refuses a keyway beside a set screw by name rather than shipping
+  the geometry.
+
+  The construction, exactly (it is the gear hub with both options, which the refusal now
+  blocks — reproduce it by hand from the primitives):
+
+  ```
+  spec   = GearSpec(module 2.5, teeth 30)   // root diameter ~71.25
+  over   = 0.05 * 32 = 1.6
+  body   = Extrude(Gears.Spur(spec).Sketch, 16)                       // blank, NO bore
+             .Union(Cylinder(r 16, h 16).Translate((0, 0, 24)))       // hub disc, flush ring
+  tool   = Cylinder(r 2.5, h 8 + 2*over).RotateY(pi/2)
+             .Translate(((8 + 16)/2, 0, 24))                          // radial pilot, +X
+  plane  = SketchPlane(Frame3d.FromXY((0, 0, -over), UnitX, UnitY))
+  result = body.Subtract(tool)
+             .Subtract(Extrude(Gears.KeyedBore(16, StandardKeys.For(16)), 32 + 2*over, plane))
+  ```
+
+  Measured on that solid: `Validate()` passes, the tessellation is CLOSED, the shell
+  count is 1 and the genus is 2 — every structural check the kernel has — and the
+  volume is **75862.573** where the exact answer is **75793.517**, so **69.06 of the
+  pilot's 158.06 mm³ of wall removal is silently RETAINED**. Nothing downstream can
+  see it: `BrepBoolean.Verified` enforces two-manifold output, which this satisfies.
+  Swap the keyed prism for a plain circular one and the same pilot removes 157.12 of
+  158.06 (a tracer sampling floor, one-sided — correct); the ONLY difference is that
+  the keyed bore's wall is a partial-**ARC** `ExtrudedSurface` rather than a whole-turn
+  one that promotes to an exact `CylinderSurface`, so the pilot cylinder meets a
+  bounded arc patch and the traced window misclassifies a fragment.
+
+  **A lead, from the two-tool attempt that was built and reverted.** Subtracting the
+  bore as a circle prism PLUS a rectangular notch prism (whose union is the keyed prism
+  extended into air, so the final geometry is identical) keeps every pair analytic and
+  fails differently: the notch's vertical **corner line** against the bore cylinder
+  clips to the TOOL's own extent rather than to the shared trim, stranding a traced
+  curve inside the face. That points at `ClipToFace`'s asymmetric keep rule where one
+  operand's boundary is a corner of a rectangle rather than a smooth trim — the
+  narrower, more tractable question, and probably the way in.
+
+  Fix the classification and the gear hub's own refusal
+  (`Gears.SpurGear`, "A set screw and a keyway together are refused") comes out; the
+  test `GearTests.Hub_KeywayWithSetScrew_IsRefusedByName` pins both halves so it
+  cannot rot.
+
 ## Deformation / analysis follow-ups
 
 The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
@@ -70,11 +117,6 @@ design.md §2). Residuals:
     z_min = 2(h_a* − x)/sin²α by name; drawing the actual generated trochoid would
     admit z ≥ ~12 if it can be VERIFIED (the conjugate-contact instrument exists and
     measurably sees a 5e-2 flank error as 5.6e-4 rad of transmission wobble).
-  - **Set screw boss** (the keyway ✅ and web lightening ✅ halves landed —
-    `StandardKeys`/`KeywaySpec`/`Gears.KeyedBore` and `LighteningSpec`, both exact
-    sketch features with closed-form areas). A boss needs a 3D HUB — a cylinder proud
-    of the web, i.e. a revolved blank cross-section rather than one extrude — so it is
-    a gear-blank redesign, not a hole.
   - **The apex relief groove on a herringbone** (`HerringboneGears`) — the one part
     of the double-helical form that did NOT land, and the entry carries its
     measurement so it cannot rot into a guess. A hobbed herringbone cannot have a

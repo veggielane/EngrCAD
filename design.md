@@ -9992,9 +9992,66 @@ exactly π·d²/4 of blank area (the volume identity held at mass-properties gra
 the keyed bore's). The three refusals are closed-form and each names its numbers: a
 hole reaching the bore's clear radius, one reaching the root circle, and neighbours
 overlapping (the chord 2·R·sin(π/n) against d — the planetary neighbour-clearance test
-one feature over). The remaining set-screw BOSS is filed with its reason: a boss needs
-a 3D hub proud of the web, i.e. a revolved blank cross-section rather than one
-extrude — a gear-blank redesign, not a hole.
+one feature over).
+
+**The set-screw HUB landed as a SOLID feature rather than a blank sketch one**
+(`GearHubSpec` + the `hub:` optional on `SpurGear`), and the filed prediction — "a boss
+needs a revolved blank cross-section rather than one extrude, a gear-blank redesign" —
+was wrong in a useful direction: it needs no blank redesign at all, because the boss is
+a separate SOLID unioned onto the web. What the construction order buys is that every
+boolean stays legal. The gear is extruded WITHOUT its bore and unioned with the hub
+DISC, so the interface is a flush planar ring (the coplanar-fusion tier's own case)
+rather than two coaxial equal-radius bore walls, which is the coincident-curved pair the
+v1 boolean refuses by name; the bore is then subtracted ONCE through both levels,
+overshooting each end so the cut is transversal (the `Drill` overshoot doctrine). A set
+screw is cut BEFORE the bore, while the hub's centre is still solid — an ordinary blind
+flat-bottom hole whose floor the bore prism then removes, opening the pilot into the
+bore without its own cap ever meeting a face.
+
+**The oracle is ADDITIVE, which is what makes it a statement about the union**: a hubbed
+gear's volume is the same gear without a hub PLUS exactly `(πR² − bore area)·projection`
+at 1e-6 relative, so a fusion that had left two touching shells, or a bore re-cut per
+level, would fail it; `Shells.Count == 1` states the fusion directly and the genus stays
+1 (a boss adds no handle). The set screw's own claim is TOPOLOGICAL: a blind pocket
+leaves the genus alone, so **genus 2 — and not 1** — is the assertion that the pilot
+broke through into the bore, beside the closed-form removal
+`2a²∫ cos²t (√(R² − a²sin²t) − √(r² − a²sin²t)) dt`, measured 157.12 against an exact
+158.06. That 0.6% is reported as a FLOOR rather than a chord error because it does not
+converge — 157.22 / 157.12 / 157.21 at 32 / 64 / 128 segments per circle — both of the
+pilot's cut curves being perpendicular-cylinder pairs the marching tracer samples by its
+own arc-length step; it is one-sided (an inscribed cross hole can only under-remove), so
+the test asserts the removal is bounded by the exact value rather than merely near it.
+
+**A keyway and a set screw TOGETHER are refused by name, and the refusal is the
+interesting part of the feature.** Each alone is exact. Together, the keyed bore is
+subtracted as one prism whose wall is a partial-ARC `ExtrudedSurface` — not a whole turn,
+so it never promotes to an exact `CylinderSurface` — and that wall against the radial
+pilot is a surface pair the boolean measurably misclassifies: the result is closed,
+`Validate`-clean, one shell and genus-correct, with **69.06 of the pilot's 158.06 mm³ of
+wall removal silently retained**. That is the wrong-but-closed outcome
+`BrepBoolean.Verified` structurally cannot see (it enforces two-manifold output, which
+this satisfies), and it is the first REPRODUCIBLE fixture for a hazard the repo had only
+recorded as a hypothetical — filed in todo.md with the exact construction. The two-tool
+alternative (a circle prism plus a rectangular notch prism, whose union is the keyed
+prism extended into air, so the final geometry is identical while every pair stays
+analytic) was built and REVERTED: it fails differently, the notch's vertical corner line
+against the bore cylinder clipping to the TOOL's own extent and stranding a traced curve
+inside the face — which is the narrower `ClipToFace` question the todo entry carries as
+the lead. An algorithm that can only trade one refusal for another is not reached at all,
+so the gate ships and the geometry does not.
+
+**What kind of guard a defect class admits is decided by whether its domain is
+ENUMERABLE, and this one's is not.** The sibling failure is a wrong transcribed table
+cell: both are a structural property holding (two-manifold output; the fixture rows
+passing) while the thing that property stands proxy for is wrong. But a transcription's
+domain is finite and enumerable, so it earns a COVERAGE test — probe every letter at
+every sub-range boundary and no hand-picked row can hide the next defect — whereas
+"every surface pair whose classification might misfire" cannot be enumerated at all. So
+a boolean defect earns the other pair of guards: a named REFUSAL at the one
+configuration measured, plus a FILED FIXTURE carrying the construction and the numbers
+so the diagnosis is not re-derived. Reaching for a coverage test here would be reaching
+for a guarantee the domain cannot supply; reaching for a named refusal on a table would
+be settling for less than one it can.
 
 **Transient playback landed as the fifth animation slot, and the contract extension is
 stated with its cost model** (`FieldSequenceTrack`; `Animation.FieldTrack`;
