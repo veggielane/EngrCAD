@@ -57,7 +57,7 @@ public class UndoStackTests
         "parameter", "parameters-json", "suppress", "add-feature", "remove-feature",
         "rename", "colour", "material", "field-display", "transform", "display-mode", "clipped",
         "add-occurrence", "remove-occurrence", "repose", "explode",
-        "add-annotation", "remove-annotation", "add-mate", "remove-mate");
+        "add-annotation", "remove-annotation", "add-mate", "remove-mate", "solve-mates");
 
     [Theory]
     [MemberData(nameof(EditNames))]
@@ -117,6 +117,7 @@ public class UndoStackTests
                 rig.Plate, new LeaderNote((0, 0, 8), "FLATNESS 0.05")),
             "remove-annotation" => RemoveAnnotation(rig),
             "add-mate" => AddMate(rig),
+            "solve-mates" => SolveMates(rig),
             "remove-mate" => RemoveMate(rig),
             _ => throw new ArgumentOutOfRangeException(nameof(name), name, null),
         };
@@ -145,6 +146,12 @@ public class UndoStackTests
         gap: 2, name: "stack");
 
     private static DocumentEdit AddMate(Rig rig) => DocumentEdits.AddMate(Mates(rig), Stack(rig));
+
+    private static DocumentEdit SolveMates(Rig rig)
+    {
+        var set = Mates(rig).Add(Stack(rig));
+        return DocumentEdits.SolveMates(set);
+    }
 
     private static DocumentEdit RemoveMate(Rig rig)
     {
@@ -332,6 +339,24 @@ public class UndoStackTests
         using (rig.Undo.Group("Whatever"))
             rig.Undo.Do(DocumentEdits.SetColor(rig.Plate, Palette.Coral));
         Assert.Equal("Recolour plate", rig.Undo.UndoDescription);
+    }
+
+    [Fact]
+    public void AFailedMateSolve_LeavesTheDocumentUntouched_AndIsNeverPushed()
+    {
+        var rig = Build();
+        var set = Mates(rig).Add(Stack(rig));
+        // A second planar mate on the same pair demanding a DIFFERENT gap contradicts
+        // the first; the solve refuses loudly and writes nothing.
+        set.Add(Mate.Planar(
+            MateGeometry.PlanarFace(rig.Assembly.Occurrences[0], FaceRef.Top),
+            MateGeometry.PlanarFace(rig.Assembly.Occurrences[1], FaceRef.Bottom),
+            gap: 9, name: "contradiction"));
+
+        string before = rig.Snapshot();
+        Assert.Throws<MateSolveException>(() => rig.Undo.Do(DocumentEdits.SolveMates(set)));
+        Assert.Equal(before, rig.Snapshot());
+        Assert.False(rig.Undo.CanUndo);
     }
 
     [Fact]

@@ -1410,10 +1410,12 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     what a UI performs today; the gaps are deliberate rather than forgotten —
     add/remove a whole `Part` or `Tab` (needs `Tab.Remove`/`Scene.RemoveTab`, and a removed
     part may still be placed by occurrences, so the edit has to decide whether it takes
-    them with it), committing a `MateSet.Solve` as one undoable repose of every occurrence
-    it moved (mechanically easy — one `CompoundEdit` of `Repose`s — but it wants the solver
-    to report which frames it wrote), and `Part.Results`/`FieldDisplay`. None is hard; each
-    is a decision about scope rather than about mechanism.
+    them with it), and `Part.Results`/`FieldDisplay`. None is hard; each
+    is a decision about scope rather than about mechanism. (`MateSet.Solve` as one
+    undoable step ✅ landed as `DocumentEdits.SolveMates` — and the filed "wants the
+    solver to report which frames it wrote" dissolved: capturing every frame in the
+    assembly TREE is the safe superset, an untouched frame restoring to itself
+    exactly, so no solver report was needed.)
 
 ## build123d / CadQuery parity (open items)
 
