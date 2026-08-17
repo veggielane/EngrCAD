@@ -48,8 +48,14 @@ public enum EdgeSource
 /// <param name="Points">The polyline, at least two points.</param>
 /// <param name="Visibility">Solid or dashed.</param>
 /// <param name="Source">What produced it.</param>
+/// <param name="Instance">The occurrence PATH of the instance this run came from
+/// (<see cref="PartInstance.Path"/>), or null for line work that belongs to no instance —
+/// a caller-supplied cut boundary. It is what lets a BOM balloon anchor on the line work
+/// of the occurrence it labels rather than on whatever happens to be nearby; see
+/// <see cref="BomBalloons"/>.</param>
 public sealed record HiddenLineRun(
-    IReadOnlyList<Vector2d> Points, EdgeVisibility Visibility, EdgeSource Source)
+    IReadOnlyList<Vector2d> Points, EdgeVisibility Visibility, EdgeSource Source,
+    string? Instance = null)
 {
     /// <summary>Total 2D length of the run.</summary>
     public double Length
@@ -308,14 +314,14 @@ public static class HiddenLineRemoval
         for (int i = 0; i < occluders.Count; i++)
         {
             foreach (var (points, source) in occluders[i].Edges(opts))
-                Classify(points, source, i, probe, view, extent, opts, runs, ref bounds);
+                Classify(points, source, i, occluders[i].Path, probe, view, extent, opts, runs, ref bounds);
         }
         // Owner −1: a supplied polyline belongs to no instance, so the local back-face
         // stage has nothing to read and the ray decides on its own.
         foreach (var polyline in extraEdges)
         {
             if (polyline.Count >= 2)
-                Classify(polyline, extraSource, -1, probe, view, extent, opts, runs, ref bounds);
+                Classify(polyline, extraSource, -1, null, probe, view, extent, opts, runs, ref bounds);
         }
         return new HiddenLineResult(runs, bounds);
     }
@@ -362,7 +368,8 @@ public static class HiddenLineRemoval
     /// transition by bisection, and appends the resulting runs projected into the sheet.
     /// </summary>
     private static void Classify(
-        IReadOnlyList<Vector3d> points, EdgeSource source, int owner, VisibilityProbe probe,
+        IReadOnlyList<Vector3d> points, EdgeSource source, int owner, string? instance,
+        VisibilityProbe probe,
         in Frame3d view, double extent, HiddenLineOptions options,
         List<HiddenLineRun> runs, ref Aabb bounds)
     {
@@ -402,11 +409,11 @@ public static class HiddenLineRemoval
             }
             var transition = Bisect(samples[i - 1], samples[i], currentVisible, probe, owner, split);
             current.Add(transition);
-            Emit(current, currentVisible, source, view, extent, options, runs, ref bounds);
+            Emit(current, currentVisible, source, instance, view, extent, options, runs, ref bounds);
             current = [transition, samples[i]];
             currentVisible = flags[i];
         }
-        Emit(current, currentVisible, source, view, extent, options, runs, ref bounds);
+        Emit(current, currentVisible, source, instance, view, extent, options, runs, ref bounds);
     }
 
     /// <summary>
@@ -490,7 +497,8 @@ public static class HiddenLineRemoval
     }
 
     private static void Emit(
-        List<Vector3d> points, bool visible, EdgeSource source, in Frame3d view, double extent,
+        List<Vector3d> points, bool visible, EdgeSource source, string? instance,
+        in Frame3d view, double extent,
         HiddenLineOptions options, List<HiddenLineRun> runs, ref Aabb bounds)
     {
         if (points.Count < 2)
@@ -527,7 +535,7 @@ public static class HiddenLineRemoval
         // so a weld-tier Douglas-Peucker drops them and leaves a curve's own samples.
         var simplified = PolylineSimplify.Simplify(flat, tolerance);
         runs.Add(new HiddenLineRun(
-            simplified, visible ? EdgeVisibility.Visible : EdgeVisibility.Hidden, source));
+            simplified, visible ? EdgeVisibility.Visible : EdgeVisibility.Hidden, source, instance));
     }
 
     // ------------------------------------------------------------------- the probe
@@ -602,6 +610,10 @@ public static class HiddenLineRemoval
 
         public Aabb Bounds { get; private set; } = Aabb.Empty;
 
+        /// <summary>The occurrence path of the instance this occluder was built from, so
+        /// every run it produces can name where it came from.</summary>
+        public string? Path { get; private set; }
+
         /// <summary>The world-space loops this instance's cut exposed (empty without a
         /// section, or when the plane misses it).</summary>
         public IReadOnlyList<IReadOnlyList<Vector3d>> CutLoops { get; private set; } = [];
@@ -654,6 +666,7 @@ public static class HiddenLineRemoval
                 _mirrored = world.Determinant < 0,
                 _sectionThrough = instance.Part.ClippedBySection ? options.SectionThrough : null,
                 CutLoops = cutLoops,
+                Path = instance.Path,
             };
             // The view direction pulled back into the mesh's own frame. n_world . v has
             // the same sign as n_local . (M^-1 v) for ANY invertible affine M (the
