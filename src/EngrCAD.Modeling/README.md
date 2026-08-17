@@ -1904,6 +1904,21 @@ claiming a lowering it never produced. `Tab.PreMesh` therefore polls for cancell
 *between* parts: the part in flight finishes and its mesh stays cached (so returning to
 it costs nothing), which is the useful half of cancelling anyway.
 
+**`Part.RefineMesh(quality)` is the deliberate re-mesh entry point** — the seam behind
+the viewer's opt-in camera-adaptive display quality — and it is a **ratchet**: it
+re-tessellates only when `quality` resolves to strictly more segments per circle than the
+cached mesh already carries (`Part.MeshSegmentsPerCircle` reports that count), so a
+request to *coarsen* is declined rather than obeyed. That makes "never coarser than this
+session started" a property of the method rather than of any one caller's bookkeeping —
+and a part that visibly loses detail when a camera pulls back reads as a bug even where
+the criterion is working. It refines B-Rep-routed parts only (a raw mesh has no finer
+form; an `SdfResolution` is a grid resolution rather than a per-radius quantity, the same
+reason `TessellationQuality` leaves it alone) and declines a part with no mesh yet, since
+producing the *first* mesh belongs to whoever meshes at the session quality. The cached
+`TryGetSolid` lowering is criterion-independent and is kept, so a refinement is the
+tessellate half only; the feature-edge overlay is rebuilt at the same quality, so one
+criterion still drives fill and overlay. Like `GetMesh`, it belongs off the render thread.
+
 Two display flags travel with the part rather than with a viewer, so a design states
 its own intent: `Part.DisplayMode` (Shaded / Wireframe / Translucent) and
 `Part.ClippedBySection` (default true). Setting the latter false makes a viewer's

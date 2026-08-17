@@ -159,6 +159,22 @@ public sealed class EngrCadOptions
     public bool LazyTabMeshing { get; set; } = LazyTabMeshingDefault;
 
     /// <summary>
+    /// Re-tessellate the displayed parts to the on-screen size of the geometry when the
+    /// camera SETTLES — a large rim gains segments as you zoom onto it — through
+    /// <see cref="AdaptiveQuality"/> and <c>Part.RefineMesh</c>. <b>Off by default,
+    /// deliberately.</b>
+    /// <para>The criterion is sound and the FEEL is not measured: a background re-mesh
+    /// triggered by camera motion is exactly the kind of thing that behaves in every test
+    /// and reads as jerky in the hand, so it is opt-in until someone has lived with it.
+    /// Off, the viewport is byte-identical to what it always was — nothing re-meshes, no
+    /// timer runs, and no committed docs image moves.</para>
+    /// <para>Window only. Headless renders and exports are deterministic one-shots at the
+    /// stated quality and never consult the camera: a PNG whose resolution depended on
+    /// framing would make the committed docs images a function of where the camera stood.</para>
+    /// </summary>
+    public bool AdaptiveDisplayQuality { get; set; }
+
+    /// <summary>
     /// Non-null enables the viewer's remote-control endpoint: newline-delimited
     /// JSON-RPC 2.0 on a <b>loopback-only</b> TCP port (see <c>RemoteControl.cs</c> for
     /// the vocabulary — set_view/fit/set_section/set_display_mode/set_view_style/
@@ -207,6 +223,15 @@ public sealed class EngrCadBuilder
     public EngrCadBuilder WithQuality(MeshQuality quality)
     {
         Options.Quality = quality ?? throw new ArgumentNullException(nameof(quality));
+        return this;
+    }
+
+    /// <summary>Re-tessellates displayed parts to their on-screen size when the camera
+    /// settles (window only, off by default) — see
+    /// <see cref="EngrCadOptions.AdaptiveDisplayQuality"/>.</summary>
+    public EngrCadBuilder WithAdaptiveDisplayQuality(bool enabled = true)
+    {
+        Options.AdaptiveDisplayQuality = enabled;
         return this;
     }
 

@@ -62,6 +62,12 @@ internal sealed class SceneHost
     /// be rebuilt from the full list with that part marked.</summary>
     private IReadOnlyList<PartInstance> _tabInstances = [];
 
+    /// <summary>The instances the viewport currently HOLDS — the last batch the loader
+    /// published, which is <see cref="_tabInstances"/> minus whatever failed to mesh.
+    /// A republish (the adaptive-quality refinement) must hand back exactly this list, or
+    /// a failed part would silently come back and every row index would shift.</summary>
+    private IReadOnlyList<PartInstance> _publishedInstances = [];
+
     /// <summary>Parts of the current tab that could not be meshed, with why. Their rows
     /// stay visible (and say so) but carry no viewport index.</summary>
     private Dictionary<Part, string> _failed = [];
@@ -593,6 +599,109 @@ internal sealed class SceneHost
         var target = scene.Tabs.FirstOrDefault(t => t.Name == _currentTab) ?? scene.Tabs.FirstOrDefault();
         ShowTab(target?.Name, keepCamera: target?.Name == _currentTab);
         ArmAnimation(scene);
+        ArmAdaptiveQuality(scene);
+    }
+
+    // ---- camera-adaptive display quality (opt-in; see EngrCadOptions) ----
+
+    /// <summary>The decision rule (pure, in Viewer.Core). Null unless the host asked for
+    /// adaptive display quality — off, no timer runs and nothing re-meshes.</summary>
+    private AdaptiveQuality? _adaptive;
+
+    private Avalonia.Threading.DispatcherTimer? _adaptiveTimer;
+    private readonly System.Diagnostics.Stopwatch _adaptiveClock = new();
+
+    /// <summary>Generation token for refinement jobs, the <see cref="TabMeshLoader"/>
+    /// discipline: bumped by every tab switch, live reload and newly adopted quality, and
+    /// re-checked after the post, so a superseded refinement can never land.</summary>
+    private int _adaptiveGeneration;
+
+    private bool _adaptiveBusy;
+
+    /// <summary>Rebuilds the adaptive rule for a freshly set scene (its baseline is the
+    /// session's resolved quality, which is the floor the never-coarsen ratchet protects)
+    /// and starts the poll timer. Every earlier refinement job is superseded.</summary>
+    private void ArmAdaptiveQuality(Scene scene)
+    {
+        Interlocked.Increment(ref _adaptiveGeneration);
+        if (!EngrCad.CurrentOptions.AdaptiveDisplayQuality)
+        {
+            _adaptiveTimer?.Stop();
+            _adaptiveTimer = null;
+            _adaptive = null;
+            return;
+        }
+
+        _adaptive = new AdaptiveQuality(scene.ResolveQuality(EngrCad.CurrentOptions.Quality));
+        if (!_adaptiveClock.IsRunning)
+            _adaptiveClock.Start();
+        if (_adaptiveTimer is not null)
+            return;
+        _adaptiveTimer = new Avalonia.Threading.DispatcherTimer
+        {
+            // A poll, not a per-frame hook: the rule needs only to notice that the camera
+            // has stopped, and the settle delay is an order of magnitude longer than this.
+            Interval = TimeSpan.FromMilliseconds(60),
+        };
+        _adaptiveTimer.Tick += (_, _) => PollAdaptiveQuality();
+        _adaptiveTimer.Start();
+    }
+
+    /// <summary>One observation of the camera (UI thread). Almost always answers nothing;
+    /// when the rule adopts a finer criterion, the re-tessellation runs on a background
+    /// task and republishes the tab's instances if it changed any mesh.</summary>
+    private void PollAdaptiveQuality()
+    {
+        if (_adaptive is not { } rule || _adaptiveBusy || _publishedInstances.Count == 0)
+            return;
+        double height = Viewport.DevicePixelHeight;
+        if (rule.Observe(Viewport.Camera, height, _adaptiveClock.Elapsed) is not { } quality)
+            return;
+
+        _adaptiveBusy = true;
+        // Every write is on the UI thread and every read on a worker, so the increment is
+        // interlocked and the reads volatile — the pairing TabMeshLoader gets from its lock.
+        int token = Interlocked.Increment(ref _adaptiveGeneration);
+        var instances = _publishedInstances;
+        var parts = instances.Select(i => i.Part).Distinct().ToList();
+        Task.Run(() =>
+        {
+            bool changed = false;
+            string? error = null;
+            try
+            {
+                foreach (var part in parts)
+                {
+                    // Superseded between parts — the loader's own rule. BREAK rather than
+                    // return: the post below is what clears the in-flight flag, and
+                    // skipping it would leave adaptivity switched off for the session.
+                    if (Volatile.Read(ref _adaptiveGeneration) != token)
+                        break;
+                    changed |= part.RefineMesh(quality);
+                }
+            }
+            catch (Exception exception)
+            {
+                // A refinement is an improvement to geometry already on screen, so a
+                // kernel refusal costs the sharper mesh and nothing else: report it and
+                // keep drawing what is already uploaded.
+                error = $"{exception.GetType().Name}: {exception.Message}";
+            }
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                _adaptiveBusy = false;
+                if (Volatile.Read(ref _adaptiveGeneration) != token)
+                    return;   // and again after the post
+                if (error is not null)
+                {
+                    _statusText.Text = $"display quality: {error}";
+                    return;
+                }
+                if (!changed)
+                    return;
+                Viewport.SetInstances(instances, frame: false, EffectiveVisibility());
+            });
+        });
     }
 
     // ---- animation playback ----
@@ -819,6 +928,10 @@ internal sealed class SceneHost
         _previewKey = null;
         _failed = [];
         _tabInstances = instances;
+        _publishedInstances = [];
+        // A refinement in flight is for the tab being left: supersede it (the loader's own
+        // generation discipline, one token per host rather than one per subsystem).
+        Interlocked.Increment(ref _adaptiveGeneration);
         // Rows FIRST — the whole tab's rows, including parts still to be meshed, so the
         // tree shows what is coming — then hand the geometry over as the loader
         // publishes it (OnMeshBatch), together with the visibility it implies: the swap
@@ -1149,6 +1262,7 @@ internal sealed class SceneHost
             _failed = batch.Failed.ToDictionary(part => part, part => _failed.GetValueOrDefault(part, ""));
             RebuildTree(_currentTabContent, _tabInstances, _failed);
         }
+        _publishedInstances = batch.Ready;
         Viewport.SetInstances(batch.Ready, batch.Frame, EffectiveVisibility());
         if (batch.Final)
             _loadingPanel.IsVisible = false;

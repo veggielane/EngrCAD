@@ -900,6 +900,47 @@ spelling.) Headless paths are unaffected either way: `--export`, `--render` and
 > `Scene.PreMesh`) — the contract `SetInstances` always documented — or opt out with
 > `.WithLazyTabMeshing(false)`.
 
+## Camera-adaptive display quality (opt-in, off by default)
+
+`.WithAdaptiveDisplayQuality()` (or `EngrCadOptions.AdaptiveDisplayQuality = true`) lets
+the displayed parts re-tessellate to their on-screen size: the target is half a device
+pixel of chord deviation at the orbit target, fed to `TessellationQuality`'s
+`MaxChordDeviation`, so a large rim gains segments as you zoom onto it. The whole
+decision rule is the pure `AdaptiveQuality` in `EngrCAD.Viewer.Core` — no GL, no timer,
+unit-tested headlessly — and its shape is three rules:
+
+| | |
+|---|---|
+| **Settle** | 300 ms of an unchanged pose, and each settled pose evaluated exactly once — a drag or a wheel flurry queues nothing |
+| **Hysteresis** | a settled target is adopted only when ≥ 2× finer than the last one adopted |
+| **Floor** | never coarser: a coarser target is declined, and the emitted quality carries the session's own segment count as `MinSegments` |
+
+`Part.RefineMesh(quality)` is the kernel-side seam and enforces the same ratchet per
+part, so "never coarser than the session started" is a property of that method rather
+than of the controller's bookkeeping surviving a tab switch. It refuses to coarsen,
+refuses a part with no mesh yet (producing the *first* mesh is the loader's job at the
+session quality) and refuses mesh/SDF parts (a raw mesh has no finer form; an
+`SdfResolution` is a grid resolution, not a per-radius quantity). It keeps the cached
+B-Rep lowering — criterion-independent, so a refinement is the tessellate half only,
+which is what makes this affordable — and rebuilds the feature-edge overlay with the
+mesh so one criterion still drives both.
+
+The re-tessellation runs on a background task under `TabMeshLoader`'s generation
+discipline (checked between parts *and* after the post, so a tab switch or a newer
+adoption can never let a stale result land) and republishes exactly the instance list
+the viewport holds. Ambient occlusion is deliberately **not** re-baked — it stays one
+level behind rather than making a zoom cost 12 s.
+
+**Window only, deliberately.** `--render`, `--export` and `RenderToImage` are
+deterministic one-shots at the stated quality and never consult the camera: a headless
+PNG whose resolution depended on framing would make the committed documentation images a
+function of where the camera stood.
+
+**Off by default** because the criterion is measured and the *feel* is not — a background
+re-mesh triggered by camera motion is exactly the kind of feature that behaves in every
+test and reads as jerky in the hand. Off, no timer runs, nothing re-meshes, and the
+viewport is byte-identical to what it always was.
+
 ## The live-modeling loop
 
 Hand `EngrCad.ShowLive` a scene *factory* and run the model under `dotnet watch`:
@@ -947,13 +988,14 @@ return EngrCad.Configure()
     .WithExplode(1)                                            // --render exploded view
     .WithAmbientOcclusion(false)                               // baked AO (on by default)
     .WithLazyTabMeshing(false)                                 // mesh everything up front
+    .WithAdaptiveDisplayQuality()                              // re-mesh to on-screen size
     .WithLogger(logger)                                        // any ILogger
     .Run(args, BuildScene);
 ```
 
 The builder accumulates an **`EngrCadOptions`** POCO (`Title`, `Quality`,
 `RenderWidth`/`RenderHeight`, `RenderStyle`, `SectionAxis`/`SectionOffset`, `Explode`,
-`AmbientOcclusion`, `LazyTabMeshing`, `Logger`, `OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
+`AmbientOcclusion`, `LazyTabMeshing`, `AdaptiveDisplayQuality`, `Logger`, `OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
 `RenderToImage`) mirror the static `EngrCad` entry points with those options
 applied. The plain `EngrCad.Run/Show/ShowLive` overloads are unchanged and remain
 the simple path.
