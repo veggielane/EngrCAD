@@ -1026,6 +1026,17 @@ only — a varying radius across a **sharp corner**, where the two bands are con
 do not circumscribe a common sphere and meet in a quartic. A constant law reproduces
 the plain overload exactly, mesh and all.
 
+The edge-set law forms — `FilletEdges(radiusAt, edges)` / `ChamferEdges(setbackAt, edges)` —
+resolve complete rims **and** contiguous partial runs, because they hand the edge selector
+straight to `Filleting.FilletEdges`/`ChamferEdges`, whose resolver already groups a selection
+into both. (They used to route through `Filleting.RimFacesFor`, which refuses a partial
+selection before the kernel's law-run path is ever reached.) A run's termination is exact at
+any law value — the end cross-section is a planar quarter arc, or a planar strip, of whatever
+the law gives at the stop vertex — so a linear law over one straight edge removes exactly
+`(1 − π/4)·L·(r₀² + r₀r₁ + r₁²)/3`, and the chamfer twin is exact to round-off (a linear law
+leaves every strip ruled by two parallel lines, hence planar). The sharp-corner refusal is
+unchanged and a run has a third way out of it that a full rim does not: stop before the corner.
+
 ### Naming a construction step: `Shape.Tag` and face provenance
 
 Selectors say what a face **is**; `Shape.Tag(name)` lets the design say where a face

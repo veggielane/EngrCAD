@@ -1023,14 +1023,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     constant law across such a corner still works, so the refusal is about the law, and
     on a RUN there is a third way out: stop the run before the corner), and a varying
     law along an ARC or on a full circular rim (a spiral).
-  - [ ] **`Shape.FilletEdges(law, edges)`/`ChamferEdges(law, edges)` still resolve
-    complete rims only** (Modeling): the scalar edge-set overloads pass `edgeSelector`
-    through to `Filleting.FilletEdges(solid, edges, radius)` and so pick up partial
-    runs, but the LAW overloads route via `Filleting.RimFacesFor`, which refuses a
-    partial selection before the kernel's new law-run path is reached. The fix is the
-    scalar overloads' shape: hand the edge selector to
-    `Filleting.FilletEdges(solid, edges, law)` (which now resolves rims AND runs) —
-    a few lines in `Shape.cs`/`RimShape`, out of the B-Rep agent's fence.
 - [ ] **Traced-curve residuals after the band-crossing fix** (`SnapTracerEnds` ✅ landed —
   a traced polyline is extended onto the EXACT solution of E(t) = S(u, v) once, on the
   curve object both faces share, and `SplitByCurve`'s interior probe ✅ now takes an exact

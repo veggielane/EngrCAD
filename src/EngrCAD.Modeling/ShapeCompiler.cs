@@ -759,6 +759,14 @@ internal static class ShapeCompiler
                     if (selectedEdges.Count == 0)
                         throw new InvalidOperationException(
                             $"{rim.Describe()}: the edge selector matched nothing on the lowered solid.");
+                    // A LAW reads corner positions on the lowered solid — the transforms are
+                    // already baked into the geometry it sees — so its result is used
+                    // verbatim, never multiplied by the feature scale, exactly as the
+                    // face-selected law path below does.
+                    if (rim.SetbackLaw is { } edgeLaw)
+                        return rim.IsFillet
+                            ? Filleting.FilletEdges(solid, selectedEdges, edgeLaw)
+                            : Filleting.ChamferEdges(solid, selectedEdges, edgeLaw);
                     return rim.IsFillet
                         ? Filleting.FilletEdges(solid, selectedEdges, rim.Amount * featureScale)
                         : Filleting.ChamferEdges(

@@ -195,6 +195,94 @@ public class FilletChamferTests
     }
 
     [Fact]
+    public void VariableLawEdgeRun_ChamferIsExactClosedForm()
+    {
+        // The LAW overloads used to route through Filleting.RimFacesFor, which refuses a
+        // partial selection before the kernel's law-run path is reached; they now hand the
+        // edge selector straight to Filleting.ChamferEdges(solid, edges, law), which
+        // resolves complete rims AND terminated runs.
+        //
+        // A linear law keeps every strip planar (the offset endpoints A→B at each station
+        // are (0, -c, -c), parallel for every c, so the two rulings are parallel), so the
+        // removed solid is the swept right triangle of area c(x)²/2 and the volume is
+        // exact: V = w·d·h - ∫₀^w c(x)²/2 dx = w·d·h - w·(c₀² + c₀c₁ + c₁²)/6.
+        double w = 30, d = 20, h = 6, c0 = 1.0, c1 = 2.0;
+        var shape = Shape.Box(new Aabb((0, 0, 0), (w, d, h)))
+            .ChamferEdges(p => c0 + (c1 - c0) * p.X / w, s => Top(s)
+                .SelectMany(f => f.RimEdges())
+                .Where(e => e.IsLinear(out var start, out var end)
+                    && Math.Abs(start.Y) < 1e-9 && Math.Abs(end.Y) < 1e-9));
+        var solid = shape.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid);
+        Assert.True(mesh.IsClosed);
+        double exact = w * d * h - w * (c0 * c0 + c0 * c1 + c1 * c1) / 6;
+        Assert.True(Math.Abs(mesh.Volume() - exact) < 1e-9,
+            $"variable chamfer run volume {mesh.Volume()} vs {exact}");
+    }
+
+    [Fact]
+    public void VariableLawEdgeRun_FilletMatchesItsClosedForm()
+    {
+        // The band's cross-section at each station is a TRUE quarter circle of the
+        // interpolated radius, so the removed volume is ∫₀^w (1 - π/4)·r(x)² dx =
+        // (1 - π/4)·w·(r₀² + r₀r₁ + r₁²)/3 — the same closed form the kernel corpus's
+        // "variable fillet run" member converges onto at ratio exactly 4.0.
+        double w = 30, d = 20, h = 6, r0 = 1.0, r1 = 2.0;
+        var shape = Shape.Box(new Aabb((0, 0, 0), (w, d, h)))
+            .FilletEdges(p => r0 + (r1 - r0) * p.X / w, s => Top(s)
+                .SelectMany(f => f.RimEdges())
+                .Where(e => e.IsLinear(out var start, out var end)
+                    && Math.Abs(start.Y) < 1e-9 && Math.Abs(end.Y) < 1e-9));
+        var solid = shape.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid, 64, 128);
+        Assert.True(mesh.IsClosed);
+        double exact = w * d * h - (1 - Math.PI / 4) * w * (r0 * r0 + r0 * r1 + r1 * r1) / 3;
+        Assert.True(Math.Abs(mesh.Volume() - exact) / exact < 1e-5,
+            $"variable fillet run volume {mesh.Volume()} vs {exact}");
+    }
+
+    [Fact]
+    public void ConstantLawOnARun_AgreesWithThePlainRadiusOverload()
+    {
+        // The claim that makes the law overloads a generalisation rather than a second
+        // path: a law returning a constant must reproduce the plain overload's geometry.
+        double w = 30, d = 20, h = 6, r = 2;
+        static Func<BrepSolid, IEnumerable<BrepEdge>> Run(double w) => s =>
+            s.PlanarFacesWithNormal(Vector3d.UnitZ)
+                .SelectMany(f => f.RimEdges())
+                .Where(e => e.IsLinear(out var start, out var end)
+                    && Math.Abs(start.Y) < 1e-9 && Math.Abs(end.Y) < 1e-9);
+
+        var byLaw = Shape.Box(new Aabb((0, 0, 0), (w, d, h))).FilletEdges(_ => r, Run(w));
+        var byScalar = Shape.Box(new Aabb((0, 0, 0), (w, d, h))).FilletEdges(r, Run(w));
+        var lawMesh = BRepTessellator.Tessellate(byLaw.ToBrep(), 64, 128);
+        var scalarMesh = BRepTessellator.Tessellate(byScalar.ToBrep(), 64, 128);
+        Assert.Equal(scalarMesh.FaceCount, lawMesh.FaceCount);
+        Assert.True(Math.Abs(lawMesh.Volume() - scalarMesh.Volume()) / scalarMesh.Volume() < 1e-12,
+            $"constant-law run volume {lawMesh.Volume()} vs scalar {scalarMesh.Volume()}");
+    }
+
+    [Fact]
+    public void VariableLawEdgeSetRefOverloads_ResolveLikeTheirFuncSpelling()
+    {
+        // The typed vocabulary was complete for the SCALAR edge-set forms and missing for
+        // the law ones; both spellings must reach the same geometry.
+        double w = 30, d = 20, h = 6;
+        Func<Vector3d, double> law = p => 1.0 + 0.02 * p.X;
+        var byRef = Shape.Box(new Aabb((0, 0, 0), (w, d, h)))
+            .ChamferEdges(law, EdgeSetRef.RimOf(FaceSetRef.PlanarWithNormal(Vector3d.UnitZ)));
+        var byFunc = Shape.Box(new Aabb((0, 0, 0), (w, d, h)))
+            .ChamferEdges(law, s => s.PlanarFacesWithNormal(Vector3d.UnitZ).SelectMany(f => f.RimEdges()));
+        var a = BRepTessellator.Tessellate(byRef.ToBrep());
+        var b = BRepTessellator.Tessellate(byFunc.ToBrep());
+        Assert.True(a.IsClosed && b.IsClosed);
+        Assert.Equal(b.FaceCount, a.FaceCount);
+        Assert.True(Math.Abs(a.Volume() - b.Volume()) < 1e-9, $"{a.Volume()} vs {b.Volume()}");
+    }
+
+    [Fact]
     public void PartialEdgeRun_ChamferIsExact()
     {
         // All-planar output: single edge exact to round-off, and the two-edge L-run

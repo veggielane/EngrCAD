@@ -197,6 +197,81 @@ Two things have no exact form and are refused by name rather than approximated:
 A constant law reproduces the plain `Fillet(radius, faces)` overload exactly, mesh and
 all, so nothing is lost by reaching for the law form.
 
+## Variable laws on partial runs
+
+The two ideas compose: `FilletEdges(radiusAt, edges)` and `ChamferEdges(setbackAt, edges)`
+take an **edge selection**, which the kernel groups into complete rims *and* contiguous
+partial runs — so a blend can taper along a run that stops in the middle of a rim.
+
+```csharp render:fillet-variable-run
+// One top edge of a plate, blended from r = 0.5 at x = 0 to r = 3 at x = 30. The run
+// terminates with an exact setback at each end vertex.
+double w = 30, d = 20, h = 6;
+var plate = Shape.Box(new Aabb((0, 0, 0), (w, d, h)))
+    .FilletEdges(
+        p => 0.5 + 2.5 * p.X / w,
+        s => s.PlanarFacesWithNormal(Vector3d.UnitZ)
+            .SelectMany(f => f.RimEdges())
+            .Where(e => e.IsLinear(out var a, out var b)
+                && Math.Abs(a.Y - d) < 1e-9 && Math.Abs(b.Y - d) < 1e-9));
+
+var scene = new Scene();
+scene.Add(new Part("tapered run", plate, Palette.Steel));
+```
+
+![A plate with one top edge blended from a small to a large radius](images/fillet-variable-run.png)
+
+A run's **termination is exact at any law value**, which is what makes this composable
+rather than a special case: the end cross-section is a planar quarter arc of whatever
+radius the law gives at the stop vertex, so the removed material has a closed form,
+
+```
+V = (1 − π/4) · L · (r₀² + r₀r₁ + r₁²) / 3
+```
+
+— the integral of the constant-radius `(1 − π/4)·r²` along a linearly varying `r`. On the
+plate above it is **23.069697 mm³**, and the tessellated band converges onto it from above
+(the band inscribes the true quarter cylinder, so it removes a little too much) at exactly
+the second order you would want: 23.078230 / 23.071831 / 23.070231 / 23.069831 at 32 / 64 /
+128 / 256 segments per circle, i.e. deficits falling by **4.00 / 4.00 / 3.99**.
+
+The chamfer sibling is exact to round-off, because a linear law leaves every strip a true
+plane: at each station the offset endpoints differ by `(0, −c, −c)`, which is parallel for
+every `c`, so the strip is ruled by two parallel lines.
+
+```csharp render:chamfer-variable-run
+// An L-shaped run over two adjacent top edges, widening as it goes. The interior corner
+// still miters exactly — a chamfer's strips are planes whatever the law does.
+double w = 30, d = 20, h = 6;
+var plate = Shape.Box(new Aabb((0, 0, 0), (w, d, h)))
+    .ChamferEdges(
+        p => 0.8 + 0.05 * (p.X + p.Y),
+        s => s.PlanarFacesWithNormal(Vector3d.UnitZ)
+            .SelectMany(f => f.RimEdges())
+            .Where(e => e.IsLinear(out var a, out var b)
+                && (Math.Abs(a.Y) + Math.Abs(b.Y) < 1e-9
+                    || Math.Abs(a.X - w) + Math.Abs(b.X - w) < 1e-9)));
+
+var scene = new Scene();
+scene.Add(new Part("tapered L-run", plate, Palette.Brass));
+```
+
+![A plate with two adjacent top edges chamfered by a widening setback](images/chamfer-variable-run.png)
+
+Both overloads also take an `EdgeSetRef`, so a variable blend can be driven from a
+serializable selector rather than a lambda:
+
+```csharp
+var rounded = plate.FilletEdges(
+    p => 1.0 + 0.02 * p.X,
+    EdgeSetRef.RimOf(FaceSetRef.PlanarWithNormal(Vector3d.UnitZ)));
+```
+
+The refusals are the ones the law form already carries, and they are about the **law**
+rather than about the run: a varying radius across a *sharp* corner is still refused (two
+variable bands are cones with no common inscribed sphere), and on a run there is a third
+way out that a full rim does not have — stop the run before the corner.
+
 ## Rounding every edge at once
 
 `Filleting.FilletAllEdges` rounds **every** edge of a convex polyhedron in one call. It

@@ -820,6 +820,14 @@ public abstract class Shape
     public Shape ChamferEdges(double topSetback, double sideSetback, EdgeSetRef edges) =>
         ChamferEdges(topSetback, sideSetback, Selector(edges, nameof(edges)));
 
+    /// <inheritdoc cref="FilletEdges(Func{Vector3d, double}, Func{BrepSolid, IEnumerable{BrepEdge}})"/>
+    public Shape FilletEdges(Func<Vector3d, double> radiusAt, EdgeSetRef edges) =>
+        FilletEdges(radiusAt, Selector(edges, nameof(edges)));
+
+    /// <inheritdoc cref="ChamferEdges(Func{Vector3d, double}, Func{BrepSolid, IEnumerable{BrepEdge}})"/>
+    public Shape ChamferEdges(Func<Vector3d, double> setbackAt, EdgeSetRef edges) =>
+        ChamferEdges(setbackAt, Selector(edges, nameof(edges)));
+
     // Shell deliberately gets NO FaceSetRef overload. Its existing openings parameter is
     // a NULLABLE Func (no openings = a sealed void), so a second reference-typed overload
     // would make the existing, correct call `Shell(t, null)` ambiguous at every site — a
@@ -956,13 +964,17 @@ public abstract class Shape
     }
 
     /// <summary>Variable-setback chamfer of selected EDGES; the selection resolves to
-    /// complete rims exactly as <see cref="ChamferEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>.</summary>
+    /// complete rims AND terminated partial runs, exactly as
+    /// <see cref="ChamferEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>. A run's
+    /// termination is exact at any law value — the end cross-section is a planar strip of
+    /// whatever setback the law gives at the stop vertex.</summary>
     public Shape ChamferEdges(
         Func<Vector3d, double> setbackAt, Func<BrepSolid, IEnumerable<BrepEdge>> edges)
     {
         ArgumentNullException.ThrowIfNull(setbackAt);
         return new RimShape(this, fillet: false, 0, 0,
-            solid => Filleting.RimFacesFor(solid, edges(solid)), setbackAt, lawAngleDegrees: null);
+            solid => Filleting.RimFacesFor(solid, edges(solid)), setbackAt, lawAngleDegrees: null,
+            edgeSelector: edges);
     }
 
     /// <summary>
@@ -986,13 +998,17 @@ public abstract class Shape
     }
 
     /// <summary>Variable-radius fillet of selected EDGES; the selection resolves to complete
-    /// rims exactly as <see cref="FilletEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>.</summary>
+    /// rims AND terminated partial runs, exactly as
+    /// <see cref="FilletEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>. A run's
+    /// termination is exact at any law value — the end cross-section is a planar quarter arc
+    /// of whatever radius the law gives at the stop vertex.</summary>
     public Shape FilletEdges(
         Func<Vector3d, double> radiusAt, Func<BrepSolid, IEnumerable<BrepEdge>> edges)
     {
         ArgumentNullException.ThrowIfNull(radiusAt);
         return new RimShape(this, fillet: true, 0, 0,
-            solid => Filleting.RimFacesFor(solid, edges(solid)), radiusAt, lawAngleDegrees: null);
+            solid => Filleting.RimFacesFor(solid, edges(solid)), radiusAt, lawAngleDegrees: null,
+            edgeSelector: edges);
     }
 
     // ---- Draft (mould-release taper) ----
