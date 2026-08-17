@@ -2365,10 +2365,28 @@ absurd — is filed in todo.md rather than built.
 
 Loading follows `LoadParameters`' convention: **warnings, never exceptions**, for opaque
 features (a `BooleanFeature`'s `Shape` tool, a `FromFunc` lambda, a `ComponentFeature` —
-`DocumentLoadOptions.ResolveOpaqueFeature` is the hook), selector-backed annotations
-(`LinearDimension.BetweenFaces`, `RadialDimension.OnEdge` measure through lambdas), and
+`DocumentLoadOptions.ResolveOpaqueFeature` is the hook), lambda-backed annotations, and
 catalogue parts (the geometry loads, the `HardwareComponent` cannot). Only a structurally
 invalid file — bad JSON, a missing envelope, an unknown version — throws.
+
+**A dimension named through the typed reference vocabulary is DATA, so it round-trips.**
+`LinearDimension`/`AngularDimension` take a `FaceRef` pair and `RadialDimension` an
+`EdgeSetRef`, beside the `Func` spellings that remain the escape hatch. The reference form
+stores the *reference* and derives the selector from it, so resolution keeps one path and
+the serialized form is the reference's own `Descriptor` — the string that is already its
+cache key. They are constructors as well as factories, because `Label`/`Tolerance` are
+init-only and only a `new` expression can carry them. An `EdgeSetRef` is set-valued where a
+radial dimension needs *one* edge, so the cardinality is checked where the reference
+resolves and refused by name with the count found — the contract `FaceRef.One` already
+states for faces. A lambda-backed reference (`opaque(label)`) still saves as the marker, so
+the honesty is unchanged; only the need for it is gone.
+
+> One boundary is worth stating: the reference round-trips, but *resolving* it after a load
+> needs the part to still be B-Rep-representable. A code-built `Shape` part has no recipe,
+> so it reloads as a mesh snapshot (reported by `DocumentLoadResult.Snapshots`) and every
+> selector-based annotation on it refuses by name — the `Shape`-graph serialization gap
+> showing through rather than an annotation one. A history-backed part regenerates and
+> resolves normally.
 
 `save → load → save` is a **byte-identical fixed point** for everything that round-trips;
 a file carrying opaque records is smaller the second time by exactly those records and a

@@ -76,6 +76,104 @@ public class AdaptiveQualityTests
         Assert.Equal(near.Tessellation.SegmentsFor(200), nearSegments);
     }
 
+    // ---- THE PER-PART DEPTH: a part far from the orbit target is sized by ITSELF ----
+
+    private static Vector3d EyeOf(CameraState c) =>
+        CameraMath.Eye(c.Yaw, c.Pitch, c.Distance, c.Target);
+
+    private static Vector3d AtDepth(CameraState c, double depth)
+    {
+        var eye = EyeOf(c);
+        return eye + (c.Target - eye).Normalized() * depth;
+    }
+
+    [Fact]
+    public void APointAtTheOrbitTargetAsksForExactlyTheSceneLevelDeviation()
+    {
+        // The generalisation must REDUCE to what it generalises: the target's own depth
+        // IS the camera distance, so the per-part rule and the scene-level one agree
+        // there. Anything else would mean the two spellings disagree about the case they
+        // share, which is exactly how a "per-part" refinement quietly changes every part.
+        var camera = At(300);
+        Assert.Equal(
+            AdaptiveQuality.ChordDeviationFor(camera, ViewportHeight),
+            AdaptiveQuality.ChordDeviationFor(camera, ViewportHeight, camera.Target), 12);
+    }
+
+    [Fact]
+    public void TheDeviationIsProportionalToThePartsOwnDepth()
+    {
+        // A pixel's world size grows linearly with depth, so this is an exact ratio, not
+        // a trend: a part twice as far as the target may be half as finely meshed.
+        var camera = At(300);
+        double near = AdaptiveQuality.ChordDeviationFor(camera, ViewportHeight, AtDepth(camera, 150));
+        double at = AdaptiveQuality.ChordDeviationFor(camera, ViewportHeight, camera.Target);
+        double far = AdaptiveQuality.ChordDeviationFor(camera, ViewportHeight, AtDepth(camera, 600));
+        Assert.Equal(0.5, near / at, 12);
+        Assert.Equal(2.0, far / at, 12);
+    }
+
+    [Fact]
+    public void DepthIsMeasuredALONGTheViewDirection_NotAsADistance()
+    {
+        // A part displaced SIDEWAYS is no further into the screen, so it must be sized
+        // exactly as the target is — the discriminating case, since a naive
+        // |worldPoint - eye| would make it coarser the further off-axis it sits.
+        var camera = At(300);
+        var eye = EyeOf(camera);
+        var forward = (camera.Target - eye).Normalized();
+        var sideways = forward.Cross(Vector3d.UnitZ).Normalized();
+        var offAxis = camera.Target + sideways * 250;
+
+        Assert.Equal(
+            AdaptiveQuality.ChordDeviationFor(camera, ViewportHeight, camera.Target),
+            AdaptiveQuality.ChordDeviationFor(camera, ViewportHeight, offAxis), 12);
+
+        // and the naive reading really would differ, so the assertion above has teeth
+        Assert.True((offAxis - eye).Length > 1.3 * camera.Distance);
+    }
+
+    [Fact]
+    public void APartBehindTheEyeClampsRatherThanGoingNonPositive()
+    {
+        var camera = At(300);
+        double clamped = AdaptiveQuality.ChordDeviationFor(
+            camera, ViewportHeight, AtDepth(camera, -500));
+        double floor = AdaptiveQuality.ChordDeviationFor(
+            camera, ViewportHeight, AtDepth(camera, AdaptiveQuality.MinimumDepthFraction * 300));
+        Assert.True(clamped > 0);
+        Assert.Equal(floor, clamped, 12);
+    }
+
+    [Fact]
+    public void TwoPartsAtDifferentDepthsResolveSegmentCountsTheCriterionPredicts()
+    {
+        // The oracle the residual asked for, in the same shape as the two-camera one:
+        // one settled pose, two parts, segment counts following n ~ sqrt(1/depth).
+        var solid = Shape.Cylinder(radius: 200, height: 40).ToBrep();
+        var camera = At(300);
+        var rule = new AdaptiveQuality(baseline: null);
+
+        var near = rule.QualityFor(camera, ViewportHeight, AtDepth(camera, 300));
+        var far = rule.QualityFor(camera, ViewportHeight, AtDepth(camera, 1200));
+
+        int nearSegments = near.Tessellation!.ResolveFor(solid).SegmentsPerCircle;
+        int farSegments = far.Tessellation!.ResolveFor(solid).SegmentsPerCircle;
+
+        Assert.True(nearSegments > farSegments,
+            $"the nearer part must be finer: near {nearSegments}, far {farSegments}");
+        Assert.Equal(2.0, (double)nearSegments / farSegments, 1);
+        Assert.Equal(80, nearSegments);
+        Assert.Equal(40, farSegments);
+
+        // And it is the SAME pair of numbers the two-camera oracle measures, which is the
+        // point: moving the camera 4x closer and putting the part 4x nearer are one rule.
+        Assert.Equal(
+            rule.QualityFor(AdaptiveQuality.ChordDeviationFor(At(1200), ViewportHeight))
+                .Tessellation!.ResolveFor(solid).SegmentsPerCircle,
+            farSegments);
+    }
+
     // ---- settle ----
 
     [Fact]

@@ -1,3 +1,4 @@
+using EngrCAD.Core;
 using EngrCAD.Modeling;
 
 namespace EngrCAD.Viewer;
@@ -10,8 +11,10 @@ namespace EngrCAD.Viewer;
 /// should refine to, or null when nothing should happen — which is almost always.
 /// <para><b>The criterion is one line and the plumbing is the feature</b> (the design
 /// the backlog entry recorded): the target is a chord deviation of
-/// <see cref="PixelFraction"/> of a device pixel at the orbit target
-/// (<see cref="ChordDeviationFor"/>), fed to the landed
+/// <see cref="PixelFraction"/> of a device pixel <b>at the depth being sized</b> — each
+/// part's own depth (<see cref="QualityFor(CameraState, double, in Vector3d)"/>), with the
+/// orbit target's serving the scene-level "is this pose worth acting on" decision — fed to
+/// the landed
 /// <see cref="TessellationQuality.MaxChordDeviation"/> criterion, so a large rim gains
 /// segments as the camera closes in on it. Three rules keep it from being a per-frame
 /// knob:</para>
@@ -86,6 +89,57 @@ public sealed class AdaptiveQuality
                 viewportHeightPixels, "Viewport height must be a positive pixel count.");
         return PixelFraction * 2 * camera.Distance * Math.Tan(CameraMath.FovY / 2) / viewportHeightPixels;
     }
+
+    /// <summary>
+    /// The chord deviation ONE PART asks for: the same rule measured at that part's own
+    /// depth rather than at the orbit target's. A pixel's world size grows linearly with
+    /// depth, so in a wide scene a part twice as far as the target needs half the segments
+    /// and one half as far needs √2 times as many — sizing every part by the target's
+    /// distance over-refines the far ones and under-refines the near ones by exactly that
+    /// factor.
+    /// <para><paramref name="worldPoint"/> is the part's bounds CENTRE (the target is a
+    /// centre-like point, so this is the direct generalisation). Depth is measured along
+    /// the view direction, and a part at or behind the eye is clamped to
+    /// <see cref="MinimumDepthFraction"/> of the camera distance: such a part is mostly
+    /// off screen, and the clamp keeps the answer positive and finite without letting one
+    /// stray centre demand an unbounded refinement — <see cref="RefinementCeiling"/>
+    /// bounds it in any case.</para>
+    /// </summary>
+    public static double ChordDeviationFor(
+        CameraState camera, double viewportHeightPixels, in Vector3d worldPoint)
+    {
+        ArgumentNullException.ThrowIfNull(camera);
+        if (viewportHeightPixels <= 0 || !double.IsFinite(viewportHeightPixels))
+            throw new ArgumentOutOfRangeException(nameof(viewportHeightPixels),
+                viewportHeightPixels, "Viewport height must be a positive pixel count.");
+
+        var eye = CameraMath.Eye(camera.Yaw, camera.Pitch, camera.Distance, camera.Target);
+        var toTarget = camera.Target - eye;
+        double span = toTarget.Length;
+        if (!(span > 0) || !double.IsFinite(span))
+            return ChordDeviationFor(camera, viewportHeightPixels);
+
+        double depth = (worldPoint - eye).Dot(toTarget / span);
+        double floor = MinimumDepthFraction * camera.Distance;
+        if (!double.IsFinite(depth) || depth < floor)
+            depth = floor;
+        return PixelFraction * 2 * depth * Math.Tan(CameraMath.FovY / 2) / viewportHeightPixels;
+    }
+
+    /// <summary>Depth floor for <see cref="ChordDeviationFor(CameraState, double, in Vector3d)"/>,
+    /// as a fraction of the camera distance — what a part whose centre sits at or behind
+    /// the eye is sized by.</summary>
+    public const double MinimumDepthFraction = 1.0 / 64;
+
+    /// <summary>The quality ONE PART should refine to under a settled pose — the per-part
+    /// twin of <see cref="QualityFor(double)"/>, sized at that part's own depth. The host
+    /// calls this once per displayed part after <see cref="Observe"/> has decided that the
+    /// pose is worth acting on at all; the never-coarsen ratchet is enforced per part by
+    /// <c>Part.RefineMesh</c>, so a part that ends up asking for less than it already has
+    /// simply re-meshes nothing.</summary>
+    public MeshQuality QualityFor(
+        CameraState camera, double viewportHeightPixels, in Vector3d worldPoint) =>
+        QualityFor(ChordDeviationFor(camera, viewportHeightPixels, worldPoint));
 
     /// <summary>
     /// One observation of the camera. Returns the quality the displayed parts should

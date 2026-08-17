@@ -904,16 +904,28 @@ spelling.) Headless paths are unaffected either way: `--export`, `--render` and
 
 `.WithAdaptiveDisplayQuality()` (or `EngrCadOptions.AdaptiveDisplayQuality = true`) lets
 the displayed parts re-tessellate to their on-screen size: the target is half a device
-pixel of chord deviation at the orbit target, fed to `TessellationQuality`'s
+pixel of chord deviation **at the depth being sized**, fed to `TessellationQuality`'s
 `MaxChordDeviation`, so a large rim gains segments as you zoom onto it. The whole
 decision rule is the pure `AdaptiveQuality` in `EngrCAD.Viewer.Core` — no GL, no timer,
-unit-tested headlessly — and its shape is three rules:
+unit-tested headlessly — and its shape is four rules:
 
 | | |
 |---|---|
 | **Settle** | 300 ms of an unchanged pose, and each settled pose evaluated exactly once — a drag or a wheel flurry queues nothing |
 | **Hysteresis** | a settled target is adopted only when ≥ 2× finer than the last one adopted |
 | **Floor** | never coarser: a coarser target is declined, and the emitted quality carries the session's own segment count as `MinSegments` |
+| **Per-part depth** | the three rules above decide *whether* a pose is worth acting on, using the orbit target; the deviation each part is then meshed to is measured at **that part's own depth**, along the view direction |
+
+The last one matters in a wide scene: a pixel's world size grows linearly with depth, so
+sizing every part by the target's distance over-refines whatever is behind it and
+under-refines whatever is in front, by exactly the ratio of the two depths. Depth is the
+component **along the view direction**, not a distance — a part displaced sideways is no
+further into the screen and is meshed exactly as the target is — and the rule reduces to
+the scene-level one at the target, which is the assertion that keeps the two spellings
+from drifting. A part placed several times is one mesh, so it is sized at its *nearest*
+occurrence, read off the display mesh's bounds (no lowering); a centre at or behind the
+eye clamps to `MinimumDepthFraction` of the camera distance rather than going
+non-positive.
 
 `Part.RefineMesh(quality)` is the kernel-side seam and enforces the same ratchet per
 part, so "never coarser than the session started" is a property of that method rather

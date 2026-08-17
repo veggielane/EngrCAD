@@ -1121,6 +1121,18 @@ internal static class DocumentReader
                 LoadVector(element.GetProperty("a")),
                 LoadVector(element.GetProperty("b")))
             { Label = label, Tolerance = tolerance },
+            "linearFaces" => new LinearDimension(
+                FaceRef.Parse(element.GetProperty("faceA").GetString() ?? ""),
+                FaceRef.Parse(element.GetProperty("faceB").GetString() ?? ""))
+            { Label = label, Tolerance = tolerance },
+            "angularFaces" => new AngularDimension(
+                FaceRef.Parse(element.GetProperty("faceA").GetString() ?? ""),
+                FaceRef.Parse(element.GetProperty("faceB").GetString() ?? ""))
+            { Label = label, Tolerance = tolerance },
+            "radialEdge" => new RadialDimension(
+                EdgeSetRef.Parse(element.GetProperty("edge").GetString() ?? ""),
+                element.TryGetProperty("diameter", out var dia) && dia.GetBoolean())
+            { Label = label, Tolerance = tolerance },
             "note" => new LeaderNote(
                 LoadVector(element.GetProperty("anchor")), element.GetProperty("text").GetString() ?? "")
             { Label = label },

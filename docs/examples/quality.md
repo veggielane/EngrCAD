@@ -86,7 +86,7 @@ if (rim != expected) throw new Exception($"mesh rim {rim} != {expected}");
 
 A criterion stated in model units is still a guess about how close you will get. The
 viewer can instead derive one from the **camera**: half a device pixel of chord deviation
-at the orbit target, fed to `MaxChordDeviation`, so a large rim gains segments as you
+at the depth being sized, fed to `MaxChordDeviation`, so a large rim gains segments as you
 zoom onto it.
 
 ```csharp
@@ -110,6 +110,53 @@ tuning constant:
   not rest on the controller's state surviving a tab switch. A part that visibly loses
   detail when you pull back reads as a bug even when the criterion is working; the trade
   is memory, not detail.
+
+### Each part is sized by its own depth
+
+A pixel's world size grows linearly with depth, so sizing every part by the *orbit
+target's* distance over-refines whatever is behind the target and under-refines whatever
+is in front of it — in a wide scene, by the ratio of the two depths. So the settle,
+hysteresis and ratchet rules above decide **whether** a pose is worth acting on, using the
+target; the deviation each part is then meshed to is measured at **that part's own depth**,
+along the view direction (a part displaced sideways is no further into the screen and is
+meshed exactly as the target is).
+
+The two spellings agree where they overlap — a part at the target asks for exactly the
+scene-level deviation — and the segment counts follow the same `n ∝ √(1/depth)` the
+two-camera oracle measures. The same Ø400 rim, one settled pose, two depths:
+
+| part depth | chord deviation | segments per circle |
+| ---: | ---: | ---: |
+| 300 (at the target) | 0.1553 mm | **80** |
+| 1 200 | 0.6213 mm | **40** |
+
+which is the identical pair of numbers you get by moving the camera 4× closer instead —
+moving the camera and moving the part are one rule.
+
+```csharp run:quality-adaptive-depth
+// The rule's own answers, checked rather than described. (A headless render never
+// consults a camera at all — that is the deterministic-one-shot rule below — so the
+// depths are fed in explicitly.)
+var camera = new CameraState(0.7, 0.45, Distance: 300, Target: Vector3d.Zero);
+var eye = CameraMath.Eye(camera.Yaw, camera.Pitch, camera.Distance, camera.Target);
+var forward = (camera.Target - eye).Normalized();
+
+var rule = new AdaptiveQuality(baseline: null);
+var rim = (Shape.Cylinder(radius: 200, height: 40)).ToBrep();
+
+foreach (double depth in new[] { 300.0, 1200.0 })
+{
+    var quality = rule.QualityFor(camera, 800, eye + forward * depth);
+    int segments = quality.Tessellation!.ResolveFor(rim).SegmentsPerCircle;
+    Console.WriteLine($"depth {depth,6}: {segments} segments per circle");
+    if (depth == 300 && segments != 80) throw new Exception("the near part must resolve 80");
+    if (depth == 1200 && segments != 40) throw new Exception("the far part must resolve 40");
+}
+```
+
+A part placed several times is one mesh, so it is sized at the depth of its **nearest**
+occurrence — the closest place it appears is the one whose faceting a viewer would see
+first. The bounds it reads are the display mesh's, so this costs no lowering.
 
 The re-tessellation runs on a background task under the tab loader's own generation
 discipline (a stale result never lands), and it is the *tessellate half only* — the

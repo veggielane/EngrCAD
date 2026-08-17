@@ -655,7 +655,8 @@ internal sealed class SceneHost
         if (_adaptive is not { } rule || _adaptiveBusy || _publishedInstances.Count == 0)
             return;
         double height = Viewport.DevicePixelHeight;
-        if (rule.Observe(Viewport.Camera, height, _adaptiveClock.Elapsed) is not { } quality)
+        var camera = Viewport.Camera;
+        if (rule.Observe(camera, height, _adaptiveClock.Elapsed) is null)
             return;
 
         _adaptiveBusy = true;
@@ -663,21 +664,38 @@ internal sealed class SceneHost
         // interlocked and the reads volatile — the pairing TabMeshLoader gets from its lock.
         int token = Interlocked.Increment(ref _adaptiveGeneration);
         var instances = _publishedInstances;
-        var parts = instances.Select(i => i.Part).Distinct().ToList();
+        // One centre per DISTINCT part, taken from its nearest instance: a part placed
+        // several times is one mesh, so the honest depth to size it at is the closest
+        // place it appears. Bounds read the mesh already on screen, so this costs no
+        // lowering; a part that somehow has none yet falls back to the orbit target,
+        // which is the scene-level answer this used to give every part.
+        var parts = new List<(Part Part, Vector3d Centre)>();
+        foreach (var group in instances.GroupBy(i => i.Part))
+        {
+            var centre = camera.Target;
+            double best = double.PositiveInfinity;
+            foreach (var instance in group)
+            {
+                var here = instance.Bounds().Center;
+                double d = (here - camera.Target).LengthSquared;
+                if (d < best) { best = d; centre = here; }
+            }
+            parts.Add((group.Key, centre));
+        }
         Task.Run(() =>
         {
             bool changed = false;
             string? error = null;
             try
             {
-                foreach (var part in parts)
+                foreach (var (part, centre) in parts)
                 {
                     // Superseded between parts — the loader's own rule. BREAK rather than
                     // return: the post below is what clears the in-flight flag, and
                     // skipping it would leave adaptivity switched off for the session.
                     if (Volatile.Read(ref _adaptiveGeneration) != token)
                         break;
-                    changed |= part.RefineMesh(quality);
+                    changed |= part.RefineMesh(rule.QualityFor(camera, height, centre));
                 }
             }
             catch (Exception exception)

@@ -197,6 +197,8 @@ public sealed class LinearDimension : Annotation
     private readonly Vector3d _a, _b;
     private readonly Func<BrepSolid, BrepFace>? _faceA;
     private readonly Func<BrepSolid, BrepFace>? _faceB;
+    private readonly FaceRef? _refA;
+    private readonly FaceRef? _refB;
 
     /// <summary>Point-to-point dimension between two fixed part-local points; the
     /// measured value is their distance.</summary>
@@ -223,6 +225,34 @@ public sealed class LinearDimension : Annotation
     /// </summary>
     public static LinearDimension BetweenFaces(
         Func<BrepSolid, BrepFace> faceA, Func<BrepSolid, BrepFace> faceB) => new(faceA, faceB);
+
+    /// <summary>
+    /// The same dimension named through the typed <see cref="FaceRef"/> vocabulary
+    /// instead of a lambda — <b>and therefore persistent</b>. A reference's
+    /// <see cref="GeometryRef{T}.Descriptor"/> is already its cache key, so it is also
+    /// its serialized form: this overload stores the references and DERIVES the
+    /// selectors from them, which keeps one resolution path rather than two.
+    /// <para>A lambda-backed reference (<c>opaque(label)</c>) still cannot round-trip
+    /// and still saves as the opaque marker, so the honesty is unchanged — what
+    /// changes is that an ordinary semantic selection no longer has to be one.</para>
+    /// </summary>
+    public static LinearDimension BetweenFaces(FaceRef faceA, FaceRef faceB)
+    {
+        ArgumentNullException.ThrowIfNull(faceA);
+        ArgumentNullException.ThrowIfNull(faceB);
+        return new LinearDimension(faceA, faceB);
+    }
+
+    /// <inheritdoc cref="BetweenFaces(FaceRef, FaceRef)"/>
+    /// <remarks>A constructor as well as a factory because <see cref="Annotation.Label"/>
+    /// and <see cref="Annotation.Tolerance"/> are init-only, so only a <c>new</c>
+    /// expression can carry them.</remarks>
+    public LinearDimension(FaceRef faceA, FaceRef faceB)
+        : this(s => faceA.Resolve(s, "faceA"), s => faceB.Resolve(s, "faceB"))
+    {
+        _refA = faceA;
+        _refB = faceB;
+    }
 
     /// <inheritdoc />
     public override ResolvedAnnotation Resolve(Func<BrepSolid> solid)
@@ -262,15 +292,26 @@ public sealed class LinearDimension : Annotation
     }
 
     /// <inheritdoc />
-    protected internal override System.Text.Json.Nodes.JsonNode? SaveJson() =>
-        _faceA is not null || _faceB is not null
-            ? null   // a face-selector dimension is a lambda: only its own code can rebuild it
-            : new System.Text.Json.Nodes.JsonObject
-            {
-                ["kind"] = "linear",
-                ["a"] = DocumentWriter.SaveVector(_a),
-                ["b"] = DocumentWriter.SaveVector(_b),
-            };
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveJson()
+    {
+        if (_refA is not null && _refB is not null)
+            return _refA.IsSerializable && _refB.IsSerializable
+                ? new System.Text.Json.Nodes.JsonObject
+                {
+                    ["kind"] = "linearFaces",
+                    ["faceA"] = _refA.Descriptor,
+                    ["faceB"] = _refB.Descriptor,
+                }
+                : null;   // a lambda-backed reference is still only its own code's to rebuild
+        if (_faceA is not null || _faceB is not null)
+            return null;  // a raw face-selector dimension is a lambda
+        return new System.Text.Json.Nodes.JsonObject
+        {
+            ["kind"] = "linear",
+            ["a"] = DocumentWriter.SaveVector(_a),
+            ["b"] = DocumentWriter.SaveVector(_b),
+        };
+    }
 
     /// <summary>
     /// <b>Chain dimensioning</b>: one dimension per consecutive pair of
@@ -338,6 +379,8 @@ public sealed class AngularDimension : Annotation
     private readonly Vector3d _vertex, _a, _b;
     private readonly Func<BrepSolid, BrepFace>? _faceA;
     private readonly Func<BrepSolid, BrepFace>? _faceB;
+    private readonly FaceRef? _refA;
+    private readonly FaceRef? _refB;
 
     /// <summary>Angle at <paramref name="vertex"/> between the rays toward
     /// <paramref name="a"/> and <paramref name="b"/> (part-local points; the value is
@@ -366,6 +409,24 @@ public sealed class AngularDimension : Annotation
     /// </summary>
     public static AngularDimension BetweenFaces(
         Func<BrepSolid, BrepFace> faceA, Func<BrepSolid, BrepFace> faceB) => new(faceA, faceB);
+
+    /// <summary>The same dimension named through the typed <see cref="FaceRef"/>
+    /// vocabulary — see <see cref="LinearDimension.BetweenFaces(FaceRef, FaceRef)"/> for
+    /// why that makes it persistent.</summary>
+    public static AngularDimension BetweenFaces(FaceRef faceA, FaceRef faceB)
+    {
+        ArgumentNullException.ThrowIfNull(faceA);
+        ArgumentNullException.ThrowIfNull(faceB);
+        return new AngularDimension(faceA, faceB);
+    }
+
+    /// <inheritdoc cref="BetweenFaces(FaceRef, FaceRef)"/>
+    public AngularDimension(FaceRef faceA, FaceRef faceB)
+        : this(s => faceA.Resolve(s, "faceA"), s => faceB.Resolve(s, "faceB"))
+    {
+        _refA = faceA;
+        _refB = faceB;
+    }
 
     /// <inheritdoc />
     public override ResolvedAnnotation Resolve(Func<BrepSolid> solid)
@@ -434,16 +495,27 @@ public sealed class AngularDimension : Annotation
     }
 
     /// <inheritdoc />
-    protected internal override System.Text.Json.Nodes.JsonNode? SaveJson() =>
-        _faceA is not null || _faceB is not null
-            ? null
-            : new System.Text.Json.Nodes.JsonObject
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveJson()
+    {
+        if (_refA is not null && _refB is not null)
+            return _refA.IsSerializable && _refB.IsSerializable
+                ? new System.Text.Json.Nodes.JsonObject
+                {
+                    ["kind"] = "angularFaces",
+                    ["faceA"] = _refA.Descriptor,
+                    ["faceB"] = _refB.Descriptor,
+                }
+                : null;
+        if (_faceA is not null || _faceB is not null)
+            return null;
+        return new System.Text.Json.Nodes.JsonObject
             {
                 ["kind"] = "angular",
                 ["vertex"] = DocumentWriter.SaveVector(_vertex),
                 ["a"] = DocumentWriter.SaveVector(_a),
                 ["b"] = DocumentWriter.SaveVector(_b),
-            };
+            };;
+    }
 
     private ResolvedAnnotation ResolveFromPoints(in Vector3d vertex, in Vector3d va, in Vector3d vb)
     {
@@ -478,11 +550,30 @@ public sealed class RadialDimension : Annotation
 {
     private readonly Func<BrepSolid, BrepEdge> _edge;
     private readonly bool _diameter;
+    private readonly EdgeSetRef? _ref;
 
     private RadialDimension(Func<BrepSolid, BrepEdge> edge, bool diameter)
     {
         _edge = edge;
         _diameter = diameter;
+    }
+
+    /// <inheritdoc cref="OnEdge(EdgeSetRef, bool)"/>
+    public RadialDimension(EdgeSetRef edge, bool diameter = false)
+        : this(s => One(edge, s), diameter) => _ref = edge;
+
+    /// <summary>An <see cref="EdgeSetRef"/> is set-valued and a radial dimension needs
+    /// exactly ONE edge, so the cardinality is a claim checked where the reference is
+    /// resolved and refused BY NAME with the count found — the contract
+    /// <see cref="FaceRef.One"/> already states for faces.</summary>
+    private static BrepEdge One(EdgeSetRef reference, BrepSolid? solid)
+    {
+        var edges = reference.Resolve(solid, "edge");
+        return edges.Count == 1
+            ? edges[0]
+            : throw new InvalidOperationException(
+                $"RadialDimension: edge: expected exactly one edge, found {edges.Count} "
+                + $"({reference.Descriptor}).");
     }
 
     /// <summary>
@@ -493,6 +584,27 @@ public sealed class RadialDimension : Annotation
     /// </summary>
     public static RadialDimension OnEdge(Func<BrepSolid, BrepEdge> edge, bool diameter = false) =>
         new(edge, diameter);
+
+    /// <summary>The same dimension named through the typed <see cref="EdgeSetRef"/>
+    /// vocabulary — see <see cref="LinearDimension.BetweenFaces(FaceRef, FaceRef)"/> for
+    /// why that makes it persistent. The selection must resolve to exactly one edge.
+    /// </summary>
+    public static RadialDimension OnEdge(EdgeSetRef edge, bool diameter = false)
+    {
+        ArgumentNullException.ThrowIfNull(edge);
+        return new RadialDimension(edge, diameter);
+    }
+
+    /// <inheritdoc />
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveJson() =>
+        _ref is { IsSerializable: true }
+            ? new System.Text.Json.Nodes.JsonObject
+            {
+                ["kind"] = "radialEdge",
+                ["edge"] = _ref.Descriptor,
+                ["diameter"] = _diameter,
+            }
+            : null;
 
     /// <inheritdoc />
     public override ResolvedAnnotation Resolve(Func<BrepSolid> solid)

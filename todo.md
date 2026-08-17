@@ -752,14 +752,6 @@ export — is recorded in CLAUDE.md):
   the code. Verified coordinate-for-coordinate on synthetic fonts, with the charset
   tests choosing codes the TABLE routes to different glyphs than the identity would —
   which is what proves the table was read rather than assumed.
-- [ ] **Heightmap follow-ups** (`surface()` ✅ landed — `Shape.Heightmap` +
-  `Heightmap.Mesh/ReadDat/ReadPng`; **colour-PNG luminance ✅ landed** — truecolor RGB/RGBA
-  → Rec. 709 relative luminance `0.2126 R + 0.7152 G + 0.0722 B`, a documented rule, alpha
-  ignored, palette still refused by name; **chunk CRC verification ✅ landed** — CRC-32/
-  ISO-HDLC checked on critical chunks, a corrupt IHDR/IDAT named): Adam7 interlace
-  ✅ landed (seven per-pass filter streams, empty passes contributing no bytes,
-  twin-encoder-verified bit-identical to the straight spelling across gray-8/16,
-  truecolor and empty-pass sizes); nothing remains open here.
 - [x] ~~mirror B-Rep completion, remaining nodes~~ ✅ **landed in full** — revolve/sweep/
   rim/drill earlier (axis negation `F∘R(d,θ)∘F = R(−F·d, θ)` for revolves, intrinsic RMF
   for sweeps, isometry-commuting surgery for rims/drills), and now `Draft` /
@@ -844,20 +836,18 @@ export — is recorded in CLAUDE.md):
   right settle, does a factor of two read as too coarse a step (a big rim can sit
   visibly faceted for one whole band), and does the republish blink? Turning the default
   on is a decision that wants a week of use, not another test.
-  Two smaller residuals it leaves, both stated in the docs rather than hidden: the
+  The per-part-depth residual ✅ landed (`AdaptiveQuality.ChordDeviationFor(camera,
+  height, worldPoint)` / `QualityFor(camera, height, worldPoint)`): the settle, hysteresis
+  and ratchet rules still decide WHETHER a settled pose is worth acting on, using the
+  orbit target, but the deviation each part is meshed to is now measured at that part's
+  own depth ALONG the view direction — so a part displaced sideways is meshed exactly as
+  the target is, and a part twice as far may be half as finely meshed. It reduces to the
+  scene-level answer at the target (asserted), reproduces the two-camera oracle's own
+  80/40 segment pair from two DEPTHS at one pose, and a part placed several times is sized
+  at its NEAREST occurrence off the display mesh's bounds, so it costs no lowering.
+  One smaller residual remains, stated in the docs rather than hidden: the
   ambient-occlusion bake is NOT re-run (12.3 s on the demo scene, so occlusion stays one
-  level behind the fill), and the criterion is measured at the orbit TARGET, so a part
-  far from the target in a wide scene is sized by the camera's distance to the target
-  rather than to itself.
-- [ ] **Debug-modifier follow-ups** (v1 ✅ landed — `Part.Ghost`/`Hidden`/`Isolated`
-  + `DebugFilter` shared by window/offscreen/exports/MCP; `#` highlight deliberately
-  stays the selection mechanism; **web viewport Hidden/Isolated ✅ landed** —
-  `EngrCadViewport.ResolveInstances` applies `DebugFilter.Shown` exactly as the window /
-  offscreen / `--export` / MCP do, and Ghost renders through `EffectiveDisplayMode`, so with
-  no flags it is the identity; **tree-row graying ✅ landed** —
-  `SceneTree.IsEffectivelyHidden` exposes the own-AND-ancestors chain per row, pure and
-  tested, and the markup asks it rather than restating a visibility rule it could drift
-  from; selection still golds, a hidden part being addressable). Nothing open here.
+  level behind the fill).
 - [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame. This
   is the *expensive* cousin of the Animation section above and deliberately separate:
   that one moves poses and the camera only, which is why it can animate with matrices
@@ -1399,11 +1389,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     §6b). The case that would justify a `{"kind": "external", "path": ...}` record is a
     scan mesh too large to inline; it needs a resolver hook, path resolution relative to
     the document, and a missing-file policy, so it waits for a real need.
-  - [ ] **Selector-backed annotations do not round-trip.** `LinearDimension.BetweenFaces`
-    and `RadialDimension.OnEdge` take `Func<BrepSolid, …>` lambdas, so they save as opaque
-    markers. The fix is not more serialization machinery but the vocabulary that already
-    exists: overloads taking `FaceRef`/`EdgeSetRef`, whose `Descriptor` is the serialized
-    form. Small, and it would make dimensions as persistent as features already are.
   - [ ] **Mechanisms in the document envelope.** The mechanism layer itself now
     round-trips (`Mechanism.SaveMechanism`/`LoadMechanism` — joints with saved
     reference directions and unwrap state, couplings by factory args, cam laws per
