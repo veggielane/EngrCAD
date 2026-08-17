@@ -477,21 +477,38 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   ask it for. That is a post-processing vocabulary (`ElasticLaw.ToMaterialFrame(stress)` plus
   a `FailureCriterion` with its allowables) rather than a solver change, and it is the more
   valuable of the two.
-- [ ] **FEA: ADAPTIVE refinement, now that there is something to refine against.**
-  `StructuralResults.ErrorEstimate` gives a per-element energy-norm error (design.md §3i),
-  which is exactly the map an adaptive loop consumes — and the loop itself is the thing
-  nobody has built: solve, estimate, choose a target size field from the element errors
-  (the standard rule is `h_new = h_old · (target/e_local)^(1/p)` for an equidistributed
-  error), re-mesh, repeat until the global figure is under a stated tolerance. Two things
-  make it more than a for-loop here. **(a) `TetMesher` re-meshes from the SURFACE**, so
-  every pass throws away the volume mesh and its boundary recovery rather than refining in
-  place; a `SizingField` from the previous pass's errors is the cheap route and it needs the
-  errors mapped from the old elements onto a spatial field (an `Sdf`-shaped
-  `Func<Vector3d,double>` over a BVH of the old mesh, which is a small piece of work). **(b)
-  The stopping rule wants a decision**: a global 5% target is the textbook one, but a model
-  with a genuine singularity — a re-entrant corner, a point load — never reaches it and the
-  honest loop caps the passes and REPORTS the figure it stalled at rather than refining
-  forever. That is the same shape as the boundary-recovery non-convergence detection.
+- [ ] **FEA: adaptive refinement residuals** (the loop landed — `AdaptiveSolve`, design.md
+  §3l, docs `fea-structural.md`; 1.40x fewer elements than uniform refinement at the same
+  estimated error on the cantilever). Four things it does NOT do, each with its reason:
+  **(a) it never coarsens below the starting mesh in practice**, because every round measures
+  the size the previous mesh ACHIEVED and the surface tessellation floors that — so a model
+  over-resolved at the outset stays over-resolved, and the fix is a surface the loop is also
+  allowed to re-triangulate rather than a change to the size rule. **(b) A singular corner is
+  refined by a fixed factor per round**, so reaching a stated target there needs geometric
+  grading toward the corner, which the `MinRefineFactor` band structurally cannot deliver in a
+  bounded number of rounds; the honest report (`RoundsExhausted` with the figure) is what
+  ships, and a graded-toward-a-named-feature mode is the alternative. **(c) The element budget
+  is predicted as `sum (h_old/h_new)^3`, a LOWER bound** — the mesher's red refinement
+  overshoots it, measured 17 636 predicted against 31 368 actual — so the post-mesh backstop
+  still fires on a run whose prediction just cleared. Calibrating the prediction against the
+  mesher's own overshoot would let the budget mean what it says. **(d) Only the STRUCTURAL
+  physics has a loop.** `ThermalResults.ErrorEstimate` is the same ZZ figure over the same
+  machinery (design.md §3d), so a thermal `AdaptiveSolve` is the same loop with the model
+  builder returning a `ThermalModel` — the sizing field, the gradation limiter, the budget
+  prediction and every refusal are physics-agnostic already, and what is missing is the
+  seam that lets one loop take either (the `ITopologyEvaluator` shape `TopologyOptimizer`
+  uses for exactly this reason). **(e) The 1.40x is a POINT measurement at one tolerance, and
+  the interesting quantity is the TREND.** Adaptivity's payoff on a singular problem is
+  asymptotic — the uniform arm keeps paying the singularity's rate (measured `N^-0.302`
+  against the smooth-problem `N^-0.333`) while the adapted mesh escapes it — so the
+  PREDICTION is that the ratio GROWS as the target tightens, and 1.40x is the shallow end
+  rather than the headline. Measuring it needs one more target (half the current error),
+  which costs a round at ~31 000 elements (18.6 s to mesh, 8.6 s to solve) plus a uniform arm
+  bigger than that, which is why it is filed rather than run in the test suite. The
+  prediction is stated so the measurement can refute it: **if the ratio does NOT grow, that
+  is the finding** — it would mean the adapted mesh is paying the singularity's rate too,
+  i.e. that the clamp needs geometric grading (residual (b)) rather than more rounds of a
+  fixed-factor band.
 - [ ] **FEA: a bi-material colour plot still shows the blended interface value, because
   `MeshField` has one value per vertex.** `StructuralResults.Fields()`/`SampleOnto` publish
   the node-indexed `NodalStress` and `ThermalResults`' publish `NodalFlux`, so the honest

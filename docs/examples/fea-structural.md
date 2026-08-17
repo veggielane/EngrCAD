@@ -350,7 +350,7 @@ var estimate = results.ErrorEstimate;
 Console.WriteLine(estimate);                       // "estimated error 12.4% (...)"
 Console.WriteLine($"peak {direct:F1} -> {recovered:F1} MPa");
 
-// The per-element map is what an adaptive refinement loop would consume.
+// The per-element map is what the adaptive refinement loop below consumes.
 int worst = estimate.WorstElement;
 Console.WriteLine($"worst element {worst}, error {estimate.ElementError[worst]:E3}");
 
@@ -400,6 +400,125 @@ Console.WriteLine($"{model.Mesh.InterfaceNodeCount} interface nodes");
 > 9.9e-15 against a true error of 0.313. That would call the mesh perfect on exactly the mesh
 > too coarse to assess. `ErrorEstimate.FallbackNodes` counts the partial case for the same
 > reason: a recovery that quietly did not happen must not look like one that did.
+
+## Adaptive refinement — spending elements where the error is
+
+`AdaptiveSolve.Run` closes the loop the estimate opens: solve, estimate, make the elements
+smaller where the error is large and larger where it is small, re-mesh, repeat. The rule is
+the classical one, `h_new = h_old * (target/e_local)^(1/p)` for an **equidistributed** error,
+with `p` the element degree because that is the energy-norm rate.
+
+You hand it a closed **surface** and a callback that builds the model on whatever mesh a
+round produces. The callback shape is what the loop needs — a `StructuralModel` is bound to
+one `AnalysisMesh` and every round has a new one — and it is sound because boundary
+conditions are named by `Facets` **selectors** rather than by facet indices.
+
+```csharp run:fea-adaptive
+var surface = Shape.Box(40, 20, 8).ToMesh();
+
+var result = AdaptiveSolve.Run(
+    surface,
+    mesh =>
+    {
+        var model = new StructuralModel(mesh, Materials.Steel);
+        model.Fix(Facets.OnPlane(new Vector3d(-20, 0, 0), Vector3d.UnitX));
+        model.Force(Facets.OnPlane(new Vector3d(20, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -400));
+        return model;
+    },
+    new AdaptiveOptions
+    {
+        TargetRelativeError = 0.15,
+        MaxRounds = 2,
+        MaxElements = 25_000,
+        Mesh = new TetMeshOptions { MaxElementSize = 8 },
+    });
+
+Console.WriteLine(result.ToText());
+
+// The answer is an ordinary solve on the final mesh.
+double tip = result.Results.MaxDisplacement;
+Console.WriteLine($"tip {tip:F4} mm at {result.RelativeError * 100:F1}% estimated error");
+
+if (result.Rounds.Count < 1) throw new Exception("a run always reports its rounds");
+if (result.Rounds[^1].RelativeError > result.Rounds[0].RelativeError)
+    throw new Exception("refining must not make the estimate worse");
+if (!(tip > 0)) throw new Exception("the final round is a real solve");
+```
+
+### What it buys, measured
+
+The comparison that means anything is **uniform** refinement of the same model, by the same
+mesher and solver, to the same estimated error. Measured on a 24 x 5 x 5 cantilever
+(`AdaptiveRefinementTests`, win-x64), starting from 1 764 elements at 39.48%:
+
+| | elements | estimated error | peak/mean element error |
+| --- | ---: | ---: | ---: |
+| adaptive, round 1 | 9 406 | 22.49% | **4.14** |
+| uniform, size 1.4 | 11 410 | 23.50% | 6.68 |
+| uniform, size 1.2 | 18 049 | 20.46% | 7.04 |
+| uniform, interpolated to 22.49% | **13 204** | 22.49% | — |
+
+The uniform arm's own rate over that ladder measures `error ~ N^-0.271`. Linear tetrahedra
+converge at `N^-0.333` on a smooth problem, so a rate below it is the fixture reporting that the
+clamp singularity really is what limits it — which is both the calibration the interpolation
+needs and the check that the comparison is running on the right problem. It is asserted, not just
+printed, with the bound being the theory constant rather than a tuned number.
+
+> [!NOTE]
+> **That rate is fitted over the whole ladder, and a two-point rate would not do.** The ladder is
+> not a refinement *sequence* — the mesher's red-refinement overshoot sets the element counts, so
+> the rungs jump unevenly and the pairwise rates swing 0.2235 to 0.3776, two of them above 1/3.
+> Interpolating the headline ratio still uses the local bracketing pair, which is what
+> interpolation wants and is measurably insensitive here (1.40x to 1.48x across the plausible
+> range); asserting a fixture property does not.
+
+So **1.40x fewer elements at the same estimated error**, and the reason is the last column:
+the error is spread 1.6x more evenly over the adapted mesh, so no small group of elements is
+holding the global figure up. The refinement goes where the singularity is — over the five
+millimetres nearest the clamp the mean element size fell to **0.439** of its starting value,
+while over the five nearest the tip it fell to **0.989**, which is to say the tip was left
+alone.
+
+> [!NOTE]
+> **peak/mean does not fall monotonically with every round on a singular fixture, and that is
+> honest rather than a defect.** Halving an element far from the clamp roughly halves its
+> error; halving one *at* the clamp barely moves it. So a round that refines both lowers the
+> global figure and widens the spread. The claim that survives is the matched-cost one above.
+
+### Two knobs that are not tuning
+
+**`SizeGradation`** bounds how fast the requested size may change with distance. It is not a
+smoothing nicety: the raw field is piecewise constant over the old elements, so a refined
+region meets an unrefined one at a *cliff*, and a mesher asked to put a 0.4 mm element against
+a 3 mm one across one face answers with slivers. Measured with the limit off on a raw
+`MeshPrimitives` box — already the mesher's worst-case surface — the next round's
+conjugate-gradient solve did not converge at all (13 185 free DOF, 250 s, the estimate coming
+back at 100%); with it, the same round solves in the ordinary way. On a remeshed surface the
+same defect is milder and still one-signed: 9 060 elements at 23.36% unlimited against 9 406 at
+22.49% limited — a bigger mesh for a worse answer. The direction generalises; the magnitude
+belongs to the surface.
+
+**`ReductionPerRound`** aims a round at `max(target, measured x factor)` rather than at the
+final target every time. Without it a far target makes *every* element's ratio fall below
+`MinRefineFactor`, the whole mesh clamps to one factor, and the run pays a uniform
+refinement's bill for an adaptive scheme's complexity. It sets how big a round is rather than
+how much a round is worth: 0.5 / 0.7 / 0.85 gave 13 284 / 9 406 / 7 373 elements at
+20.30% / 22.49% / 24.76%, which against that fixture's own uniform rate (`error ~ N^-0.30`)
+all sit on one curve.
+
+### Stopping is a decision
+
+A model with a genuine singularity never reaches an arbitrary target, so the loop caps its
+rounds and **reports the figure it stalled at** rather than refining forever — the same shape
+as boundary recovery's non-convergence detection. `AdaptiveResult.Outcome` says which cap it
+hit: `Converged`, `RoundsExhausted`, `Stalled` (a round that did not improve on the one
+before) or `ElementBudgetExceeded` (the next mesh's predicted size, from the sizing field
+itself, over `MaxElements` — checked before paying for the mesh that would prove it).
+
+Refused by name: a target outside `(0, 1)`, a non-positive round budget, a first mesh already
+over the element budget, a callback that returns a model over a *different* mesh, a solve that
+did not converge, and a mesh so coarse that no recovery patch exists — refining against a
+`NaN` estimate would be refining against nothing.
 
 ## Elements
 

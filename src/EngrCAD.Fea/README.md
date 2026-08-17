@@ -48,6 +48,7 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `StructuralSolver` / `StructuralSolveOptions` / `FeaSolveReport` | Assembly, restraint checking, the solve, and what it did |
 | `StructuralResults` / `NodalAveraging` / `StressRecovery` | Displacements, strain, stress, von Mises, publishing and `.vtu` |
 | `ErrorEstimate` | The Zienkiewicz-Zhu error estimate: per element and overall, in the energy norm — the answer to "is this mesh good enough", which a solve otherwise never gives; the SAME type for a recovered stress or a recovered flux |
+| `AdaptiveSolve` / `AdaptiveOptions` / `AdaptiveRound` / `AdaptiveResult` | The refinement LOOP: solve, estimate, re-mesh where the error is, repeat — 1.40x fewer elements than uniform refinement at the same estimated error, and an honest report when a singularity puts the target out of reach |
 | `ThermalModel` | Conduction: held temperatures, flux, generation and convection over the SAME facet selectors |
 | `ThermalSolver` / `ThermalSolveOptions` / `ThermalSolveReport` | Steady and theta-scheme transient solves, and the energy balance |
 | `ThermalTransientOptions` / `ThermalTimeScheme` / `ThermalTransientReport` | Step, count, scheme, initial condition; one factorization per run |
@@ -507,7 +508,7 @@ interfaces rather than a live defect, pinned by test at both ends so the finding
 
 **The error estimate is the more valuable half.** `StructuralResults.ErrorEstimate` is the
 energy-norm distance between the element stress field and its recovery: per element (the map
-an adaptive scheme refines against) and globally (the answer to "is this mesh good enough",
+`AdaptiveSolve` refines against) and globally (the answer to "is this mesh good enough",
 which a solve otherwise never gives). It is always computed from the *recovered* field
 whatever `Recovery` is set to, because that is what makes it an estimator rather than a
 smoothness measure.

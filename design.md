@@ -1808,7 +1808,7 @@ out loud: *an error estimator is worth more than the accuracy it buys*. That is 
 decides the shape of the feature. A solve returns a number whatever the mesh, and nothing in
 this library previously answered "is this mesh good enough" — the convergence tables answer
 it for the fixtures, which is not the same thing. `ErrorEstimate` answers it per element,
-which is also the input an adaptive refinement loop would consume. The one-order accuracy gain
+which is also the input the adaptive refinement loop consumes (§3l). The one-order accuracy gain
 is real (14x and 11x at the finest fixture meshes) and is the smaller half.
 
 ### The boundary caps the rate, and the signature is a HALF order
@@ -2545,6 +2545,158 @@ essentially IS the numeric-pass floor, which is optimal — a factorization cann
 arithmetic. The complementary lever the todo names, a preconditioned CG warm-started from the
 previous iterate, is a different mechanism (it attacks the numeric cost, not the symbolic one)
 and is filed.
+
+## 3l. Adaptive refinement (`EngrCAD.Fea`)
+
+`AdaptiveSolve.Run(surface, buildModel, options)` closes the loop §3i opens: solve, estimate,
+choose a target size field from the per-element errors, re-mesh, repeat until the global figure
+is under a stated tolerance or a stated cap is hit. The rule is the classical one,
+`h_new = h_old · (e_target/e_local)^(1/p)` for an EQUIDISTRIBUTED error, with `p` the element
+degree because that is the energy-norm rate; the per-element target follows from the ZZ figure's
+own definition, `eta = E/sqrt(U² + E²)` solved for `E`, divided by `sqrt(N)`.
+
+**Two things make it more than a for-loop, and the backlog named both.** (1) `TetMesher`
+re-meshes from the SURFACE, so a round cannot refine the previous volume mesh in place — the
+errors have to travel as a SPATIAL field, which is a BVH over the old elements' bounding boxes
+answering with the nearest element's requested size (a piecewise-constant Voronoi field over the
+old centroids; the BVH prunes on box distance, sound because an element's centroid lies inside
+its own box). (2) The stopping rule is a decision rather than a convergence test: a model with a
+genuine singularity never reaches an arbitrary target, so the loop caps its rounds and REPORTS
+the figure it stalled at — the same shape as boundary recovery's non-convergence detection.
+
+**The size a round measures is the mesher's own.** `TetMeshOptions.SizingField` is compared
+against twice a tetrahedron's circumradius, so that is what an element's current size is read as
+here, which makes "ask for the size you already have" a fixed point rather than an accidental
+refinement. And each round measures the size the previous mesh ACHIEVED rather than the size it
+requested, so the loop self-corrects where the input surface's own tessellation floors the
+element size (`TetMeshDiagnostics.MinBoundaryFacetSize`) instead of asking again for something it
+cannot have.
+
+**The model is rebuilt per round through a callback**, because a `StructuralModel` is bound to
+one `AnalysisMesh` and every round has a new one. That is sound precisely because boundary
+conditions are named by `Facets` SELECTORS: a tag rides on `TetFacet.SourceTriangle`, refinement
+subdivides an input triangle but never re-attributes it, so `Facets.Tag(faceId)` resolves to the
+same B-Rep face on every mesh the loop builds. Measured through the model-fed seam
+(`BRepTessellator.TessellateForTetMesh`): the tagged clamp face's AREA is exactly 25.000000000 on
+every round while its facet count goes 48 → 175, and a stated total load's resultant is exactly
+-400 on every round however the facets are split. The area rather than the count is the
+assertion with teeth — a selector that drifted onto a neighbouring face would still return
+facets, and only the area says which face they are on.
+
+### Two knobs that are not tuning, and one that is not offered
+
+**`SizeGradation`** bounds how fast the requested size may change with distance, enforced as
+`h_i <= h_j + gradation·|c_i - c_j|` over node-adjacent elements in a monotone sweep (sizes only
+ever fall, so it terminates). **It is what makes the next mesh solvable at all, not a smoothing
+nicety.** The raw field is piecewise constant over the old elements, so a refined region meets an
+unrefined one at a CLIFF, and a mesher asked to put a 0.4 mm element against a 3 mm one across a
+single face answers with slivers. **Each number belongs to its fixture, and the two differ by an
+order of severity.** On the un-remeshed `MeshPrimitives` box — whose surface is already the
+mesher's worst case — round 1's conjugate-gradient solve without limiting did not converge at
+all (13 185 free DOF, **250 s**, the estimate coming back at 100.00% with a peak/mean element
+error of 408), where with limiting the same round solves in 1.3 s and the estimate falls
+48.97% → 29.36%. On the REMESHED surface the committed test uses, the same defect is real and
+mild: unlimited gives 9 060 elements at 23.36% against limited's 9 406 at 22.49%, a bigger mesh
+for a worse estimate. So the catastrophic reading is not the typical one, and quoting it without
+its fixture would overstate the limiter — what is general is the direction, not the magnitude.
+Node adjacency rather than face adjacency, deliberately: a cliff between two elements sharing
+only an edge produces the same sliver, and the node table is what the mesh already hands out.
+
+**That failure is the direct-vs-iterative lesson arriving from the other side**, and naming the
+link is what stops the next person debugging the solver: CLAUDE.md records that the Cholesky/CG
+crossover is a measurement of the OPERATOR's conditioning rather than of the two algorithms, and
+a size field with a cliff in it is a way of MANUFACTURING a badly conditioned operator. A CG that
+stalls inside an adaptive loop is therefore a report about element shape, not about the linear
+solver, and the first thing to look at is the size field's gradient — which is why the limit is
+on by default and why a non-converged solve is refused by name rather than fed back into the
+loop.
+
+**`ReductionPerRound`** aims a round at `max(target, measured × factor)` rather than at the final
+target every time. Without it a far target degenerates into UNIFORM refinement, which is the
+opposite of the point: the size rule is `(e_target/e)^(1/p)`, so when the target is far below
+what one round can deliver EVERY element's ratio falls below `MinRefineFactor` and the whole mesh
+clamps to the same factor. **What it does not change is efficiency**, which is worth recording
+because it is what one would expect such a knob to buy: 0.5 / 0.7 / 0.85 gave 13 284 / 9 406 /
+7 373 elements at 20.30% / 22.49% / 24.76%, and against the same fixture's own uniform rate
+(`error ~ N^-0.30`) those three sit at 350 / 350 / 358 on one curve. It sets how BIG a round is,
+not how much a round is worth; 0.7 is the default as the middle of a measured plateau.
+
+**There is deliberately no recovery setting.** `StructuralResults.ErrorEstimate` is computed from
+the SUPERCONVERGENT recovery whatever `StructuralResults.Recovery` is set to — that is what makes
+it an estimator rather than a comparison of a field with itself — so the loop's input needs no
+knob, and offering one would suggest it changes the estimate.
+
+### What it buys, measured against uniform refinement
+
+The only comparison that means anything is UNIFORM refinement of the same model by the same
+mesher and solver to the same estimated error. On a 24 × 5 × 5 cantilever
+(`AdaptiveRefinementTests`, win-x64, linear elements, starting from 1 764 elements at 39.48%):
+
+| | elements | estimated error | peak/mean element error |
+| --- | ---: | ---: | ---: |
+| adaptive, round 1 | 9 406 | 22.49% | **4.14** |
+| uniform, size 1.4 | 11 410 | 23.50% | 6.68 |
+| uniform, size 1.2 | 18 049 | 20.46% | 7.04 |
+| uniform, interpolated to 22.49% | **13 204** | 22.49% | — |
+
+**1.40× fewer elements at the same estimated error**, and the last column is the cause: the error
+is spread 1.6× more evenly, so no small group of elements holds the global figure up. The ratio
+is taken against an INTERPOLATED uniform count (`error ~ C·N^-a` over the bracketing pair, rate
+measured 0.302) rather than against the first ladder rung that clears the error, which would have
+read 1.92× and would have been flattering the adaptive arm by whatever gap the swept sizes happen
+to leave.
+
+**That rate is also the check that the fixture still carries its singularity, and it is asserted
+as one.** Linear tetrahedra converge at O(h) in the energy norm on a SMOOTH problem, which in
+element count is `O(N^-1/3) = N^-0.333`; a rate below it is the signature of a
+singularity-limited problem — the same effect that caps the cantilever's tip convergence at 1.86
+whatever the element (§3c). So the rate does two jobs: it calibrates the interpolation, and a
+fixture that measured 0.333 would be quietly reporting that the clamp is not biting and that the
+whole comparison is running on the wrong problem. It is asserted rather than merely printed, for
+the reason the Surface Nets regression fixtures are asserted to still CARRY their configuration.
+
+**But it is asserted on a FIT over the whole ladder, not on the bracketing pair, and the reason
+is a measurement.** A two-point rate is a ratio of two errors, and this ladder is not a
+convergence SEQUENCE: the mesher's red-refinement overshoot sets the element counts, so the rungs
+jump unevenly (4 806 → 11 410 is 2.37×) and the PAIRWISE rates swing **0.2235, 0.3021, 0.2310,
+0.3644, 0.3776** — two of the five ABOVE the smooth-problem 1/3. A band tuned around whichever
+pair happens to bracket the adaptive run's error (the bracketing pair here reads 0.302) would
+fail on a differently loaded box with a message blaming the geometry, which is the one thing this
+assertion must not do. The least-squares slope of `ln(error)` against `ln(N)` over every rung
+reads **0.271**, comfortably clear, and the asserted bound is the theory constant `1/3` itself
+rather than a tuned number. Note this does NOT contradict the recorded rule that the LAST PAIR is
+the honest estimate of a convergence order (§3c's convergence tables): that rule is for a
+refinement sequence, and this is a set of meshes at assorted sizes. Refinement goes where the singularity is: over the five millimetres nearest the clamp
+the mean element size fell to **0.439** of its starting value, over the five nearest the tip to
+**0.989**.
+
+**peak/mean does NOT fall monotonically with every round on a singular fixture, and that is a
+property rather than a defect** — the obvious form of the equidistribution claim, and the
+measurement refuses it. Halving an element far from the clamp roughly halves its error while
+halving one AT the clamp barely moves it, so a round that refines both lowers the global figure
+and widens the spread (measured 4.32 → 4.14 on one fixture and 5.04 → 5.69 on another). The claim
+that survives is the matched-cost one above, and it is the one asserted.
+
+### Fixture lessons
+
+**A `MeshPrimitives` box is the wrong surface for a uniform ladder**, and finding out cost a
+sweep: its two-triangle faces put the mesher's own red-refinement ladder in charge of the element
+size rather than `MaxElementSize` — sizes 3.0 / 2.4 / 2.0 all came back within 2% of 7 500
+elements, so a "ladder" over them would have compared one mesh against itself — and at size 1.5
+the same surface produced slivers the direct factorization refused by name. Remeshing the box
+surface to a uniform edge length first (`Remesher`, whose `PreventLongEdgeFlips` default is what
+keeps it Delaunay-clean for boundary recovery) restores a ladder that actually varies: 1 764 /
+2 313 / 3 474 / 4 806 / 11 410 / 18 049 elements at sizes 3.0 … 1.2.
+
+**The element budget is checked BEFORE the mesh, from the sizing field itself** (`sum
+(h_old/h_new)³`), which is both cheaper and more honest than meshing first and measuring: a run
+that would melt says so without paying for the mesh that would prove it. The prediction is a
+lower bound (the mesher's red refinement overshoots), so the post-mesh check stays as a backstop.
+
+**A solve that did not converge is refused by name.** An iterative solve that hits its cap
+returns a plausible-looking field, and refining against a solution that was never found is
+refining against noise — which is exactly what the un-limited size field produced before the
+gradation limit existed.
 
 ## 4. Implicit engine
 
