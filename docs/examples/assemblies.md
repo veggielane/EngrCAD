@@ -264,11 +264,67 @@ if (reloaded.LoadMates(json).Count != 0) throw new Exception("expected a clean l
 
 The carrier itself was never mentioned, so it stays rigid where it was placed — only
 the plate moves, *within* it. `MateSolveResult.OccurrenceFreedoms` reports DOF per
-movable occurrence by path. Two honesty rules ride along: a deep target inside a
-sub-assembly that is **placed more than once** is refused by name (its frame is one
-shared object — solving would move every placement), and `SaveMates`/`LoadMates`
+movable occurrence by path. One honesty rule rides along: `SaveMates`/`LoadMates`
 follow the `FeatureHistory` contract — query-backed ends re-resolve eagerly on load,
 lambda-backed ends load from their pinned coordinates with a warning.
+
+## Flexible placements
+
+`Occurrence.SubAssembly` points at a **shared** assembly, so two placements of one
+sub-assembly normally agree about every internal pose — a clamp placed twice is the
+same clamp, closed the same amount. Marking a placement **flexible** gives it its own
+internal poses:
+
+```csharp
+var clamp = new Assembly("clamp");
+clamp.Add(bolt, Frame3d.FromXY((1, 1, 1), Vector3d.UnitX, Vector3d.UnitY));
+
+var rig = new Assembly("rig");
+var ground = rig.Add(basePlate);
+var left  = rig.Add(clamp);
+var right = rig.Add(clamp, Frame3d.FromXY((50, 0, 0), Vector3d.UnitX, Vector3d.UnitY));
+left.IsFlexible = right.IsFlexible = true;      // each placement poses its own insides
+
+new MateSet(rig)
+    .Ground(ground)
+    .Add(Mate.Coincident(
+        MateGeometry.Point(ground, (5, 0, 10)),
+        MateGeometry.Point(rig, "clamp/bolt", Vector3d.Zero)))
+    .Add(Mate.Coincident(
+        MateGeometry.Point(ground, (60, 7, 20)),
+        MateGeometry.Point(rig, "clamp.2/bolt", Vector3d.Zero)))
+    .Solve();                                    // two independent unknowns
+```
+
+The two bolts now sit in different places *within* their clamps, and nothing was
+duplicated: both placements still reference one `Assembly`, the bolt is still one
+`Part` with one display mesh and one BOM line of quantity 2. What a flexible placement
+carries is an **overlay** — a map from the relative occurrence path (`"bolt"`,
+`"jaw/bolt"`) to that placement's own frame — which `Flatten` reads through, so
+instances, occurrence paths, exploded views, pose tracks, glTF export and the BOM all
+follow with nothing to switch on.
+
+Four rules worth knowing:
+
+- **It is a set of overrides, not a copy.** A path the overlay does not mention falls
+  back to the shared frame, so marking a placement flexible changes no geometry until
+  something poses it. Setting `IsFlexible = false` discards the overrides — rigid means
+  the shared frames.
+- **The outermost flexible placement owns its whole subtree.** Because the key is a
+  relative path, `"jaw/bolt"` and `"jaw.2/bolt"` are different entries of one overlay,
+  so an assembly placed twice *inside* a flexible placement needs no second marker.
+- **A rigid placement is still refused, by name.** A deep target inside a sub-assembly
+  placed more than once would move every placement, so the solve rejects it naming the
+  assembly, its placements and `IsFlexible` as the way out. The same refusal fires for a
+  flexible marker below a multiply-placed *rigid* ancestor, whose overlay would itself be
+  shared.
+- **Grounds are per placement too** (`Ground("clamp/bolt")` leaves `"clamp.2/bolt"`
+  free), while **explode offsets are not**: they live on the shared occurrence, so both
+  placements explode the same way.
+
+`Occurrence.SetFlexiblePose`/`FlexiblePose`/`FlexiblePoses` are the accessors for posing
+one by hand; the overlay round-trips through the document format, written only when a
+placement states it.
 
 ## In the viewer
 
@@ -301,6 +357,5 @@ a `NEXT_ASSEMBLY_USAGE_OCCURRENCE` per placement, which `StepReader` reads back 
 display path uses to share meshes; posing the geometry and writing it N times would
 throw away the structure the format exists to carry.
 
-Still future work: per-instance colour overrides, flexible sub-assemblies (per-instance
-internal DOF for a sub-assembly placed more than once), and the dashed explode-path
-leader lines drafting standards draw between an exploded part and its seat.
+Still future work: per-instance colour overrides, and the dashed explode-path leader
+lines drafting standards draw between an exploded part and its seat.

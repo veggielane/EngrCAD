@@ -339,14 +339,13 @@ public sealed partial class Mechanism
     private MateSolveResult Solved(Func<MateSolveResult> solve)
     {
         bool anyLimits = _joints.Any(j => j is AxisJoint { AngleLimits: not null } or AxisJoint { SlideLimits: not null });
-        var snapshot = anyLimits ? SnapshotFrames() : null;
+        var snapshot = anyLimits ? OccurrencePoses.Capture(Assembly) : null;
         var result = solve();
         if (!result.Converged)
             return result;
         if (LimitViolation() is { } violation)
         {
-            foreach (var (occurrence, frame) in snapshot!)
-                occurrence.Frame = frame;
+            snapshot!.Restore();
             return new MateSolveResult(
                 false, result.Iterations, result.Residual,
                 result.FreeDegreesOfFreedom, result.ConstrainedDegreesOfFreedom,
@@ -385,22 +384,6 @@ public sealed partial class Mechanism
         return null;
     }
 
-    private List<(Occurrence Occurrence, Frame3d Frame)> SnapshotFrames()
-    {
-        var snapshot = new List<(Occurrence, Frame3d)>();
-        Collect(Assembly);
-        return snapshot;
-
-        void Collect(Assembly assembly)
-        {
-            foreach (var occurrence in assembly.Occurrences)
-            {
-                snapshot.Add((occurrence, occurrence.Frame));
-                if (occurrence.SubAssembly is { } sub)
-                    Collect(sub);
-            }
-        }
-    }
 
     /// <summary>
     /// Solves with <paramref name="driver"/> pinned at <paramref name="value"/> —

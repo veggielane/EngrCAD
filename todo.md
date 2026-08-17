@@ -239,10 +239,17 @@ Remaining follow-ups:
   phase; until then a consumer measuring volumes near a tangency should treat the mesh
   answer as suspect and the B-Rep boolean's refusal-by-name as the honest tier.
 
-- [ ] **Flexible sub-assemblies in mechanisms** — inherited from the mates layer: a
-  deep occurrence whose owning sub-assembly is placed more than once is refused (one
-  shared frame). A mechanism inside a twice-placed sub-assembly needs per-placement
-  frame overlays first. See the assessment under "Assemblies follow-ups".
+- [ ] **Flexible sub-assemblies in mechanisms — verify the inherited layer.** The mates
+  layer landed per-placement pose overlays (`Occurrence.IsFlexible`, design.md's mates
+  record), and the mechanism layer inherits the pieces rather than restating them:
+  `MateRefWorld.WorldFrame` composes through the `FlexiblePlacement` scope, joint DOF
+  probes and the joint-limit rollback both capture `OccurrencePoses` (frames AND
+  overlays), and rate analysis reads the solver's slots. What is NOT yet measured is a
+  mechanism *driven* inside a flexible placement: two placements of one linkage swept to
+  different configurations, with the unwrapped joint coordinates (`AxisJoint.Angle`) per
+  placement — those live on the `Joint`, which is one object, so a driven flexible
+  placement probably needs per-placement joint STATE the way poses now have per-placement
+  frames. Measure it before building anything.
 
 ## Simulation
 
@@ -2074,38 +2081,26 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   buffer, one draw per part), per-instance color/display-mode overrides, an
   **explode-path renderer** (the dashed leader lines drafting standards draw between an
   exploded part and its seat — and `Occurrence.ExplodePath` now gives it a real path to
-  draw rather than a straight line to assume), and **flexible sub-assemblies**: a deep
-  mate target inside a multiply-placed sub-assembly is refused today because its
-  internal frame is one shared object. Mechanisms (above) can now assume cross-level
-  mates exist: a linkage whose members are sub-assemblies is jointable via occurrence
-  paths.
-  **Flexible sub-assemblies, assessed — this is the big one, and it is a DOCUMENT-MODEL
-  change rather than a solver change.** The refusal is honest and structural:
-  `Occurrence.SubAssembly` points at a shared `Assembly` object, and that assembly's own
-  occurrences carry `Frame3d`s, so two placements of one sub-assembly necessarily agree
-  about every internal pose. Onshape's answer is per-instance internal state, and the
-  seam it has to attach to here is `Assembly.Flatten` — the ONE walk every consumer sees
-  (viewers, exporters, BOM, mates, mechanisms, animation). Three candidate shapes, with
-  what each costs:
-  (a) **Deep-copy on flexibility** — mark an occurrence flexible and clone its
-  sub-assembly. Simplest, and wrong: it breaks part IDENTITY (`Scene.AllParts` dedupes by
-  reference, so a cloned subtree would mesh and upload twice) and the BOM would
-  double-count.
-  (b) **A per-occurrence frame OVERLAY** — `Occurrence.Overrides: Dictionary<string,
-  Frame3d>` keyed by the relative occurrence path, consulted by `FlattenInto` as it
-  descends. Preserves identity, is additive to the format, and is a few lines in the
-  walk. The cost lands on everything that WRITES a frame: the mate solver's variables are
-  occurrence frames, so solving inside a flexible instance must write to the overlay
-  rather than to the shared occurrence, which means `MateSolver` needs to address "the
-  frame of THIS placement of that occurrence" — a path, not an object. That is the real
-  work, and it is the same change `MateRef` would need.
-  (c) **Instance-level document objects** (a first-class `AssemblyInstance` with its own
-  occurrence list) — the most general and the most disruptive; it changes what an
-  assembly IS.
-  Recommendation: **(b)**, and only when a real model needs it. Roughly two to three days
-  with the mate-solver addressing change, and the test that matters is not "it moves" but
-  that two placements of one sub-assembly can hold DIFFERENT internal poses while still
-  sharing one `Part`, one mesh and one BOM line.
+  draw rather than a straight line to assume). Flexible sub-assemblies LANDED (see
+  below); what remains open here is the display-mode/colour overrides and the leader
+  lines. Mechanisms (above) can now assume cross-level mates exist: a linkage whose
+  members are sub-assemblies is jointable via occurrence paths.
+  **Flexible sub-assemblies landed (2026-08-17)** as option (b) of the three the
+  assessment weighed — a per-placement pose OVERLAY (`Occurrence.IsFlexible` plus a map
+  from the relative occurrence path to that placement's frame), read through by
+  `Assembly.Flatten`. The assessment's own prediction held: the document-model half was
+  small and the real work was the solver ADDRESSING change, its unknowns becoming pose
+  SLOTS keyed by path rather than `Occurrence` objects. Deep-copying (a) was declined for
+  the reason recorded — it breaks part identity and double-counts the BOM — and
+  instance-level document objects (c) for changing what an assembly is. Two things the
+  assessment did not name and the work found: the key had to be the RELATIVE path rather
+  than the occurrence, which is what makes nesting free (an assembly placed twice INSIDE
+  a flexible placement needs no second overlay); and `Assembly.Flatten` is not quite the
+  only walk — the glTF exporter builds a node HIERARCHY, so it had to ask the same
+  `FlexiblePlacement` rule or it would have exported the shared poses silently. See
+  design.md's mates record and docs `examples/assemblies.md`. Residual, filed above under
+  mechanisms: a mechanism DRIVEN inside a flexible placement, where the unwrapped joint
+  coordinates still live on the one `Joint` object.
 - [ ] **Standard component library — remaining fidelity** (breadth landed: ISO 7380
   button, ISO 10642 csk, ISO 4032 nuts, ISO 7089 washers, 60x deep groove bearings,
   the opt-in exact hex socket on `CapScrew`, and `PlaceThrough(..., anchorInto:)`

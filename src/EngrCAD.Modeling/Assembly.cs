@@ -115,6 +115,95 @@ public sealed class Occurrence
         return offset;
     }
 
+    // ---- flexible placements --------------------------------------------
+
+    private bool _flexible;
+    private Dictionary<string, Frame3d>? _poses;
+
+    /// <summary>
+    /// True when this placement carries its OWN internal poses: the occurrences beneath
+    /// it are posed per PLACEMENT rather than by the shared <see cref="Assembly"/>'s
+    /// frames, so one sub-assembly placed twice can hold two different internal
+    /// configurations while still sharing one <see cref="Modeling.Part"/>, one display
+    /// mesh and one BOM line.
+    /// <para><b>Why it is needed at all:</b> <see cref="SubAssembly"/> points at a
+    /// SHARED assembly object whose own occurrences carry <see cref="Frame"/>s, so two
+    /// placements necessarily agree about every internal pose. A flexible placement adds
+    /// an overlay — a map from the relative occurrence path ("jaw/bolt") to that
+    /// placement's own frame — which <see cref="Assembly.Flatten(double)"/> reads
+    /// THROUGH, so instances, occurrence paths, exploded views, pose tracks, exporters
+    /// and the BOM inherit it with no change of their own.</para>
+    /// <para>The overlay is a set of OVERRIDES, not a copy: a path it does not mention
+    /// falls back to the shared <see cref="Frame"/>, so marking a placement flexible
+    /// changes no geometry until something poses it.</para>
+    /// <para><b>The scope is the whole subtree, and the OUTERMOST flexible placement
+    /// owns it</b> — an overlay is keyed by the relative path, which distinguishes
+    /// "jaw/bolt" from "jaw.2/bolt", so nesting needs no second overlay and a flexible
+    /// marker below an already-flexible ancestor is ignored.</para>
+    /// <para>Setting this false makes the placement rigid again and DISCARDS its
+    /// per-placement poses — rigid means the shared frames, and dormant overrides would
+    /// be a second truth about where the same geometry sits.</para>
+    /// <para>Explode offsets are deliberately NOT per-placement: they live on the shared
+    /// occurrence, so both placements of a flexible sub-assembly explode the same way.</para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">This occurrence places a part, which
+    /// has no internal occurrences to pose independently.</exception>
+    public bool IsFlexible
+    {
+        get => _flexible;
+        set
+        {
+            if (value && SubAssembly is null)
+                throw new InvalidOperationException(
+                    $"Occurrence '{Name}' places a part, not a sub-assembly, so it has no internal " +
+                    "occurrences to pose independently. Flexibility is a property of a sub-assembly " +
+                    "placement.");
+            _flexible = value;
+            if (!value)
+                _poses = null;
+        }
+    }
+
+    /// <summary>
+    /// This placement's own pose for the occurrence <paramref name="relativePath"/>
+    /// names (relative to this placement — "bolt", "jaw/bolt"), or null when the
+    /// placement does not override it and the shared
+    /// <see cref="Occurrence.Frame"/> stands.
+    /// </summary>
+    public Frame3d? FlexiblePose(string relativePath) =>
+        _poses is not null && _poses.TryGetValue(relativePath, out var pose) ? pose : null;
+
+    /// <summary>
+    /// Poses an occurrence beneath this placement, for THIS placement only. The path is
+    /// relative to the placement, in the same '/'-separated spelling
+    /// <see cref="Assembly.ResolvePath"/> and mate references use.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The placement is not
+    /// <see cref="IsFlexible">flexible</see> — its inner occurrences are the shared
+    /// assembly's, so posing one here would be a second truth about the same frame.</exception>
+    public void SetFlexiblePose(string relativePath, in Frame3d frame)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            throw new ArgumentException("A flexible pose path must be non-empty.", nameof(relativePath));
+        if (!_flexible)
+            throw new InvalidOperationException(
+                $"Occurrence '{Name}' is not a flexible placement, so '{relativePath}' is posed by the " +
+                $"shared assembly rather than by this placement. Set {nameof(IsFlexible)} first.");
+        (_poses ??= [])[relativePath] = frame;
+    }
+
+    /// <summary>Drops one override, so that path falls back to the shared frame; false
+    /// when this placement did not override it.</summary>
+    public bool ClearFlexiblePose(string relativePath) => _poses?.Remove(relativePath) ?? false;
+
+    /// <summary>
+    /// This placement's overrides, ordered by path — a deterministic function of the
+    /// model, which is what lets the document format and any report agree about the
+    /// order. Empty for a rigid placement.
+    /// </summary>
+    public IReadOnlyList<KeyValuePair<string, Frame3d>> FlexiblePoses =>
+        _poses is null ? [] : [.. _poses.OrderBy(p => p.Key, StringComparer.Ordinal)];
+
     /// <summary>True when this occurrence places a nested assembly.</summary>
     public bool IsAssembly => SubAssembly is not null;
 
@@ -125,6 +214,138 @@ public sealed class Occurrence
         SubAssembly = subAssembly;
         Frame = frame;
     }
+}
+
+/// <summary>
+/// Where a tree walk currently sits with respect to
+/// <see cref="Occurrence.IsFlexible">flexible placements</see>: which placement's
+/// overlay is in force, and the relative path prefix beneath it. This is the ONE rule
+/// for "what pose does this occurrence have HERE" — <see cref="Assembly.Flatten(double)"/>
+/// and every hierarchy walker (the glTF exporter's node tree, the mate solver's chain
+/// composition) ask it rather than restating it, so they cannot disagree about where a
+/// flexibly-placed part sits.
+/// <para><see cref="None"/> is the rigid case and costs nothing: <see cref="PoseOf"/>
+/// returns the occurrence's own frame with no lookup and no allocation, so a model that
+/// uses no flexible placement is bit-for-bit what it always was.</para>
+/// </summary>
+public readonly struct FlexiblePlacement
+{
+    private readonly Occurrence? _placement;
+    private readonly string _prefix;
+
+    private FlexiblePlacement(Occurrence placement, string prefix)
+    {
+        _placement = placement;
+        _prefix = prefix;
+    }
+
+    /// <summary>Not inside any flexible placement — every pose is the shared frame.</summary>
+    public static FlexiblePlacement None => default;
+
+    /// <summary>The flexible placement whose overlay is in force, or null.</summary>
+    public Occurrence? Placement => _placement;
+
+    /// <summary>True when an overlay is in force.</summary>
+    public bool IsActive => _placement is not null;
+
+    /// <summary>The relative path an occurrence of the assembly this scope sits in is
+    /// stored under. Only meaningful while <see cref="IsActive"/>.</summary>
+    public string PathOf(Occurrence child) => _prefix + child.Name;
+
+    /// <summary>The effective pose of an occurrence of the assembly this scope sits in:
+    /// the placement's override when it has one, the shared
+    /// <see cref="Occurrence.Frame"/> otherwise.</summary>
+    public Frame3d PoseOf(Occurrence child) =>
+        _placement is { } placement && placement.FlexiblePose(_prefix + child.Name) is { } pose
+            ? pose
+            : child.Frame;
+
+    /// <summary>The scope for the SUBTREE beneath <paramref name="child"/>: the same
+    /// overlay one path segment deeper, or a newly opened one when the child is a
+    /// flexible placement and nothing above it already owns the subtree.</summary>
+    public FlexiblePlacement Below(Occurrence child) =>
+        _placement is null
+            ? child.IsFlexible ? new FlexiblePlacement(child, "") : default
+            : new FlexiblePlacement(_placement, _prefix + child.Name + "/");
+}
+
+/// <summary>
+/// Where ONE occurrence's pose lives: its own <see cref="Occurrence.Frame"/>, or an
+/// entry in a <see cref="Occurrence.IsFlexible">flexible placement</see>'s overlay. The
+/// mate solver's unknowns are slots rather than occurrences, which is exactly what lets
+/// two placements of one sub-assembly solve to different internal poses — "the frame of
+/// THIS placement of that occurrence" is a path, not an object.
+/// </summary>
+internal readonly record struct PoseSlot(Occurrence Occurrence, Occurrence? Placement, string RelativePath)
+{
+    /// <summary>A slot addressing an occurrence's own shared frame.</summary>
+    public static PoseSlot Shared(Occurrence occurrence) => new(occurrence, null, "");
+
+    public Frame3d Read() =>
+        Placement is { } placement && placement.FlexiblePose(RelativePath) is { } pose
+            ? pose
+            : Occurrence.Frame;
+
+    public void Write(in Frame3d frame)
+    {
+        if (Placement is { } placement)
+            placement.SetFlexiblePose(RelativePath, frame);
+        else
+            Occurrence.Frame = frame;
+    }
+}
+
+/// <summary>
+/// A restorable snapshot of every pose in an assembly TREE — occurrence frames AND
+/// flexible placements' overlays. The safe superset an undoable mate solve, a mechanism's
+/// joint-limit rollback and a joint's DOF probe all capture before they move anything:
+/// an untouched pose restores to itself exactly, and (unlike a frames-only capture) a
+/// solve that wrote into a flexible placement's overlay is taken back too.
+/// </summary>
+internal sealed class OccurrencePoses
+{
+    private readonly List<Entry> _entries = [];
+
+    private readonly record struct Entry(
+        Occurrence Occurrence, Frame3d Frame, bool Flexible, KeyValuePair<string, Frame3d>[] Poses);
+
+    /// <summary>Captures the whole tree beneath (and including) an assembly's own
+    /// occurrences.</summary>
+    public static OccurrencePoses Capture(Assembly assembly)
+    {
+        var snapshot = new OccurrencePoses();
+        snapshot.Collect(assembly);
+        return snapshot;
+    }
+
+    private void Collect(Assembly assembly)
+    {
+        foreach (var occurrence in assembly.Occurrences)
+        {
+            _entries.Add(new Entry(
+                occurrence, occurrence.Frame, occurrence.IsFlexible, [.. occurrence.FlexiblePoses]));
+            if (occurrence.SubAssembly is { } nested)
+                Collect(nested);
+        }
+    }
+
+    /// <summary>Restores every captured pose.</summary>
+    public void Restore()
+    {
+        foreach (var (occurrence, frame, flexible, poses) in _entries)
+        {
+            occurrence.Frame = frame;
+            // Assigning false clears the overlay, so this rebuilds exactly what was
+            // captured rather than merging into whatever the solve left behind.
+            occurrence.IsFlexible = false;
+            occurrence.IsFlexible = flexible;
+            foreach (var (path, pose) in poses)
+                occurrence.SetFlexiblePose(path, pose);
+        }
+    }
+
+    /// <summary>Drops the capture (nothing was written, so nothing stale is held).</summary>
+    public void Clear() => _entries.Clear();
 }
 
 /// <summary>
@@ -394,31 +615,41 @@ public sealed class Assembly
     }
 
     internal void FlattenInto(
-        in Frame3d parentWorld, string parentPath, List<PartInstance> into, double explode = 0)
+        in Frame3d parentWorld, string parentPath, List<PartInstance> into, double explode = 0) =>
+        FlattenInto(parentWorld, parentPath, into, explode, FlexiblePlacement.None);
+
+    internal void FlattenInto(
+        in Frame3d parentWorld, string parentPath, List<PartInstance> into, double explode,
+        FlexiblePlacement scope)
     {
         foreach (var occurrence in _occurrences)
         {
-            var world = Posed(occurrence, explode).Then(parentWorld);
+            var world = Posed(occurrence, scope.PoseOf(occurrence), explode).Then(parentWorld);
             string path = $"{parentPath}/{occurrence.Name}";
             if (occurrence.Part is { } part)
                 into.Add(new PartInstance(part, world.ToMatrix() * part.Transform, path));
             else
-                occurrence.SubAssembly!.FlattenInto(world, path, into, explode);
+                occurrence.SubAssembly!.FlattenInto(world, path, into, explode, scope.Below(occurrence));
         }
     }
 
     internal void FlattenInto(
         in Frame3d parentWorld, string parentPath, List<PartInstance> into,
-        Func<Occurrence, double> explodeOf)
+        Func<Occurrence, double> explodeOf) =>
+        FlattenInto(parentWorld, parentPath, into, explodeOf, FlexiblePlacement.None);
+
+    internal void FlattenInto(
+        in Frame3d parentWorld, string parentPath, List<PartInstance> into,
+        Func<Occurrence, double> explodeOf, FlexiblePlacement scope)
     {
         foreach (var occurrence in _occurrences)
         {
-            var world = Posed(occurrence, explodeOf(occurrence)).Then(parentWorld);
+            var world = Posed(occurrence, scope.PoseOf(occurrence), explodeOf(occurrence)).Then(parentWorld);
             string path = $"{parentPath}/{occurrence.Name}";
             if (occurrence.Part is { } part)
                 into.Add(new PartInstance(part, world.ToMatrix() * part.Transform, path));
             else
-                occurrence.SubAssembly!.FlattenInto(world, path, into, explodeOf);
+                occurrence.SubAssembly!.FlattenInto(world, path, into, explodeOf, scope.Below(occurrence));
         }
     }
 
@@ -426,14 +657,17 @@ public sealed class Assembly
     /// frame, its origin moved by <see cref="Occurrence.ExplodeDisplacement"/> in the
     /// parent's coordinates (a straight line by default, the dogleg path when one is
     /// set). Exactly the original frame at factor 0 or with no offset — an un-exploded
-    /// flatten is bit-for-bit what it always was.</summary>
-    private static Frame3d Posed(Occurrence occurrence, double explode)
+    /// flatten is bit-for-bit what it always was.
+    /// <para><paramref name="frame"/> is the occurrence's EFFECTIVE pose here — its own
+    /// frame, or a flexible placement's override for this placement (see
+    /// <see cref="FlexiblePlacement"/>). The explode offset itself is not per-placement:
+    /// it lives on the shared occurrence.</para></summary>
+    private static Frame3d Posed(Occurrence occurrence, in Frame3d frame, double explode)
     {
         // Exact-zero semantic tests: "no offset set" and "not exploded" are decisions,
         // not measurements, and both must return the ORIGINAL frame untouched.
         if (occurrence.ExplodeOffset is null || explode == 0)
-            return occurrence.Frame;
-        var frame = occurrence.Frame;
+            return frame;
         return Frame3d.FromOrthonormal(
             frame.Origin + occurrence.ExplodeDisplacement(explode), frame.X, frame.Y);
     }

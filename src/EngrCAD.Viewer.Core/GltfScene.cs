@@ -152,12 +152,21 @@ public static class GltfScene
         public GltfNode? InstanceNode(in PartInstance instance) =>
             PartNode(instance.Part, instance.Path, instance.World);
 
-        public GltfNode? AssemblyNode(Assembly assembly, string name, double explode)
+        public GltfNode? AssemblyNode(Assembly assembly, string name, double explode) =>
+            AssemblyNode(assembly, name, explode, FlexiblePlacement.None);
+
+        /// <param name="scope">Which flexible placement's per-placement poses are in force
+        /// (see <see cref="FlexiblePlacement"/>). This walk builds the node HIERARCHY
+        /// rather than going through <c>Flatten</c>, so it asks the same rule rather than
+        /// restating it — otherwise two placements of one flexible sub-assembly would
+        /// export with the shared internal poses, silently.</param>
+        private GltfNode? AssemblyNode(
+            Assembly assembly, string name, double explode, FlexiblePlacement scope)
         {
             var children = new List<GltfNode>();
             foreach (var occurrence in assembly.Occurrences)
             {
-                var frame = Posed(occurrence, explode);
+                var frame = Posed(occurrence, scope.PoseOf(occurrence), explode);
                 if (occurrence.Part is { } part)
                 {
                     // The occurrence's own pose times the part's transform: exactly what
@@ -166,7 +175,8 @@ public static class GltfScene
                     if (PartNode(part, occurrence.Name, frame.ToMatrix() * part.Transform) is { } node)
                         children.Add(node);
                 }
-                else if (AssemblyNode(occurrence.SubAssembly!, occurrence.Name, explode) is { } node)
+                else if (AssemblyNode(
+                    occurrence.SubAssembly!, occurrence.Name, explode, scope.Below(occurrence)) is { } node)
                 {
                     // A sub-assembly's own node carries its occurrence frame; its children
                     // are then relative to it, which is the whole point of keeping the
@@ -179,12 +189,13 @@ public static class GltfScene
 
         /// <summary>An occurrence's pose with the explode displacement applied — the same
         /// rule <c>Assembly.Flatten</c> uses, and exactly the original frame at factor 0
-        /// so an un-exploded export is bit-for-bit the assembled one.</summary>
-        private static Frame3d Posed(Occurrence occurrence, double explode)
+        /// so an un-exploded export is bit-for-bit the assembled one.
+        /// <paramref name="frame"/> is the EFFECTIVE pose here (a flexible placement's
+        /// override, or the shared frame).</summary>
+        private static Frame3d Posed(Occurrence occurrence, in Frame3d frame, double explode)
         {
             if (occurrence.ExplodeOffset is not { } offset || explode == 0)
-                return occurrence.Frame;
-            var frame = occurrence.Frame;
+                return frame;
             return Frame3d.FromOrthonormal(frame.Origin + offset * explode, frame.X, frame.Y);
         }
 

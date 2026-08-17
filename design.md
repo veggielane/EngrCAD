@@ -10988,8 +10988,48 @@ geometry kernel building *that* model in the reader's tab. The pieces are
   target whose owning assembly has multiple placements is rejected naming them (moving it
   would silently move geometry the mate never mentioned); a *chain*, by contrast, always
   names a unique placement, which is why `MateRef` carries the chain and why a bare deep
-  `Occurrence` reference stays invalid. Per-instance internal DOF ("flexible
-  sub-assemblies") is the follow-up, not a patch on this scheme.
+  `Occurrence` reference stays invalid.
+- **Flexible sub-assemblies are a DOCUMENT-MODEL change, and the solver's share of it is
+  one substitution: its unknowns became pose SLOTS addressed by path rather than
+  `Occurrence` objects.** The refusal above is structural — `Occurrence.SubAssembly`
+  points at a shared `Assembly` whose own occurrences carry `Frame3d`s, so two placements
+  necessarily agree about every internal pose — and the assessment weighed three answers.
+  **Deep-copying the subtree** on flexibility is simplest and wrong: it breaks part
+  IDENTITY (`Scene.AllParts` dedupes by reference, so a cloned subtree meshes and uploads
+  twice) and double-counts the BOM. **Instance-level document objects** (a first-class
+  `AssemblyInstance` with its own occurrence list) is the most general and changes what an
+  assembly *is*. What landed is the middle one: **a per-placement pose OVERLAY**
+  (`Occurrence.IsFlexible` plus a map from the relative occurrence path to that
+  placement's frame), because it preserves identity, is additive to the format, and
+  attaches to `Assembly.Flatten` — the ONE walk every consumer sees, so instances,
+  occurrence paths, exploded views, pose tracks, the BOM and the exporters inherit it with
+  no change of their own. Four things make it hold together. (1) **The key is the RELATIVE
+  PATH, and that is what makes nesting free**: "jaw/bolt" and "jaw.2/bolt" are different
+  entries of one overlay, so an assembly placed twice *inside* a flexible placement needs
+  no second overlay and the OUTERMOST flexible placement owns its whole subtree.
+  (2) **`FlexiblePlacement` is the one rule for "what pose does this occurrence have
+  HERE"**, asked by `Flatten`, by the glTF exporter's node walk (which builds a hierarchy
+  rather than flattening, so it would otherwise export the shared poses *silently*) and by
+  the solver's chain composition — the "one shared rule only holds if every caller asks
+  it" lesson, applied before a second copy could exist. Its `None` case returns the
+  occurrence's own frame with no lookup and no allocation, which is why a model using no
+  flexible placement is bit-for-bit what it always was. (3) **The overlay is a set of
+  OVERRIDES, not a copy** — an unmentioned path falls back to the shared frame — so
+  marking a placement flexible changes no geometry until something poses it, and turning
+  it off DISCARDS the overrides, because rigid means the shared frames and dormant
+  overrides would be a second truth about where the same geometry sits. (4) **The refusal
+  survives, narrowed to exactly the ambiguous case**: the solver walks the chain and
+  refuses a link whose owning assembly has several placements *only while no flexible
+  ancestor has opened a scope*, so a flexible marker below a multiply-placed rigid
+  ancestor is still refused (its overlay object would itself be shared) and the message
+  names `IsFlexible` as the way out. Grounds became path-keyed for the same reason
+  variables did, so grounding "clamp/bolt" leaves "clamp.2/bolt" free. The verification
+  that matters is not "it moves" but that two placements hold DIFFERENT internal poses
+  while still sharing one `Part`, one mesh and one BOM line — a deep copy passes the first
+  half and fails the second — with `OccurrencePoses` (frames AND overlays) as the one
+  capture an undoable solve, a mechanism's limit rollback and a joint's DOF probe share,
+  since a frames-only capture would leave a solved overlay moved and the document
+  serializer is what catches it.
 - **STEP assemblies share products the way the display path shares parts.** Reference
   identity on the solid gives one PRODUCT and N occurrences; posing the geometry and
   writing it N times would throw away the structure the format exists to carry.

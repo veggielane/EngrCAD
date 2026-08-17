@@ -88,7 +88,7 @@ public sealed partial class MateSet
             }
             _columns = _free.Count * 6;
             _rows = mates.Sum(m => m.RowCount) + extras.Sum(x => x.RowCount);
-            _poses = [.. _free.Select(o => o.Frame)];
+            _poses = [.. _free.Select(v => v.Slot.Read())];
             _length = CharacteristicLength();
 
             if (_columns == 0)
@@ -145,19 +145,20 @@ public sealed partial class MateSet
 
             // Per-occurrence motion states, from the same chain formulas as the columns.
             var occurrences = new List<OccurrenceRate>(_free.Count);
-            foreach (var occurrence in _free)
+            foreach (var variable in _free)
             {
-                var chain = _ancestors[occurrence];
-                var pseudo = chain.Length == 0
-                    ? new MateRef(occurrence, Vector3d.Zero)
-                    : new MateRef([.. chain, occurrence], Vector3d.Zero);
+                var target = variable.Slot.Occurrence;
+                var pseudo = variable.Ancestors.Length == 0
+                    ? new MateRef(target, Vector3d.Zero)
+                    : new MateRef(
+                        [.. variable.Ancestors.Select(link => link.Occurrence), target], Vector3d.Zero);
                 var end = Evaluate(pseudo);
                 var (velocity, _) = Delta(end, qdot);
                 var (accelerationQdd, _) = Delta(end, qddot);
                 var (accelerationFlow, _) = SecondDelta(end, qdot);
                 var (omega, alpha) = AngularRates(end, qdot, qddot);
                 occurrences.Add(new OccurrenceRate(
-                    PathOf(occurrence), velocity, omega, accelerationQdd + accelerationFlow, alpha));
+                    variable.Path, velocity, omega, accelerationQdd + accelerationFlow, alpha));
             }
 
             return new MechanismRates(occurrences, joint =>

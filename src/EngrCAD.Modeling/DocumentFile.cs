@@ -654,6 +654,28 @@ internal static class DocumentWriter
                     ["y"] = SaveVector(frame.Y),
                 };
             }
+            // A flexible placement and its per-placement poses are written only when
+            // stated, so a document that uses neither is byte-identical to what it always
+            // was. The overlay's own accessor orders by path, so the file is a
+            // deterministic function of the model.
+            if (occurrence.IsFlexible)
+            {
+                record["flexible"] = true;
+                if (occurrence.FlexiblePoses is { Count: > 0 } poses)
+                {
+                    var overlay = new JsonObject();
+                    foreach (var (relative, pose) in poses)
+                    {
+                        overlay[relative] = new JsonObject
+                        {
+                            ["origin"] = SaveVector(pose.Origin),
+                            ["x"] = SaveVector(pose.X),
+                            ["y"] = SaveVector(pose.Y),
+                        };
+                    }
+                    record["flexiblePoses"] = overlay;
+                }
+            }
             if (occurrence.ExplodeOffset is { } offset)
                 record["explode"] = SaveVector(offset);
             // Written only when a dogleg was actually designed, so every existing file
@@ -1157,6 +1179,32 @@ internal static class DocumentReader
                 {
                     warnings.Add($"assembly '{assembly.Name}': occurrence '{occurrenceName}' " +
                         $"references assembly '{id}', which is not in the file");
+                }
+            }
+            if (occurrence is not null && record.TryGetProperty("flexible", out var flexible)
+                && flexible.ValueKind == JsonValueKind.True)
+            {
+                occurrence.IsFlexible = true;
+            }
+            if (occurrence is not null && record.TryGetProperty("flexiblePoses", out var overlay))
+            {
+                // Poses exist only on a flexible placement (the model's own invariant), so
+                // a file carrying them without the flag is malformed — warn rather than
+                // throw, the reader convention.
+                if (!occurrence.IsFlexible)
+                {
+                    warnings.Add($"assembly '{assembly.Name}': occurrence '{occurrenceName}' carries " +
+                        "per-placement poses but is not marked flexible; they were dropped");
+                }
+                else
+                {
+                    foreach (var entry in overlay.EnumerateObject())
+                    {
+                        occurrence.SetFlexiblePose(entry.Name, Frame3d.FromOrthonormal(
+                            LoadVector(entry.Value.GetProperty("origin")),
+                            LoadVector(entry.Value.GetProperty("x")),
+                            LoadVector(entry.Value.GetProperty("y"))));
+                    }
                 }
             }
             if (occurrence is not null && record.TryGetProperty("explode", out var explode))

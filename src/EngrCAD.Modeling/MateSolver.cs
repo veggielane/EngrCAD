@@ -164,6 +164,14 @@ public sealed partial class MateSet
     private readonly List<Mate> _mates = [];
     private readonly HashSet<Occurrence> _grounded = [];
 
+    /// <summary>Grounds as occurrence PATHS, the spelling the solver's unknowns are keyed
+    /// by. It matters only once a placement is
+    /// <see cref="Occurrence.IsFlexible">flexible</see>, where grounding one placement's
+    /// inner occurrence must leave the other placement's free; for a rigid tree a deep
+    /// occurrence has exactly one legal path, so this and <see cref="Grounded"/> say the
+    /// same thing.</summary>
+    private readonly HashSet<string> _groundedPaths = [];
+
     /// <param name="assembly">The assembly whose occurrence frames are solved for.</param>
     public MateSet(Assembly assembly)
     {
@@ -203,18 +211,32 @@ public sealed partial class MateSet
                 $"'{Assembly.Name}'. Ground a nested occurrence by its path: Ground(\"sub/{occurrence.Name}\").",
                 nameof(occurrence));
         _grounded.Add(occurrence);
+        _groundedPaths.Add(occurrence.Name);
         return this;
     }
 
     /// <summary>Pins the occurrence an occurrence path names ("clamp.2/bolt") — the
     /// cross-level form of <see cref="Ground(Occurrence)"/>. A grounded deep
     /// occurrence's local frame is an input, so a chain through it still moves with any
-    /// free ancestors.</summary>
+    /// free ancestors. Under a <see cref="Occurrence.IsFlexible">flexible</see>
+    /// placement the ground is per-PLACEMENT, so grounding "clamp/bolt" leaves
+    /// "clamp.2/bolt" free.</summary>
     public MateSet Ground(string path)
     {
-        _grounded.Add(Assembly.ResolvePath(path)[^1]);
+        var chain = Assembly.ResolvePath(path);
+        _grounded.Add(chain[^1]);
+        _groundedPaths.Add(PathOf(chain));
         return this;
     }
+
+    /// <summary>The canonical path spelling of a resolved chain — the same one
+    /// <see cref="MateRef.Path"/> produces, so grounds and mate targets are keyed
+    /// alike whichever way the caller spelled the path.</summary>
+    internal static string PathOf(IReadOnlyList<Occurrence> chain) =>
+        string.Join("/", chain.Select(o => o.Name));
+
+    /// <summary>True when the occurrence a path names is pinned.</summary>
+    internal bool IsGrounded(string path) => _groundedPaths.Contains(path);
 
     /// <summary>Removes a mate; false when it is not in this set. Note that removing a
     /// mate does not move anything — the frames it produced stay where the last solve put
@@ -243,7 +265,23 @@ public sealed partial class MateSet
     public bool Unground(Occurrence occurrence)
     {
         ArgumentNullException.ThrowIfNull(occurrence);
+        _groundedPaths.RemoveWhere(path => Resolves(path, occurrence));
         return _grounded.Remove(occurrence);
+    }
+
+    /// <summary>Whether a stored ground path still names this occurrence. A path that no
+    /// longer resolves (the tree changed under the set) simply does not match — the
+    /// load-warnings culture rather than an exception from an un-ground.</summary>
+    private bool Resolves(string path, Occurrence occurrence)
+    {
+        try
+        {
+            return ReferenceEquals(Assembly.ResolvePath(path)[^1], occurrence);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     private void Validate(in MateRef reference, Mate mate)
@@ -339,13 +377,25 @@ public sealed partial class MateSet
         double? rankTolerance = null)
     {
         private readonly double _rankTolerance = rankTolerance ?? RankRelativeTolerance;
-        private readonly List<Occurrence> _free = [];
-        private readonly Dictionary<Occurrence, int> _block = [];
+        private readonly List<Variable> _free = [];
 
-        /// <summary>Each free occurrence's ancestor chain (outermost first; empty for a
-        /// direct occurrence) — the frames its pose composes through, and what
-        /// <see cref="Apply"/> pulls the world-space step back through.</summary>
-        private readonly Dictionary<Occurrence, Occurrence[]> _ancestors = [];
+        /// <summary>Variable block per occurrence PATH, not per occurrence object: a
+        /// sub-assembly placed twice reaches ONE occurrence object down two paths, and a
+        /// flexible placement gives each of those its own pose. Keying by path is what
+        /// makes the two independent unknowns; for a rigid tree an occurrence has exactly
+        /// one legal path, so this is the object keying by another name.</summary>
+        private readonly Dictionary<string, int> _block = [];
+
+        /// <summary>One link of a mate reference's chain, resolved: the occurrence, its
+        /// path from the set's assembly, and the POSE SLOT its frame lives in (its own
+        /// <see cref="Occurrence.Frame"/>, or a flexible placement's overlay entry).</summary>
+        private readonly record struct Link(Occurrence Occurrence, string Path, PoseSlot Slot);
+
+        /// <summary>One solver unknown: where its pose is read and written, its path for
+        /// reports, and the chain it composes through (outermost first; empty for a
+        /// direct occurrence) — what <see cref="Apply"/> pulls the world-space step back
+        /// through.</summary>
+        private readonly record struct Variable(string Path, PoseSlot Slot, Link[] Ancestors);
 
         private Frame3d[] _poses = [];
         private double _length = 1;     // characteristic length: residual/variable scaling
@@ -370,7 +420,7 @@ public sealed partial class MateSet
 
             _columns = _free.Count * 6;
             _rows = mates.Sum(m => m.RowCount) + extras.Sum(x => x.RowCount);
-            _poses = [.. _free.Select(o => o.Frame)];
+            _poses = [.. _free.Select(v => v.Slot.Read())];
             _length = CharacteristicLength();
 
             if (_rows == 0)
@@ -466,13 +516,15 @@ public sealed partial class MateSet
                     for (int c = 0; c < 6; c++)
                         block[r * 6 + c] = final[(b * 6 + r) * _columns + (b * 6 + c)];
                 }
-                freedoms.Add(new MateOccurrenceFreedom(PathOf(_free[b]), Rank(block, 6, _rankTolerance)));
+                freedoms.Add(new MateOccurrenceFreedom(_free[b].Path, Rank(block, 6, _rankTolerance)));
             }
 
             if (converged)
             {
+                // Each unknown writes back to ITS OWN slot: a direct occurrence's frame,
+                // or the flexible placement's overlay entry the path names.
                 for (int i = 0; i < _free.Count; i++)
-                    _free[i].Frame = _poses[i];
+                    _free[i].Slot.Write(_poses[i]);
             }
             else
             {
@@ -514,43 +566,83 @@ public sealed partial class MateSet
         {
             if (reference.Occurrence is not { } occurrence)
                 return;
-            if (set.Grounded.Contains(occurrence) || _block.ContainsKey(occurrence))
+            string path = reference.Path!;
+            if (set.IsGrounded(path) || _block.ContainsKey(path))
                 return;
-            Occurrence[] ancestors = reference.Ancestors is { } chain ? [.. chain] : [];
-            if (ancestors.Length > 0)
+            if (reference.Ancestors is null)
             {
-                // A sub-assembly's internal frames are ONE object however many times it
-                // is placed: moving this occurrence would move geometry in EVERY
-                // placement, most of which the mate never mentioned. Refuse by name
-                // rather than quietly aliasing.
-                var owner = ancestors[^1].SubAssembly!;
-                var placements = set.Assembly.PlacementsOf(owner);
-                if (placements.Count > 1)
-                    throw new InvalidOperationException(
-                        $"A mate targets '{reference.Path}', but assembly '{owner.Name}' is placed " +
-                        $"{placements.Count} times ({string.Join(", ", placements)}), and " +
-                        $"'{occurrence.Name}' is one shared frame across all of them — solving would move " +
-                        "every placement. Ground it, mate the sub-assembly occurrence itself, or give " +
-                        "each placement its own Assembly.");
+                _block[path] = _free.Count;
+                _free.Add(new Variable(path, PoseSlot.Shared(occurrence), []));
+                return;
             }
-            _block[occurrence] = _free.Count;
-            _free.Add(occurrence);
-            _ancestors[occurrence] = ancestors;
+
+            var links = Chain(reference);
+            RequireAddressable(reference, links);
+            _block[path] = _free.Count;
+            _free.Add(new Variable(path, links[^1].Slot, links[..^1]));
         }
 
-        /// <summary>An occurrence's path relative to the set's assembly, for reports.</summary>
-        private string PathOf(Occurrence occurrence)
+        /// <summary>
+        /// Resolves a cross-level reference's chain: each link's occurrence, its path
+        /// from the set's assembly, and the pose slot its frame lives in. The walk tracks
+        /// the <see cref="FlexiblePlacement"/> scope, so a link beneath a flexible
+        /// placement is addressed in THAT placement's overlay — which is what lets two
+        /// placements of one sub-assembly carry two independent unknowns.
+        /// </summary>
+        private static Link[] Chain(in MateRef reference)
         {
-            var ancestors = _ancestors[occurrence];
-            return ancestors.Length == 0
-                ? occurrence.Name
-                : string.Join("/", ancestors.Select(o => o.Name).Append(occurrence.Name));
+            var ancestors = reference.Ancestors!;
+            var links = new Link[ancestors.Count + 1];
+            var scope = FlexiblePlacement.None;
+            string path = "";
+            for (int i = 0; i < links.Length; i++)
+            {
+                var link = i < ancestors.Count ? ancestors[i] : reference.Occurrence!;
+                path = i == 0 ? link.Name : $"{path}/{link.Name}";
+                var slot = scope.IsActive
+                    ? new PoseSlot(link, scope.Placement, scope.PathOf(link))
+                    : PoseSlot.Shared(link);
+                links[i] = new Link(link, path, slot);
+                scope = scope.Below(link);
+            }
+            return links;
+        }
+
+        /// <summary>
+        /// Refuses a reference whose target pose is not addressable: a sub-assembly's
+        /// internal frames are ONE object however many times it is placed, so moving this
+        /// occurrence would move geometry in EVERY placement, most of which the mate never
+        /// mentioned. A FLEXIBLE placement is the way out — its overlay is keyed by the
+        /// relative path, so each placement carries its own pose — and once a link opens
+        /// that scope everything below it is per-placement and needs no further check.
+        /// </summary>
+        private void RequireAddressable(in MateRef reference, Link[] links)
+        {
+            bool flexible = false;
+            for (int i = 0; i < links.Length; i++)
+            {
+                var owner = i == 0 ? set.Assembly : links[i - 1].Occurrence.SubAssembly!;
+                if (!flexible)
+                {
+                    var placements = set.Assembly.PlacementsOf(owner);
+                    if (placements.Count > 1)
+                        throw new InvalidOperationException(
+                            $"A mate targets '{reference.Path}', but assembly '{owner.Name}' is placed " +
+                            $"{placements.Count} times ({string.Join(", ", placements)}), and " +
+                            $"'{links[i].Occurrence.Name}' is one shared frame across all of them — " +
+                            "solving would move every placement. Make the placement FLEXIBLE " +
+                            "(occurrence.IsFlexible = true) so it carries its own internal poses, ground " +
+                            "it, mate the sub-assembly occurrence itself, or give each placement its own " +
+                            "Assembly.");
+                }
+                flexible |= links[i].Occurrence.IsFlexible;
+            }
         }
 
         private void Note(List<string> diagnostics)
         {
             var unmated = set.Assembly.Occurrences
-                .Where(o => !_block.ContainsKey(o) && !set.Grounded.Contains(o))
+                .Where(o => !_block.ContainsKey(o.Name) && !set.IsGrounded(o.Name))
                 .Select(o => o.Name)
                 .ToList();
             if (unmated.Count > 0)
@@ -637,12 +729,13 @@ public sealed partial class MateSet
         {
             if (reference.Occurrence is not { } occurrence)
                 return new End(NoContributions, reference.Point, reference.Direction);
-            if (reference.Ancestors is not { } ancestors)
+            if (reference.Ancestors is null)
             {
-                // Direct occurrence: its local frame IS its world frame. Kept as its own
-                // arithmetic (no identity composition) so one-level solves stay
+                // Direct occurrence: its local frame IS its world frame, and the root
+                // assembly's own occurrences are never inside a flexible placement. Kept
+                // as its own arithmetic (no identity composition) so one-level solves stay
                 // bit-identical to the original single-level solver.
-                bool free = _block.TryGetValue(occurrence, out int block);
+                bool free = _block.TryGetValue(occurrence.Name, out int block);
                 var frame = free ? _poses[block] : occurrence.Frame;   // grounded: an input
                 return new End(
                     free ? [new Contribution(block, frame.Origin)] : NoContributions,
@@ -655,14 +748,10 @@ public sealed partial class MateSet
             // through the frame chain, expressed as "which world origins can this end
             // rotate about".
             var contributions = new List<Contribution>(2);
+            var links = Chain(reference);
             Frame3d world = default;
-            bool first = true;
-            foreach (var link in ancestors)
-            {
-                world = Compose(link, world, first, contributions);
-                first = false;
-            }
-            world = Compose(occurrence, world, first, contributions);
+            for (int i = 0; i < links.Length; i++)
+                world = Compose(links[i], world, i == 0, contributions);
             return new End(
                 [.. contributions],
                 world.ToWorld(reference.Point),
@@ -670,22 +759,23 @@ public sealed partial class MateSet
         }
 
         /// <summary>Composes one chain link onto the running world frame, using the
-        /// working pose when the link is a variable, and records its contribution.</summary>
-        private Frame3d Compose(Occurrence link, in Frame3d parent, bool first, List<Contribution> contributions)
+        /// working pose when the link is a variable and its own slot's pose otherwise,
+        /// and records its contribution.</summary>
+        private Frame3d Compose(in Link link, in Frame3d parent, bool first, List<Contribution> contributions)
         {
-            bool free = _block.TryGetValue(link, out int block);
-            var local = free ? _poses[block] : link.Frame;
+            bool free = _block.TryGetValue(link.Path, out int block);
+            var local = free ? _poses[block] : link.Slot.Read();
             var world = first ? local : local.Then(parent);
             if (free)
                 contributions.Add(new Contribution(block, world.Origin));
             return world;
         }
 
-        /// <summary>A free occurrence's ancestor world frame from the CURRENT working
+        /// <summary>A free unknown's ancestor world frame from the CURRENT working
         /// poses, or null for a direct occurrence.</summary>
-        private Frame3d? AncestorWorld(Occurrence occurrence)
+        private Frame3d? AncestorWorld(in Variable variable)
         {
-            var ancestors = _ancestors[occurrence];
+            var ancestors = variable.Ancestors;
             if (ancestors.Length == 0)
                 return null;
             var world = LocalPose(ancestors[0]);
@@ -694,8 +784,8 @@ public sealed partial class MateSet
             return world;
         }
 
-        private Frame3d LocalPose(Occurrence occurrence) =>
-            _block.TryGetValue(occurrence, out int block) ? _poses[block] : occurrence.Frame;
+        private Frame3d LocalPose(in Link link) =>
+            _block.TryGetValue(link.Path, out int block) ? _poses[block] : link.Slot.Read();
 
         /// <summary>Fills the residual vector and returns the largest absolute entry.</summary>
         private double Evaluate(double[] residual)
