@@ -460,23 +460,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   that number, and finding out needs an arc-length (Riks) continuation over a geometrically
   nonlinear solve — a different solver, and the honest scope statement is already in
   `BucklingSolver`'s limitations rather than implied away.
-- [ ] **FEA: laminate theory and directional failure criteria.** `ElasticLaw` landed
-  (orthotropic / transversely isotropic / fully anisotropic, with a material frame; see
-  design.md §3h), and it deliberately stops at the constitutive law. Two things a composite
-  user reaches for next, neither of which the law can supply. **(a) A LAMINATE is a stack of
-  plies at different angles**, and today that is either several mesh regions (which needs a
-  ply-thick element through the stack — expensive, and the mesher would have to be told to
-  put layers there) or a homogenised law the CALLER computes with classical lamination
-  theory. Doing it here means an `A`/`B`/`D` matrix vocabulary and a decision about whether a
-  solid element can represent bending-extension coupling at all, which it cannot without
-  through-thickness resolution — so the honest first step is a `LaminateStack` that produces
-  a homogenised `ElasticLaw` and SAYS what it dropped. **(b) `MaxVonMises` on a composite
-  part is a number with no engineering meaning** — a directional material fails by Tsai-Wu,
-  Hashin or maximum strain against per-direction allowables, all of which want the stress
-  resolved in the MATERIAL frame, which `ElasticLaw` knows and `StructuralResults` does not
-  ask it for. That is a post-processing vocabulary (`ElasticLaw.ToMaterialFrame(stress)` plus
-  a `FailureCriterion` with its allowables) rather than a solver change, and it is the more
-  valuable of the two.
 - [ ] **FEA: ADAPTIVE refinement, now that there is something to refine against.**
   `StructuralResults.ErrorEstimate` gives a per-element energy-norm error (design.md §3i),
   which is exactly the map an adaptive loop consumes — and the loop itself is the thing

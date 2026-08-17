@@ -44,6 +44,8 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `Material` / `Materials` | **Lives in `EngrCAD.Core`**, not here — see below |
 | `ElasticLaw` | The constitutive law: isotropic (from a `Material`), transversely isotropic, orthotropic or fully anisotropic, with a material FRAME applied once at construction — the directional half `Material` deliberately cannot carry |
 | `ConductivityLaw` | The thermal twin of `ElasticLaw`: an isotropic, orthotropic or fully anisotropic conductivity TENSOR with a material frame, so a laminate conducts along its fibres — set per region with `ThermalModel.SetConductivity` |
+| `LaminaProperties` / `Ply` / `Laminate` / `LaminateConstants` | Classical lamination theory over a ply stack: `A`/`B`/`D`, the in-plane and flexural equivalent constants, and `ToElasticLaw` — a property derivation, consumed through the same `SetElasticity` seam |
+| `LaminaStrength` / `FailureCriterion` / `FailureAnalysis` / `FailureResults` | Directional failure: Tsai–Wu, Tsai–Hill and maximum stress evaluated in the MATERIAL frame, published as a load-normalised index and a strength ratio |
 | `StructuralModel` / `Facets` / `Dof` | The model: materials per region, supports and loads over facet selectors |
 | `StructuralSolver` / `StructuralSolveOptions` / `FeaSolveReport` | Assembly, restraint checking, the solve, and what it did |
 | `StructuralResults` / `NodalAveraging` / `StressRecovery` | Displacements, strain, stress, von Mises, publishing and `.vtu` |
@@ -356,11 +358,66 @@ of them assembles its stiffness through `FeaAssembly`.
 
 **Not covered, and stated rather than implied**: `Materials` carries no composite entries
 (the catalogue is isotropic engineering metals and plastics, and a lamina's constants are a
-layup decision rather than a stock number); a *laminate* — a stack of plies at different
-angles — is several regions or a homogenised law the caller supplies, not something this
-computes; and failure criteria for directional materials (Tsai-Wu, Hashin, maximum strain)
-are a post-processing vocabulary that does not exist here, so `MaxVonMises` on a composite
-part is a number with no engineering meaning.
+layup decision rather than a stock number). A *laminate* and *failure criteria* are covered —
+see below.
+
+## Laminates: `Laminate`
+
+A stack of plies, and classical lamination theory over it. It adds no element type and no
+solver path: it produces an `ElasticLaw` and rides `SetElasticity` exactly as a hand-stated
+orthotropic law does.
+
+```csharp
+var t300 = new LaminaProperties(e1: 181_000, e2: 10_300, nu12: 0.28, g12: 7_170);
+var layup = Laminate.Symmetric(t300, plyThickness: 0.125, 0.0, 45.0, -45.0, 90.0);
+
+model.SetElasticity(0, layup.ToElasticLaw(Frame3d.WorldXY));   // X = 0 degrees, Z = stacking
+```
+
+`A`, `B` and `D` are there in the textbook's own terms, with `InPlane` and `Flexural`
+equivalent single-layer constants derived from them.
+
+**What smearing drops is reported as a number, not a caveat.** A solid element carrying one
+constitutive law has no memory of the stacking sequence, so an unsymmetric layup (non-zero
+`B` — in-plane load produces curvature) is **refused by name**, and even for a symmetric one
+the flexural stiffness survives only where `D` agrees with `h²A/12`. `FlexuralDiscrepancy`
+measures exactly that gap: **0.401** for a `[0/90]s` cross-ply, whose outer plies dominate
+bending. The way out of either is the same — mesh the plies as separate regions through the
+thickness. Interlaminar stress and delamination are outside the model; it has no ply
+interfaces to separate.
+
+**What it does NOT cost is in-plane accuracy.** The homogenisation is *mixed* (plies share
+the in-plane strain and the through-thickness stress — the same parallel/series split the PCB
+thermal smear rests on), and condensing the resulting 6x6 back to plane stress returns `A/h`
+**exactly**, so the 3D law and the CLT cannot disagree there. A solved bar reproduces the CLT
+modulus to nine digits.
+
+## Directional failure: `LaminaStrength`, `FailureAnalysis`
+
+`MaxVonMises` on a composite is a number with no engineering meaning — a scalar equivalent
+stress compares a state against *one* allowable, and a carbon/epoxy ply is 37x stronger along
+the fibre than across it.
+
+```csharp
+model.SetStrength(0, new LaminaStrength(xt: 1500, xc: 1500, yt: 40, yc: 246, s: 68));
+
+var failure = FailureAnalysis.Evaluate(results, FailureCriterion.TsaiWu);
+Console.WriteLine($"{failure.MaxFailureIndex:F3} peak, R = {failure.MinStrengthRatio:F3}");
+```
+
+The stress is rotated into the **material frame** — the region's own `ElasticLaw.Frame`, never
+a second copy that could drift — and measured against the region's allowables. The published
+`FailureIndex` is `1 / StrengthRatio`: 1 is the limit, and it is linear in the load for all
+three criteria, which is what makes them comparable and the uniaxial reductions exact.
+
+Three things it reports rather than hides: `MaxOutOfPlaneFraction` (the criteria are
+plane-stress, so this says whether that idealisation holds here), `FailureIndexIn(region,
+node)` (the honest per-material value where the per-node field can only take the worst), and
+**NaN** for a region stating no strength — never zero, which would paint the safest colour on
+a part nobody has checked. Asking for a criterion when *no* region states one is refused by
+name.
+
+Docs page: `docs/examples/fea-composites.md`.
 
 ## Directional conductivity: `ConductivityLaw`
 

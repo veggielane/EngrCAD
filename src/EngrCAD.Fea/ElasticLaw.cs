@@ -49,6 +49,7 @@ public sealed class ElasticLaw
         bool statesOwnExpansion,
         double lambda,
         double mu,
+        Frame3d frame,
         string description)
     {
         _d = d;
@@ -57,6 +58,7 @@ public sealed class ElasticLaw
         StatesOwnThermalExpansion = statesOwnExpansion;
         Lambda = lambda;
         Mu = mu;
+        Frame = frame;
         Description = description;
 
         _thermalStress = new double[6];
@@ -75,6 +77,22 @@ public sealed class ElasticLaw
     /// <summary>True when the law came from an isotropic <see cref="Material"/>, which is
     /// what lets the assembly take the index form.</summary>
     public bool IsIsotropic { get; }
+
+    /// <summary>
+    /// The material axes in global coordinates — the frame the stiffness was rotated BY,
+    /// kept so a consumer can rotate a stress back INTO them.
+    ///
+    /// <para><b>It is retained here rather than restated beside a strength set</b>, and the
+    /// reason is the recurring one: a directional strength (<see cref="LaminaStrength"/>)
+    /// is quoted along the same 1-2-3 axes the moduli are, so a second copy of the frame
+    /// would be a second spelling of one fact, free to drift from the stiffness it is
+    /// supposed to describe. <see cref="ToMaterialFrame"/> is the one way to ask.</para>
+    ///
+    /// <para>Meaningless but harmless for an isotropic law, where it is
+    /// <see cref="Frame3d.WorldXY"/>: rotating an isotropic stress state changes its
+    /// components and no isotropic consumer reads them.</para>
+    /// </summary>
+    public Frame3d Frame { get; }
 
     /// <summary>
     /// True when <see cref="WithThermalExpansion"/> stated the expansion HERE, so the
@@ -192,6 +210,32 @@ public sealed class ElasticLaw
         MultiplyD(strain, stress);
     }
 
+    /// <summary>
+    /// A stress tensor written in the MATERIAL frame's own 1-2-3 axes — the components a
+    /// directional failure criterion is stated in.
+    ///
+    /// <para><c>sigma_material = R' · sigma_global · R</c> with R the frame's axes as
+    /// columns, evaluated as <c>e_i · (sigma · e_j)</c> so the whole thing is six dot
+    /// products and no Voigt vector, no engineering-shear convention and no Bond
+    /// transformation appear. That is deliberate: the STIFFNESS rotation next door goes
+    /// through the Voigt stress transformation, and keeping the two derivations apart is
+    /// what stopped a transposed rotation being invisible when this file was first
+    /// written.</para>
+    /// </summary>
+    /// <param name="globalStress">A stress tensor in global coordinates.</param>
+    public SymmetricTensor3 ToMaterialFrame(in SymmetricTensor3 globalStress)
+    {
+        var x = Frame.X;
+        var y = Frame.Y;
+        var z = Frame.Z;
+        var sx = globalStress.Multiply(x);
+        var sy = globalStress.Multiply(y);
+        var sz = globalStress.Multiply(z);
+        return new SymmetricTensor3(
+            x.Dot(sx), y.Dot(sy), z.Dot(sz),
+            x.Dot(sy), x.Dot(sz), y.Dot(sz));
+    }
+
     private void MultiplyD(ReadOnlySpan<double> strain, Span<double> stress)
     {
         for (int i = 0; i < 6; i++)
@@ -222,6 +266,7 @@ public sealed class ElasticLaw
             statesOwnExpansion: false,
             material.Lambda,
             material.Mu,
+            Frame3d.WorldXY,
             $"isotropic ({material.Name})");
     }
 
@@ -282,7 +327,7 @@ public sealed class ElasticLaw
 
         string label = name ?? "orthotropic";
         return new ElasticLaw(
-            d, new double[6], isotropic: false, statesOwnExpansion: false, 0, 0, label);
+            d, new double[6], isotropic: false, statesOwnExpansion: false, 0, 0, frame, label);
     }
 
     /// <summary>
@@ -375,7 +420,7 @@ public sealed class ElasticLaw
         RequirePositiveDefinite(d, 6, stride: 6, name ?? "anisotropic", "stiffness");
         RotateInPlace(d, frame);
         return new ElasticLaw(
-            d, new double[6], isotropic: false, statesOwnExpansion: false, 0, 0,
+            d, new double[6], isotropic: false, statesOwnExpansion: false, 0, 0, frame,
             name ?? "anisotropic");
     }
 
@@ -408,7 +453,7 @@ public sealed class ElasticLaw
         // The stiffness matrix is SHARED by reference: it is never mutated after
         // construction, and two laws differing only in expansion are the same elasticity.
         return new ElasticLaw(
-            _d, strain, IsIsotropic, statesOwnExpansion: true, Lambda, Mu, Description);
+            _d, strain, IsIsotropic, statesOwnExpansion: true, Lambda, Mu, Frame, Description);
     }
 
     /// <inheritdoc/>

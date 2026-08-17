@@ -179,6 +179,7 @@ public sealed class StructuralModel
     private readonly Vector3d[] _force;
     private readonly Dictionary<int, Material> _materials = [];
     private readonly Dictionary<int, ElasticLaw> _laws = [];
+    private readonly Dictionary<int, LaminaStrength> _strengths = [];
     private readonly Dictionary<int, RayleighDamping> _regionDamping = [];
     private readonly Dictionary<int, double> _regionLossFactor = [];
     private readonly List<DashpotSpec> _dashpots = [];
@@ -315,15 +316,53 @@ public sealed class StructuralModel
     /// states. Derived laws are cached per region, so the 6x6 inversion and frame rotation
     /// are paid once per model rather than once per element.
     /// </summary>
-    public ElasticLaw ElasticityOf(int element)
+    public ElasticLaw ElasticityOf(int element) => ElasticityOfRegion(Mesh.RegionOf(element));
+
+    /// <summary>
+    /// The constitutive law of one REGION — <see cref="ElasticityOf"/> keyed by region
+    /// rather than by element, which is what a post-processor asking "which way do this
+    /// material's fibres run" needs (a failure criterion is evaluated per (node, region)
+    /// slot, and a node has no element).
+    /// </summary>
+    public ElasticLaw ElasticityOfRegion(int region)
     {
-        int region = Mesh.RegionOf(element);
         if (_laws.TryGetValue(region, out var law))
             return law;
-        law = ElasticLaw.FromMaterial(MaterialOf(element));
+        law = ElasticLaw.FromMaterial(
+            _materials.TryGetValue(region, out var material) ? material : DefaultMaterial);
         _laws[region] = law;
         return law;
     }
+
+    /// <summary>
+    /// Assigns a directional strength set to one region — the allowables a
+    /// <see cref="FailureAnalysis"/> measures the recovered stress against.
+    ///
+    /// <para>It is stated per region and NOT on the <see cref="Material"/> for the frame
+    /// argument (design.md §3h): a directional strength is quoted along the fibre axes, and
+    /// those belong to the layup rather than to the stuff. The frame itself is not restated
+    /// here — the criterion reads it from this region's own
+    /// <see cref="ElasticityOfRegion">elastic law</see>, so the strengths and the stiffness
+    /// cannot disagree about which way is "1".</para>
+    /// </summary>
+    public StructuralModel SetStrength(int region, LaminaStrength strength)
+    {
+        ArgumentNullException.ThrowIfNull(strength);
+        _strengths[region] = strength;
+        _conditions.Add($"strength '{strength.Name}' on region {region}");
+        return this;
+    }
+
+    /// <summary>The strength set of one region, or null when none was stated — the "no
+    /// value" spelling a failure field publishes as NaN.</summary>
+    public LaminaStrength? StrengthOfRegion(int region) =>
+        _strengths.TryGetValue(region, out var s) ? s : null;
+
+    /// <summary>The strength set covering one element, or null.</summary>
+    public LaminaStrength? StrengthOf(int element) => StrengthOfRegion(Mesh.RegionOf(element));
+
+    /// <summary>True when any region states a strength set.</summary>
+    public bool HasStrengths => _strengths.Count > 0;
 
     /// <summary>True when any region carries a non-isotropic law — what a report states and
     /// what the thermal-load path checks before assuming a scalar expansion.</summary>
