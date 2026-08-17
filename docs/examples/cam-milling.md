@@ -413,6 +413,59 @@ Console.WriteLine($"decoded cut length {decoded.Moves.Where(m => !m.Rapid).Sum(m
 
 ## Arc output (`G2`/`G3`)
 
+There are two routes to an arc in the file, and which one you get is decided by what the
+toolpath was built from rather than by a switch: a pass built on the **exact curved tier**
+*carries* its arcs and the writer transcribes them, while a pass that is only a polyline can
+have arcs *recovered* from it by the opt-in fitter.
+
+### Native arcs — the source said "arc"
+
+`CncMill.Profile` and `CncMill.Pocket` have overloads taking a `CurvedRegion2d`, the exact
+2D tier where a circular arc stays a circular arc through an offset. Those routes offset with
+`CurvedRegion2dOffset`, so a tool-compensated corner *is* an arc, and the `MillPass` carries
+it as a `MillArc` span — a stretch of the pass polyline that the writer emits as one
+`G2`/`G3`. No fitter runs and **no sagitta cap guards it**: the fitter's cap exists because
+four points can be exactly concyclic by accident, and an arc that declares itself cannot be.
+
+The polyline stays the universal representation. An arc-native pass's `Points` are exactly
+the flattened path at `CncMill.ArcChordTolerance`, so the stock simulation, the travel linker,
+the coverage oracle and every other polyline consumer read what they always read; the arcs are
+purely additive.
+
+**The assertion with teeth is the exact perimeter.** A 40×24 plate with r6 corners profiled
+outside by a Ø6 tool has a tool-centre outline of exactly `2(28 + 12) + 2π·9`, and the decoded
+arc-native program reaches it **to nine decimal places** — no chord deficit at all. The chorded
+route cannot, at any flattening density, because an inscribed polygon is shorter than its arc;
+that deficit is a floor, not a tolerance. Note *which* decoded quantity carries the claim:
+`GcodeReader` expands an arc at 5°, coarser than the 1e-3 source chords, so summing move
+**chords** reads a perfect arc as short. `GcodeMove.PathLength` is `r·|sweep|` for a sub-move
+expanded from an arc, which measures the geometry the *file* states with no discretization in
+between.
+
+```csharp run:cam-arcs-native
+var exact = Sketch.RoundedRectangle(40, 24, 6).ToCurvedRegions()[0];
+var op = CncMill.Profile(exact, new MillTool(6), depth: 2, ProfileSide.Outside);
+string gcode = CncGcodeWriter.Write([op]);
+foreach (var line in gcode.Split('\n').Where(l => l.StartsWith("G2 ") || l.StartsWith("G3 ")))
+    Console.WriteLine(line);
+
+var decoded = GcodeReader.Read(gcode).Moves.Where(m => !m.Rapid).ToList();
+double exactLength = decoded.Sum(m => m.PathLength);
+double chordLength = decoded.Sum(m => m.XyLength);
+double closedForm = 2 * (28 + 12.0) + 2 * Math.PI * 9;
+Console.WriteLine($"closed form           {closedForm:0.000000000}");
+Console.WriteLine($"decoded (PathLength)  {exactLength:0.000000000}");
+Console.WriteLine($"decoded (chords)      {chordLength:0.000000000}  <- the 5-degree expansion");
+
+var flat = Sketch.RoundedRectangle(40, 24, 6).ToRegions()[0];
+var chorded = CncMill.Profile(flat, new MillTool(6), depth: 2, ProfileSide.Outside);
+double flatLength = GcodeReader.Read(CncGcodeWriter.Write([chorded]))
+    .Moves.Where(m => !m.Rapid).Sum(m => m.PathLength);
+Console.WriteLine($"chorded route         {flatLength:0.000000000}  <- short, at any density");
+```
+
+### Fitted arcs — recovering them from a polyline
+
 `CncGcodeWriter.Write(operations, arcFitting: true)` emits maximal runs of constant-z
 points that lie on one circle as a single `G2`/`G3` in the I/J centre-offset form instead
 of the chord run — and this is **recovery, not approximation**: the offset machinery
@@ -450,10 +503,17 @@ Console.WriteLine($"decoded cut length {length:0.00} vs closed form "
     + $"2(28+12) + 2*pi*9 = {2 * (28 + 12.0) + 2 * Math.PI * 9:0.00}");
 ```
 
-Still filed with the campaign: native arcs carried end to end from the exact
-curved-profile tier (a `MillPass` whose segments ARE arcs — the fitter above recovers them
-from the polyline instead), the 3-axis (surfacing) stock simulation — a raster row's swept
-volume is not a prism, so `Simulate` refuses it by name today — and the trochoid ×
+A pass carrying arcs emits them whether or not the fitter is on, so the two compose: the
+carried spans are transcribed and the fitter, if asked, works the stretches between them.
+A pass carrying none behaves exactly as it always did — a polygonal construction emits no
+`G2`/`G3` at all with the fitter off.
+
+Still filed with the campaign: arcs on a **tabbed** profile pass (a tab is resampled at
+arc-length stations, so half an arc stated as a whole one would be a misresolve — the spans
+are dropped rather than re-derived) and on a **helical** ramp entry (a helix's chords carry a
+Z word, which the planar arc carry deliberately does not spell), the 3-axis (surfacing) stock
+simulation — a raster row's swept volume is not a prism, so `Simulate` refuses it by name
+today — and the trochoid ×
 stock-record composition (the swept union's scallop cusps are near-tangent crossings, the
 mesh imprint boolean's hostile family), plus general adaptive (constant-engagement) pocket
 clearing, of which the closed-form cycloid family above is the honest first step.

@@ -2294,17 +2294,18 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     started a level at its boundary ring). NOTE for the stock-sim composition: a
     helix retraces one polygon per turn, so its footprint has EXACTLY-coincident
     repeated segments — dedupe before stroking (the ramp coverage test does).
-    **Stage-2 residuals, open**: native arcs carried end to end from the exact
-    curved-profile tier (`SectionExact`/`CurvedRegion2dOffset` — a `MillPass` whose
-    segments ARE arcs; the WRITER/DECODER half landed — opt-in `arcFitting` on
-    `CncGcodeWriter.Write` fits co-circular constant-z runs into I/J-form G2/G3
-    with each chord's sagitta capped at the file's own 1e-3 coordinate quantum,
-    the cap being what the on-circle test cannot supply: IEEE negation is exact,
-    so a symmetric part's straight side flanked by its two tangency vertices puts
-    four points EXACTLY on a 675 mm phantom circle bulging 0.027 mm across the
-    side; `GcodeReader` expands I/J arcs at 5° and refuses R-form/missing-centre/
-    radius-disagreement by name), and the material-removal animation over recorded
-    stock states. Lead-in/out arcs LANDED (`Profile(leadRadius:)` — quarter arcs
+    NATIVE arcs carried end to end LANDED (`CncMill.Profile`/`Pocket` overloads over
+    `CurvedRegion2d`, offsetting on the exact curved tier so a compensated corner IS
+    an arc; `MillPass.Arcs` carries `MillArc` spans of its own flattened polyline and
+    the writer transcribes each into one I/J-form G2/G3 with NO sagitta cap, since the
+    cap guards an INFERENCE and a declared arc is not one; oracle = the decoded
+    `GcodeMove.PathLength` reaching the exact closed-form perimeter to 9 decimals where
+    the chorded route is short at every density — see design.md §6e).
+    **Stage-2 residuals, open**: arcs on a TABBED profile pass (a tab resamples the
+    loop at arc-length stations, so a span would name half an arc — dropped, not
+    re-derived) and on a HELICAL ramp entry (its chords carry a Z word the planar arc
+    carry does not spell; a helical G2/G3 would need the arc word to take Z, and the
+    decoder's expansion with it). Lead-in/out arcs LANDED (`Profile(leadRadius:)` — quarter arcs
     tangent at the seam on the away-from-material side, a travel-relative fact by
     Orient's winding contract so no per-loop kind flag exists; the plunge lands at
     the arc start, off the wall; a lead that cannot fit a small hole refuses by

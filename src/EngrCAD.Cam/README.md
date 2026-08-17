@@ -210,6 +210,17 @@ Stage 2 — pocket, profile and drill over the same landed machinery:
   on-circle test, is what rejects the mirror-symmetry phantom (IEEE negation is exact, so
   four points spanning a straight side can be EXACTLY concyclic on a 675 mm circle whose
   arc would gouge 0.027 mm).
+- **NATIVE arcs** need no fitter and no cap: `Profile`/`Pocket` overloads taking a
+  `CurvedRegion2d` offset on the EXACT curved tier, where a tool-compensated corner IS an arc,
+  and the pass carries it as a `MillArc` span the writer transcribes. The cap guards an
+  INFERENCE, which a declared arc is not. The polyline stays the universal representation —
+  a span names a stretch of the pass's own flattened points at `CncMill.ArcChordTolerance`, so
+  the stock simulation, the travel linker and `CutLength` are untouched and a polygonal
+  construction still carries `Arcs == null`. The oracle is the exact PERIMETER: a 40×24 plate
+  with r6 corners profiled outside by a Ø6 tool decodes to `2(28 + 12) + 2π·9` to **nine
+  decimals**, where the chorded route is short at every density. Measure it with
+  `GcodeMove.PathLength` (`r·|sweep|` per expanded sub-move), never `XyLength` — the decoder
+  expands an arc at 5°, coarser than the source chords, so chords read a perfect arc as SHORT.
 - **The oracle is the morphological OPENING**: a radius-r tool reaches exactly
   `grow_r(shrink_r(region))`, the passes' stroked-and-unioned footprints (the machined-stock
   simulation) must equal it, and a rectangular pocket's unreachable corner residue is CLOSED

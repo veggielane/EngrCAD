@@ -9077,8 +9077,47 @@ lifts exactly `tabs` times to exactly `−depth + tabHeight`, the decoded cut le
 operations' own within formatting precision, and the program is byte-deterministic. Filed with
 the campaign at the time — and since landed with their own records below: climb/conventional
 selection, helical/ramp entry, canned cycles, the ⚠ feeds/speeds catalogue, rest machining,
-and writer-side G2/G3 arc fitting; still open: native arcs carried end to end from the exact
-curved-profile tier, and the material-removal animation over recorded stock states.
+writer-side G2/G3 arc fitting, the material-removal animation over recorded stock states, and
+NATIVE arcs carried end to end from the exact curved-profile tier.
+
+**Native G2/G3 arcs — the source says "arc" rather than the writer guessing one.**
+`CncMill.Profile`/`Pocket` gained `CurvedRegion2d` overloads that offset on the EXACT curved
+tier (`CurvedRegion2dOffset`), where a tool-compensated corner IS a circular arc, and a
+`MillPass` carries those arcs as `MillArc` spans the writer transcribes into one `G2`/`G3`
+each. **The design decision is that the polyline stays the universal representation and the
+arcs are ADDITIVE**: a span names a stretch of the pass's own flattened points (at
+`CncMill.ArcChordTolerance`), so `CncStock.Simulate`, the travel linker, `CutLength` and every
+other polyline consumer read exactly what they always read, every polygonal construction still
+carries `Arcs == null`, and the writer's non-arc path is the incumbent one byte for byte. It is
+also why **no sagitta cap guards a carried arc**: the fitter's cap exists because four points
+can be exactly concyclic by accident (the recorded 675 mm phantom), and an arc that declares
+itself cannot be — the cap is a guard on an INFERENCE, and there is no inference here.
+
+**The oracle is the exact PERIMETER, and it is what a fitted or chorded route structurally
+cannot reach.** A 40×24 plate with r6 corners profiled outside by a Ø6 tool has a tool-centre
+outline of exactly `2(28 + 12) + 2π·9 = 136.548667765`, and the decoded arc-native program
+measures it to **nine decimal places**; the chorded route is short at every flattening density,
+because an inscribed polygon is shorter than its arc and that deficit is a FLOOR. Which decoded
+quantity carries the claim is the load-bearing half: `GcodeReader` expands an arc at 5°, coarser
+than the 1e-3 source chords, so summing move CHORDS reads a perfect arc as SHORT (the recorded
+lesson, which is why the fitter's own test asserts against the closed form rather than against
+the chorded file). `GcodeMove` therefore gained `ArcRadius`/`ArcSweep` per expanded sub-move and
+a `PathLength` that is `r·|sweep|` for one — the file's stated geometry with no discretization
+in between, and `XyLength` unchanged so every incumbent identity reads what it read.
+
+Three smaller rules, each forced by the geometry rather than chosen: **orientation happens on
+the CHAIN, not on the flattened points** (reversing a closed chain reverses every edge and their
+order, so the walk starts where it started — edge[n−1].End IS edge[0].Start, the curved twin of
+`Orient` holding loop[0] still — and every sweep flips sign with it); **a full-circle edge is
+halved** before flattening, since a `G2` whose endpoints coincide is a legal full turn this
+decoder reads but the one arc a controller may take for a zero-length move, and halving is exact
+(the same rule `CurvedRegion2dOffset` applies before raising a slab); and **a span's `End` may
+equal `Points.Count`**, meaning point 0 — the extended indexing the writer and `CutLength`
+already walk a closed pass by, which is what makes the lead-arc and ramp-merge shifts one
+addition with no wrap case. Filed rather than built: arcs on a TABBED pass (a tab resamples the
+loop at arc-length stations, so half an arc stated as a whole one would be the misresolve the
+carry exists to avoid — the spans are dropped, not re-derived) and on a HELICAL ramp entry (its
+chords carry a Z word, which the planar arc carry deliberately does not spell).
 
 **FDM supports — columns under the measured overhang field** (`PrinterProfile.SupportOverhangAngle`,
 0 = off — the write-only-when-stated path, so a profile stating nothing slices byte-identically).

@@ -24,11 +24,26 @@ public enum GcodeMoveKind
 /// CNC program's verification turns on, since the feed state persists across rapids and cannot
 /// separate them on its own.</summary>
 public sealed record GcodeMove(
-    Vector3d From, Vector3d To, double DeltaE, double Feed, GcodeMoveKind Kind, bool Rapid = false)
+    Vector3d From, Vector3d To, double DeltaE, double Feed, GcodeMoveKind Kind, bool Rapid = false,
+    double ArcRadius = 0, double ArcSweep = 0)
 {
-    /// <summary>The XY length of the move (mm).</summary>
+    /// <summary>The XY length of the move (mm) — the CHORD, which for an expanded arc sub-move
+    /// is what the machine's own interpolation is being compared against.</summary>
     public double XyLength =>
         new Vector2d(To.X - From.X, To.Y - From.Y).Length;
+
+    /// <summary>
+    /// The XY length the tool actually travels: <c>r·|sweep|</c> for a sub-move expanded from a
+    /// <c>G2</c>/<c>G3</c>, and <see cref="XyLength"/> otherwise.
+    ///
+    /// <para><b>This is the measure an arc program must be judged by.</b> The expansion samples
+    /// each arc at 5 degrees, which is COARSER than the source geometry that produced it, so a
+    /// program whose arcs are exact reads SHORT through <see cref="XyLength"/> — by the
+    /// expansion's own chord deficit and by nothing else. Summing this instead compares the
+    /// file's stated geometry against a closed form with no discretization in between, which is
+    /// exactly the claim a fitted or chorded program cannot make.</para>
+    /// </summary>
+    public double PathLength => ArcRadius > 0 ? ArcRadius * Math.Abs(ArcSweep) : XyLength;
 }
 
 /// <summary>A decoded G-code program — the moves plus the derived quantities the verification
@@ -267,9 +282,13 @@ public static class GcodeReader
                             double se = e + (ne - e) * s / steps;
                             double deltaE = se - pe;
                             var kind = deltaE > 0 ? GcodeMoveKind.Deposition : GcodeMoveKind.Travel;
+                            // Each sub-move carries its own share of the arc, so a caller
+                            // summing GcodeMove.PathLength measures the arc the FILE states
+                            // rather than the polyline this expansion drew from it.
                             moves.Add(new GcodeMove(
                                 new Vector3d(px, py, pz), new Vector3d(sx, sy, sz),
-                                deltaE, feed, kind));
+                                deltaE, feed, kind, Rapid: false,
+                                ArcRadius: r0, ArcSweep: sweep / steps));
                             (px, py, pz, pe) = (sx, sy, sz, se);
                         }
                         (x, y, z, e) = (nx, ny, nz, ne);
