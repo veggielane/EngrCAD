@@ -232,7 +232,11 @@ The reason to build it is the estimate that comes with it. `ErrorEstimate` is th
 Zienkiewicz–Zhu figure — the energy-norm distance between the finite-element flux and its own
 recovery, per element and overall — which is the answer to "is this conduction mesh good
 enough" a solve otherwise never gives, and the per-element map an adaptive refinement loop
-would consume.
+consumes. `AdaptiveSolve` (see the [structural page](fea-structural.md)) drives that loop for
+the STRUCTURAL physics today; every part of it below the model — the sizing field, the
+gradation limiter, the budget prediction, the refusals — is physics-agnostic, so a thermal
+loop is the same loop with the callback returning a `ThermalModel`, and it is filed rather
+than implied.
 
 ```csharp run:fea-thermal-recovery
 var block = Shape.Box(60, 40, 20);
