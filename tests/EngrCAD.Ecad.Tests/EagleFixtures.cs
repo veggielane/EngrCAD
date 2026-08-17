@@ -228,6 +228,107 @@ internal static class EagleFixtures
 </eagle>
 """;
 
+    // A MANAGED (Eagle 9 / Fusion) library, transcribed from the newer XML's shape: urn
+    // attributes on the library and on every element, a <packages3d> block declaring 3D packages
+    // by URN, and a device binding one through <package3dinstances>. Coordinates and the
+    // connect map are the classic library's, so the only thing under test is the new vocabulary.
+    //
+    // Devices:
+    //   R-EU_R0805  binds RESC2012X70N (a "model" 3D package, listing package R0805)
+    //   R-EU_R0805B binds RESC2012X70N-BOX ("box"), whose packageinstance names a package the
+    //               library does not contain (a diagnostic, not a refusal)
+    //   R-EU_R0805X binds an urn <packages3d> never declares (a diagnostic)
+    //   R-EU_R0805T binds BOTH real 3D packages (only the first can be attached)
+    internal const string ManagedLibrary = """
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE eagle SYSTEM "eagle.dtd">
+<eagle version="9.6.2">
+  <drawing>
+    <library urn="urn:adsk.eagle:library:325">
+      <description>A minimal managed test library.</description>
+      <packages>
+        <package name="R0805" urn="urn:adsk.eagle:footprint:23122/1" library_version="1">
+          <smd name="1" x="-0.9125" y="0" dx="1.025" dy="1.4" layer="1" roundness="25"/>
+          <smd name="2" x="0.9125" y="0" dx="1.025" dy="1.4" layer="1" roundness="25"/>
+        </package>
+      </packages>
+      <packages3d>
+        <package3d name="RESC2012X70N" urn="urn:adsk.eagle:package:23123/2" type="model" library_version="1">
+          <description>Chip, 2.00 X 1.25 X 0.70 mm body</description>
+          <packageinstances>
+            <packageinstance name="R0805"/>
+          </packageinstances>
+        </package3d>
+        <package3d name="RESC2012X70N-BOX" urn="urn:adsk.eagle:package:23124/1" type="box" library_version="1">
+          <packageinstances>
+            <packageinstance name="R0805_NOT_HERE"/>
+          </packageinstances>
+        </package3d>
+        <package3d name="NAMELESS" type="model">
+          <packageinstances>
+            <packageinstance name="R0805"/>
+          </packageinstances>
+        </package3d>
+      </packages3d>
+      <symbols>
+        <symbol name="R" urn="urn:adsk.eagle:symbol:16966/1" library_version="1">
+          <rectangle x1="-1.016" y1="-2.54" x2="1.016" y2="2.54" layer="94"/>
+          <pin name="1" x="0" y="3.81" visible="off" length="short" direction="pas" rot="R270"/>
+          <pin name="2" x="0" y="-3.81" visible="off" length="short" direction="pas" rot="R90"/>
+        </symbol>
+      </symbols>
+      <devicesets>
+        <deviceset name="R-EU_" prefix="R" uservalue="yes" urn="urn:adsk.eagle:component:23134/1" library_version="1">
+          <gates>
+            <gate name="G$1" symbol="R" x="0" y="0"/>
+          </gates>
+          <devices>
+            <device name="R0805" package="R0805">
+              <connects>
+                <connect gate="G$1" pin="1" pad="1"/>
+                <connect gate="G$1" pin="2" pad="2"/>
+              </connects>
+              <package3dinstances>
+                <package3dinstance package3d_urn="urn:adsk.eagle:package:23123/2"/>
+              </package3dinstances>
+              <technologies><technology name=""/></technologies>
+            </device>
+            <device name="R0805B" package="R0805">
+              <connects>
+                <connect gate="G$1" pin="1" pad="1"/>
+                <connect gate="G$1" pin="2" pad="2"/>
+              </connects>
+              <package3dinstances>
+                <package3dinstance package3d_urn="urn:adsk.eagle:package:23124/1"/>
+              </package3dinstances>
+            </device>
+            <device name="R0805X" package="R0805">
+              <connects>
+                <connect gate="G$1" pin="1" pad="1"/>
+                <connect gate="G$1" pin="2" pad="2"/>
+              </connects>
+              <package3dinstances>
+                <package3dinstance package3d_urn="urn:adsk.eagle:package:99999/9"/>
+              </package3dinstances>
+            </device>
+            <device name="R0805T" package="R0805">
+              <connects>
+                <connect gate="G$1" pin="1" pad="1"/>
+                <connect gate="G$1" pin="2" pad="2"/>
+              </connects>
+              <package3dinstances>
+                <package3dinstance package3d_urn="urn:adsk.eagle:package:23123/2"/>
+                <package3dinstance package3d_urn="urn:adsk.eagle:package:23124/1"/>
+              </package3dinstances>
+            </device>
+          </devices>
+        </deviceset>
+      </devicesets>
+    </library>
+  </drawing>
+</eagle>
+""";
+
     // A board (.brd), not a library — refused by name at the root.
     internal const string BoardFile = """
 <?xml version="1.0" encoding="utf-8"?>

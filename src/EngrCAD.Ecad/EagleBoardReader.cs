@@ -92,6 +92,11 @@ public static class EagleBoardReader
         var once = new HashSet<string>(StringComparer.Ordinal);
         void Note(string message) { if (once.Add(message)) diagnostics.Add(message); }
 
+        // A newer Eagle 9 / Fusion (managed) file says so; a classic file gets no note, so a
+        // pre-9 import's diagnostics are exactly what they always were.
+        if (EagleLibraryReader.VersionNote(root) is { } versionNote)
+            Note(versionNote);
+
         Note($"An Eagle .brd states no board thickness (it lives in the fab profile); "
             + $"{DefaultThickness.ToString("0.0#", CultureInfo.InvariantCulture)} mm was assumed.");
 

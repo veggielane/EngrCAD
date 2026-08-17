@@ -86,6 +86,11 @@ public static class EagleSchematicReader
         var once = new HashSet<string>(StringComparer.Ordinal);
         void Note(string message) { if (once.Add(message)) diagnostics.Add(message); }
 
+        // A newer Eagle 9 / Fusion (managed) file says so; a classic file gets no note, so a
+        // pre-9 import's diagnostics are exactly what they always were.
+        if (EagleLibraryReader.VersionNote(root) is { } versionNote)
+            Note(versionNote);
+
         // ---- the embedded libraries (each the same content as a .lbr's <library>) ----------
         var libraries = new Dictionary<string, EagleLibrary>(StringComparer.Ordinal);
         var librariesElement = schematicElement.Element("libraries");
