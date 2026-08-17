@@ -785,39 +785,22 @@ export — is recorded in CLAUDE.md):
     the below/above pair or their stated union — a semantics decision (which limit does
     `projection(cut=true)` mean on a graze?) before an implementation.
 - [ ] `roof()` — straight-skeleton roof over a polygon; low priority
-- [ ] **Camera-adaptive tessellation on zoom** — `TessellationQuality` ✅ landed (max
-  angle + max chord deviation, per-solid resolution driving mesh AND feature edges);
-  the follow-on is re-resolving against the on-screen pixel size of a radius when the
-  camera zooms, which needs re-tessellation plumbing in the viewer.
-  **Assessed; the criterion is the easy half and the PLUMBING is the item.** Deriving
-  the target is one line — a chord deviation of half a device pixel at the current
-  camera, i.e. `deviation = 0.5 * worldPerPixel(distance, fov, viewportHeight)` fed to
-  the existing `TessellationQuality.MaxChordDeviation` — and `Part.GetMesh(quality)`
-  already re-tessellates for a different criterion. What is missing, and what makes this
-  a real piece of work rather than a knob:
-  (a) **A re-tessellation must not run on the render thread and must not run per frame.**
-  It needs `TabMeshLoader`'s generation-token discipline (a zoom that supersedes an
-  in-flight re-mesh must not land) plus hysteresis — re-mesh on a factor-of-two change in
-  the criterion, not on every wheel notch, or a drag queues dozens of tessellations.
-  (b) **Every derived cache keys off the mesh**: feature edges, the pick BVH and the
-  ambient-occlusion bake are all per-mesh, so a re-tessellation invalidates three
-  expensive things. The AO bake is 12.3 s on the demo scene, which alone rules out
-  re-baking per zoom level — the honest v1 keeps the coarse bake and accepts that
-  occlusion is one level behind, or caps adaptivity to parts under the AO opt-out
-  threshold.
-  (c) **`Part.TryGetSolid` is the saving grace**: the B-Rep lowering is cached and
-  criterion-independent, so a re-tessellation is the tessellate half only — which is
-  what makes this affordable at all (measured elsewhere: lowering dominates a Shape
-  part's meshing).
-  (d) **The oracle is awkward**: the docs-PNG byte comparison cannot see this (renders
-  are one-shot at a fixed camera), so it needs its own test — mesh a large-radius part
-  at two camera distances and assert the segment counts differ in the direction the
-  criterion predicts, plus that a zoom back out does not *coarsen* below the quality
-  floor mid-session (a part that visibly loses detail when you pull back reads as a bug
-  even when it is the criterion working).
-  Worth about a day and a half. Not blocked on anything; deliberately not started in a
-  sweep, because a background re-mesh triggered by camera motion is exactly the kind of
-  feature that is fine in every test and janky in the hand.
+- [ ] **Camera-adaptive display quality: the HAND-FEEL is untested** (the feature ✅
+  landed opt-in — `EngrCadOptions.AdaptiveDisplayQuality`, the pure `AdaptiveQuality` in
+  Viewer.Core, `Part.RefineMesh`'s never-coarsen ratchet, docs `quality.md`). Everything
+  the entry asked for is measured: two camera distances resolve 40 and 80 segments on a
+  Ø400 rim exactly as `n ∝ √(1/d)` predicts, a pull-back adopts nothing, the session
+  floor holds. What is NOT measured is the thing the entry itself predicted would decide
+  it — whether a background re-mesh triggered by camera motion *feels* right in the hand
+  — which is why it ships off by default. Somebody has to live with it on: is 300 ms the
+  right settle, does a factor of two read as too coarse a step (a big rim can sit
+  visibly faceted for one whole band), and does the republish blink? Turning the default
+  on is a decision that wants a week of use, not another test.
+  Two smaller residuals it leaves, both stated in the docs rather than hidden: the
+  ambient-occlusion bake is NOT re-run (12.3 s on the demo scene, so occlusion stays one
+  level behind the fill), and the criterion is measured at the orbit TARGET, so a part
+  far from the target in a wide scene is sized by the camera's distance to the target
+  rather than to itself.
 - [ ] **Debug-modifier follow-ups** (v1 ✅ landed — `Part.Ghost`/`Hidden`/`Isolated`
   + `DebugFilter` shared by window/offscreen/exports/MCP; `#` highlight deliberately
   stays the selection mechanism; **web viewport Hidden/Isolated ✅ landed** —

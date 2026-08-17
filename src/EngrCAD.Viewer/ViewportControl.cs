@@ -263,6 +263,13 @@ public sealed class ViewportControl : OpenGlControlBase
         }
     }
 
+    /// <summary>The viewport's height in DEVICE pixels — the same
+    /// <c>Bounds.Height * RenderScaling</c> the render pass sizes its GL viewport with,
+    /// so a screen-space criterion (the camera-adaptive display quality) measures against
+    /// what is actually rasterized rather than against DIPs. At least 1.</summary>
+    public double DevicePixelHeight =>
+        Math.Max(1, Bounds.Height * (TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0));
+
     protected override void OnOpenGlInit(GlInterface gl)
     {
         _gl = GL.GetApi(new LamdaNativeContext(name => gl.GetProcAddress(name)));

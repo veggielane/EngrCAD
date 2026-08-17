@@ -78,7 +78,51 @@ if (rim != expected) throw new Exception($"mesh rim {rim} != {expected}");
 - **Per solid, not per face.** The resolution scans the solid's curvature radii
   (circular and elliptic edges; cylinder, sphere, revolved, extruded and swept
   surfaces) and resolves one count pair for the whole solid, sized by the largest
-  radius. Shared edges therefore weld exactly as they always did. Camera-adaptive
-  re-extraction on zoom is future work.
+  radius. Shared edges therefore weld exactly as they always did.
 - `SegmentsFor(radius)` is public — the criterion itself, usable anywhere you need the
   same answer the tessellation used.
+
+## Following the camera (opt-in)
+
+A criterion stated in model units is still a guess about how close you will get. The
+viewer can instead derive one from the **camera**: half a device pixel of chord deviation
+at the orbit target, fed to `MaxChordDeviation`, so a large rim gains segments as you
+zoom onto it.
+
+```csharp
+return EngrCad.Configure()
+    .WithAdaptiveDisplayQuality()      // window only; off by default
+    .Run(args, BuildScene);
+```
+
+Three rules keep it from being a per-frame knob, and each is a decision rather than a
+tuning constant:
+
+- **It fires on SETTLE, never per frame.** A pose is evaluated only after it has been
+  held unchanged for 300 ms, and each settled pose exactly once — so a wheel flurry or a
+  drag queues nothing at all.
+- **A factor of two, or nothing.** A settled target is adopted only when it is at least
+  2× finer than the last one adopted, so a small zoom costs nothing.
+- **It only ever refines.** Zooming back out re-meshes nothing, and the emitted quality
+  carries the session's own segment count as its `MinSegments`, so no part can resolve
+  below the quality the session started at. `Part.RefineMesh` enforces the same ratchet
+  per part — it declines a coarser request rather than obeying it — so the guarantee does
+  not rest on the controller's state surviving a tab switch. A part that visibly loses
+  detail when you pull back reads as a bug even when the criterion is working; the trade
+  is memory, not detail.
+
+The re-tessellation runs on a background task under the tab loader's own generation
+discipline (a stale result never lands), and it is the *tessellate half only* — the
+cached B-Rep lowering is criterion-independent, which is what makes it affordable. The
+feature-edge overlay is rebuilt with the mesh, so the one-criterion agreement above holds
+at every refinement.
+
+**Two things it deliberately does not do.** Headless renders and exports never consult
+the camera: they are deterministic one-shots at the stated quality, and a PNG whose
+resolution depended on framing would make the committed documentation images a function
+of where the camera stood. And the baked ambient occlusion is not re-baked — it stays one
+level behind, which is what keeps a zoom from costing a bake.
+
+It is off by default because the *feel* is unmeasured: a background re-mesh triggered by
+camera motion is exactly the kind of feature that behaves in every test and reads as
+jerky in the hand. Off, the viewport is byte-identical to what it always was.

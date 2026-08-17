@@ -260,6 +260,7 @@ public sealed class Part
         {
             Geometry = body;
             Volatile.Write(ref _mesh, null);   // pairs with HasMesh's lock-free probe
+            _meshSegments = 0;                 // the refinement ratchet restarts with the mesh
             _solid = null;
             _solidLowered = false;
             _solidError = null;
@@ -423,6 +424,7 @@ public sealed class Part
                 // Fixed counts, or the adaptive TessellationQuality resolution — the
                 // SAME resolution GetFeatureEdges uses, so overlay and fill agree.
                 var (segmentsPerCircle, curveSamples) = q.ResolveSegments(solid);
+                _meshSegments = segmentsPerCircle;
                 return _mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples, progress);
             }
             if (_solidError is { } error)
@@ -432,6 +434,76 @@ public sealed class Part
                 return _mesh = shape.ToMesh(quality);   // implicit/mesh route
             throw new InvalidOperationException($"Unknown geometry type {Geometry.GetType().Name}.");
         }
+    }
+
+    /// <summary>Segments per circle the cached B-Rep mesh was tessellated at (0 when the
+    /// part has no mesh, or was not produced by tessellation). The ratchet
+    /// <see cref="RefineMesh"/> compares against — see its remarks.</summary>
+    private int _meshSegments;
+
+    /// <summary>
+    /// Re-tessellates the cached display mesh at a FINER quality, and only ever finer —
+    /// the deliberate re-mesh entry point behind the viewer's camera-adaptive display
+    /// quality. Returns true when a new mesh was produced (the caller must then republish
+    /// whatever it uploaded from the old one).
+    /// <para><b>It is a ratchet.</b> The refinement runs only when
+    /// <paramref name="quality"/> resolves to strictly MORE segments per circle than the
+    /// cached mesh already carries, so a request to coarsen — a camera pulling back — is
+    /// declined rather than obeyed: a part that visibly loses detail on zoom-out reads as
+    /// a bug even where a criterion is working, and the mesh already in hand is the better
+    /// answer at no cost. That makes "never coarser than this session started" a property
+    /// of this method rather than of any one caller's bookkeeping.</para>
+    /// <para><b>Only B-Rep-routed parts refine.</b> A raw <c>HalfEdgeMesh</c> part has no
+    /// finer form to produce, and an SDF's <see cref="MeshQuality.SdfResolution"/> is a
+    /// grid resolution rather than a per-radius quantity (the same reason
+    /// <see cref="TessellationQuality"/> leaves it alone); both return false. A part with
+    /// no mesh yet also returns false — producing the FIRST mesh is the display loader's
+    /// job at the session quality, and this only sharpens one that exists.</para>
+    /// <para>The cached B-Rep lowering is criterion-independent and is deliberately kept,
+    /// which is what makes this affordable: a refinement is the tessellate half only. The
+    /// feature-edge overlay is REBUILT here at the same quality — dropping it and leaving
+    /// it to whoever asks next would resolve it against THAT caller's quality, and the
+    /// smooth exact edge would detach from the finer fill it outlines. Results,
+    /// annotations and the construction tree are untouched, none of them being functions
+    /// of the display density. A tessellation that throws leaves the cached mesh, its
+    /// count and its overlay exactly as they were.</para>
+    /// <para>Belongs off the render thread, exactly like
+    /// <see cref="GetMesh(MeshQuality?, ProgressCancel?)"/>.</para>
+    /// </summary>
+    public bool RefineMesh(MeshQuality quality, ProgressCancel? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(quality);
+        lock (_meshLock)
+        {
+            if (_mesh is null || _meshSegments <= 0)
+                return false;   // nothing cached to sharpen (or not a tessellated mesh)
+            if (SolidCore() is not { } solid)
+                return false;   // mesh/SDF part: no finer tessellation exists
+
+            var (segmentsPerCircle, curveSamples) = quality.ResolveSegments(solid);
+            if (segmentsPerCircle <= _meshSegments)
+                return false;   // the ratchet: never coarser, and never for nothing
+
+            var refined = BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples, progress);
+            _meshSegments = segmentsPerCircle;
+            Volatile.Write(ref _mesh, refined);   // pairs with HasMesh's lock-free probe
+
+            // One criterion drives fill AND overlay, so the edges are rebuilt HERE at the
+            // same quality rather than left null for whoever asks next: a later
+            // GetFeatureEdges would resolve against ITS caller's quality, which is the
+            // session's, and the smooth exact edge would detach from the finer fill.
+            _featureEdges = null;
+            GetFeatureEdges(quality);
+            return true;
+        }
+    }
+
+    /// <summary>Segments per circle the cached display mesh was tessellated at, or 0 when
+    /// it has none (or came from a route that states no such count). Exposed so a host can
+    /// report what the adaptive display quality has reached.</summary>
+    public int MeshSegmentsPerCircle
+    {
+        get { lock (_meshLock) return _meshSegments; }
     }
 
     private readonly Lock _constructionLock = new();
