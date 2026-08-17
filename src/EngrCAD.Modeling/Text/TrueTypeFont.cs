@@ -267,11 +267,12 @@ public sealed class TrueTypeFont
     /// <c>kern</c> table.</summary>
     public bool HasKerning => _gpos is not null || _kerning is not null;
 
-    /// <summary>True when outlines come from a PostScript <c>CFF </c> table (cubic
-    /// Béziers, <c>OTTO</c>-flavoured <c>.otf</c>); false for TrueType <c>glyf</c>
-    /// quadratics. Either way the outlines map onto <see cref="Sketch"/> segments
-    /// exactly — see <see cref="GlyphContour.IsCubic"/>.</summary>
-    public bool HasPostScriptOutlines => _cff is not null;
+    /// <summary>True when outlines come from a PostScript table — <c>CFF </c> or its
+    /// variable-font successor <c>CFF2</c> (cubic Béziers, <c>OTTO</c>-flavoured
+    /// <c>.otf</c>); false for TrueType <c>glyf</c> quadratics. Either way the outlines
+    /// map onto <see cref="Sketch"/> segments exactly — see
+    /// <see cref="GlyphContour.IsCubic"/>.</summary>
+    public bool HasPostScriptOutlines => _cff is not null || _cff2 is not null;
 
     /// <summary>
     /// The em size that renders flat capitals <paramref name="capHeight"/> tall —

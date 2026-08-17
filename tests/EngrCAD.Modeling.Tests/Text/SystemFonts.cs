@@ -74,4 +74,46 @@ internal static class SystemFonts
 
     /// <summary>The CFF font; only valid when <see cref="CffSkipReason"/> is null.</summary>
     public static TrueTypeFont CffFont => LoadedCff.Value!;
+
+    // ---- variable fonts ------------------------------------------------------
+
+    /// <summary>Windows 10 1709 and later ship Bahnschrift (weight + width axes);
+    /// Windows 11 adds Segoe UI Variable (weight + optical size).</summary>
+    private static readonly string[] VariableCandidates =
+    [
+        @"C:\Windows\Fonts\bahnschrift.ttf",
+        @"C:\Windows\Fonts\SegUIVar.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",           // not variable; probed and rejected below
+    ];
+
+    private static readonly Lazy<TrueTypeFont?> LoadedVariable = new(() =>
+    {
+        foreach (string path in VariableCandidates)
+        {
+            if (!File.Exists(path))
+                continue;
+            try
+            {
+                var font = TrueTypeFont.Load(path);
+                if (font.IsVariable && font.VariationAxes.Any(a => a.Tag == "wght"))
+                    return font;
+            }
+            catch (FontFormatException)
+            {
+                // Keep looking.
+            }
+        }
+        return null;
+    });
+
+    /// <summary>Null when a real variable font carrying a weight axis was found,
+    /// otherwise the reason to skip.</summary>
+    public static string? VariableSkipReason =>
+        LoadedVariable.Value is null
+            ? $"no variable font with a 'wght' axis found (looked for {string.Join(", ", VariableCandidates)})"
+            : null;
+
+    /// <summary>The variable font; only valid when <see cref="VariableSkipReason"/> is
+    /// null.</summary>
+    public static TrueTypeFont VariableFont => LoadedVariable.Value!;
 }

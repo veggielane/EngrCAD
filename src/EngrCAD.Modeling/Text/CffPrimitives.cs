@@ -72,7 +72,11 @@ internal static class CffPrimitives
             int b0 = reader.ReadUInt8();
             switch (b0)
             {
-                case <= 21:                                  // operator
+                // Operators. CFF1 stops at 21 and leaves 22..27 reserved; CFF2 spends
+                // three of them (22 vsindex, 23 blend, 24 vstore), and since none of the
+                // reserved bytes is a valid OPERAND either, admitting them changes no
+                // well-formed CFF1 parse.
+                case <= 24:
                     int key = b0 == 12 ? Op(12, reader.ReadUInt8()) : b0;
                     dict[key] = [.. operands];
                     operands.Clear();
