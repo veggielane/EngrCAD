@@ -10465,6 +10465,29 @@ first diagnosis naming the wrong tier is the lesson: when a pipeline stage is
 suspected, run the pipeline without it — the refusal reproduced with the rows
 disabled, which is what pointed one tier over.
 
+**ISO 286 fits and tolerance stackups** (`Iso286`/`ToleranceStackup` in Modeling;
+docs `examples/fits.md`): the fit tables are a TRANSCRIPTION under the
+verify-against-datasheet flag, stored in the standard's own micrometres and converted
+to model millimetres at the API — the `Materials` lesson, that a constant must be
+asserted in the form a human checks. Three decisions carry it. **Scope is the
+hole-basis d–p band, refused by name beyond it**: letters a–c and r–z split their
+fundamental deviations at sub-range boundaries the main table does not have (c changes
+at 40 within the 30–50 range), so transcribing them halfway would be exactly the
+plausible-wrong-row failure the flag exists to prevent — they are filed with the
+reason, H11/c11 and H7/s6 named as the preferred fits waiting on them. **A fit's KIND
+is derived from the clearance extremes, never looked up** — `MinClearance ≥ 0` is
+clearance, `MaxClearance < 0` interference, else transition — so the classification
+cannot disagree with the numbers it classifies (H7/p6 at Ø40 is interference by the
+−1 µm maximum clearance, not by the letter p). And **the stackup CHAIN is the
+caller's design statement**: the filed item said "a walk along the existing mate
+graph", and the finding is that mates constrain POSES and carry no toleranced
+dimensions — a chain walked off the mate graph would be a guess about which
+dimensions matter and in which direction, so `ToleranceStackup` takes the explicit
+chain (worst-case from each contribution's own signed band ends; RSS re-centring each
+band on its MID so the statistical mean shifts exactly when a tolerance is
+asymmetric, the textbook treatment stated rather than implied) and the model-attached
+dimension scheme that would make derivation honest is filed as the follow-up.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

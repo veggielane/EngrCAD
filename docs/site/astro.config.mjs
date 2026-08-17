@@ -166,6 +166,7 @@ document.addEventListener('click', function (event) {
             { label: 'Assemblies', slug: 'examples/assemblies' },
             { label: 'Standard components', slug: 'examples/components' },
             { label: 'Materials & mass', slug: 'examples/materials' },
+            { label: 'Fits & tolerance stackups', slug: 'examples/fits' },
             { label: 'Mechanisms', slug: 'examples/mechanisms' },
             { label: 'Gears', slug: 'examples/gears' },
           ],

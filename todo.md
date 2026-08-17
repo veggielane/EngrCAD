@@ -1971,13 +1971,21 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     reported like any other ceiling, because the check knows the build DIRECTION and not
     where the plate is. Adding a plate is one plane plus a "within one layer of it" test
     — but it changes the reported area, so it is opt-in and stated, not a default.
-- [ ] **ISO 286 fits and tolerance stackups along a mate chain.** The fit tables
-  (H7/g6 and friends) are a transcription carrying the verify-against-datasheet flag
-  (`StandardHoles`' convention); a stackup is a walk along the existing mate graph
-  summing dimensions worst-case and RSS. This is where mechanical engineers actually
-  lose time — the same argument the ECAD assessment makes for the MCAD boundary.
-  - Verification: table rows asserted in the form a human checks (micrometres straight
-    from the standard), and a textbook stackup reproduced both worst-case and RSS.
+- [ ] **ISO 286 follow-ups** (v1 ✅ landed — `Iso286`/`FitLimits`/`IsoFit`/`FitKind` +
+  `ToleranceStackup`, docs `examples/fits.md`: IT5–IT12 × 13 ranges and shaft letters
+  d–p + hole H transcribed in the standard's own µm, the kind DERIVED from the
+  clearance extremes, worst-case + RSS with asymmetric bands re-centred on their mids):
+  - [ ] **Letters a–c and r–z, and shaft-basis holes.** The large-clearance and
+    heavier-interference letters split their fundamental deviations at sub-range
+    boundaries (c at 40, 65, 100…; r/s/t likewise), so their table is roughly double
+    the d–p one and was deferred rather than half-transcribed — H11/c11 and H7/s6 are
+    preferred fits, so this is the first row to add. Shaft-basis holes (F8 and
+    friends) are the same rows applied with the opposite sign convention.
+  - [ ] **A stackup derived from the model.** The v1 finding, recorded in the class
+    doc: mates constrain POSES and carry no toleranced dimensions, so a chain walked
+    off the mate graph would be a guess about intent — deriving one needs a dimension
+    SCHEME attached to the model (the drawing layer's dimensions are the natural
+    source), which is a design question about where tolerances live, not a walk.
 
 - [ ] **Parametric features follow-ups** (`FeatureHistory` landed; typed geometry
   inputs landed — `GeometryRefs.cs`: `PlaneRef`/`FaceRef`/`FaceSetRef`/`EdgeSetRef`/
