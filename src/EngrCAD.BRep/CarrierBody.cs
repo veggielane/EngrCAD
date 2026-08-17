@@ -58,17 +58,15 @@ internal sealed class CarrierBody
         return false;
     }
 
-    public static CarrierBody Recognize(BrepSolid solid) => Recognize(solid, allowReversedFaces: false);
-
     /// <summary>
-    /// The recognized body. <paramref name="allowReversedFaces"/> is the OFFSET path's escape
-    /// hatch: an OFFSET moves a face along its OUTWARD normal, which <see cref="Lift"/> spells
-    /// exactly for a reversed face (a difference marks the subtracted tool's walls
-    /// <see cref="BrepFace.IsReversed"/>), so a bore this kernel cut can be offset. A TAPER
-    /// (<see cref="Draft"/>) and a SHELL do not, because their carrier construction and cavity
-    /// rules are not yet sense-aware, so they keep the refusal by asking with the flag off.
+    /// The recognized body. A REVERSED face is ordinary input here — a difference marks the
+    /// subtracted tool's walls <see cref="BrepFace.IsReversed"/>, so a bore this kernel cut
+    /// arrives that way — and every consumer is sense-aware: <see cref="Lift"/> offsets along
+    /// the OUTWARD normal, <see cref="Flipped"/> turns a cavity twin around relative to its
+    /// parent's own sense, and <see cref="Draft"/>'s taper reads its lean off the outward
+    /// normal too. Nothing here needs to know which way the surface happened to be spelled.
     /// </summary>
-    public static CarrierBody Recognize(BrepSolid solid, bool allowReversedFaces)
+    public static CarrierBody Recognize(BrepSolid solid)
     {
         if (solid.Shells.Count != 1)
             throw new NotSupportedException(
@@ -78,13 +76,7 @@ internal sealed class CarrierBody
         var faces = solid.Faces.ToArray();
         var faceIndex = new Dictionary<BrepFace, int>(faces.Length);
         for (int f = 0; f < faces.Length; f++)
-        {
-            if (faces[f].IsReversed && !allowReversedFaces)
-                throw new NotSupportedException(
-                    "Offsetting needs forward-oriented faces; a reversed face's outward normal is the " +
-                    "reverse of its surface's, so its offset direction is ambiguous.");
             faceIndex[faces[f]] = f;
-        }
 
         var vertices = solid.Vertices.ToArray();
         var vertexIndex = new Dictionary<BrepVertex, int>(vertices.Length);
@@ -196,9 +188,9 @@ internal sealed class CarrierBody
     /// outward normal is the negative of its surface's, so its surface is offset by
     /// <c>−distance</c>. Every consumer states the offset in OUTWARD terms — a positive
     /// <c>OffsetFaces</c> grows the solid, a shell's inner layer is a negative outward offset
-    /// — so the sign lives here once and the callers stay orientation-free. The shell and
-    /// draft paths never pass a reversed face (they ask <see cref="Recognize(BrepSolid)"/>
-    /// with the flag off), so their <c>Lift</c> is bit-identical.</para>
+    /// — so the sign lives here once and the callers stay orientation-free. A forward face's
+    /// <c>Lift</c> is the multiplication by an exact <c>+1</c> that never happens: the branch
+    /// returns <c>offsets[f]</c> verbatim, so every all-forward body is bit-identical.</para>
     /// </summary>
     private Surface[] Lift(double[] offsets, string what)
     {
@@ -241,8 +233,14 @@ internal sealed class CarrierBody
             var (a, b) = EdgeFaces[e];
             if (opening[a] && opening[b])
                 throw new NotSupportedException(
-                    "Two adjacent faces were selected as openings; the rim between them would have zero " +
-                    "width. Open them one at a time, or merge them into a single opening first.");
+                    "Two adjacent faces of a CURVED solid were selected as openings. The rim between them " +
+                    "has zero width, so the two rims must merge into one loop and the shared edge be cut " +
+                    "back to its two end pieces — which the all-planar path does, because there each piece " +
+                    "is a straight sub-segment through corners that provably lie on the edge's own line. " +
+                    "On a curved shared edge the pieces are sub-CURVES, so each needs its own parameter " +
+                    "solved on the shared carrier, and a CLOSED shared rim (a cap meeting a full-turn band) " +
+                    "has no two corners to cut back to at all. Open them one at a time, or cut the second " +
+                    "opening as a boolean.");
         }
 
         // Openings do not move: the cavity must reach exactly to the removed face's carrier.
@@ -294,7 +292,8 @@ internal sealed class CarrierBody
             outerFaces.Add(new BrepFace(
                 Faces[f].Surface, MapLoops(f, outerEdges, reverse: false), Faces[f].IsReversed)
                 .DescendsFrom(Faces[f]));
-            innerFaces.Add(Flipped(inner.Surfaces[f], MapLoops(f, innerEdges, reverse: true))
+            innerFaces.Add(
+                Flipped(inner.Surfaces[f], MapLoops(f, innerEdges, reverse: true), Faces[f].IsReversed)
                 .DescendsFrom(Faces[f]));
         }
 
@@ -309,16 +308,28 @@ internal sealed class CarrierBody
     }
 
     /// <summary>
-    /// A cavity face: the same carrier with its outward normal turned around. A plane can
-    /// do that EXACTLY in its own frame — swapping X and Y negates X × Y with no
-    /// arithmetic at all — while a cylinder's or a revolve's normal is intrinsic, so those
-    /// carry <see cref="BrepFace.IsReversed"/> instead, which the tessellator and the STEP
-    /// writer both already honour (<c>same_sense</c>).
+    /// A cavity face: the same carrier with its outward normal turned around, relative to the
+    /// PARENT's own sense. A plane can do that EXACTLY in its own frame — swapping X and Y
+    /// negates X × Y with no arithmetic at all — while a cylinder's or a revolve's normal is
+    /// intrinsic, so those carry <see cref="BrepFace.IsReversed"/> instead, which the
+    /// tessellator and the STEP writer both already honour (<c>same_sense</c>).
+    ///
+    /// <para><b>The parent's sense is the whole of the rule.</b> A cavity twin must face
+    /// exactly opposite its parent's OUTWARD normal, which is the surface's for a forward face
+    /// and its negation for a reversed one — so the flag is <c>!parentReversed</c> rather than
+    /// a hard-coded <c>true</c>, and the plane's exact frame swap is spent only when there is
+    /// something to swap. A reversed planar parent already points its outward normal the other
+    /// way, so its twin is the plane VERBATIM with no flag at all: the reversal the parent
+    /// carries IS the flip. Hard-coding <c>true</c> was right for every forward body and would
+    /// turn a bore's cavity wall inside out, which is why shelling used to refuse boolean
+    /// output outright.</para>
     /// </summary>
-    private static BrepFace Flipped(Surface surface, IReadOnlyList<BrepLoop> loops) =>
+    private static BrepFace Flipped(Surface surface, IReadOnlyList<BrepLoop> loops, bool parentReversed) =>
         surface is PlaneSurface plane
-            ? new BrepFace(new PlaneSurface(plane.Origin, plane.YDirection, plane.XDirection), loops)
-            : new BrepFace(surface, loops, isReversed: true);
+            ? (parentReversed
+                ? new BrepFace(plane, loops)
+                : new BrepFace(new PlaneSurface(plane.Origin, plane.YDirection, plane.XDirection), loops))
+            : new BrepFace(surface, loops, isReversed: !parentReversed);
 
     /// <summary>
     /// The face's loops rebuilt over <paramref name="edges"/>. Reversing walks each loop
@@ -412,7 +423,18 @@ internal sealed class CarrierBody
         var carriers = VertexFaces[vertex].Select(f => surfaces[f]).ToArray();
         if (!SurfaceCorner.TrySolvePoint(carriers, seed, out var corner, out var reason))
             throw new NotSupportedException(
-                $"The {what} cannot re-solve the corner at {seed}: {reason}.");
+                $"The {what} cannot re-solve the corner at {seed}: {reason}." +
+                (carriers.Length > 3
+                    // The polyhedral tier says the same thing; a >3-valent corner survives an
+                    // offset only when its carriers stay CONCURRENT (a pyramid apex does), and
+                    // otherwise the offset opens the vertex into a small FACE. That is
+                    // corner-patch construction — the FilletAllEdges machinery — rather than a
+                    // better solve, so it is named rather than averaged into a point lying on
+                    // none of its own carriers.
+                    ? $" {carriers.Length} faces meet there and their moved carriers are no longer " +
+                      "concurrent, so the corner opens into a small face; that is corner-patch " +
+                      "construction rather than a carried-over rebuild."
+                    : string.Empty));
         return corner.Point;
     }
 

@@ -148,12 +148,12 @@ public class ShellingTests
             new NurbsCurve(1, [(0, 0, 0), (10, 0, 0)], null, [0, 0, 1, 1]));
         Assert.Throws<NotSupportedException>(() => Shelling.Offset(pipe, 0.2));
 
-        // Adjacent openings.
+        // Adjacent openings are NO LONGER refused on the all-planar path (see
+        // AdjacentOpeningTests): the two rims merge into one loop along their shared edge.
         var block = Block();
         var top = TopOf(block);
         var side = block.PlanarFacesWithNormal(Vector3d.UnitX).Single();
-        Assert.Throws<NotSupportedException>(() =>
-            Shelling.Shell(block, 1, f => ReferenceEquals(f, top) || ReferenceEquals(f, side)));
+        Shelling.Shell(block, 1, f => ReferenceEquals(f, top) || ReferenceEquals(f, side)).Validate();
 
         // Too thick: the cavity would turn inside out (the block is only 10 tall).
         Assert.Throws<ArgumentException>(() => Shelling.Shell(Block(), 8));

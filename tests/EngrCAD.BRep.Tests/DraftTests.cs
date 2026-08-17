@@ -216,12 +216,19 @@ public class DraftTests
         Assert.Throws<NotSupportedException>(() =>
             Draft.Apply(SolidFactory.MakeCylinder(3, 5), Vector3d.Zero, Vector3d.UnitX, Ten));
 
-        // Caps with holes.
+        // Caps with holes are NO LONGER refused (see HoledCapDraftTests): a hole's walls are
+        // an ordinary ring of side faces and taper by the same rule.
         var plate = Profile.FromPoints([(-5, -5, 0), (5, -5, 0), (5, 5, 0), (-5, 5, 0)]);
         var hole = Profile.FromPoints([(-2, -2, 0), (2, -2, 0), (2, 2, 0), (-2, 2, 0)]);
         var drilled = SolidFactory.Extrude(plate, (0, 0, 3), holes: [hole]);
-        Assert.Throws<NotSupportedException>(() =>
-            Draft.Apply(drilled, Vector3d.Zero, Vector3d.UnitZ, Ten));
+        Draft.Apply(drilled, Vector3d.Zero, Vector3d.UnitZ, Ten).Validate();
+
+        // A non-planar NEUTRAL SURFACE is refused by name: every drafted face would get a
+        // curved hinge, so its tapered carrier is a general ruled surface.
+        var cylinder2 = SolidFactory.MakeCylinder(3, 5);
+        var curved = cylinder2.Faces.Single(f => !f.IsPlanar(out _, out _));
+        var neutral = Assert.Throws<ArgumentException>(() => Draft.Apply(cylinder2, curved, Ten));
+        Assert.Contains("curved hinge", neutral.Message);
 
         // A taper the solid is not tall enough for: 10 tall, 20 wide, so 45 degrees on all
         // four sides collapses the top face to a point and beyond.

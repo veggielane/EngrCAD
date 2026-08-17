@@ -23,13 +23,26 @@ namespace EngrCAD.BRep;
 /// re-solved by <see cref="SurfaceCorner"/> through the shared <see cref="CarrierBody"/>
 /// rebuild, which is the same machinery curved <see cref="Shelling"/> uses.</para>
 ///
+/// <para><b>Caps carry HOLES.</b> A hole's walls are an ordinary closed RING of side faces
+/// whose outward normals point into the hole, so the same "rotate about the neutral line" rule
+/// applies to them verbatim and the hole OPENS along the pull direction while the outside
+/// closes — which is exactly what releases a core pin. The only generalization it needed was
+/// one ring per cap loop: the corner solve, the fold check and the winding rule are the outer
+/// boundary's own, and a hole loop is already wound the other way in the cap it came from.</para>
+///
+/// <para><b>A reversed face drafts too.</b> A difference marks the subtracted tool's walls
+/// <see cref="BrepFace.IsReversed"/>, so a bored body — the closest thing this kernel builds to
+/// an imported one — arrives with its bore wall spelled backwards; the taper reads its lean off
+/// the OUTWARD normal, which is the negation of that face's surface normal, so a cored hole
+/// drafts open rather than plausibly shut.</para>
+///
 /// <para><b>What is rejected.</b> The planar path handles <b>planar-faced prisms</b>: two cap
-/// faces perpendicular to the pull direction, single-loop caps (no holes), and four-sided
-/// planar side faces between them. The curved path handles solids whose curved faces are
-/// surfaces of revolution about the PULL AXIS. Anything else — a curved face on some other
-/// axis, drafting a cap, a taper so large the profile folds — throws with a message naming the
-/// problem rather than silently approximating. For organic parts the implicit route
-/// (<c>Shape.ToImplicit</c>) remains available.</para>
+/// faces perpendicular to the pull direction and four-sided planar side faces between them, one
+/// closed ring per cap loop. The curved path handles solids whose curved faces are surfaces of
+/// revolution about the PULL AXIS. Anything else — a curved face on some other axis, drafting a
+/// cap, a NON-PLANAR neutral surface, a taper so large the profile folds — throws with a
+/// message naming the problem rather than silently approximating. For organic parts the
+/// implicit route (<c>Shape.ToImplicit</c>) remains available.</para>
 /// </summary>
 public static class Draft
 {
@@ -110,45 +123,60 @@ public static class Draft
                 "Draft selected a cap face (one perpendicular to the pull direction). Caps are the " +
                 "parting faces and stay put; select the side faces to taper.", nameof(angleSelector));
 
-        var planes = new (Vector3d Origin, Vector3d Normal)[prism.SideFaces.Length];
+        // One plane array per RING — the outer boundary, then one per hole in a cap. A hole's
+        // wall is an ordinary side face whose outward normal points INTO the hole, so the same
+        // taper rule applies to it verbatim and the hole OPENS along the pull direction while
+        // the outside closes: exactly what releases a core pin.
+        var rings = prism.Rings;
+        var planes = new (Vector3d Origin, Vector3d Normal)[rings.Length][];
         double largest = 0;
         bool anyDrafted = false;
-        for (int i = 0; i < planes.Length; i++)
+        for (int r = 0; r < rings.Length; r++)
         {
-            var face = prism.SideFaces[i];
-            face.IsPlanar(out var faceOrigin, out var faceNormal);
-            if (angleSelector(face) is not double faceAngle)
+            var sideFaces = rings[r].SideFaces;
+            planes[r] = new (Vector3d, Vector3d)[sideFaces.Length];
+            for (int i = 0; i < sideFaces.Length; i++)
             {
-                planes[i] = (faceOrigin, faceNormal);
-                continue;
+                var face = sideFaces[i];
+                face.IsPlanar(out var faceOrigin, out var faceNormal);
+                if (angleSelector(face) is not double faceAngle)
+                {
+                    planes[r][i] = (faceOrigin, faceNormal);
+                    continue;
+                }
+                if (Math.Abs(faceAngle) >= Math.PI / 2 - 1e-9)
+                    throw new ArgumentOutOfRangeException(nameof(angleSelector),
+                        "A draft angle must be less than 90 degrees.");
+                planes[r][i] = TaperPlane(faceOrigin, faceNormal, origin, pull, faceAngle);
+                if (Math.Abs(faceAngle) > Math.Abs(largest))
+                    largest = faceAngle;
+                anyDrafted = true;
             }
-            if (Math.Abs(faceAngle) >= Math.PI / 2 - 1e-9)
-                throw new ArgumentOutOfRangeException(nameof(angleSelector),
-                    "A draft angle must be less than 90 degrees.");
-            planes[i] = TaperPlane(faceOrigin, faceNormal, origin, pull, faceAngle);
-            if (Math.Abs(faceAngle) > Math.Abs(largest))
-                largest = faceAngle;
-            anyDrafted = true;
         }
 
         if (!anyDrafted)
             throw new ArgumentException("Draft selected no side face of the solid.", nameof(angleSelector));
         double angle = largest; // for the fold-rejection messages below
 
-        int n = planes.Length;
-        var baseCorners = new Vector3d[n];
-        var topCorners = new Vector3d[n];
-        for (int i = 0; i < n; i++)
+        var baseCorners = new Vector3d[rings.Length][];
+        var topCorners = new Vector3d[rings.Length][];
+        for (int r = 0; r < rings.Length; r++)
         {
-            // Corner i separates side face i − 1 from side face i.
-            var previous = planes[(i + n - 1) % n];
-            var current = planes[i];
-            baseCorners[i] = IntersectPlanes(previous, current, prism.BasePlane, i);
-            topCorners[i] = IntersectPlanes(previous, current, prism.TopPlane, i);
+            int n = planes[r].Length;
+            baseCorners[r] = new Vector3d[n];
+            topCorners[r] = new Vector3d[n];
+            for (int i = 0; i < n; i++)
+            {
+                // Corner i separates side face i − 1 from side face i, WITHIN this ring: a
+                // hole's corners involve only that hole's own walls and the two caps.
+                var previous = planes[r][(i + n - 1) % n];
+                var current = planes[r][i];
+                baseCorners[r][i] = IntersectPlanes(previous, current, prism.BasePlane, i);
+                topCorners[r][i] = IntersectPlanes(previous, current, prism.TopPlane, i);
+            }
+            ValidateProfile(baseCorners[r], rings[r].TopCorners, pull, angle, "base");
+            ValidateProfile(topCorners[r], rings[r].TopCorners, pull, angle, "top");
         }
-
-        ValidateProfile(baseCorners, prism.TopCorners, pull, angle, "base");
-        ValidateProfile(topCorners, prism.TopCorners, pull, angle, "top");
         return BuildPrism(baseCorners, topCorners, planes, prism);
     }
 
@@ -202,7 +230,7 @@ public static class Draft
             // same carrier keeps a no-op selector bit-identical.
             if (angle == 0)
                 continue;
-            carriers[f] = Taper(faces[f].Surface, origin, direction, angle);
+            carriers[f] = Taper(faces[f].Surface, faces[f].IsReversed, origin, direction, angle);
             anyDrafted = true;
         }
         if (!anyDrafted)
@@ -220,12 +248,28 @@ public static class Draft
     /// wins. Deriving it instead would mean re-proving the half-plane's handedness against the
     /// generator's traversal and the revolve's own outward convention — three sign conventions
     /// that have each cost this kernel real geometry — for an answer one dot product settles.</para>
+    ///
+    /// <para><b>The measurement is of the OUTWARD normal, which is why
+    /// <paramref name="reversed"/> is a parameter.</b> A taper is defined against the direction
+    /// the material faces, and a reversed face's outward normal is the negation of its
+    /// surface's — so a bore (whose walls a difference marks reversed) would otherwise taper
+    /// the wrong way while looking perfectly plausible. The sign appears twice for the same
+    /// reason: on the plane's own normal before the hinge, and on the candidate lean after it.
+    /// A forward face multiplies by an exact <c>+1</c> in both places, so every all-forward
+    /// body's carriers are bit-identical.</para>
     /// </summary>
-    private static Surface Taper(Surface surface, in Vector3d neutralOrigin, in Vector3d pull, double angle)
+    private static Surface Taper(
+        Surface surface, bool reversed, in Vector3d neutralOrigin, in Vector3d pull, double angle)
     {
+        double sense = reversed ? -1 : 1;
         if (surface is PlaneSurface plane)
         {
-            var (origin, normal) = TaperPlane(plane.Origin, plane.Normal.Normalized(), neutralOrigin, pull, angle);
+            // TaperPlane speaks OUTWARD normals in and out; Rebuild carries IsReversed over
+            // verbatim, so the surface built here must carry the outward answer back through
+            // the same sense it came in on.
+            var (origin, outward) = TaperPlane(
+                plane.Origin, plane.Normal.Normalized() * sense, neutralOrigin, pull, angle);
+            var normal = outward * sense;
             var x = normal.ArbitraryPerpendicular(Tolerance.Default);
             return new PlaneSurface(origin, x, normal.Cross(x));
         }
@@ -259,7 +303,7 @@ public static class Draft
                 * Matrix4d.CreateTranslation(-pivot);
             var tapered = new RevolvedSurface(
                 Rotate(revolved.Generator, rotation), revolved.AxisOrigin, axis, revolved.Angle);
-            double lean = Math.Sign(angle)
+            double lean = Math.Sign(angle) * sense
                 * tapered.NormalAt(tapered.DomainU.Mid, tapered.DomainV.Mid).Dot(pull);
             if (lean > bestLean)
             {
@@ -418,7 +462,12 @@ public static class Draft
         ArgumentNullException.ThrowIfNull(solid);
         ArgumentNullException.ThrowIfNull(neutralFace);
         if (!neutralFace.IsPlanar(out var origin, out var normal))
-            throw new ArgumentException("The neutral face must be planar.", nameof(neutralFace));
+            throw new ArgumentException(
+                "The neutral face must be planar. A non-planar neutral SURFACE gives every drafted face a " +
+                "curved hinge instead of a straight neutral line, so the tapered carrier is a general ruled " +
+                "surface rather than a plane, a cone or a torus band — no family this kernel builds, and " +
+                "nothing an exact corner solve could re-intersect. Draft about a plane, or split the part at " +
+                "the parting line and draft each side.", nameof(neutralFace));
 
         // Pull points from the neutral plane toward the bulk of the solid. For a boundary
         // cap that is simply the inward direction; for a face lying on a mid-plane it picks
@@ -485,15 +534,22 @@ public static class Draft
     /// <summary>
     /// Rejects a taper that has folded the profile: the loop must keep its winding about
     /// the pull direction and every edge must still run the way it did.
+    ///
+    /// <para>The winding is compared against the ORIGINAL ring's own sign rather than
+    /// required positive, because a hole ring is wound the other way by construction — and
+    /// for the outer ring, whose original area is positive, that is the same predicate.</para>
     /// </summary>
     private static void ValidateProfile(
         Vector3d[] corners, Vector3d[] original, in Vector3d pull, double angle, string which)
     {
         int n = corners.Length;
-        double area = 0;
+        double area = 0, was = 0;
         for (int i = 0; i < n; i++)
+        {
             area += corners[i].Cross(corners[(i + 1) % n]).Dot(pull);
-        if (!(area > 0))
+            was += original[i].Cross(original[(i + 1) % n]).Dot(pull);
+        }
+        if (!(area * was > 0))
             throw new ArgumentException(
                 $"A draft of {angle * 180 / Math.PI:0.###} degrees turns the {which} profile inside out; " +
                 "the taper exceeds what the solid's height allows.", nameof(angle));
@@ -523,70 +579,85 @@ public static class Draft
     /// landing on the wrong wall.</para>
     /// </summary>
     private static BrepSolid BuildPrism(
-        Vector3d[] baseCorners, Vector3d[] topCorners,
-        (Vector3d Origin, Vector3d Normal)[] sidePlanes,
+        Vector3d[][] baseCorners, Vector3d[][] topCorners,
+        (Vector3d Origin, Vector3d Normal)[][] sidePlanes,
         in Prism prism)
     {
         var basePlane = prism.BasePlane;
         var topPlane = prism.TopPlane;
-        int n = baseCorners.Length;
-        var baseVertices = new BrepVertex[n];
-        var topVertices = new BrepVertex[n];
-        for (int i = 0; i < n; i++)
-        {
-            baseVertices[i] = new BrepVertex(baseCorners[i]);
-            topVertices[i] = new BrepVertex(topCorners[i]);
-        }
+        int ringCount = baseCorners.Length;
+        var faces = new List<BrepFace>();
+        var baseLoops = new List<BrepLoop>(ringCount);
+        var topLoops = new List<BrepLoop>(ringCount);
 
-        var baseEdges = new BrepEdge[n];
-        var topEdges = new BrepEdge[n];
-        var rails = new BrepEdge[n];
-        for (int i = 0; i < n; i++)
+        for (int r = 0; r < ringCount; r++)
         {
-            int next = (i + 1) % n;
-            baseEdges[i] = new BrepEdge(
-                new Line3d(baseCorners[i], baseCorners[next]), Interval.Unit, baseVertices[i], baseVertices[next]);
-            topEdges[i] = new BrepEdge(
-                new Line3d(topCorners[i], topCorners[next]), Interval.Unit, topVertices[i], topVertices[next]);
-            rails[i] = new BrepEdge(
-                new Line3d(baseCorners[i], topCorners[i]), Interval.Unit, baseVertices[i], topVertices[i]);
-        }
+            int n = baseCorners[r].Length;
+            var baseVertices = new BrepVertex[n];
+            var topVertices = new BrepVertex[n];
+            for (int i = 0; i < n; i++)
+            {
+                baseVertices[i] = new BrepVertex(baseCorners[r][i]);
+                topVertices[i] = new BrepVertex(topCorners[r][i]);
+            }
 
-        var faces = new List<BrepFace>(n + 2);
-        for (int i = 0; i < n; i++)
-        {
-            int next = (i + 1) % n;
-            // Plane axes: X along the base edge, Y completing the outward frame, so
-            // X x Y is exactly the drafted normal.
-            var x = (baseCorners[next] - baseCorners[i]).Normalized();
-            var normal = sidePlanes[i].Normal;
-            faces.Add(new BrepFace(
-                new PlaneSurface(baseCorners[i], x, normal.Cross(x)),
-                [
-                    new BrepLoop(
+            var baseEdges = new BrepEdge[n];
+            var topEdges = new BrepEdge[n];
+            var rails = new BrepEdge[n];
+            for (int i = 0; i < n; i++)
+            {
+                int next = (i + 1) % n;
+                baseEdges[i] = new BrepEdge(
+                    new Line3d(baseCorners[r][i], baseCorners[r][next]), Interval.Unit,
+                    baseVertices[i], baseVertices[next]);
+                topEdges[i] = new BrepEdge(
+                    new Line3d(topCorners[r][i], topCorners[r][next]), Interval.Unit,
+                    topVertices[i], topVertices[next]);
+                rails[i] = new BrepEdge(
+                    new Line3d(baseCorners[r][i], topCorners[r][i]), Interval.Unit,
+                    baseVertices[i], topVertices[i]);
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                int next = (i + 1) % n;
+                // Plane axes: X along the base edge, Y completing the outward frame, so
+                // X x Y is exactly the drafted normal.
+                var x = (baseCorners[r][next] - baseCorners[r][i]).Normalized();
+                var normal = sidePlanes[r][i].Normal;
+                faces.Add(new BrepFace(
+                    new PlaneSurface(baseCorners[r][i], x, normal.Cross(x)),
                     [
-                        new BrepCoedge(baseEdges[i], sameSense: true),
-                        new BrepCoedge(rails[next], sameSense: true),
-                        new BrepCoedge(topEdges[i], sameSense: false),
-                        new BrepCoedge(rails[i], sameSense: false),
-                    ]),
-                ]).DescendsFrom(prism.SideFaces[i]));
+                        new BrepLoop(
+                        [
+                            new BrepCoedge(baseEdges[i], sameSense: true),
+                            new BrepCoedge(rails[next], sameSense: true),
+                            new BrepCoedge(topEdges[i], sameSense: false),
+                            new BrepCoedge(rails[i], sameSense: false),
+                        ]),
+                    ]).DescendsFrom(prism.Rings[r].SideFaces[i]));
+            }
+
+            // The SAME winding rule serves both rings, which is what makes holes structural
+            // rather than a second case: a hole loop is already wound the other way in the cap
+            // it came from, so reversing the base and keeping the top reproduces exactly that.
+            var baseLoop = new List<BrepCoedge>(n);
+            for (int i = n - 1; i >= 0; i--)
+                baseLoop.Add(new BrepCoedge(baseEdges[i], sameSense: false));
+            var topLoop = new List<BrepCoedge>(n);
+            for (int i = 0; i < n; i++)
+                topLoop.Add(new BrepCoedge(topEdges[i], sameSense: true));
+            baseLoops.Add(new BrepLoop(baseLoop));
+            topLoops.Add(new BrepLoop(topLoop));
         }
 
-        var baseLoop = new List<BrepCoedge>(n);
-        for (int i = n - 1; i >= 0; i--)
-            baseLoop.Add(new BrepCoedge(baseEdges[i], sameSense: false));
-        var topLoop = new List<BrepCoedge>(n);
-        for (int i = 0; i < n; i++)
-            topLoop.Add(new BrepCoedge(topEdges[i], sameSense: true));
-
-        var baseX = (baseCorners[1] - baseCorners[0]).Normalized();
-        var topX = (topCorners[1] - topCorners[0]).Normalized();
+        var baseX = (baseCorners[0][1] - baseCorners[0][0]).Normalized();
+        var topX = (topCorners[0][1] - topCorners[0][0]).Normalized();
         faces.Add(new BrepFace(
-            new PlaneSurface(basePlane.Origin, baseX, basePlane.Normal.Cross(baseX)), [new BrepLoop(baseLoop)])
+            new PlaneSurface(basePlane.Origin, baseX, basePlane.Normal.Cross(baseX)), baseLoops)
             .DescendsFrom(prism.BaseCap));
         faces.Add(new BrepFace(
-            new PlaneSurface(topPlane.Origin, topX, topPlane.Normal.Cross(topX)), [new BrepLoop(topLoop)])
+            new PlaneSurface(topPlane.Origin, topX, topPlane.Normal.Cross(topX)), topLoops)
             .DescendsFrom(prism.TopCap));
         return new BrepSolid([new BrepShell(faces)]);
     }
@@ -603,11 +674,12 @@ public static class Draft
         public required (Vector3d Origin, Vector3d Normal) BasePlane { get; init; }
         public required (Vector3d Origin, Vector3d Normal) TopPlane { get; init; }
 
-        /// <summary>Side faces in the top cap's loop order; face i spans corner i to i + 1.</summary>
-        public required BrepFace[] SideFaces { get; init; }
-
-        /// <summary>The original top-loop corners, in the same order.</summary>
-        public required Vector3d[] TopCorners { get; init; }
+        /// <summary>
+        /// One ring per cap loop: the outer boundary first, then one per HOLE. A hole's walls
+        /// form a closed ring of side faces exactly as the outer boundary's do, and taper by
+        /// the same rule, so the only thing multi-loop caps needed was the loop over rings.
+        /// </summary>
+        public required Ring[] Rings { get; init; }
 
         public static Prism Recognize(BrepSolid solid, in Vector3d pull)
         {
@@ -652,39 +724,50 @@ public static class Draft
             if (baseCap is null || topCap is null)
                 throw new NotSupportedException(
                     "Draft needs two cap faces perpendicular to the pull direction (the parting faces).");
-            if (baseCap.Loops.Count != 1 || topCap.Loops.Count != 1)
+            if (baseCap.Loops.Count != topCap.Loops.Count)
                 throw new NotSupportedException(
-                    "Draft v1 does not support caps with holes; the taper would have to be applied to the " +
-                    "hole walls too, which needs a multi-loop rebuild.");
-
-            var loop = topCap.OuterLoop;
-            int n = loop.Coedges.Count;
-            if (n != sides.Count || n < 3)
+                    $"Draft needs the two caps to have matching loop counts; the base has " +
+                    $"{baseCap.Loops.Count} and the top {topCap.Loops.Count}, so they do not bound the same " +
+                    "prism.");
+            int total = topCap.Loops.Sum(l => l.Coedges.Count);
+            if (total != sides.Count)
                 throw new NotSupportedException(
-                    $"Draft needs one side face per cap edge; the top cap has {n} edges but the solid has " +
-                    $"{sides.Count} side faces.");
-            if (baseCap.OuterLoop.Coedges.Count != n)
+                    $"Draft needs one side face per cap edge; the top cap has {total} edges (over " +
+                    $"{topCap.Loops.Count} loop(s)) but the solid has {sides.Count} side faces.");
+            if (baseCap.Loops.Sum(l => l.Coedges.Count) != total)
                 throw new NotSupportedException("Draft needs the two caps to have matching edge counts.");
 
-            var sideFaces = new BrepFace[n];
-            var corners = new Vector3d[n];
+            var rings = new Ring[topCap.Loops.Count];
             var seen = new HashSet<BrepFace>();
-            for (int i = 0; i < n; i++)
+            for (int r = 0; r < rings.Length; r++)
             {
-                var coedge = loop.Coedges[i];
-                corners[i] = coedge.StartVertex.Position;
-                var partner = coedge.Partner
-                    ?? throw new NotSupportedException("Draft needs a closed manifold solid (an edge has one use).");
-                var face = partner.Loop.Face;
-                if (!seen.Add(face))
+                var loop = topCap.Loops[r];
+                int n = loop.Coedges.Count;
+                if (n < 3)
                     throw new NotSupportedException(
-                        "Draft needs each side face to touch the top cap exactly once (a face used twice is " +
-                        "not a simple prism side).");
-                if (face.Loops.Count != 1 || face.OuterLoop.Coedges.Count != 4)
-                    throw new NotSupportedException(
-                        "Draft needs four-sided single-loop side faces (base edge, two rails, top edge); " +
-                        $"one side face has {face.Loops.Count} loop(s) and {face.OuterLoop.Coedges.Count} edges.");
-                sideFaces[i] = face;
+                        $"Draft needs at least three edges per cap loop; one has {n}.");
+                var sideFaces = new BrepFace[n];
+                var corners = new Vector3d[n];
+                for (int i = 0; i < n; i++)
+                {
+                    var coedge = loop.Coedges[i];
+                    corners[i] = coedge.StartVertex.Position;
+                    var partner = coedge.Partner
+                        ?? throw new NotSupportedException(
+                            "Draft needs a closed manifold solid (an edge has one use).");
+                    var face = partner.Loop.Face;
+                    if (!seen.Add(face))
+                        throw new NotSupportedException(
+                            "Draft needs each side face to touch the top cap exactly once (a face used twice " +
+                            "is not a simple prism side).");
+                    if (face.Loops.Count != 1 || face.OuterLoop.Coedges.Count != 4)
+                        throw new NotSupportedException(
+                            "Draft needs four-sided single-loop side faces (base edge, two rails, top edge); " +
+                            $"one side face has {face.Loops.Count} loop(s) and " +
+                            $"{face.OuterLoop.Coedges.Count} edges.");
+                    sideFaces[i] = face;
+                }
+                rings[r] = new Ring { SideFaces = sideFaces, TopCorners = corners };
             }
 
             return new Prism
@@ -693,9 +776,21 @@ public static class Draft
                 TopCap = topCap,
                 BasePlane = basePlane,
                 TopPlane = topPlane,
-                SideFaces = sideFaces,
-                TopCorners = corners,
+                Rings = rings,
             };
         }
+    }
+
+    /// <summary>
+    /// One closed ring of side faces and the cap corners they span: the prism's outer
+    /// boundary, or one of its holes.
+    /// </summary>
+    private readonly struct Ring
+    {
+        /// <summary>Side faces in the cap loop's order; face i spans corner i to i + 1.</summary>
+        public required BrepFace[] SideFaces { get; init; }
+
+        /// <summary>The original cap-loop corners, in the same order.</summary>
+        public required Vector3d[] TopCorners { get; init; }
     }
 }
