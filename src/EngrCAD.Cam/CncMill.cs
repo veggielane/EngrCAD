@@ -77,13 +77,37 @@ public enum MillDirection
     Conventional,
 }
 
+/// <summary>
+/// One EXACT circular arc a pass carries: the points from <see cref="Start"/> to
+/// <see cref="End"/> inclusive are samples of the true arc about <see cref="Center"/>, and
+/// <see cref="End"/> may equal <c>Points.Count</c> on a closed pass, meaning point 0 (the
+/// same extended indexing the writer and <see cref="MillPass.CutLength"/> already use).
+///
+/// <para><b>An arc here is a STATEMENT, not a fit.</b> It is carried down from the exact
+/// curved 2D tier (<see cref="CurvedRegion2dOffset"/>), where a tool-compensated corner IS a
+/// circular arc, so the writer emits <c>G2</c>/<c>G3</c> from what the geometry SAID rather
+/// than from a circle fitted through chords — which is why no sagitta cap guards it (the
+/// fitter's cap exists because four points can be exactly concyclic by accident; an arc that
+/// declares itself cannot be). The polyline stays the universal representation and the arcs
+/// are additive: every consumer that reads <c>Points</c> sees the flattened path it always
+/// saw.</para>
+/// </summary>
+public sealed record MillArc(int Start, int End, Vector2d Center, bool Clockwise);
+
 /// <summary>One tool pass: a 3D polyline in bed coordinates (the stock top is z = 0, cuts run
 /// negative). Within a pass the WRITER classifies each move by shape — an XY move is a CUT at
 /// the feed rate, a straight-down move a PLUNGE at the plunge rate, a straight-up move a RAPID
-/// retract — so pecked drilling and tab lifts need no per-move annotations.</summary>
-public sealed record MillPass(IReadOnlyList<Vector3d> Points, bool IsClosed)
+/// retract — so pecked drilling and tab lifts need no per-move annotations.
+/// <para><see cref="Arcs"/> is the optional ARC-NATIVE carry: spans of the polyline that are
+/// samples of an exact circular arc (see <see cref="MillArc"/>). Null — the default, and what
+/// every polygonal construction produces — means the pass is a plain polyline, so the flattened
+/// <see cref="Points"/> remain the one representation every consumer reads.</para></summary>
+public sealed record MillPass(
+    IReadOnlyList<Vector3d> Points, bool IsClosed, IReadOnlyList<MillArc>? Arcs = null)
 {
-    /// <summary>The XY cutting length of the pass (vertical moves excluded).</summary>
+    /// <summary>The XY cutting length of the pass (vertical moves excluded), measured over the
+    /// CHORDS — the polyline is what the stock simulation and the travel linker read, so an
+    /// arc-native pass reports the same length its flattened twin does.</summary>
     public double CutLength
     {
         get
@@ -143,10 +167,7 @@ public static class CncMill
         ArgumentNullException.ThrowIfNull(tool);
         tool.Validate();
         RequireDepth(depth);
-        if (!(rampAngleDegrees >= 0) || rampAngleDegrees > 45)
-            throw new ArgumentException(
-                $"'{name}': rampAngleDegrees must lie in [0, 45] (0 = straight plunge); "
-                + $"got {rampAngleDegrees:0.###}.");
+        RequireRamp(rampAngleDegrees, name);
 
         // The ring ladder, outermost (boundary pass) first as generated. Cutting INSIDE the
         // outline, the remaining stock sits beyond each outer-derived ring (toward the wall —
@@ -168,13 +189,79 @@ public static class CncMill
             }
             rings.Add(loops);
         }
+        return PocketFromRings(rings, null, region, tool, depth, name, rampAngleDegrees);
+    }
+
+    /// <summary>
+    /// The ARC-NATIVE pocket: the same ring ladder over the EXACT curved tier
+    /// (<see cref="CurvedRegion2dOffset"/>), so a ring's tool-compensated corners stay circular
+    /// arcs all the way into the G-code rather than being chorded and re-fitted from the chords.
+    /// The pass polyline is exactly what the flattened route produces at
+    /// <see cref="ArcChordTolerance"/> — the stock simulation, the travel linker and the
+    /// coverage oracle read it unchanged — and what is ADDED is the arc spans
+    /// <see cref="CncGcodeWriter"/> emits as <c>G2</c>/<c>G3</c>.
+    /// </summary>
+    public static MillOperation Pocket(
+        CurvedRegion2d region, MillTool tool, double depth, string name = "pocket",
+        MillDirection direction = MillDirection.Climb, double rampAngleDegrees = 0)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        ArgumentNullException.ThrowIfNull(tool);
+        tool.Validate();
+        RequireDepth(depth);
+        RequireRamp(rampAngleDegrees, name);
+
+        double step = tool.Stepover * tool.Diameter;
+        var rings = new List<List<Vector2d[]>>();
+        var ringArcs = new List<List<IReadOnlyList<MillArc>?>>();
+        for (int k = 0; ; k++)
+        {
+            var offsets = CurvedRegion2dOffset.Offset(region, -(tool.Radius + k * step));
+            if (offsets.Count == 0)
+                break;
+            var loops = new List<Vector2d[]>();
+            var arcs = new List<IReadOnlyList<MillArc>?>();
+            foreach (var shell in offsets)
+            {
+                AddChain(shell.Outer, materialInside: false);
+                foreach (var hole in shell.Holes)
+                    AddChain(hole, materialInside: true);
+            }
+            rings.Add(loops);
+            ringArcs.Add(arcs);
+
+            void AddChain(IReadOnlyList<CurvedEdge2d> chain, bool materialInside)
+            {
+                var (points, spans) = FlattenOriented(chain, direction, materialInside);
+                loops.Add(points);
+                arcs.Add(spans);
+            }
+        }
+        // The clearance queries (a helix's room, a depth link's web) read a POLYGONAL boundary:
+        // an inscribed flattening, so every measured distance is at or under the true one and
+        // the ramp machinery stays conservative exactly as it is on a polygonal region.
+        return PocketFromRings(
+            rings, ringArcs, region.ToRegion(ArcChordTolerance), tool, depth, name,
+            rampAngleDegrees);
+    }
+
+    /// <summary>The pocket's own body once the ring ladder exists, shared by the polygonal and
+    /// the arc-native overloads so the two cannot drift about depth levels, travel order or the
+    /// ramp's linking rule. <paramref name="ringArcs"/> is parallel to
+    /// <paramref name="rings"/> (null = a plain polyline ladder, which is the polygonal path
+    /// bit for bit).</summary>
+    private static MillOperation PocketFromRings(
+        List<List<Vector2d[]>> rings, List<List<IReadOnlyList<MillArc>?>>? ringArcs,
+        Region2d clearanceRegion, MillTool tool, double depth, string name,
+        double rampAngleDegrees)
+    {
         if (rings.Count == 0)
             throw new ArgumentException(
                 $"'{name}': the tool (Ø{tool.Diameter:0.###}) does not fit the region at all — "
                 + "the boundary pass at one radius inset is already empty.");
 
         var passes = new List<MillPass>();
-        var pen = new Vector2d(region.Bounds.Min.X, region.Bounds.Min.Y);
+        var pen = new Vector2d(clearanceRegion.Bounds.Min.X, clearanceRegion.Bounds.Min.Y);
         double previousLevel = 0;
         foreach (double z in DepthLevels(depth, tool.StepDown))
         {
@@ -186,7 +273,7 @@ public static class CncMill
             if (rampAngleDegrees <= 0)
             {
                 for (int k = rings.Count - 1; k >= 0; k--)
-                    AppendLinkedLoops(passes, rings[k], z, ref pen);
+                    AppendLinkedLoops(passes, rings[k], z, ref pen, null, ringArcs?[k]);
             }
             else
             {
@@ -198,41 +285,73 @@ public static class CncMill
                 // tool radius clear of the boundary; a link that would pass a concave gap too
                 // closely, or a pocket too tight to helix, falls back to the plunge entry.
                 var ordered = new List<Vector2d[]>();
+                var orderedArcs = new List<IReadOnlyList<MillArc>?>();
                 for (int k = rings.Count - 1; k >= 0; k--)
-                    ordered.AddRange(LinkLoops(rings[k], ref pen));
+                {
+                    foreach (int index in LinkOrder(rings[k], ref pen))
+                    {
+                        ordered.Add(rings[k][index]);
+                        orderedArcs.Add(ringArcs?[k][index]);
+                    }
+                }
                 if (ordered.Count == 0)
                 {
                     previousLevel = z;
                     continue;
                 }
                 var centre = ordered[0][0];
-                double room = DistanceToBoundary(region, centre) - tool.Radius;
+                double room = DistanceToBoundary(clearanceRegion, centre) - tool.Radius;
                 double rh = Math.Min(tool.Radius / 2, room);
                 List<Vector3d>? current = null;
+                List<MillArc>? currentArcs = null;
                 if (rh >= tool.Radius / 10)
                     current = [.. HelixEntry(centre, previousLevel, z, rh, rampAngleDegrees).Points];
-                foreach (var loop in ordered)
+                for (int i = 0; i < ordered.Count; i++)
                 {
+                    var loop = ordered[i];
                     if (current is not null && current.Count > 0
-                        && !SegmentClearOfBoundary(region,
+                        && !SegmentClearOfBoundary(clearanceRegion,
                             new Vector2d(current[^1].X, current[^1].Y), loop[0], tool.Radius))
                     {
-                        passes.Add(new MillPass(current, IsClosed: false));
+                        passes.Add(new MillPass(current, IsClosed: false, currentArcs));
                         current = null;
+                        currentArcs = null;
                     }
                     // A blocked link (or no helix room) starts a fresh run whose entry is
                     // the incumbent plunge; clear links downstream still merge at depth.
                     current ??= [];
+                    // The loop's own index 0 lands here, and its closing point lands at
+                    // offset + loop.Length — which is exactly where a wrapping span's End
+                    // already points, so the shift is one addition and no special case.
+                    int offset = current.Count;
                     foreach (var q in loop)
                         current.Add(new Vector3d(q.X, q.Y, z));
                     current.Add(new Vector3d(loop[0].X, loop[0].Y, z));
+                    if (orderedArcs[i] is { Count: > 0 } spans)
+                    {
+                        currentArcs ??= [];
+                        foreach (var span in spans)
+                            currentArcs.Add(span with
+                            {
+                                Start = span.Start + offset,
+                                End = span.End + offset,
+                            });
+                    }
                 }
                 if (current is { Count: > 0 })
-                    passes.Add(new MillPass(current, IsClosed: false));
+                    passes.Add(new MillPass(current, IsClosed: false, currentArcs));
             }
             previousLevel = z;
         }
         return new MillOperation(name, tool, passes);
+    }
+
+    private static void RequireRamp(double rampAngleDegrees, string name)
+    {
+        if (!(rampAngleDegrees >= 0) || rampAngleDegrees > 45)
+            throw new ArgumentException(
+                $"'{name}': rampAngleDegrees must lie in [0, 45] (0 = straight plunge); "
+                + $"got {rampAngleDegrees:0.###}.");
     }
 
     /// <summary>The helical entry pass: full turns from <paramref name="zFrom"/> down to
@@ -391,18 +510,7 @@ public static class CncMill
         ArgumentNullException.ThrowIfNull(tool);
         tool.Validate();
         RequireDepth(depth);
-        if (tabs < 0)
-            throw new ArgumentException($"'{name}': tabs must be non-negative; got {tabs}.");
-        if (tabs > 0)
-        {
-            if (!(tabHeight > 0) || tabHeight >= depth)
-                throw new ArgumentException(
-                    $"'{name}': {tabs} tabs need a tab height in (0, depth); got {tabHeight:0.###} "
-                    + $"against depth {depth:0.###}.");
-            if (!(tabWidth > 0))
-                throw new ArgumentException(
-                    $"'{name}': {tabs} tabs need a positive tab width; got {tabWidth:0.###}.");
-        }
+        RequireProfileOptions(depth, tabs, tabHeight, tabWidth, leadRadius, name);
 
         double delta = side == ProfileSide.Outside ? tool.Radius : -tool.Radius;
         var offsets = Region2dOffset.Offset(region, delta);
@@ -420,10 +528,71 @@ public static class CncMill
             foreach (var hole in shell.Holes)
                 loops.Add(Orient([.. hole], direction, materialInside: !outside));
         }
+        return ProfileFromLoops(
+            loops, null, region, tool, depth, direction, tabs, tabHeight, tabWidth, name,
+            leadRadius);
+    }
 
-        if (!(leadRadius >= 0) || !double.IsFinite(leadRadius))
+    /// <summary>
+    /// The ARC-NATIVE profile: ONE outward (or inward) offset on the EXACT curved tier
+    /// (<see cref="CurvedRegion2dOffset"/>), so a rounded outline's tool-compensated corners
+    /// arrive as circular arcs the writer states as <c>G2</c>/<c>G3</c> rather than as chords a
+    /// fitter must recover a circle from. The polyline is the flattened path at
+    /// <see cref="ArcChordTolerance"/>, unchanged for every consumer that reads it, and the
+    /// decoded cut length of the emitted program then equals the outline's exact closed-form
+    /// perimeter — the claim a chorded or fitted route structurally cannot make, since its
+    /// arcs are only ever inscribed.
+    /// </summary>
+    public static MillOperation Profile(
+        CurvedRegion2d region, MillTool tool, double depth, ProfileSide side,
+        int tabs = 0, double tabHeight = 0, double tabWidth = 0, string name = "profile",
+        MillDirection direction = MillDirection.Climb, double leadRadius = 0)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        ArgumentNullException.ThrowIfNull(tool);
+        tool.Validate();
+        RequireDepth(depth);
+        RequireProfileOptions(depth, tabs, tabHeight, tabWidth, leadRadius, name);
+
+        double delta = side == ProfileSide.Outside ? tool.Radius : -tool.Radius;
+        var offsets = CurvedRegion2dOffset.Offset(region, delta);
+        if (offsets.Count == 0)
             throw new ArgumentException(
-                $"'{name}': leadRadius must be finite and non-negative; got {leadRadius:0.###}.");
+                $"'{name}': the {side} profile at one tool radius (Ø{tool.Diameter:0.###}) "
+                + "leaves no outline — the tool does not fit.");
+        bool outside = side == ProfileSide.Outside;
+        var loops = new List<Vector2d[]>();
+        var loopArcs = new List<IReadOnlyList<MillArc>?>();
+        foreach (var shell in offsets)
+        {
+            AddChain(shell.Outer, materialInside: outside);
+            foreach (var hole in shell.Holes)
+                AddChain(hole, materialInside: !outside);
+        }
+        // The lead-fit probe reads a POLYGONAL boundary — the inscribed flattening — so at a
+        // convex arc it sits up to one chord tolerance further from an outside point than the
+        // true outline does, and the refusal is that much slack. Stated rather than absorbed:
+        // it is bounded by ArcChordTolerance and nothing here depends on it being tight.
+        return ProfileFromLoops(
+            loops, loopArcs, region.ToRegion(ArcChordTolerance), tool, depth, direction, tabs,
+            tabHeight, tabWidth, name, leadRadius);
+
+        void AddChain(IReadOnlyList<CurvedEdge2d> chain, bool materialInside)
+        {
+            var (points, spans) = FlattenOriented(chain, direction, materialInside);
+            loops.Add(points);
+            loopArcs.Add(spans);
+        }
+    }
+
+    /// <summary>The profile's own body once the offset loops exist, shared by the polygonal and
+    /// the arc-native overloads. <paramref name="loopArcs"/> is parallel to
+    /// <paramref name="loops"/> (null = a plain polyline, the polygonal path bit for bit).</summary>
+    private static MillOperation ProfileFromLoops(
+        List<Vector2d[]> loops, List<IReadOnlyList<MillArc>?>? loopArcs,
+        Region2d clearanceRegion, MillTool tool, double depth, MillDirection direction,
+        int tabs, double tabHeight, double tabWidth, string name, double leadRadius)
+    {
         (Vector2d[] In, Vector2d[] Out)[]? leads = null;
         if (leadRadius > 0)
         {
@@ -433,7 +602,7 @@ public static class CncMill
                 leads[i] = LeadArcs(loops[i], direction, leadRadius);
                 foreach (var q in leads[i].In.Concat(leads[i].Out))
                 {
-                    double room = DistanceToBoundary(region, q) - tool.Radius;
+                    double room = DistanceToBoundary(clearanceRegion, q) - tool.Radius;
                     if (room < -1e-9)
                         throw new ArgumentException(
                             $"'{name}': a lead radius of {leadRadius:0.###} does not fit "
@@ -445,7 +614,7 @@ public static class CncMill
 
         var levels = DepthLevels(depth, tool.StepDown);
         var passes = new List<MillPass>();
-        var pen = new Vector2d(region.Bounds.Min.X, region.Bounds.Min.Y);
+        var pen = new Vector2d(clearanceRegion.Bounds.Min.X, clearanceRegion.Bounds.Min.Y);
         for (int i = 0; i < levels.Count; i++)
         {
             bool final = i == levels.Count - 1;
@@ -453,6 +622,10 @@ public static class CncMill
             {
                 for (int k = 0; k < loops.Count; k++)
                 {
+                    // A tabbed pass is RESAMPLED at arc-length stations, so its polyline is no
+                    // longer the arcs' own samples and the spans are dropped rather than
+                    // re-derived — a tab can split an arc, and half an arc stated as a whole
+                    // one is the misresolve this carry exists to avoid.
                     var pass = WithTabs(loops[k], levels[i], tabs, -depth + tabHeight, tabWidth, name);
                     passes.Add(leads is null ? pass : WithLeads(pass, leads[k], levels[i]));
                 }
@@ -461,10 +634,30 @@ public static class CncMill
             }
             else
             {
-                AppendLinkedLoops(passes, loops, levels[i], ref pen, leads);
+                AppendLinkedLoops(passes, loops, levels[i], ref pen, leads, loopArcs);
             }
         }
         return new MillOperation(name, tool, passes);
+    }
+
+    private static void RequireProfileOptions(
+        double depth, int tabs, double tabHeight, double tabWidth, double leadRadius, string name)
+    {
+        if (tabs < 0)
+            throw new ArgumentException($"'{name}': tabs must be non-negative; got {tabs}.");
+        if (tabs > 0)
+        {
+            if (!(tabHeight > 0) || tabHeight >= depth)
+                throw new ArgumentException(
+                    $"'{name}': {tabs} tabs need a tab height in (0, depth); got {tabHeight:0.###} "
+                    + $"against depth {depth:0.###}.");
+            if (!(tabWidth > 0))
+                throw new ArgumentException(
+                    $"'{name}': {tabs} tabs need a positive tab width; got {tabWidth:0.###}.");
+        }
+        if (!(leadRadius >= 0) || !double.IsFinite(leadRadius))
+            throw new ArgumentException(
+                $"'{name}': leadRadius must be finite and non-negative; got {leadRadius:0.###}.");
     }
 
     /// <summary>The two quarter arcs a loop is entered and left on: tangent to the path at
@@ -521,7 +714,21 @@ public static class CncMill
             points.Add(pass.Points[0]);
         foreach (var q in leads.Out)
             points.Add(new Vector3d(q.X, q.Y, z));
-        return new MillPass(points, IsClosed: false);
+        // The loop's points move by exactly the lead-in's length, and a wrapping span's End —
+        // which named index Count, i.e. point 0 — now names the closing point the open pass
+        // carries explicitly. One shift covers both, so no span needs a special case.
+        List<MillArc>? arcs = null;
+        if (pass.Arcs is { Count: > 0 })
+        {
+            arcs = new List<MillArc>(pass.Arcs.Count);
+            foreach (var span in pass.Arcs)
+                arcs.Add(span with
+                {
+                    Start = span.Start + leads.In.Length,
+                    End = span.End + leads.In.Length,
+                });
+        }
+        return new MillPass(points, IsClosed: false, arcs);
     }
 
     /// <summary>
@@ -620,29 +827,29 @@ public static class CncMill
     /// and appends them at <paramref name="z"/>.</summary>
     private static void AppendLinkedLoops(
         List<MillPass> passes, List<Vector2d[]> loops, double z, ref Vector2d pen,
-        (Vector2d[] In, Vector2d[] Out)[]? leads = null)
+        (Vector2d[] In, Vector2d[] Out)[]? leads = null,
+        IReadOnlyList<IReadOnlyList<MillArc>?>? loopArcs = null)
     {
-        foreach (var loop in LinkLoops(loops, ref pen))
+        // The linker REORDERS and never rebuilds, so it hands back the loops' own INDICES —
+        // which is what the lead arcs and the arc spans are both keyed by, and is the index
+        // a reference search over the loop list would have found anyway.
+        foreach (int k in LinkOrder(loops, ref pen))
         {
+            var loop = loops[k];
             var points = new Vector3d[loop.Length];
             for (int i = 0; i < loop.Length; i++)
                 points[i] = new Vector3d(loop[i].X, loop[i].Y, z);
-            var pass = new MillPass(points, IsClosed: true);
+            var pass = new MillPass(points, IsClosed: true, loopArcs?[k]);
             if (leads is not null)
-            {
-                // LinkLoops permutes the travel order; the lead belongs to the LOOP, so
-                // match by reference — the linker reorders, it never rebuilds.
-                int k = loops.IndexOf(loop);
                 pass = WithLeads(pass, leads[k], z);
-            }
             passes.Add(pass);
         }
     }
 
-    /// <summary>The level's loops in the shared <see cref="RunLinker"/>'s travel order,
+    /// <summary>The level's loop INDICES in the shared <see cref="RunLinker"/>'s travel order,
     /// updating the pen to the last loop's start — ONE ordering rule for the plunged and
     /// the ramped emission.</summary>
-    private static List<Vector2d[]> LinkLoops(List<Vector2d[]> loops, ref Vector2d pen)
+    private static List<int> LinkOrder(List<Vector2d[]> loops, ref Vector2d pen)
     {
         if (loops.Count == 0)
             return [];
@@ -653,11 +860,81 @@ public static class CncMill
             ends[i] = (start, start);                        // a closed loop starts where it ends
         }
         var linkage = RunLinker.Link(ends, new Vector3d(pen.X, pen.Y, 0));
-        var ordered = new List<Vector2d[]>(loops.Count);
+        var ordered = new List<int>(loops.Count);
         foreach (var run in linkage.Order)
-            ordered.Add(loops[run.Index]);
-        pen = ordered[^1][0];
+            ordered.Add(run.Index);
+        pen = loops[ordered[^1]][0];
         return ordered;
+    }
+
+    /// <summary>The chord tolerance the arc-native routes flatten their polyline at — the
+    /// sketch tier's own default, so an arc-native pass's points are exactly what the
+    /// flattened route produces and no consumer sees a different discretization.</summary>
+    public const double ArcChordTolerance = 1e-3;
+
+    /// <summary>
+    /// Orients a closed curved chain by the <see cref="MillDirection"/> rule and flattens it
+    /// into the pass polyline PLUS the arc spans that polyline samples.
+    ///
+    /// <para>Orientation happens on the CHAIN rather than on the flattened points, which is
+    /// what keeps the two representations in step: reversing a closed chain reverses every
+    /// edge and their order, so the walk starts at the same point it started at
+    /// (edge[n−1].End IS edge[0].Start) exactly as the polygonal <see cref="Orient"/> holds
+    /// loop[0] still, and every arc's sweep flips sign with it.</para>
+    ///
+    /// <para>A FULL-circle edge is halved first. A single G2/G3 whose endpoints coincide is a
+    /// legal full turn and this decoder reads one, but a coincident start and end is the one
+    /// arc a controller may read as a zero-length move, and halving costs nothing exact — the
+    /// same rule <see cref="CurvedRegion2dOffset"/> applies before it raises a slab.</para>
+    /// </summary>
+    private static (Vector2d[] Points, IReadOnlyList<MillArc>? Arcs) FlattenOriented(
+        IReadOnlyList<CurvedEdge2d> chain, MillDirection direction, bool materialInside)
+    {
+        bool wantCcw = (direction == MillDirection.Climb) == materialInside;
+        var edges = new List<CurvedEdge2d>(chain.Count + 1);
+        if (CurvedRegion2d.SignedArea(chain) > 0 == wantCcw)
+        {
+            edges.AddRange(chain);
+        }
+        else
+        {
+            for (int i = chain.Count - 1; i >= 0; i--)
+                edges.Add(chain[i].Reversed());
+        }
+
+        var points = new List<Vector2d>();
+        var arcs = new List<MillArc>();
+        foreach (var edge in edges)
+        {
+            if (edge.IsFullCircle)
+            {
+                Emit(CurvedEdge2d.Arc(edge.Center, edge.Radius, edge.StartAngle, edge.SweepAngle / 2));
+                Emit(CurvedEdge2d.Arc(
+                    edge.Center, edge.Radius, edge.StartAngle + edge.SweepAngle / 2,
+                    edge.SweepAngle / 2));
+                continue;
+            }
+            Emit(edge);
+        }
+        return ([.. points], arcs.Count > 0 ? arcs : null);
+
+        void Emit(CurvedEdge2d edge)
+        {
+            int start = points.Count;
+            points.Add(edge.Start);
+            if (!edge.IsArc)
+                return;
+            // The sagitta rule CurvedRegion2d.Flatten uses, so the polyline is that method's
+            // own output rather than a second discretization of the same chain.
+            double ratio = 1 - ArcChordTolerance / edge.Radius;
+            double maxAngle = ratio <= -1 ? Math.PI : 2 * Math.Acos(Math.Max(ratio, -1));
+            int segments = Math.Max(1, (int)Math.Ceiling(Math.Abs(edge.SweepAngle) / maxAngle));
+            for (int k = 1; k < segments; k++)
+                points.Add(edge.PointAt((double)k / segments));
+            // End names the NEXT edge's start — which for the last edge is Count, i.e. point 0,
+            // the same extended indexing the writer walks a closed pass by.
+            arcs.Add(new MillArc(start, points.Count, edge.Center, edge.SweepAngle < 0));
+        }
     }
 
     /// <summary>True when the straight segment a-b stays at least <paramref name="clearance"/>

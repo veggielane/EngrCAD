@@ -28,12 +28,19 @@ namespace EngrCAD.Cam;
 public static class CncGcodeWriter
 {
     /// <summary>Writes the operations as G-code, rapids above <paramref name="safeZ"/>.
-    /// <para><b>Arc fitting is opt-in</b> (<paramref name="arcFitting"/>): runs of four or
-    /// more consecutive constant-z points EQUIDISTANT from a common centre are emitted as
-    /// one <c>G2</c>/<c>G3</c> (I/J centre-offset form) instead of the chord run — and this
-    /// RECOVERS geometry rather than approximating it, because the offset machinery's round
-    /// joins place their polyline vertices INSCRIBED on the true tool-compensated arc, so
-    /// the circle through them IS the arc the chording lost. Off is byte-identical.</para></summary>
+    /// <para><b>A pass's OWN arcs are always emitted</b> (<see cref="MillPass.Arcs"/>): a pass
+    /// built on the exact curved tier CARRIES its circular arcs, so a <c>G2</c>/<c>G3</c> there
+    /// is a transcription of what the geometry stated and needs no opt-in and no sagitta cap.
+    /// A pass carrying none — every polygonal construction — writes exactly what it always
+    /// wrote.</para>
+    /// <para><b>Arc FITTING is opt-in</b> (<paramref name="arcFitting"/>), and is the recovery
+    /// path for a polyline source: runs of four or more consecutive constant-z points
+    /// EQUIDISTANT from a common centre are emitted as one <c>G2</c>/<c>G3</c> (I/J
+    /// centre-offset form) instead of the chord run — which RECOVERS geometry rather than
+    /// approximating it, because the offset machinery's round joins place their polyline
+    /// vertices INSCRIBED on the true tool-compensated arc, so the circle through them IS the
+    /// arc the chording lost. Off is byte-identical, and the two compose: carried spans are
+    /// transcribed and the fitter works the stretches between them.</para></summary>
     public static string Write(
         IReadOnlyList<MillOperation> operations, double safeZ = 5, bool cannedDrilling = false,
         bool arcFitting = false)
@@ -83,9 +90,9 @@ public static class CncGcodeWriter
                 b.Append($"G0 X{Num(start.X)} Y{Num(start.Y)}\n");
                 Move(b, new Vector3d(start.X, start.Y, safeZ), start, op.Tool, ref lastFeed);
 
-                if (arcFitting)
+                if (arcFitting || pass.Arcs is { Count: > 0 })
                 {
-                    EmitFitted(b, pass, op.Tool, ref lastFeed);
+                    EmitPass(b, pass, op.Tool, ref lastFeed, arcFitting);
                 }
                 else
                 {
@@ -117,45 +124,84 @@ public static class CncGcodeWriter
         File.WriteAllText(path, Write(operations, safeZ, cannedDrilling));
     }
 
-    /// <summary>Emits a pass with arc fitting: greedy maximal runs of constant-z points on
-    /// one circle become a single G2/G3, everything else stays the classified line move.
-    /// The on-circle test is the weld tier (relative in the radius), because the candidate
-    /// points come from geometry that placed them on the circle EXACTLY up to rounding — a
-    /// looser tolerance would start inventing arcs through genuinely polygonal corners.</summary>
-    private static void EmitFitted(
-        StringBuilder b, MillPass pass, MillTool tool, ref double lastFeed)
+    /// <summary>
+    /// Emits a pass's moves, taking a <c>G2</c>/<c>G3</c> wherever an arc is available.
+    ///
+    /// <para><b>A pass's OWN arcs win and need no opt-in</b> (<see cref="MillArc"/>): the pass
+    /// carries them down from the exact curved tier, so emitting one is transcribing what the
+    /// geometry SAID rather than deciding that some points look circular — which is why the
+    /// fitter's sagitta cap has nothing to guard here. A pass carrying none behaves exactly as
+    /// it always did.</para>
+    ///
+    /// <para><b>Fitting is the RECOVERY path for a polyline source</b>
+    /// (<paramref name="fitting"/>): greedy maximal runs of constant-z points on one circle
+    /// become a single G2/G3, everything else stays the classified line move. The on-circle
+    /// test is the weld tier (relative in the radius), because the candidate points come from
+    /// geometry that placed them on the circle EXACTLY up to rounding — a looser tolerance
+    /// would start inventing arcs through genuinely polygonal corners.</para>
+    /// </summary>
+    private static void EmitPass(
+        StringBuilder b, MillPass pass, MillTool tool, ref double lastFeed, bool fitting)
     {
         int count = pass.Points.Count + (pass.IsClosed ? 1 : 0);
         var points = new Vector3d[count];
         for (int i = 0; i < count; i++)
             points[i] = pass.Points[i % pass.Points.Count];
 
+        Dictionary<int, MillArc>? native = null;
+        if (pass.Arcs is { Count: > 0 })
+        {
+            native = new Dictionary<int, MillArc>(pass.Arcs.Count);
+            foreach (var arc in pass.Arcs)
+                native[arc.Start] = arc;
+        }
+
         int index = 1;
         while (index < count)
         {
-            // Try an arc starting at points[index − 1]: needs at least three chords ahead,
-            // all at one z, whose circumcircle the run stays on.
-            if (TryFitArc(points, index - 1, out int end, out double cx, out double cy,
+            var from = points[index - 1];
+            // A carried arc is stated, so it is taken as stated — the only refusals are the
+            // ones that would make the emitted line untrue: a span the extended point array
+            // does not reach, or one whose ends sit at different heights (an arc word carries
+            // no ramp here, and a helix's chords are deliberately not carried as arcs).
+            if (native is not null && native.TryGetValue(index - 1, out var span)
+                && span.End > index - 1 && span.End < count
+                && points[span.End].Z == from.Z)
+            {
+                EmitArc(b, from, points[span.End], span.Center, span.Clockwise, tool, ref lastFeed);
+                index = span.End + 1;
+                continue;
+            }
+            // Try a FITTED arc starting at points[index − 1]: needs at least three chords
+            // ahead, all at one z, whose circumcircle the run stays on.
+            if (fitting && TryFitArc(points, index - 1, out int end, out double cx, out double cy,
                 out bool clockwise))
             {
-                var from = points[index - 1];
-                var to = points[end];
-                double feed = tool.FeedRate;
-                b.Append(clockwise ? "G2" : "G3");
-                b.Append($" X{Num(to.X)} Y{Num(to.Y)}");
-                b.Append($" I{NumIj(cx - from.X)} J{NumIj(cy - from.Y)}");
-                if (feed != lastFeed)
-                {
-                    b.Append($" F{(int)Math.Round(feed)}");
-                    lastFeed = feed;
-                }
-                b.Append('\n');
+                EmitArc(b, from, points[end], new Vector2d(cx, cy), clockwise, tool, ref lastFeed);
                 index = end + 1;
                 continue;
             }
-            Move(b, points[index - 1], points[index], tool, ref lastFeed);
+            Move(b, from, points[index], tool, ref lastFeed);
             index++;
         }
+    }
+
+    /// <summary>One I/J-form arc move — the shared emission for a carried arc and a fitted
+    /// one, so the two spellings cannot differ in a word.</summary>
+    private static void EmitArc(
+        StringBuilder b, in Vector3d from, in Vector3d to, in Vector2d centre, bool clockwise,
+        MillTool tool, ref double lastFeed)
+    {
+        double feed = tool.FeedRate;
+        b.Append(clockwise ? "G2" : "G3");
+        b.Append($" X{Num(to.X)} Y{Num(to.Y)}");
+        b.Append($" I{NumIj(centre.X - from.X)} J{NumIj(centre.Y - from.Y)}");
+        if (feed != lastFeed)
+        {
+            b.Append($" F{(int)Math.Round(feed)}");
+            lastFeed = feed;
+        }
+        b.Append('\n');
     }
 
     /// <summary>Fits the longest arc starting at <paramref name="start"/>: the circumcircle
