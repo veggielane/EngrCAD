@@ -202,16 +202,22 @@ public class TrimmedFaceRefusalTests
     /// turned 53 facets inside out. `Refine` now refuses a split that would flip a facet the
     /// parent had right, so the count is 0 at every density above.</para>
     ///
-    /// <para><b>The residual that remains is the BORE rim, and its boundary is now a
-    /// decision rather than a limitation.</b> Tessellation-time refinement of tracer curves
-    /// (<see cref="RefinedTracerRimTests"/>) reaches the plane-cut rims here — open branches
-    /// in outer loops — which took the worst 48/24 agreement to 0.9669; the bore's rim is a
-    /// chain forming a HOLE loop, which feeds <c>TriangulateBandWithHoles</c>, and that tier
-    /// measurably cannot take a denser rim (refined: 0 → 3 base folds at 48/24 and an
-    /// outright refusal at 192/96), so hole rims deliberately keep their baked 15–17 samples
-    /// until the tier grows the row path filed in todo.md. Worst facet-vs-surface agreement
-    /// at 192/96 is ~0.0198 — near-perpendicular beside the coarse rim, not inverted. The
-    /// bounds below are a RECORD of today's behaviour, not a bar to sit at.</para>
+    /// <para><b>The bore-rim residual is fixed: open tracer branches refine in EVERY loop,
+    /// and the periodic band threads a scalloped chain.</b> The rim-refinement gate used to
+    /// stop at outer loops because refining this solid's bore rim made the band face refuse
+    /// outright at 192/96 — and the diagnosis recorded against that blamed
+    /// <c>TriangulateBandWithHoles</c>, which is not even reached here: the bore crosses the
+    /// band's edge, so its rim rides the band's own boundary CHAIN and turns back in u at
+    /// the bore's widest points, and it was <c>RowedPeriodicBand</c>'s up-front
+    /// u-monotonicity gate that declined, dropping the face to the merge walk whose fans
+    /// refinement then exploded. The gate is relaxed — the chain-adjacent strips already
+    /// thread scallops (StripBetween's seam-split RowedStrip, with SweepCycle splitting each
+    /// piece at its own u extremes, so the rim's turn vertex becomes a split point rather
+    /// than a refusal) — and the rim now refines: worst facet-vs-surface agreement at
+    /// 192/96 went 0.0198 → 0.9601. What remains is ONE near-perpendicular facet at the
+    /// mid density only (0.0267 at 128/64, where the refined rim count and the natural grid
+    /// land a column apart — an alignment residual, folds still zero); the bounds below
+    /// RECORD today's behaviour, not a bar to sit at.</para>
     /// </summary>
     [Fact]
     public void TorusCutWithABore_BuildsWithARecordedTessellationResidual()
@@ -241,15 +247,18 @@ public class TrimmedFaceRefusalTests
             $"192 segments must be within 0.1% of {expected}, measured {previous}");
 
         // No folds at any density — including the two well above where the corpus measures,
-        // which is where they used to appear and grow.
+        // which is where they used to appear and grow — and the refined rim's agreement,
+        // recorded: the 192/96 near-perpendicular residual is gone (was ~0.0198, now
+        // ≥ 0.9), one narrow spot survives at the mid density only.
+        var audits = new Dictionary<(int, int), TessellationQuality.SolidReport>();
         foreach (var (s, c) in (ReadOnlySpan<(int, int)>)[(48, 24), (128, 64), (192, 96)])
-            Assert.Equal(0, TessellationQuality.Audit(solid, s, c).Folds);
-
-        // The fidelity residual, recorded rather than barred: near the coarse traced rim the
-        // facets stay near-perpendicular to the surface, and refinement makes that WORSE than
-        // leaving the base alone. Both numbers are pinned so the finding cannot rot.
-        var refined = TessellationQuality.Audit(solid, 192, 96);
-        Assert.InRange(refined.WorstDot, 0.0, 0.10);
+        {
+            audits[(s, c)] = TessellationQuality.Audit(solid, s, c);
+            Assert.Equal(0, audits[(s, c)].Folds);
+        }
+        Assert.InRange(audits[(48, 24)].WorstDot, 0.5, 1.0);
+        Assert.InRange(audits[(128, 64)].WorstDot, 0.0, 0.2);
+        Assert.InRange(audits[(192, 96)].WorstDot, 0.9, 1.0);
     }
 
     /// <summary>Midpoint rule, enough for a napkin integral used only as a test oracle.</summary>

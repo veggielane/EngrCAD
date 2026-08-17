@@ -10428,12 +10428,18 @@ with PARAMETER trims and the reader reconstructs the segment verbatim (a new
 segments compose affinely down to the first non-segment base before emission, or the
 trim is written against a basis `Simplify` flattens away — measured as a drilled
 plate's bore wall arriving at 10/11 of its own span, exactly the drill overshoot the
-inner segment carried. The TORUS conversion was built, measured and REVERTED (the
-recorded institutional-memory shape): angular meridian rows explode the
-band-with-holes refinement on the torus-cut-with-a-bore member — the 200 000-split
-guard exhausts at 192/96 where the NURBS placement converged, and at 100× the budget
-the face still emerges folded — so the torus keeps `curveSamples` until the tier's
-dense-rim row path lands, with the reason recorded at the construction site.
+inner segment carried. The TORUS conversion was built, measured, REVERTED — and then
+LANDED once the real blocker fell: the 192/96 explosion was never the
+band-with-holes tier (not reached on that fixture) but `RowedPeriodicBand`'s
+up-front u-monotonicity gate, which the bore-scalloped chain always trips, dropping
+the face to the merge walk whose fans refinement exploded. With the gate relaxed
+(the chain-adjacent `StripBetween` threads the scallop; `SweepCycle` splits each
+piece at its own u extremes) the torus generators are `CurveSegment`s over one minor
+`Circle3d` like the sphere's, the meridian takes the angular density, and the
+torus-cut-with-a-bore member's worst 192/96 agreement went 0.0198 → 0.9601. The
+first diagnosis naming the wrong tier is the lesson: when a pipeline stage is
+suspected, run the pipeline without it — the refusal reproduced with the rows
+disabled, which is what pointed one tier over.
 
 ## 7. Query layer
 
@@ -11466,11 +11472,15 @@ geometry kernel building *that* model in the reader's tab. The pieces are
   every guard errs toward keeping the chord: a coarse density, a carrier without an
   implicit form, or a non-converged solve all reproduce the pre-carrier output exactly.
   The band-crossing bore went 0.9988/0.9460/0.3229 → 0.9988/0.9999/1.0000 worst
-  facet-vs-surface agreement at 32/96/192. The scope boundary is a MEASUREMENT: open
-  branches in outer loops feed the paired strip/slab tiers, which absorb the density;
-  a hole rim feeds `TriangulateBandWithHoles`, which measurably folds on a denser rim
-  (a plane-cut torus's bore rim: 0 → 3 base folds at 48/24, refusing at 192/96), so
-  hole rims keep their baked density until that tier grows a dense-rim row path.
+  facet-vs-surface agreement at 32/96/192. The scope boundary is a MEASUREMENT, moved once on a
+  corrected diagnosis: an OPEN branch refines in EVERY loop now (the outer-loop
+  clause blamed `TriangulateBandWithHoles` for a refusal that was really
+  `RowedPeriodicBand`'s u-monotonicity gate tripping on a bore-scalloped chain —
+  relaxed, the chain-adjacent threading absorbs it and the torus-cut-with-a-bore
+  member went 0.0198 → 0.9601 at 192/96); a CLOSED branch keeps its baked density,
+  measured to buy nothing when refined (74 → 287 samples, same refusal), with the
+  per-slab row construction that would carry it filed in todo.md after its first
+  build measurably folded and was reverted.
 - **STEP export** (`StepWriter`, AP214): topology maps one-to-one to
   `MANIFOLD_SOLID_BREP`; analytic surfaces and curves export exactly (including rational
   B-splines via the complex-instance form); wrapper curves simplify to analytic forms or

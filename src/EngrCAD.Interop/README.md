@@ -350,12 +350,17 @@ logging complements them, never replaces them.
     "subtends more than 2π/n"). Refinement INSERTS only — baked vertices pass through
     bit-for-bit, so a coarse density, a carrier with no implicit form, or a
     non-converged solve all reproduce today's polyline exactly. The bore now measures
-    0.9988 / 0.9999 / 1.0000. **Scope is measured, not assumed**: only OPEN branches
-    whose every use sits in its face's OUTER loop refine, because the paired strip/slab
-    tiers absorb the density while `TriangulateBandWithHoles` does not (a plane-cut
-    torus's bore rim — a chain forming a HOLE loop — went 0 → 3 base folds at 48/24 and
-    refused outright at 192/96 when refined); hole rims keep their baked density until
-    that tier grows a row path that can anchor on a dense rim (filed in todo.md).
+    0.9988 / 0.9999 / 1.0000. **Scope is measured, not assumed, and moved once on a
+    corrected diagnosis**: an OPEN branch refines in EVERY loop — the outer-loop
+    clause had blamed `TriangulateBandWithHoles` for a refusal that was really
+    `RowedPeriodicBand`'s up-front u-monotonicity gate tripping on a bore-scalloped
+    chain (the rim turns back in u at its widest points); with the gate relaxed the
+    chain-adjacent `StripBetween` threads the scallop and the torus-cut-with-a-bore
+    member's worst 192/96 agreement went 0.0198 → 0.9601. A CLOSED branch — a rim
+    wholly interior to one band — keeps its baked density: refining one was measured
+    to buy nothing (74 → 287 samples, same 192/96 refusal), and the per-slab row
+    path that would carry it is filed in todo.md with its first build's fold
+    measurements.
   - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
     fragments such as a bore wall cut through by a slot, and every mitered rim-fillet
     band) go through `TrimmedFaceTessellator`, which picks a path in this order:

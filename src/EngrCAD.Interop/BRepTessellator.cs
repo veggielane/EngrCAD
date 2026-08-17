@@ -380,21 +380,19 @@ public static class BRepTessellator
             // solved on the exact surfaces, and the baked vertices pass through
             // verbatim, so a coarse density (or a carrier with no implicit form)
             // reproduces today's polyline bit for bit.
-            // <para>Scoped to the consumers measured able to absorb a denser boundary:
-            // refinement engages only for an OPEN traced branch whose every use sits in
-            // its face's OUTER loop — a crossing curve, consumed by the paired
-            // strip/slab tiers (measured clean at 32/96/192, worst agreement 1.0000 at
-            // 192 on a band-crossing bore, against 0.3229 unrefined). A branch bounding
-            // a HOLE loop (or a closed branch — a winding-band boundary) feeds
-            // TriangulateBandWithHoles, whose chain handling measurably cannot take the
-            // density: a plane-cut torus with a bore went 0 → 3 base folds at 48/24 and
-            // refused outright at 192/96 the moment its bore rim refined — the recorded
-            // narrow-column-at-the-rim residual surfacing as inversions. Until the row
-            // path that tier needs lands (filed in todo.md), those rims keep their baked
-            // density, which is exactly today's behaviour. Both faces sharing the edge
-            // must agree, which is why the gate quantifies over EVERY use.</para>
-            if (edge.Curve.Underlying is PolylineCurve3d { IsClosed: false, Carriers: { } carriers }
-                && edge.Uses.All(use => ReferenceEquals(use.Loop, use.Loop.Face.OuterLoop)))
+            // An OPEN tracer branch refines whatever loop it bounds — outer-loop
+            // crossing curves AND hole-loop chains, now that the band-with-holes tier
+            // carries per-slab interior rows and the periodic band threads a scalloped
+            // chain (the torus-cut-with-a-bore member's worst 192/96 agreement moved
+            // 0.0198 → 0.96 the day the gate widened past outer loops). A CLOSED
+            // branch — a bore rim wholly interior to one band — deliberately keeps its
+            // baked density: refining one was MEASURED to buy nothing (a radially
+            // bored torus's interior rim taken 74 → 287 samples still refuses at
+            // 192/96, because the hole-adjacent slabs' anchored rows fail their area
+            // guard either way — the residual filed in todo.md — and every density
+            // below was already clean), so widening there would spend vertices on
+            // every interior rim in the repository for no measured gain.
+            if (edge.Curve.Underlying is PolylineCurve3d { IsClosed: false, Carriers: { } carriers })
                 return RefineTracerChords(points, carriers, segmentsPerCircle);
             return points;
         }

@@ -1010,8 +1010,15 @@ internal static class TrimmedFaceTessellator
     {
         if (!double.IsFinite(stepV) || stepV <= 0)
             return null;
-        if (!NonDecreasingU(uvAll, bottom) || !NonDecreasingU(uvAll, top))
-            return null;
+        // A chain need NOT be u-monotone: a bore crossing the band's edge SCALLOPS it
+        // (the rim turns back in u at its widest points), and the chain-adjacent strips
+        // below absorb exactly that shape — StripBetween's level threading runs
+        // RowedStrip on the seam-split strip cycle, and SweepCycle splits each piece at
+        // its own u extremes, so a rim's turn vertex becomes a split point rather than
+        // a refusal. Where the threading cannot absorb it the strip's monotone fallback
+        // declines and the whole band falls to the rowless path exactly as the old
+        // up-front gate did, so relaxing the gate can only add capability.
+        bool monotone = NonDecreasingU(uvAll, bottom) && NonDecreasingU(uvAll, top);
 
         double lo = double.NegativeInfinity, hi = double.PositiveInfinity;
         foreach (int i in bottom)
@@ -1019,10 +1026,15 @@ internal static class TrimmedFaceTessellator
         foreach (int i in top)
             hi = Math.Min(hi, uvAll[i].Y);
         var levels = NaturalValues(surface.DomainV.Start, stepV, lo + stepV / 2, hi - stepV / 2);
-        if (levels.Count == 0)
+        // A band one natural row tall has nothing for rows to buy when its chains are
+        // monotone — the rowless sweep is exact there, and declining keeps that
+        // incumbent path bit for bit. A SCALLOPED band still needs the threading even
+        // with no full ring between the chains (a deep dip eats the whole ring range),
+        // so it proceeds with the single chain-to-chain strip.
+        if (levels.Count == 0 && monotone)
             return null;
-        var us = PeriodicNaturalU(surface, period, stepU, anchor);
-        if (us is null)
+        var us = levels.Count > 0 ? PeriodicNaturalU(surface, period, stepU, anchor) : null;
+        if (levels.Count > 0 && us is null)
             return null;
 
         int mark = uvAll.Count;
@@ -1035,7 +1047,7 @@ internal static class TrimmedFaceTessellator
 
         var chains = new List<List<int>>(levels.Count + 2) { bottom };
         foreach (double v in levels)
-            chains.Add(BuildRow(surface, period, us, v, uvAll, pointsAll));
+            chains.Add(BuildRow(surface, period, us!, v, uvAll, pointsAll));
         chains.Add(top);
 
         var triangles = new List<(int A, int B, int C)>();

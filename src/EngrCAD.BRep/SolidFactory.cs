@@ -173,15 +173,17 @@ public static partial class SolidFactory
         var a = (axis ?? Vector3d.UnitZ).Normalized();
         var radial = a.ArbitraryPerpendicular(Tolerance.Default);
         var tubeCenter = center + radial * majorRadius;
-        // Still the rational NURBS arcs, DELIBERATELY — the sphere's generators became
-        // CurveSegments over their Circle3d (the angular-density fix), and the torus's
-        // want the same, but the angular rows measurably explode the band-with-holes
-        // refinement on the recorded torus-cut-with-a-bore member (the 200k split guard
-        // exhausts where the NURBS placement converged, and with 100x the budget the
-        // face still folds): the torus waits on that tier's dense-rim row path, filed
-        // in todo.md, and its meridian keeps the curveSamples density until then.
-        var outerArc = NurbsCurve.Arc(tubeCenter, radial, a, minorRadius, -Math.PI / 2, Math.PI / 2);
-        var innerArc = NurbsCurve.Arc(tubeCenter, radial, a, minorRadius, Math.PI / 2, 3 * Math.PI / 2);
+        // The minor circle's two halves as CurveSegments over ONE Circle3d — the
+        // sphere's own angular-density fix (a rational NURBS arc's parameter is not the
+        // angle, so IsAngularlyParameterized never fires and every latitude-quantized
+        // quantity freezes at curveSamples). This needed the periodic-band scallop
+        // fallback in TrimmedFaceTessellator first: a bore crossing the band's edge
+        // puts a non-monotone chain on the band, RowedPeriodicBand declines it, and
+        // the angular v-pullback then drove midpoint refinement past its budget where
+        // the rational one happened to squeak through.
+        var minor = new Circle3d(tubeCenter, radial, a, minorRadius);
+        var outerArc = new CurveSegment(minor, -Math.PI / 2, Math.PI / 2);
+        var innerArc = new CurveSegment(minor, Math.PI / 2, 3 * Math.PI / 2);
         return Revolve(new Profile([outerArc, innerArc]), center, a);
     }
 

@@ -1037,16 +1037,39 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     through bit-for-bit) until a chord subtends at most one natural angular step. The
     band-crossing bore went **0.9988/0.9460/0.3229 → 0.9988/0.9999/1.0000** worst
     facet-vs-surface agreement at 32/96/192 — the degradation with density is gone.
-    **Scope, measured rather than assumed**: refinement engages only for OPEN traced
-    branches whose every use sits in its face's OUTER loop, because the paired
-    strip/slab tiers absorb the density while `TriangulateBandWithHoles` measurably
-    cannot — refining a plane-cut torus's bore rim (a chain forming a HOLE loop) took
-    its band from 0 folds to 3 base folds at 48/24 and an outright refusal at 192/96,
-    the recorded narrow-column-at-the-rim residual surfacing as inversions. The open
-    item is a row path in the hole/winding tiers that can anchor on a dense rim; when
-    it lands, drop the outer-loop clause from `SampleEdge`'s gate and the hole rims
-    (torus bore ~0.0198 at 192/96, Ø3-through-Ø10 cylinder band 0.565 at 192) refine
-    for free.
+    **The outer-loop clause is ✅ gone — an OPEN traced branch refines whatever loop
+    it bounds** — because the failure that forced it was misattributed: the recorded
+    blame on `TriangulateBandWithHoles` was wrong (that tier is not even reached on the
+    torus fixture); the refusal was `RowedPeriodicBand`'s own up-front u-monotonicity
+    gate, which a bore crossing the band's edge always trips (the rim SCALLOPS the
+    chain, turning back in u at its widest points), dropping exactly those faces to the
+    merge walk whose fans refinement then exploded. The gate is relaxed — the
+    chain-adjacent `StripBetween` already threads a scalloped chain (seam-split
+    `RowedStrip`, with `SweepCycle` splitting each piece at its own u extremes so the
+    rim's turn vertex becomes a split point, not a refusal) — and the
+    torus-cut-with-a-bore member's worst 192/96 agreement went **0.0198 → 0.9601**
+    (one alignment residual remains at 128/64 only, 0.0267, recorded in the test).
+    What stays gated is the CLOSED branch — see the per-slab-rows item below.
+  - [ ] **Per-slab interior rows in `ZipSlabs`, for the CLOSED-rim band-with-holes
+    case.** The fixture that needs them: `Torus(12, 4) − Cylinder(1, 40).RotateX(π/2)
+    .Translate((16, 0, 0))` — a radial bore notching the outer band, whose interior
+    rim is a CLOSED tracer branch on a face with finite stepV (loops [192, 192, 74]);
+    it refuses at 192/96 today ("curvature refinement did not converge") and is the
+    reason `SampleEdge`'s gate keeps its `IsClosed: false` clause — refining that rim
+    74 → 287 samples was MEASURED to buy nothing (same refusal, every density below
+    already clean), so the gate boundary is evidence, not a deferral. A first build
+    threaded `RowedStrip` per slab (lower chain + reversed upper as the cycle) and was
+    REVERTED on two measurements: the free slabs' only anchors are the cut chords'
+    four endpoints, so rows land on long off-level diagonals whose slivers FOLD
+    (0/1 → 2/7 folds at 48/24 and 128/64 on the fixture, bit-identical to baseline
+    with the rows disabled), and the hole-adjacent slabs' anchored paths cross the
+    dense chain near their ends, failing the area guard by ~1e-4 relative — a REAL
+    overlap, correctly rejected. The sound construction is `StripBetween`'s own: the
+    cut chords (and seam chords) must be PRE-SPLIT at the natural levels with vertices
+    shared VERBATIM by both neighbouring slabs — and all-or-nothing across the whole
+    slab run, because one slab rowing against a split chord while its neighbour sweeps
+    the unsplit one is a T-junction crack. Until then the tier keeps the plain sweep,
+    which is exact for the ruled (stepV = ∞) cylinder bands that dominate it.
 - [ ] **Draft follow-ups** (`Draft.Apply` landed with per-face angles in one call, wired
   as `Shape.Draft`; CURVED faces ✅ landed too — a face of revolution about the pull axis
   tapers by rotating its generator in its own half-plane, so a drafted cylinder is
@@ -1952,24 +1975,6 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     reported like any other ceiling, because the check knows the build DIRECTION and not
     where the plate is. Adding a plate is one plane plus a "within one layer of it" test
     — but it changes the reported area, so it is opt-in and stated, not a default.
-- [ ] **The TORUS meridian still tessellates at `curveSamples` — deferred on the
-  band-with-holes tier, with the measurement that decided it.** The SPHERE half of the
-  meridian-density defect ✅ landed: `MakeSphere`'s generators became `CurveSegment`s
-  over their own meridian `Circle3d` (the whole-solid-fillet corner-arc rule — the
-  angular density rule reads `Underlying`, which a rational NURBS arc hides), so a
-  sphere's facet count now QUADRUPLES per density doubling and the sphere-piercing
-  corpus member's worst agreement finally CONVERGES with density (0.67 → 0.74 → 0.94
-  against the old non-monotone 0.88 → 0.70 → 0.92); the STEP round trip carries the
-  span as a TRIMMED_CURVE with PARAMETER trims (a surface GENERATOR has no edge
-  vertices to carry it — nested segments compose affinely down to the first
-  non-segment base, or a drilled plate's bore wall arrives 10/11 of its span, the
-  drill overshoot exactly). The TORUS was converted the same way, measured, and
-  REVERTED: the angular rows explode the band-with-holes refinement on the recorded
-  torus-cut-with-a-bore member — the 200k split guard exhausts at 192/96 where the
-  NURBS placement converged, and with 100× the budget the face still emerges with a
-  fold — so the torus meridian keeps `curveSamples` until that tier grows the
-  dense-rim row path filed under the trimmed-face items, and `MakeTorus` carries the
-  reason in place.
 - [ ] **ISO 286 fits and tolerance stackups along a mate chain.** The fit tables
   (H7/g6 and friends) are a transcription carrying the verify-against-datasheet flag
   (`StandardHoles`' convention); a stackup is a walk along the existing mate graph
