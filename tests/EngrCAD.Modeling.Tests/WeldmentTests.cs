@@ -350,6 +350,56 @@ public class WeldmentTests
     }
 
     [Fact]
+    public void MixedProfiles_EachMemberKeepsItsOwnSection()
+    {
+        // Legs SHS, rail flat: the miter still cuts both members with ONE plane, so
+        // each member's volume is its own A·L exactly (centred profiles, prism-cut
+        // identity) — and the BOM names carry each member's own designation.
+        var shs = FrameProfile.Shs(40, 3);
+        var flat = FrameProfile.Flat(20, 10);
+        var frame = Weldment.Build(shs,
+        [
+            (new Vector3d(0, 0, 0), new Vector3d(0, 0, 200)),
+            (new Vector3d(0, 0, 200), new Vector3d(300, 0, 200)),
+        ], new WeldmentOptions { Up = Vector3d.UnitY }, profiles: [null, flat]);
+
+        Assert.Equal(shs.Area * 200, BrepVolume(frame.Members[0].Shape), 1e-9 * shs.Area * 200);
+        Assert.Equal(flat.Area * 300, BrepVolume(frame.Members[1].Shape), 1e-9 * flat.Area * 300);
+        Assert.StartsWith(shs.Designation, frame.Members[0].Part.Name);
+        Assert.StartsWith(flat.Designation, frame.Members[1].Part.Name);
+    }
+
+    [Fact]
+    public void MixedProfileTJoint_TrimsByTheThroughMembersOwnWall()
+    {
+        // A flat rail butting an SHS 40 post's side is trimmed by the POST's half
+        // width (20), not its own — the wall offset reads the through member's
+        // profile.
+        var shs = FrameProfile.Shs(40, 3);
+        var flat = FrameProfile.Flat(20, 10);
+        var frame = Weldment.Build(shs,
+        [
+            (new Vector3d(0, 0, 0), new Vector3d(200, 0, 0)),
+            (new Vector3d(100, 150, 0), new Vector3d(100, 0, 0)),
+        ], profiles: [null, flat]);
+
+        Assert.Equal(shs.Area * 200, BrepVolume(frame.Members[0].Shape), 1e-9 * shs.Area * 200);
+        Assert.Equal(flat.Area * 130, BrepVolume(frame.Members[1].Shape), 1e-9 * flat.Area * 130);
+        Assert.Equal(130, frame.Members[1].CutLength, 1e-9);
+    }
+
+    [Fact]
+    public void ProfileOverrideCountMismatch_IsRefusedByName()
+    {
+        var shs = FrameProfile.Shs(40, 3);
+        var mismatch = Assert.Throws<ArgumentException>(() => Weldment.Build(shs,
+        [
+            (new Vector3d(0, 0, 0), new Vector3d(200, 0, 0)),
+        ], profiles: [null, null]));
+        Assert.Contains("aligned with the runs", mismatch.Message);
+    }
+
+    [Fact]
     public void TJointRefusals_NameTheirShape()
     {
         var shs = FrameProfile.Shs(40, 3);

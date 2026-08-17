@@ -78,6 +78,14 @@ scene.AddTab("tee").Add(frame.ToAssembly());
 
 ![A T-joint: the mid-post trimmed to the through rail's wall](images/frames-tee.png)
 
+Profiles may be **mixed per skeleton** — legs SHS, rails flat — by handing `Build`
+(or `Path`) a per-run override list aligned with the runs (`profiles: [null, flat]`,
+null keeping the default). The miter is unchanged (one bisector plane cuts both
+members, each keeping its own section; the weld gap a smaller section leaves against
+a larger one is the welder's, not the kernel's), and a butt or T trim reads the
+**through member's own** wall offset — a flat rail butting an SHS 40 post is trimmed
+back by the post's half-width, exactly.
+
 What a T-joint refuses is the shapes with no one honest answer, each by name: a
 **collinear** landing (the members overlap along one line — split the through run
 instead), an endpoint on **two** interiors (which wall trims is ambiguous), a
@@ -110,7 +118,8 @@ foreach (var (item, quantity, _) in bom.ByItem())
 
 ## Scope, honestly
 
-Straight members of one profile per weldment; joints of exactly two members. `Butt`
+Straight members, one profile per run (a default plus per-run overrides); joints of
+exactly two members. `Butt`
 joints trim the later run back to the earlier (through) member's flat wall, and a
 T-joint trims a run ending mid-member back the same way — while a
 round tube as the through member is the **coped saddle** joint, which is refused by
@@ -119,5 +128,4 @@ intersection the surface-intersection tracer is known to under-seed at
 structural-section scales, so the cut would be a sampled polyline whose error no
 tessellation density can lower. Multi-member joints, zero-angle joints, members
 consumed by their own end cuts and joint trims of Bézier-outline profiles are all
-refused by name; curved members, mixed profiles per skeleton and corner reliefs are
-future work.
+refused by name; curved members and corner reliefs are future work.

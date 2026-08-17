@@ -292,7 +292,10 @@ public sealed record FrameMember(
 /// </summary>
 public sealed class Weldment
 {
-    /// <summary>The section every member carries.</summary>
+    /// <summary>The DEFAULT section — what every member carries unless a per-run
+    /// override says otherwise (see the <c>profiles</c> parameter on
+    /// <see cref="Build"/>; each member's own section is on its part's name and
+    /// geometry).</summary>
     public FrameProfile Profile { get; }
 
     /// <summary>The trimmed members, in run order.</summary>
@@ -328,7 +331,7 @@ public sealed class Weldment
     /// the last-to-first run), so consecutive members share endpoints and get joints.</summary>
     public static Weldment Path(
         FrameProfile profile, IReadOnlyList<Vector3d> points, bool closed = false,
-        WeldmentOptions? options = null)
+        WeldmentOptions? options = null, IReadOnlyList<FrameProfile?>? profiles = null)
     {
         ArgumentNullException.ThrowIfNull(points);
         if (points.Count < 2)
@@ -338,20 +341,35 @@ public sealed class Weldment
             runs.Add((points[i], points[i + 1]));
         if (closed)
             runs.Add((points[^1], points[0]));
-        return Build(profile, runs, options);
+        return Build(profile, runs, options, profiles);
     }
 
     /// <summary>Builds the weldment: validates the whole skeleton first (every refusal
     /// fires before any geometry is built), then trims each member.</summary>
+    /// <param name="profiles">Optional per-run section overrides, aligned with
+    /// <paramref name="runs"/> (a null entry keeps the default
+    /// <paramref name="profile"/>) — legs SHS, rails angle. The miter is unchanged
+    /// (one bisector plane cuts both members, each keeping its own section; the weld
+    /// gap a smaller section leaves against a larger one is the welder's, not the
+    /// kernel's), while a butt or T trim reads the THROUGH member's own wall offset.
+    /// A count mismatch is refused by name.</param>
     public static Weldment Build(
         FrameProfile profile, IReadOnlyList<(Vector3d Start, Vector3d End)> runs,
-        WeldmentOptions? options = null)
+        WeldmentOptions? options = null, IReadOnlyList<FrameProfile?>? profiles = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(runs);
         options ??= new WeldmentOptions();
         if (runs.Count == 0)
             throw new ArgumentException("A weldment needs at least one run.", nameof(runs));
+        if (profiles is not null && profiles.Count != runs.Count)
+            throw new ArgumentException(
+                $"{profiles.Count} profile override(s) for {runs.Count} run(s) — the list is "
+                + "aligned with the runs, one entry each (null keeps the default).",
+                nameof(profiles));
+        var memberProfiles = new FrameProfile[runs.Count];
+        for (int pi = 0; pi < runs.Count; pi++)
+            memberProfiles[pi] = profiles?[pi] ?? profile;
         if (options.JointStyle == FrameJointStyle.Cope)
             throw new NotSupportedException(
                 "Coped (saddle) tube joints are not supported: the saddle is the intersection of two "
@@ -451,15 +469,14 @@ public sealed class Weldment
 
         // ---- per-member trimming ----
         var members = new List<FrameMember>(n);
-        var bounds = profile.Section.Bounds;
-        double diagonal = bounds.Size.Length;
         for (int i = 0; i < n; i++)
         {
             var (s, e) = runs[i];
             var frame = MemberFrame(s, axes[i], options.Up);
-            var startCut = EndCut(profile, runs, axes, jointOf, tJointOf, options, i, end: 0);
-            var endCut = EndCut(profile, runs, axes, jointOf, tJointOf, options, i, end: 1);
-            members.Add(BuildMember(profile, options, i, s, e, lengths[i], frame, startCut, endCut, diagonal));
+            var startCut = EndCut(memberProfiles, runs, axes, jointOf, tJointOf, options, i, end: 0);
+            var endCut = EndCut(memberProfiles, runs, axes, jointOf, tJointOf, options, i, end: 1);
+            double diagonal = memberProfiles[i].Section.Bounds.Size.Length;
+            members.Add(BuildMember(memberProfiles[i], options, i, s, e, lengths[i], frame, startCut, endCut, diagonal));
         }
         return new Weldment(profile, members, options);
     }
@@ -488,7 +505,7 @@ public sealed class Weldment
     }
 
     private static PlaneCut? EndCut(
-        FrameProfile profile, IReadOnlyList<(Vector3d Start, Vector3d End)> runs,
+        FrameProfile[] profiles, IReadOnlyList<(Vector3d Start, Vector3d End)> runs,
         Vector3d[] axes, (int Partner, int PartnerEnd)?[,] jointOf, int?[,] tJointOf,
         WeldmentOptions options, int run, int end)
     {
@@ -502,7 +519,7 @@ public sealed class Weldment
             // the collinear landing, so the wall cut always exists here.
             var tPoint = end == 0 ? runs[run].Start : runs[run].End;
             var tKept = end == 0 ? axes[run] : -axes[run];
-            return WallCut(profile, runs, axes, options, run, through, tPoint, tKept)
+            return WallCut(profiles, runs, axes, options, run, through, tPoint, tKept)
                 ?? throw new InvalidOperationException(
                     "A collinear T-joint reached the cut — detection should have refused it.");
         }
@@ -534,7 +551,7 @@ public sealed class Weldment
         // Butt: the earlier run runs through with its own square end; the later run is
         // trimmed back by the through member's facing wall plane. A null WallCut is the
         // collinear splice: the square end IS flush with the through cap.
-        return run < joint.Partner ? null : WallCut(profile, runs, axes, options, run, joint.Partner, j, a);
+        return run < joint.Partner ? null : WallCut(profiles, runs, axes, options, run, joint.Partner, j, a);
     }
 
     /// <summary>
@@ -547,7 +564,7 @@ public sealed class Weldment
     /// with the raw axis.
     /// </summary>
     private static PlaneCut? WallCut(
-        FrameProfile profile, IReadOnlyList<(Vector3d Start, Vector3d End)> runs, Vector3d[] axes,
+        FrameProfile[] profiles, IReadOnlyList<(Vector3d Start, Vector3d End)> runs, Vector3d[] axes,
         WeldmentOptions options, int run, int through, in Vector3d joint, in Vector3d a)
     {
         // Facing direction: this member's kept direction, projected perpendicular to
@@ -563,7 +580,7 @@ public sealed class Weldment
         // solid is built on.
         var throughFrame = MemberFrame(runs[through].Start, axes[through], options.Up);
         var wLocal = new Vector2d(w.Dot(throughFrame.X), w.Dot(throughFrame.Y));
-        double offset = FlatWallOffset(profile, wLocal, run, through);
+        double offset = FlatWallOffset(profiles[through], wLocal, run, through);
         return new PlaneCut(joint + w * offset, w);
     }
 

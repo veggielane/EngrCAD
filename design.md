@@ -6055,6 +6055,13 @@ free, through the shared `FlatWallOffset` — a round-walled through member (the
 saddle again). The volume oracle stays the prism-cut identity, now met at a mid-run
 wall: a perpendicular T keeps exactly A·(L − w/2) and a 45° one exactly A·(the
 centroid fiber's distance to the wall crossing), both planar identities at 1e-9.
+Mixed profiles per skeleton then cost one array: `Build`/`Path` take a per-run
+override list (null = the default), every consumer of "the profile" reads the
+member's own — the reach, the margin, the name, the area — and the wall offset
+reads the THROUGH member's, which is the one place two profiles meet in one
+formula. The miter needed nothing at all: the bisector plane is pure axes, and the
+mismatched weld face a smaller section leaves against a larger one is the welder's
+gap, not the kernel's problem.
 
 - **The miter plane's normal is `a − b` and nothing is ever divided.** For unit
   leave-directions `a`, `b` at a joint, the plane with that normal through the joint

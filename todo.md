@@ -1422,10 +1422,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   `Part.CutLength` → `BomLine.CutLength` cut lists, prism-cut-identity verification,
   coped saddles refused with the tracer reason; design.md §6b). Open, in rough order
   of value:
-  - [ ] **Mixed profiles per skeleton** (legs SHS, rails angle). The miter still cuts
-    both members with one plane; what changes is that the butt wall offset and the
-    per-member reach read per-member profiles, and `Weldment.Build` takes a profile
-    per run (or a default + overrides).
   - [ ] **Multi-member joints** (three members at a corner): which pair miters and
     what closes the third is a real drafting convention, not a formula — SolidWorks
     asks per-joint trim order. Wants a per-joint override vocabulary, not a guess.
