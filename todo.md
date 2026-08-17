@@ -789,8 +789,17 @@ export — is recorded in CLAUDE.md):
     `EdgeSource.Silhouette` precisely because it is the one part of a drawing that is not
     exact. Exact HLR is blocked on this.
   - [ ] **`OfSolid` on a flush plane** — a plane containing a face or an edge throws
-    (that section is an area, not a curve). A proper answer needs coplanar-face handling,
-    the same gap as coplanar booleans.
+    (that section is an area, not a curve). **The coplanar-boolean tier landing did NOT
+    unblock this, and the counterexample is worth keeping**: the natural repair — flush
+    faces contribute their regions, everything transversal sections as before, union —
+    equals NO limit section. A fused step block (slab footprint A under a boss footprint
+    B ⊂ A) sectioned at the step plane has flush faces covering only A∖B, the boss's
+    walls merely TOUCH the plane, and the interior under B has no face there at all — so
+    the construction returns A∖B where the limit from below is A and the limit from
+    above is B. A flush section needs INTERIOR classification, and the honest mechanism
+    is the FdmSlicer's own: two ordinary sections nudged ±δ (each exact), returned as
+    the below/above pair or their stated union — a semantics decision (which limit does
+    `projection(cut=true)` mean on a graze?) before an implementation.
 - [ ] `roof()` — straight-skeleton roof over a polygon; low priority
 - [ ] **Camera-adaptive tessellation on zoom** — `TessellationQuality` ✅ landed (max
   angle + max chord deviation, per-solid resolution driving mesh AND feature edges);
