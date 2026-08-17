@@ -3095,11 +3095,42 @@ the heel cross-section with every derived cone dimension; `StraightGear` lofts i
   cone. **Spiral bevel and hypoid are refused BY NAME** — a spiral flank is the
   envelope of a cutter under a generating machine's motion rather than a
   closed-form curve, and a hypoid has no common apex at all.
+- **The pair's tooth PHASING is solved, and the derivation lands on the
+  parallel-axis external rule.** `BevelPair.PhaseFor(member, azimuth, otherPhase)`
+  is the rotation a member needs about its OWN axis before it is tilted onto its
+  mounted axis (minimal rotation, polar angle Σ, azimuth ψ). A bevel pair rolls on
+  its pitch CONES rather than on a line of centres, so the condition is derived for
+  spherical rolling — and two facts collapse it: the shared cone element sits at
+  azimuth ψ in the fixed member's frame and at **ψ + π in the tilted member's own
+  frame for EVERY shaft angle** (the minimal rotation's Σ-dependence cancels in
+  Rodrigues), and rolling through `r = R·sin δ` gives `ω₂ = −(z₁/z₂)·ω₁` in the
+  members' own frames, so the pair COUNTER-rotates exactly as an external spur pair
+  does. The invariant is therefore `u₁ + u₂ ≡ ½ (mod 1)` and `PhaseFor` DELEGATES
+  to `GearMeshing.ExternalPhase` bit for bit (the `PlanetPhase` convention — one
+  derivation, asked rather than restated). **So the shaft angle decides the cone
+  angles and never the phase**, which is what the delegation asserts.
 - Verification: the solid is checked against the EXACT volume of the cone over its
   own exact section area, `A·H·(1 − k³)/3`, which converges with tessellation and
   separates the along-cone face width from an axially measured one by 9.75%; the
   flank is measured against a projected involute the test computes from the spec
-  alone, with a 2° pressure-angle mutation the instrument sees as >50×.
+  alone, with a 2° pressure-angle mutation the instrument sees as >50×. The PHASE
+  is verified from CONTACT through a SIGNED clearance (`GearContact.Clearance`'s
+  bevel twin — positive is a gap, negative a bite, so one number separates "phased"
+  from "biting" AND from "never engaging", which an overlap depth cannot): the
+  wheel's outline is carried through the mounting and projected centrally from the
+  shared apex onto the pinion's section, exact because every flank is ruled through
+  that apex — which is also what makes the whole question 2D, both bodies being
+  sets of rays from one point. At the solved phase the conjugate flanks TOUCH,
+  measuring **7.0e-5 mm** (20:30 at Σ = 90°) and **−1.6e-4 mm** (18:45 at Σ = 60°),
+  i.e. **0.3× and 0.7× the flank fit's own deviation** — the phase contributes
+  nothing above the grade of the curves being measured — and the reading holds
+  through tooth handover as the pinion is rolled. Half a tooth pitch of phase error
+  reads **−2.577 / −2.581 mm**, some **12 000×** that deviation; a QUARTER pitch
+  still reads −2.27 / −2.22 mm, so the instrument is not tuned to the deepest
+  possible error. The docs example's old hand-phasing (`z₁ % 4 == 0` and
+  `z₂ % 4 == 2` at the pinion's 90° azimuth) is now DERIVED: for those counts the
+  solved phase is exactly 27 wheel pitches, a whole number, which is why an
+  unphased placement happened to mesh.
 
 ### Planetary (epicyclic) sets (`PlanetaryGears.cs`)
 

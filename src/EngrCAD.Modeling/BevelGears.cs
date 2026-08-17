@@ -81,6 +81,67 @@ public sealed record BevelPair
     /// either tooth count gives the same number.</summary>
     public double OuterConeDistance(double module) =>
         module * PinionTeeth / (2 * Math.Sin(PinionConeAngleDegrees * Math.PI / 180));
+
+    /// <summary>
+    /// The rotation the named member needs about its OWN axis to mesh, radians — the
+    /// <see cref="GearMeshing"/> tooth-phasing rule solved for a pair rolling on its
+    /// pitch CONES rather than on a line of centres.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The mounting convention the phase means anything under.</b> The OTHER
+    /// member sits as drawn — apex at the origin, axis on +Z, one tooth centred on +X
+    /// (the <see cref="BevelGears.Straight"/> datum, measured off the section by test
+    /// rather than assumed) — turned about its own axis by
+    /// <paramref name="otherPhase"/>; THIS member, drawn the same way, is turned by the
+    /// returned phase about its own +Z and then tilted by the MINIMAL rotation taking
+    /// +Z to the mounted axis (polar angle = <see cref="ShaftAngleDegrees"/>, azimuth
+    /// <paramref name="azimuth"/> from +X). At azimuth π/2 on a 90° pair that tilt is
+    /// <c>RotateX(−π/2)</c>, the docs example's own placement.</para>
+    /// <para><b>The derivation is spherical rolling pulled back through that tilt, and
+    /// it lands on the parallel-axis EXTERNAL rule.</b> Both pitch cones share the apex
+    /// and roll along the common element, which sits at azimuth ψ in the fixed member's
+    /// frame and — a property of the minimal rotation, for EVERY shaft angle Σ — at
+    /// azimuth ψ + π in the tilted member's own frame (Rodrigues about n̂ = ẑ×ŵ takes
+    /// the element to (−sin δ₂·cos ψ, −sin δ₂·sin ψ, cos δ₂), the Σ-dependence
+    /// cancelling). Rolling ties the spins through the pitch radii r_i = R·sin δ_i, so
+    /// in the members' OWN frames ω₂ = −(z₁/z₂)·ω₁ — the pair counter-rotates exactly
+    /// as an external spur pair does — hence u₁(ψ) + u₂(ψ+π) is the rolling invariant
+    /// and the mesh condition is the external rule's own <c>u₁ + u₂ ≡ ½ (mod 1)</c>.
+    /// So the SHAFT ANGLE decides the cone angles and never the phase, and this method
+    /// DELEGATES to <see cref="GearMeshing.ExternalPhase"/> bit-identically (the
+    /// <c>PlanetPhase</c> convention: one derivation, asked rather than restated).</para>
+    /// <para>The phase returned is the SYMMETRIC zero-backlash one (a tooth centred in
+    /// the space at the contact element) and is deliberately NOT wrapped, the
+    /// <see cref="GearMesh"/> conventions; which flank drives is the caller's, via a
+    /// further roll at the tooth ratio. Both members must share a module and pressure
+    /// angle for the pair to mesh at all — the phase rule itself depends only on the
+    /// tooth counts and the drawing datum, which is why nothing here asks for a
+    /// module.</para>
+    /// </remarks>
+    /// <param name="member">Which member is being PLACED (spun, then tilted).</param>
+    /// <param name="azimuth">Azimuth of the mounted axis from +X, radians (π/2 puts the
+    /// placed member's axis toward +Y, the ordinary layout).</param>
+    /// <param name="otherPhase">How far the FIXED member is turned from its own drawing
+    /// datum (0 = as drawn, a tooth centred on +X).</param>
+    /// <exception cref="ArgumentOutOfRangeException">An unknown member.</exception>
+    public double PhaseFor(BevelMember member, double azimuth = 0, double otherPhase = 0) => member switch
+    {
+        BevelMember.Pinion => GearMeshing.ExternalPhase(WheelTeeth, PinionTeeth, azimuth, otherPhase),
+        BevelMember.Wheel => GearMeshing.ExternalPhase(PinionTeeth, WheelTeeth, azimuth, otherPhase),
+        _ => throw new ArgumentOutOfRangeException(nameof(member), member,
+            "A bevel pair has two members: BevelMember.Pinion and BevelMember.Wheel."),
+    };
+}
+
+/// <summary>Names one member of a <see cref="BevelPair"/> — the argument
+/// <see cref="BevelPair.PhaseFor"/> takes to say which member is being placed.</summary>
+public enum BevelMember
+{
+    /// <summary>The member with <see cref="BevelPair.PinionTeeth"/> teeth.</summary>
+    Pinion,
+
+    /// <summary>The member with <see cref="BevelPair.WheelTeeth"/> teeth.</summary>
+    Wheel,
 }
 
 /// <summary>

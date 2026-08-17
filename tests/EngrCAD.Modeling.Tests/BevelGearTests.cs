@@ -72,6 +72,135 @@ public class BevelGearTests
         Assert.Contains("crown", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ---------------------------------------------------------------- the pair's phasing
+
+    [Fact]
+    public void PhaseFor_DelegatesToTheExternalRuleBitForBit()
+    {
+        // The derivation is spherical — rolling on the pitch CONES, pulled back through
+        // the minimal-rotation mounting — and the ANSWER is the parallel-axis external
+        // rule: the tilted member's own contact azimuth is psi + pi for EVERY shaft
+        // angle, and the cones counter-rotate in their own frames (w2 = -(z1/z2)*w1).
+        // So PhaseFor IS GearMeshing.ExternalPhase, pinned as bits (the PlanetPhase
+        // convention), with the placed member the DRIVEN one either way round.
+        foreach (double sigma in new[] { 60.0, 90.0, 120.0 })
+        {
+            var pair = new BevelPair(20, 30, sigma);
+            foreach (double psi in new[] { 0.0, 0.7, Math.PI / 2 })
+                foreach (double other in new[] { 0.0, 0.31 })
+                {
+                    Assert.Equal(
+                        GearMeshing.ExternalPhase(20, 30, psi, other),
+                        pair.PhaseFor(BevelMember.Wheel, psi, other));
+                    Assert.Equal(
+                        GearMeshing.ExternalPhase(30, 20, psi, other),
+                        pair.PhaseFor(BevelMember.Pinion, psi, other));
+                }
+        }
+    }
+
+    [Fact]
+    public void PhaseFor_DerivesTheDocsCountCoincidence()
+    {
+        // The docs example used to hand-phase via z1 % 4 == 0 and z2 % 4 == 2 (a tooth
+        // centre against a space centre at the pinion's 90 deg azimuth). PhaseFor
+        // derives it: for exactly those counts the solved phase is a WHOLE number of
+        // wheel pitches (27), so the unrotated wheel was the special case, not a rule.
+        var pair = new BevelPair(20, 30);
+        double phase = pair.PhaseFor(BevelMember.Wheel, azimuth: Math.PI / 2);
+        Assert.Equal(27, phase / (2 * Math.PI / 30), 12);
+    }
+
+    [Fact]
+    public void PhaseFor_RefusesAnUnknownMember()
+    {
+        var pair = new BevelPair(20, 30);
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() => pair.PhaseFor((BevelMember)7));
+        Assert.Contains("Pinion", ex.Message);
+    }
+
+    [Theory]
+    // The docs example's own mounting (90 deg shaft angle, wheel toward +Y). Ignoring
+    // the azimuth term here misphases by psi*(1 + z1/z2) = 12.5 wheel pitches — a HALF
+    // pitch, the deepest possible error — so the azimuth mutation cannot near-miss.
+    [InlineData(20, 30, 90.0, 1.5707963267948966)]
+    // A NON-right shaft angle at an oblique azimuth: the phase rule must be
+    // shaft-angle independent (sigma moves the cone angles, never the phase). 0.748 is
+    // CHOSEN so the dropped-azimuth error 1.4*psi lands at 7.5 wheel pitches — again a
+    // half pitch, the near-miss lesson applied in advance (at psi = 0.7 it would land
+    // 0.02 pitch from a whole pitch and the mutation could not bite).
+    [InlineData(18, 45, 60.0, 0.748)]
+    public void PhaseFor_PhasedPairMeshesFromContact_AndMutationsBite(
+        int z1, int z2, double sigma, double azimuth)
+    {
+        const double m = 3;
+        var pair = new BevelPair(z1, z2, sigma);
+        var pinion = BevelGears.Straight(new GearSpec(m, z1), pair.PinionConeAngleDegrees, m * 2);
+        var wheel = BevelGears.Straight(new GearSpec(m, z2), pair.WheelConeAngleDegrees, m * 2);
+
+        // The DATUM is measured off the drawn section, never assumed: bisecting both
+        // flanks at the pitch circle puts the tooth centre at azimuth 0 to round-off
+        // (the left flank is the arithmetic mirror of the right).
+        var region = pinion.Sketch.ToRegion();
+        double r1 = m * z1 / 2;
+        double At(double theta) =>
+            region.SignedDistance(new Vector2d(r1 * Math.Cos(theta), r1 * Math.Sin(theta)));
+        double centre = (Bisect(At, 0, Math.PI / z1) - Bisect(t => At(-t), 0, Math.PI / z1)) / 2;
+        Assert.True(Math.Abs(centre) < 1e-9, $"tooth centre measured {centre:E2} rad off +X");
+
+        // The solved phase: SYMMETRIC zero-backlash contact at the shared cone element,
+        // so the conjugate flanks TOUCH and the clearance is ≈0 — asserted in BOTH
+        // directions, which is what makes it a measurement rather than a formality.
+        // Nothing may bite (negative), and the pair must genuinely engage: a large
+        // positive reading would be two gears passing each other, which an
+        // interpenetration-only instrument reads exactly as "no overlap" too.
+        // The bar is the FLANK FIT's own deviation rather than a round number: measured
+        // 7.0e-5 and -1.6e-4 mm, i.e. 0.3x and 0.7x it, so the solved phase contributes
+        // nothing above the grade of the curves being measured.
+        double grade = 4 * Math.Max(pinion.MaxFitDeviation, wheel.MaxFitDeviation);
+        double phase = pair.PhaseFor(BevelMember.Wheel, azimuth);
+        double correct = MeshClearance(pair, pinion, wheel, azimuth, 0, phase);
+        Assert.True(Math.Abs(correct) < grade,
+            $"a correctly phased pair should touch; measured {correct:E3} against a flank fit grade "
+            + $"of {grade:E3}");
+
+        // The condition must be a rolling INVARIANT, which is the whole content of
+        // "u1 + u2 is constant": turn the pinion through a pitch and re-solve the
+        // wheel's phase at each pose — the contact reading stays at the same grade
+        // through tooth handover, which a wrong z1/z2 coefficient could not manage.
+        for (int k = 1; k <= 4; k++)
+        {
+            double eta = k * (2 * Math.PI / z1) / 5;
+            double rolled = MeshClearance(
+                pair, pinion, wheel, azimuth, eta, pair.PhaseFor(BevelMember.Wheel, azimuth, eta));
+            Assert.True(Math.Abs(rolled) < grade,
+                $"rolled pose {k}/5 reads {rolled:E3} against the correct pose's {correct:E3}");
+        }
+
+        // MUTATIONS, each with teeth. Half a tooth pitch of phase error is
+        // tooth-on-tooth at the contact element — measured -2.577 and -2.581 mm, some
+        // 11 800x to 12 000x the flank fit deviation, where the correct phase touches at
+        // a fraction of it. A QUARTER pitch is included because a mutation only the
+        // deepest possible error can see would prove much less: it reads -2.27 and
+        // -2.22 mm, so the instrument is not tuned to exactly half. And DROPPING the
+        // azimuth term lands at exactly a half pitch for both rows (see the InlineData
+        // notes), so it bites just as deep.
+        double bar = -100 * Math.Max(pinion.MaxFitDeviation, wheel.MaxFitDeviation);
+        double mutated = MeshClearance(pair, pinion, wheel, azimuth, 0, phase + Math.PI / z2);
+        Assert.True(mutated < bar,
+            $"a half-pitch phase error reads {mutated:E3} against a flank fit deviation of "
+            + $"{pinion.MaxFitDeviation:E3} — the instrument cannot see it");
+
+        double quarter = MeshClearance(pair, pinion, wheel, azimuth, 0, phase + Math.PI / (2 * z2));
+        Assert.True(quarter < bar,
+            $"a quarter-pitch phase error reads {quarter:E3}, which the instrument cannot see");
+
+        double droppedAzimuth = MeshClearance(
+            pair, pinion, wheel, azimuth, 0, pair.PhaseFor(BevelMember.Wheel, azimuth: 0));
+        Assert.True(droppedAzimuth < bar,
+            $"a dropped azimuth term reads {droppedAzimuth:E3}, which the instrument cannot see");
+    }
+
     // ---------------------------------------------------------------- the virtual gear
 
     [Theory]
@@ -434,6 +563,69 @@ public class BevelGearTests
             if (at(mid) < 0) inside = mid; else outside = mid;
         }
         return (inside + outside) / 2;
+    }
+
+    /// <summary>
+    /// The pair's contact instrument — <c>GearContact.Clearance</c>'s bevel twin, and a
+    /// SIGNED reading for the same reason: positive is a gap, negative is
+    /// interpenetration by that depth, so one number separates "correctly phased"
+    /// (touching, ≈0) from "biting" AND from "not engaging at all", where an
+    /// unsigned overlap depth reads a pair that never meets and a pair that meshes
+    /// identically as zero.
+    /// </summary>
+    /// <remarks>
+    /// <b>Why a 2D question is the whole of it.</b> Both members are cones about the
+    /// SHARED apex, so each is a set of rays from that apex and their intersection is
+    /// decided entirely by which rays they have in common — no sampling in depth is
+    /// needed or meaningful. So the wheel's outline is lifted into its own heel plane,
+    /// spun by its phase, tilted by the mounting rotation (Rodrigues, written out here
+    /// so the oracle shares no code with <c>PhaseFor</c> beyond the mounting convention
+    /// it measures), and projected CENTRALLY from the apex onto the pinion's heel plane
+    /// — exact, because every straight bevel flank is ruled through the apex — where it
+    /// is measured against the pinion's own exact section.
+    /// </remarks>
+    private static double MeshClearance(
+        BevelPair pair, BevelGearProfile pinion, BevelGearProfile wheel,
+        double azimuth, double pinionPhase, double wheelPhase)
+    {
+        double sigma = pair.ShaftAngleDegrees * Deg;
+        var pinionRegion = pinion.Sketch.ToRegion();
+
+        // The minimal rotation taking +Z to the mounted axis at (azimuth, sigma) is by
+        // sigma about n = (-sin psi, cos psi, 0).
+        double nx = -Math.Sin(azimuth), ny = Math.Cos(azimuth);
+        double cosS = Math.Cos(sigma), sinS = Math.Sin(sigma);
+        double cw = Math.Cos(wheelPhase), sw = Math.Sin(wheelPhase);
+        double c1 = Math.Cos(-pinionPhase), s1 = Math.Sin(-pinionPhase);
+        // Only rays that can reach the pinion's own material are worth measuring; the
+        // rest read a large positive gap and cannot be the minimum anyway.
+        double reach = pinion.SectionTipRadius + 0.05;
+
+        double min = double.PositiveInfinity;
+        foreach (var p in GearContact.Outline(wheel.Sketch))
+        {
+            // spin about the wheel's own axis, then lift into its heel plane
+            double px = p.X * cw - p.Y * sw, py = p.X * sw + p.Y * cw, pz = wheel.HeelPlaneZ;
+
+            double dot = nx * px + ny * py;                                // n . p
+            double cx = ny * pz, cy = -nx * pz, cz = nx * py - ny * px;    // n x p
+            double qx = px * cosS + cx * sinS + nx * dot * (1 - cosS);
+            double qy = py * cosS + cy * sinS + ny * dot * (1 - cosS);
+            double qz = pz * cosS + cz * sinS;
+            if (!(qz > 0))
+                continue;   // the ray points away from the pinion's own half-space
+
+            // central projection from the shared apex onto the pinion's heel plane
+            double s = pinion.HeelPlaneZ / qz;
+            double wx = qx * s, wy = qy * s;
+            if (wx * wx + wy * wy > reach * reach)
+                continue;
+            min = Math.Min(min, pinionRegion.SignedDistance(
+                new Vector2d(wx * c1 - wy * s1, wx * s1 + wy * c1)));
+        }
+        Assert.True(double.IsFinite(min),
+            "no wheel ray reached the pinion's section — the instrument measured nothing");
+        return min;
     }
 
     /// <summary>
