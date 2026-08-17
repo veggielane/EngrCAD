@@ -10490,12 +10490,33 @@ disabled, which is what pointed one tier over.
 docs `examples/fits.md`): the fit tables are a TRANSCRIPTION under the
 verify-against-datasheet flag, stored in the standard's own micrometres and converted
 to model millimetres at the API — the `Materials` lesson, that a constant must be
-asserted in the form a human checks. Three decisions carry it. **Scope is the
-hole-basis d–p band, refused by name beyond it**: letters a–c and r–z split their
-fundamental deviations at sub-range boundaries the main table does not have (c changes
-at 40 within the 30–50 range), so transcribing them halfway would be exactly the
-plausible-wrong-row failure the flag exists to prevent — they are filed with the
-reason, H11/c11 and H7/s6 named as the preferred fits waiting on them. **A fit's KIND
+asserted in the form a human checks. Three decisions carry it. **Scope is the whole
+deviation alphabet on BOTH bases, with the correction-carrying holes refused by
+name**: letters a–c and r–z split their fundamental deviations at boundaries the
+grade table does not have (c changes at 40 within the 30–50 range), so they ride a
+second, finer 25-row table read by the same size lookup — and which letters split
+where is not uniform, r and s carrying one value across 30–50 while t–z take a new
+cell at 40, which is why coverage is asserted at every one of the 25 boundaries
+rather than at the rows a fixture happened to name. The shaft-basis holes A–G are the
+standard's own mirror rule, `EI = −es` of the same-letter shaft with no correction at
+any grade, and its consequence is the verification: **G7/h6 carries exactly H7/g6's
+clearance extremes**, asserted with `==` because the two IT widths are the same
+numbers summed in the other order, so a joint has one answer whichever system
+describes it. What stays refused is where a transcription would be a guess: the holes
+J and K–ZC carry the `Δ = IT(n) − IT(n−1)` correction for fine grades, with tabulated
+exceptions and an IT3/IT4 dependence the grade table does not hold, so half-copying it
+is exactly the plausible-wrong-row failure the flag exists to prevent — and the
+refusal names the hole-basis spelling that works (H7/s6 for S7/h6) rather than merely
+declining. Two smaller refusals follow the same rule: cd/ef/fg/j and za–zc are
+refused as FAMILIES before the grade is parsed, so `cd9` can never be misread as a c
+fit; and t, v and y below 24, 14 and 18 mm are the standard's own EMPTY CELLS, named
+as absent rather than interpolated, because an empty cell is a statement about the
+letter and not a gap in the copy. Re-reading the standard's own tables to land this
+also corrected one v1 cell: k's 1–3 mm deviation is 0 in every grade column (the
++0.6·∛D rule rounds away at that size, so the published k6 row there is +6/0) where
+the first transcription carried 1 — the reason a transcription is asserted in the
+chart's own micrometres rather than checked against a re-derived formula.
+**A fit's KIND
 is derived from the clearance extremes, never looked up** — `MinClearance ≥ 0` is
 clearance, `MaxClearance < 0` interference, else transition — so the classification
 cannot disagree with the numbers it classifies (H7/p6 at Ø40 is interference by the
