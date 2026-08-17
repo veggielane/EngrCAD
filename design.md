@@ -3313,6 +3313,68 @@ gradation limit existed.
   not move and drafting twice by θ/2 equals once by θ. Because the result is still
   `PlaneSurface` faces, a drafted solid stays selectable, further-draftable and
   STEP-exportable — which a ruled-loft implementation would have given up.
+- **A drafted cap's HOLE is a ring, not a case.** A hole's walls form a closed ring of
+  side faces exactly as the outer boundary's do, and their outward normals point INTO the
+  hole, so the same rotate-about-the-neutral-line rule taken verbatim makes the hole OPEN
+  along the pull while the outside closes — which is what releases a core pin, and is a
+  consequence rather than an arrangement. So the only generalisation multi-loop caps
+  needed was ONE RING PER CAP LOOP: the corner solve is within a ring (a hole's corners
+  involve only that hole's own walls and the two caps), and the winding rule is the outer
+  boundary's own, because a hole loop is already wound the other way in the cap it came
+  from — reversing the base and keeping the top reproduces exactly that. The fold check is
+  the one thing that had to be RESTATED rather than reused: it required a positive signed
+  area, which is a proxy for "the ring did not turn inside out" that only holds for the
+  outer ring, so it now compares each ring against its OWN original sign — the same
+  predicate for the outer one, since its original area is positive.
+  **The oracle is a closed form whose quadratic terms CANCEL**: with both rings leaning,
+  `A(z) = (W−2zt)(D−2zt) − (A+2zt)(B+2zt)` loses its `z²` terms identically, so
+  `V = A₀h − tanθ·h²·(W+D+A+B)` — measured at +10° and −6° — and a hole drafted the same
+  way as the outside flips the sign of its own contribution rather than merely being
+  slightly off. The circular twin holds the same shape, `π[(R²−r²)h − tanθ·h²(R+r)]`, so
+  the identity is `V = A₀h − (tanθ·h²/2)·ΣP` over the total perimeter either way.
+- **ADJACENT OPENINGS cut the rim OPEN; they do not merge into one face.** The backlog
+  filed this as "their shared rim has zero width, so the two openings must MERGE into one
+  rim loop", and the second clause is the useful correction: the two openings lie on
+  DIFFERENT PLANES, so no single face can carry both, and what merges is the LOOP rather
+  than the face. Each opening's rim is an annulus between the outer boundary and its
+  inward-offset twin; where the two openings share an edge that annulus has zero width
+  along it, so the annulus is CUT there and its outer and inner boundaries become one
+  simply-connected loop. The trace is combinatorial and consults no geometry: walk the
+  outer loop, and at a shared edge take that edge's FIRST piece, dive into the reversed
+  inner loop and follow it BACKWARDS until the next shared edge, whose SECOND piece
+  brings the walk back out. N non-adjacent shared edges therefore cut one rim into N
+  faces, which falls out of the walk rather than being counted.
+
+  **The shared edge is cut back to its two END pieces and both rims use them by
+  REFERENCE**, which is what keeps the result two-manifold: each piece is traversed once
+  by each of the two rims, in opposite senses, so `Validate` sees an ordinary edge. The
+  stretch between the two inner corners belongs to neither rim and is simply not built —
+  it is exactly the zero-width part.
+
+  **The inner corner lies on the shared edge's own LINE by theorem**, which is why the
+  cut can be a parameter along that edge rather than a fresh solve: the corner is the
+  meeting of one MOVED plane (the wall between the two openings) and the two STATIONARY
+  opening planes, and those two already intersect in exactly that line. It is checked at
+  the weld tier all the same, because a higher-valence corner reaches its point through a
+  least-squares solve rather than through that argument, and a check that costs one dot
+  product should not rest on the caller's valence.
+
+  **`Validate()` is not an acceptable oracle here and the entry said so before the work
+  started.** A half-built merge leaves every edge with two coedges and every loop closed;
+  what it gets wrong is WHICH material the rim bounds, which only an integral reads. So
+  the oracle is the closed form `1000 − 9·8·9` for a 10-cube at t = 1 opened on two
+  adjacent faces, with the MUTATION that proves it — opening the second face removes
+  exactly `1·8·9` more than opening the first alone, the volume of the strip the merge
+  gives up.
+
+  **What is refused is refused for its own reason.** Three openings meeting at one VERTEX
+  close the rim to a point that no thickness can rescue, so it is checked before a single
+  position moves (the rim-surgery all-or-nothing rule; without that hoist the failure
+  surfaced as "the wall thickness consumes the rim" from the edge split, three stages
+  downstream and naming the wrong thing). Adjacent openings on a CURVED body stay refused
+  because the pieces would be sub-CURVES rather than sub-segments, each needing its own
+  parameter solved on the shared carrier — and a CLOSED shared rim (a cap meeting a
+  full-turn band) has no two corners to cut back to at all.
 - **Polyhedral offset is exact, and so is curved offset — the corner machinery is
   `SurfaceOffset` + `SurfaceCorner` + `CarrierBody`, built once for three consumers.**
   An offset plane is a plane and an offset vertex is a three-plane intersection, so
@@ -4598,16 +4660,40 @@ surface along its own normal (∂u × ∂v), which is the outward normal only fo
 — so a reversed face's surface is offset by `−distance`. `CarrierBody.Lift` spells exactly
 that, and the sign lives THERE once because every consumer already states the offset in
 outward terms (a positive `OffsetFaces` grows the solid; a shell's inner layer is a negative
-outward offset). The refusal is gated behind `CarrierBody.Recognize(solid,
-allowReversedFaces)` — the offset path passes `true` while SHELL and DRAFT keep it, because
-their carrier construction and cavity rules (the `Flipped` twin, `Draft.Taper`'s lean read
-off the surface normal) are not yet sense-aware. So forward-face offsets, every shell and
-every draft are bit-identical, and only a reversed face on the offset path takes the new
-branch. Verified in `DirectEditVolumeTests`: a `Cylinder(20,30) − Cylinder(9,40)` housing's
-bore wall pushed +2 shrinks the bore to r7 and −2 grows it to r11, each changing the volume
-by the exact annulus `π(9² − r'²)·30`, Validate-clean at genus 1 and re-tessellating closed.
-The MOVE of a reversed curved face and the SHELL of one stay filed (both want the same
-sense-aware carrier/cavity pass).
+outward offset). Verified in `DirectEditVolumeTests`: a `Cylinder(20,30) − Cylinder(9,40)`
+housing's bore wall pushed +2 shrinks the bore to r7 and −2 grows it to r11, each changing
+the volume by the exact annulus `π(9² − r'²)·30`, Validate-clean at genus 1 and
+re-tessellating closed.
+
+**SHELL and DRAFT are sense-aware now too, and the `allowReversedFaces` flag is gone rather
+than flipped.** It existed because two rules were not written in outward terms: the cavity
+twin (`CarrierBody.Flipped`) hard-coded `IsReversed = true`, and `Draft.Taper` read its lean
+off the SURFACE normal. Both are one sign each and both are stated as the outward rule they
+always meant. **The cavity twin's rule is `!parentReversed`**, because a twin must face
+exactly opposite its parent's own outward normal — which for a forward face is the surface's
+and for a reversed one its negation — so a reversed PLANAR parent's twin is the plane
+VERBATIM with no flag at all: the reversal it already carries IS the flip, and the exact
+frame swap a plane can do is spent only where there is something to swap. **The taper's rule
+is `sign = reversed ? −1 : 1` applied twice** — on the plane's own normal before the hinge
+and on the candidate lean after it — since `TaperPlane` speaks outward normals in and out
+while `Rebuild` carries `IsReversed` over verbatim, so the answer must come back through the
+same sense it went in on. A forward face multiplies by an exact `+1` in every one of those
+places, which is what leaves all-forward bodies bit-identical; with every consumer
+sense-aware there was nothing left for the flag to gate, so `Recognize` lost it.
+
+The pair is worth stating together because they fail in opposite directions and only one of
+them is visible to a structural check. A wrong cavity flag leaves a solid that VALIDATES —
+the flag touches no loop, so every edge still has two coedges of opposite sense — and only
+an integral through the tessellator (which reverses a reversed face's polygons) reads it
+back; the oracle is therefore the volume, `π(20²−9²)·30 − π(18²−11²)·26` on a bored housing.
+A wrong taper sense produces a plausible SHAPE whose bore closes rather than opens, which
+the volume also catches, since the closed form's second-order terms only cancel when the two
+rings lean opposite ways. One residual is newly REACHABLE rather than newly broken: a bore
+spelled as an EXTRUDED CIRCLE shells to an exact solid whose display mesh refuses by name,
+because the offset carrier's generator keeps the source generator's phase while the rebuilt
+rims keep the edge's, and the ring-paired-band tier reads them as unpaired. The MOVE of a
+reversed curved face stays filed (`ConcentricRim` rebuilds a rim about the ORIGINAL axis,
+right for an offset and false for a translation).
 
 **(b) A MOVE of a planar face is an offset, by derivation, so it is implemented as one.**
 A plane is invariant under translation within itself, so the plane reached by displacing a

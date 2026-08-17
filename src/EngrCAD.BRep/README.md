@@ -583,10 +583,12 @@ operations. Depends only on `EngrCAD.Core`.
   they meet did. The rebuild uses `PlaneSurface` faces (not a ruled loft), so the result
   stays selectable by the same `BrepQueries` vocabulary and STEP-exportable.
   The planar path handles **planar-faced prisms** — two caps perpendicular to the pull
-  direction, single-loop caps, four-sided planar sides — and rejects caps with holes,
-  selecting a cap, and a taper large enough to fold the profile (checked by winding *and*
-  per-edge direction against the original loop, since a signed area alone can stay positive
-  while one edge has already reversed).
+  direction, four-sided planar sides, caps carrying any number of loops (see below) — and
+  rejects a cap whose two ends disagree about their loop count, selecting a cap, and a taper
+  large enough to fold the profile (checked by winding *and* per-edge direction against the
+  original loop, since a signed area alone can stay positive while one edge has already
+  reversed — and compared per RING against that ring's OWN original sign, since "positive"
+  is a proxy that holds only for the outer boundary).
   **Curved faces taper too, and exactly.** A face of revolution about the pull direction
   drafts by rotating its GENERATOR in its own axial half-plane about the point where that
   generator crosses the neutral plane — the same "rotate about the neutral line" rule, one
@@ -602,7 +604,12 @@ operations. Depends only on `EngrCAD.Core`.
   generator's traversal and the revolve's outward convention, three sign conventions that have
   each cost this kernel real geometry, for an answer one dot product settles. Refused by name:
   a curved face on any other axis (its drafted carrier is not a surface of any family this
-  kernel builds).
+  kernel builds), and a non-planar NEUTRAL SURFACE (a curved hinge, so a general ruled
+  carrier). **Caps carry HOLES**: one closed ring of side faces per cap loop, the corner
+  solve / fold check / winding rule the outer boundary's own, and the hole OPENS along the
+  pull while the outside closes — which is what releases a core pin. **The taper reads its
+  lean off the OUTWARD normal**, so a bore a difference marked reversed drafts open rather
+  than plausibly shut.
   **Per-face angles in one call**: `Draft.Apply(solid, neutralOrigin, pullDirection,
   angleSelector)` takes a `Func<BrepFace, double?>` (null = leave the face) — every corner
   is solved once from its two final planes, which is exactly what chaining single-angle
@@ -623,6 +630,23 @@ operations. Depends only on `EngrCAD.Core`.
   boundary (they supply the second use of every edge that face used to carry) plus the inner
   opening as a hole. With no opening the cavity is sealed and the result is a **two-shell**
   solid; with openings it is one shell, and two opposite openings give a genus-1 tube.
+  **Adjacent openings MERGE their rims** on the all-planar path: where two opening faces
+  share an edge the strip between their rims has zero width, so the annulus is cut open and
+  the outer and inner boundaries become ONE loop — traced combinatorially (walk the outer
+  loop; at a shared edge take its first piece, dive into the reversed inner loop and follow
+  it backwards until the next shared edge, whose second piece brings the walk back out),
+  with the shared edge cut back to the two end pieces BOTH rims use in opposite directions
+  (which is what keeps the result two-manifold) and the stretch between the inner corners
+  simply not built. N non-adjacent shared edges cut a rim into N simply-connected FACES.
+  Merging the two openings into one face would have been the wrong shape of fix — they lie
+  on different planes — and three openings at one vertex are refused BEFORE any position
+  moves, since the corner there is the meeting of three STATIONARY planes and no thickness
+  can rescue it.
+  **A REVERSED face is ordinary input**: `CarrierBody`'s cavity twin flips relative to its
+  parent's own sense (`!parentReversed` rather than a hard-coded flip; a reversed planar
+  parent's twin is the plane VERBATIM, because the reversal it already carries IS the flip),
+  so a bore a boolean cut shells like any other face. The flag `Recognize` used to take is
+  gone — every consumer is sense-aware, so there is nothing left to gate.
   **Per-face wall thickness**: `Shelling.Shell(solid, Func<BrepFace, double> thickness,
   openingSelector?)` asks the selector once per non-opening face (a thick base under thin
   walls) — nothing new geometrically, since each inner corner was already the intersection
@@ -679,9 +703,11 @@ operations. Depends only on `EngrCAD.Core`.
     bore wall NARROWS the bore, the normal there pointing into the void. A CURVED bore a
     BOOLEAN cut works too: a difference marks the tool's walls `IsReversed`, and `Lift`
     offsets a reversed face's surface by `−distance` (its outward normal is the negative of
-    the surface's), so the outward sign is honoured once and the caller stays orientation-free
-    (`CarrierBody.Recognize(solid, allowReversedFaces)` gates it; SHELL and DRAFT keep the
-    reversed-face refusal, so their output is bit-identical).
+    the surface's), so the outward sign is honoured once and the caller stays orientation-free.
+    SHELL and DRAFT are sense-aware on the same terms now — a reversed face is ordinary input
+    to `CarrierBody.Recognize`, the cavity twin turning around relative to its parent's own
+    sense and the taper reading its lean off the OUTWARD normal — so the gate that used to
+    admit only the offset path is gone rather than widened.
   - **`DirectEdit.MoveFaces(solid, translation, selector)`** translates planar faces, and is
     the offset under another name BY DERIVATION: a plane is invariant under translation
     within itself, so displacing a face by `v` reaches exactly the plane an offset of `v·n̂`
@@ -1635,12 +1661,27 @@ law" generalization (a section scaled and twisted along a spine — which is a l
 sections are generated rather than given, so it lands on `LoftedSurface` once a law
 evaluator exists). `LoftedSurface` is not STEP-exportable (same bucket as swept surfaces).
 Draft gaps: curved faces on an axis other than the pull direction (a face of revolution
-ABOUT the pull direction now drafts exactly), caps with holes, and drafting about a
-non-planar neutral surface.
-Shelling gaps (curved faces now shell exactly — see `SurfaceOffset`/`SurfaceCorner` above):
-carriers with no same-family offset (swept and NURBS surfaces), non-circular curved edges,
-higher-valence vertices whose offset planes are NOT concurrent (a concurrent one — a
-pyramid apex — now works), adjacent openings, and global self-intersection detection.
+ABOUT the pull direction drafts exactly, and caps with HOLES now draft too — a hole's
+walls are an ordinary closed ring of side faces, so the same rule applies to them and the
+hole OPENS along the pull while the outside closes), and drafting about a non-planar
+neutral surface — refused by name, since a curved hinge makes every tapered carrier a
+general ruled surface rather than a plane, a cone or a torus band.
+Shelling gaps (curved faces now shell exactly — see `SurfaceOffset`/`SurfaceCorner` above,
+and ADJACENT openings merge their rims on the all-planar path): carriers with no
+same-family offset (swept and NURBS surfaces), non-circular curved edges, higher-valence
+vertices whose offset planes are NOT concurrent (a concurrent one — a pyramid apex — now
+works; a non-concurrent one opens the vertex into a small FACE, which is corner-patch
+construction rather than a carried-over rebuild), adjacent openings on a CURVED body (the
+shared edge's rim pieces would be sub-CURVES, each needing its own parameter solved on the
+shared carrier, and a closed shared rim has no two corners to cut back to), three openings
+meeting at one vertex (the rim closes to a point), and global self-intersection detection.
+One TESSELLATION residual is newly reachable now that shelling accepts boolean output: a
+body whose bore wall is an EXTRUDED CIRCLE (the `Shape.Cylinder` lowering) shells to an
+exact, `Validate`-clean solid whose cavity walls sit at their exact radii, but its offset
+carrier's generator keeps the SOURCE generator's phase while the rebuilt rims keep the
+EDGE's, so the tessellator's ring-paired-band gate reads the two ring loops as unpaired
+and the display mesh refuses BY NAME. A `CylinderSurface` bore (a `SolidFactory` operand)
+is unaffected.
 `HelicalSurface` faces cannot be exported to STEP (same bucket
 as swept surfaces); helical faces trimmed into anything other than a rail/spiral band
 (e.g. a helical band cut by a NON-perpendicular plane or another curved surface) have
