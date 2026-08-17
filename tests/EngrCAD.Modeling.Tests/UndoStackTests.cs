@@ -20,7 +20,8 @@ public class UndoStackTests
 
     private sealed record Rig(
         Document Document, Scene Scene, Part Plate, FeatureHistory History,
-        Assembly Assembly, UndoStack Undo)
+        Assembly Assembly,
+        Part Loose, UndoStack Undo)
     {
         public string Snapshot() => Document.Save();
     }
@@ -41,7 +42,9 @@ public class UndoStackTests
         assembly.Add(plate, Frame3d.FromXY((0, 0, 20), Vector3d.UnitX, Vector3d.UnitY));
         tab.Add(assembly);
 
-        return new Rig(new Document(scene), scene, plate, history, assembly, new UndoStack());
+        var loose = tab.Add(new Part("loose", Shape.Box(10, 10, 10)));
+
+        return new Rig(new Document(scene), scene, plate, history, assembly, loose, new UndoStack());
     }
 
     private static double Volume(Part part) =>
@@ -57,7 +60,8 @@ public class UndoStackTests
         "parameter", "parameters-json", "suppress", "add-feature", "remove-feature",
         "rename", "colour", "material", "field-display", "transform", "display-mode", "clipped",
         "add-occurrence", "remove-occurrence", "repose", "explode",
-        "add-annotation", "remove-annotation", "add-mate", "remove-mate", "solve-mates");
+        "add-annotation", "remove-annotation", "add-mate", "remove-mate", "solve-mates",
+        "add-part", "remove-part", "add-tab", "remove-tab");
 
     [Theory]
     [MemberData(nameof(EditNames))]
@@ -118,6 +122,10 @@ public class UndoStackTests
             "remove-annotation" => RemoveAnnotation(rig),
             "add-mate" => AddMate(rig),
             "solve-mates" => SolveMates(rig),
+            "add-part" => DocumentEdits.AddPart(rig.Scene.Tabs[0], new Part("block", Shape.Box(5, 5, 5))),
+            "remove-part" => DocumentEdits.RemovePart(rig.Scene, rig.Scene.Tabs[0], rig.Loose),
+            "add-tab" => DocumentEdits.AddTab(rig.Scene, "Drawings"),
+            "remove-tab" => RemoveTab(rig),
             "remove-mate" => RemoveMate(rig),
             _ => throw new ArgumentOutOfRangeException(nameof(name), name, null),
         };
@@ -146,6 +154,15 @@ public class UndoStackTests
         gap: 2, name: "stack");
 
     private static DocumentEdit AddMate(Rig rig) => DocumentEdits.AddMate(Mates(rig), Stack(rig));
+
+    private static DocumentEdit RemoveTab(Rig rig)
+    {
+        // A second tab holding its own loose part, so removal has contents to bring
+        // back intact.
+        var tab = rig.Scene.AddTab("Spares");
+        tab.Add(new Part("spare", Shape.Box(4, 4, 4)));
+        return DocumentEdits.RemoveTab(rig.Scene, tab);
+    }
 
     private static DocumentEdit SolveMates(Rig rig)
     {
@@ -339,6 +356,20 @@ public class UndoStackTests
         using (rig.Undo.Group("Whatever"))
             rig.Undo.Do(DocumentEdits.SetColor(rig.Plate, Palette.Coral));
         Assert.Equal("Recolour plate", rig.Undo.UndoDescription);
+    }
+
+    [Fact]
+    public void RemovingAPlacedPart_IsRefusedNamingTheOccurrences()
+    {
+        var rig = Build();
+        string before = rig.Snapshot();
+        // The plate is placed twice by the "stack" assembly, so removal must refuse,
+        // naming where — the occurrences come out first, each its own undoable edit.
+        var refused = Assert.Throws<DocumentEditException>(
+            () => rig.Undo.Do(DocumentEdits.RemovePart(rig.Scene, rig.Scene.Tabs[0], rig.Plate)));
+        Assert.Contains("stack/", refused.Message);
+        Assert.Equal(before, rig.Snapshot());
+        Assert.False(rig.Undo.CanUndo);
     }
 
     [Fact]

@@ -1407,10 +1407,11 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     an edit that captures that bookkeeping too — a `CompoundEdit` of `Suppress` edits plus
     the marker state. Worth doing when the bar next gets attention.
   - [ ] **Undo does not reach every mutation yet.** The `DocumentEdits` vocabulary covers
-    what a UI performs today; the gaps are deliberate rather than forgotten —
-    add/remove a whole `Part` or `Tab` (needs `Tab.Remove`/`Scene.RemoveTab`, and a removed
-    part may still be placed by occurrences, so the edit has to decide whether it takes
-    them with it), and `Part.Results`/`FieldDisplay`. None is hard; each
+    what a UI performs today; the remaining gap is deliberate rather than forgotten —
+    (add/remove a whole `Part` or `Tab` ✅ landed as
+    `AddPart`/`RemovePart`/`AddTab`/`RemoveTab`, with the filed occurrence decision
+    settled as a REFUSAL: a placed part refuses by name listing every occurrence path,
+    the cascade being a UI's `Group` of occurrence removals) and `Part.Results`/`FieldDisplay`. None is hard; each
     is a decision about scope rather than about mechanism. (`MateSet.Solve` as one
     undoable step ✅ landed as `DocumentEdits.SolveMates` — and the filed "wants the
     solver to report which frames it wrote" dissolved: capturing every frame in the

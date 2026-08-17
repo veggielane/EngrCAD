@@ -925,6 +925,29 @@ public sealed class Tab
         return part;
     }
 
+    /// <summary>Removes a loose part from this tab (false when it is not here). The
+    /// part object itself — results, annotations, history — is untouched; other tabs
+    /// and assemblies referencing it keep it.</summary>
+    public bool Remove(Part part)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        return _parts.Remove(part);
+    }
+
+    /// <summary>This tab's index of a loose part, −1 when absent.</summary>
+    public int IndexOf(Part part) => _parts.IndexOf(part);
+
+    /// <summary>Re-inserts a part at a stated index — what makes an undone removal come
+    /// back in PLACE rather than appended (the serializer writes parts in list order,
+    /// so position is part of the document's identity).</summary>
+    internal void Insert(int index, Part part)
+    {
+        if (_parts.Any(p => p.Name == part.Name) || _assemblies.Any(a => a.Name == part.Name))
+            throw new ArgumentException($"Tab '{Name}' already contains a part named '{part.Name}'.", nameof(part));
+        EnsureColor(part);
+        _parts.Insert(index, part);
+    }
+
     /// <summary>Adds an assembly (names must be unique within the tab, across parts and
     /// assemblies); assigns palette colors to its distinct parts that have none.
     /// Returns the assembly for chaining.</summary>
@@ -1146,6 +1169,27 @@ public sealed class Scene
         var tab = new Tab(name);
         _tabs.Add(tab);
         return tab;
+    }
+
+    /// <summary>Removes a tab (false when it is not here). Its parts are untouched —
+    /// they may be shown by other tabs, and a part is deleted by ceasing to be
+    /// referenced, never by an explicit destructor.</summary>
+    public bool RemoveTab(Tab tab)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+        return _tabs.Remove(tab);
+    }
+
+    /// <summary>This scene's index of a tab, −1 when absent.</summary>
+    public int IndexOf(Tab tab) => _tabs.IndexOf(tab);
+
+    /// <summary>Re-inserts a tab at a stated index (the undone-removal rule: position is
+    /// part of the document's identity).</summary>
+    internal void InsertTab(int index, Tab tab)
+    {
+        if (_tabs.Any(t => t.Name == tab.Name))
+            throw new ArgumentException($"The scene already contains a tab named '{tab.Name}'.", nameof(tab));
+        _tabs.Insert(index, tab);
     }
 
     /// <summary>Adds a part to the default "Model" tab (created on first use).</summary>

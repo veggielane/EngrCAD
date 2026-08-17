@@ -253,6 +253,167 @@ public static class DocumentEdits
             () => part.ClippedBySection, c => part.ClippedBySection = c, clipped);
     }
 
+    /// <summary>Adds a loose part to a tab. Redo re-adds the SAME part object, whose
+    /// palette colour was assigned on the first Apply and sticks (the colour-stability
+    /// rule), so undo→redo is byte-identical through the serializer.</summary>
+    public static DocumentEdit AddPart(Tab tab, Part part)
+    {
+        ArgumentNullException.ThrowIfNull(tab);
+        ArgumentNullException.ThrowIfNull(part);
+        return new AddPartEdit(tab, part);
+    }
+
+    /// <summary>
+    /// Removes a loose part from a tab — REFUSING BY NAME when any assembly in the
+    /// scene still places it: removing a placed part must be deliberate, so the
+    /// occurrences come out first (each its own undoable edit; a UI offering the
+    /// cascade groups them). Undo re-inserts at the captured index, since the
+    /// serializer writes parts in list order and position is part of the document's
+    /// identity.
+    /// </summary>
+    public static DocumentEdit RemovePart(Scene scene, Tab tab, Part part)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(tab);
+        ArgumentNullException.ThrowIfNull(part);
+        return new RemovePartEdit(scene, tab, part);
+    }
+
+    /// <summary>Adds a tab. The edit creates its <see cref="Tab"/> ONCE and re-inserts
+    /// the same object on redo, so references into it survive an undo/redo cycle.</summary>
+    public static DocumentEdit AddTab(Scene scene, string name)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        return new AddTabEdit(scene, name);
+    }
+
+    /// <summary>Removes a tab (its parts are untouched — other tabs referencing them
+    /// keep them); undo re-inserts the same tab object, contents intact, at the
+    /// captured index.</summary>
+    public static DocumentEdit RemoveTab(Scene scene, Tab tab)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(tab);
+        return new RemoveTabEdit(scene, tab);
+    }
+
+    private sealed class AddPartEdit(Tab tab, Part part) : DocumentEdit
+    {
+        public override string Description => $"Add {part.Name}";
+
+        public override void Apply()
+        {
+            try
+            {
+                tab.Add(part);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new DocumentEditException(exception.Message);
+            }
+        }
+
+        public override void Revert() => tab.Remove(part);
+    }
+
+    private sealed class RemovePartEdit(Scene scene, Tab tab, Part part) : DocumentEdit
+    {
+        private int _index = -1;
+
+        public override string Description => $"Remove {part.Name}";
+
+        public override void Apply()
+        {
+            var placements = new List<string>();
+            foreach (var t in scene.Tabs)
+            {
+                foreach (var assembly in t.Assemblies)
+                    CollectPlacements(assembly, assembly.Name, placements);
+            }
+            if (placements.Count > 0)
+            {
+                throw new DocumentEditException(
+                    $"Part '{part.Name}' is still placed by {placements.Count} occurrence(s) "
+                    + $"({string.Join(", ", placements)}). Remove the occurrences first — each is "
+                    + "its own undoable edit, and a UI offering the cascade groups them.");
+            }
+            _index = tab.IndexOf(part);
+            if (_index < 0)
+                throw new DocumentEditException($"Part '{part.Name}' is not a loose part of tab '{tab.Name}'.");
+            tab.Remove(part);
+        }
+
+        private void CollectPlacements(Assembly assembly, string path, List<string> placements)
+        {
+            foreach (var occurrence in assembly.Occurrences)
+            {
+                if (ReferenceEquals(occurrence.Part, part))
+                    placements.Add($"{path}/{occurrence.Name}");
+                if (occurrence.SubAssembly is { } nested)
+                    CollectPlacements(nested, $"{path}/{occurrence.Name}", placements);
+            }
+        }
+
+        public override void Revert() => tab.Insert(_index, part);
+    }
+
+    private sealed class AddTabEdit(Scene scene, string name) : DocumentEdit
+    {
+        private Tab? _tab;
+
+        public override string Description => $"Add tab {name}";
+
+        public override void Apply()
+        {
+            try
+            {
+                if (_tab is null)
+                {
+                    _tab = scene.AddTab(name);
+                }
+                else
+                {
+                    // Redo: the SAME tab object comes back (references survive), at the
+                    // end — where AddTab put it and where undo removed it from.
+                    scene.InsertTab(scene.Tabs.Count, _tab);
+                }
+            }
+            catch (ArgumentException exception)
+            {
+                throw new DocumentEditException(exception.Message);
+            }
+        }
+
+        public override void Revert() => scene.RemoveTab(_tab!);
+    }
+
+    private sealed class RemoveTabEdit(Scene scene, Tab tab) : DocumentEdit
+    {
+        private int _index = -1;
+
+        public override string Description => $"Remove tab {tab.Name}";
+
+        public override void Apply()
+        {
+            _index = scene.IndexOf(tab);
+            if (_index < 0)
+                throw new DocumentEditException($"Tab '{tab.Name}' is not in the scene.");
+            scene.RemoveTab(tab);
+        }
+
+        public override void Revert()
+        {
+            try
+            {
+                scene.InsertTab(_index, tab);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new DocumentEditException(exception.Message);
+            }
+        }
+    }
+
     // ---- assemblies -----------------------------------------------------
 
     /// <summary>Places a part in an assembly. Undo removes the occurrence; redo puts back
