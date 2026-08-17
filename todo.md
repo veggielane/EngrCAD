@@ -1705,10 +1705,6 @@ UI dependencies, which makes this unusually feasible.
   framework assets are fingerprinted and these are not, because they are ordinary wwwroot
   content. Fix by putting the content hash in the manifest and in the filename — the
   manifest is already the thing the page reads to build the URL, so nothing else changes.
-- [ ] **A page whose example cannot run says nothing about it.** The manifest carries the
-  reason; the site drops the button and prints no note. Stating it (a one-line caption under
-  the screenshot, from the same manifest) would make the boundary visible to a reader rather
-  than only to whoever opens the JSON — and would put pressure on the four causes above.
 - [ ] **The browser's per-draw GL state is never reset, and only one of its consequences
   has been found.** The depth-clear defect (Web README, "The number that went stale") came
   from `engrcad-gl.js` applying each draw's state and leaving it set, so the NEXT frame

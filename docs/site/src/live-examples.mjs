@@ -31,10 +31,14 @@ import { visit } from 'unist-util-visit';
  */
 export function readLiveManifest(contentRoot) {
   const path = resolve(contentRoot, 'examples/live-examples.json');
-  if (!existsSync(path)) return { live: new Set(), total: 0 };
+  if (!existsSync(path)) return { live: new Set(), reasons: new Map(), total: 0 };
   const data = JSON.parse(readFileSync(path, 'utf8'));
   return {
     live: new Set(data.examples.filter((e) => e.live).map((e) => e.id)),
+    // Why an example CANNOT run, verbatim from the manifest -- the boundary the site
+    // used to state only to whoever opened the JSON.
+    reasons: new Map(
+      data.examples.filter((e) => !e.live && e.reason).map((e) => [e.id, e.reason])),
     total: data.examples.length,
   };
 }
@@ -49,13 +53,14 @@ function upToBase(contentRoot, source) {
 }
 
 /**
- * @param {{ contentRoot: string, live: Set<string> }} options
+ * @param {{ contentRoot: string, live: Set<string>, reasons?: Map<string, string> }} options
  */
-export function liveExamples({ contentRoot, live }) {
+export function liveExamples({ contentRoot, live, reasons }) {
+  const why = reasons ?? new Map();
   return function rehypeLiveExamples() {
     return (tree, file) => {
       const source = file.path ?? file.history?.[0];
-      if (!source || live.size === 0) return;
+      if (!source || (live.size === 0 && why.size === 0)) return;
       const up = upToBase(contentRoot, source);
 
       visit(tree, 'element', (node, index, parent) => {
@@ -66,7 +71,34 @@ export function liveExamples({ contentRoot, live }) {
         // the emitted name may carry a hash -- match the leading stem, which the hash is
         // appended to, and never the whole basename.
         const id = (src.split('/').pop() ?? '').split('.')[0];
-        if (!live.has(id)) return;
+        if (!live.has(id)) {
+          // A figure whose example cannot run says so, from the same manifest the Run
+          // button reads -- a one-line caption rather than silence, so the boundary is
+          // visible to the reader and keeps pressure on its causes. The compiler's own
+          // words follow the short claim; a figure with no example at all (no manifest
+          // entry) stays a plain screenshot.
+          const reason = why.get(id);
+          if (!reason) return;
+          parent.children[index] = {
+            type: 'element',
+            tagName: 'figure',
+            properties: { className: ['engrcad-live-static'] },
+            children: [
+              node,
+              {
+                type: 'element',
+                tagName: 'figcaption',
+                properties: { className: ['engrcad-live-note'], title: reason },
+                children: [{
+                  type: 'text',
+                  value: 'This example runs on the full kernel only \u2014 '
+                    + shortReason(reason),
+                }],
+              },
+            ],
+          };
+          return;
+        }
 
         parent.children[index] = {
           type: 'element',
@@ -89,4 +121,18 @@ export function liveExamples({ contentRoot, live }) {
       });
     };
   };
+}
+
+/** The caption's clause: the manifest's reason with its boilerplate prefix folded away
+ *  (the full text rides on the title attribute for whoever hovers). */
+function shortReason(reason) {
+  const compile = 'does not compile against the browser\u0027s assemblies: ';
+  if (reason.startsWith(compile)) {
+    const message = reason.slice(compile.length);
+    const name = message.match(/'([^']+)'/);
+    return name
+      ? `it uses ${name[1]}, which the browser build does not ship.`
+      : 'it uses APIs the browser build does not ship.';
+  }
+  return reason.endsWith('.') ? reason : reason + '.';
 }

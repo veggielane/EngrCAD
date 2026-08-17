@@ -10384,6 +10384,21 @@ that named the path). The fix asks the ONE rule instead: the snap reads
 `PrescribedVector(model, 0.0)`, which is law-aware and offset-aware, and a law-free
 model reads the same constants through it bit for bit.
 
+**A non-runnable live example now says so on the page** (the docs-site live-examples
+plugin): the manifest always carried each refusal's reason — the compiler's own words —
+and the site printed nothing, so the boundary was visible only to whoever opened the
+JSON. A figure whose example cannot run in the browser now gets a one-line muted
+figcaption from the same manifest ("This example runs on the full kernel only — it
+uses MillPass, which the browser build does not ship."), the short clause extracted
+from the compiler message's first quoted name with the full text riding on the hover
+title, and a figure with no manifest entry at all stays a plain screenshot. One build
+lesson worth keeping: **Astro's content-layer cache serves a page whose MARKDOWN did
+not change without re-running the rehype pipeline**, so a plugin edit alone looks like
+a no-op on every existing page — the plugin change verified in isolation while the
+built page stayed stale, and deleting the `.astro` store (or building with the cache
+cleared) is what makes a pipeline change actually re-render; the tell was the new CSS
+appearing (the layout re-renders) while no figure changed.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

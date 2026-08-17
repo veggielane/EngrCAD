@@ -19,7 +19,7 @@ const contentRoot = fileURLToPath(new URL('../', import.meta.url));
 // Which example screenshots also get a "Run it" button, from the manifest EngrCAD.DocsGen
 // writes. Absent (a checkout that has never run the generator) means no buttons and an
 // otherwise identical site.
-const { live } = readLiveManifest(contentRoot);
+const { live, reasons } = readLiveManifest(contentRoot);
 
 export default defineConfig({
   site,
@@ -37,7 +37,7 @@ export default defineConfig({
   markdown: {
     rehypePlugins: [
       rewriteDocLinks({ contentRoot, base }),
-      liveExamples({ contentRoot, live }),
+      liveExamples({ contentRoot, live, reasons }),
     ],
   },
   vite: {
@@ -73,6 +73,12 @@ export default defineConfig({
   background: color-mix(in srgb, var(--sl-color-black) 78%, transparent);
 }
 .engrcad-live-run:hover { border-color: var(--sl-color-accent); }
+.engrcad-live-static { margin: 0; }
+.engrcad-live-static > img { display: block; width: 100%; border-radius: .3rem; }
+.engrcad-live-note {
+  margin-top: .35rem; font-size: .78rem; line-height: 1.35;
+  color: var(--sl-color-gray-3);
+}
 @media (prefers-reduced-motion: no-preference) { .engrcad-live-run { transition: border-color .15s; } }
 `,
         },
