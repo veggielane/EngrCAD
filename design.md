@@ -1788,12 +1788,11 @@ places, which is what a shared helper's implicit assumption looks like from the 
 ### Scope, stated rather than implied
 
 `Materials` gains no composite entries: the catalogue is isotropic engineering metals and
-plastics, and a lamina's constants are a layup decision rather than a stock number. A
-**laminate** — a stack of plies at different angles — is several regions or a homogenised law
-the caller supplies, not something this computes. And **failure criteria for directional
-materials** (Tsai–Wu, Hashin, maximum strain) are a post-processing vocabulary that does not
-exist here, which means `MaxVonMises` on a composite part is a number with no engineering
-meaning; that is filed rather than left for a user to discover.
+plastics, and a lamina's constants are a layup decision rather than a stock number.
+
+The two things a composite user reaches for next — a **laminate** (a stack of plies at
+different angles) and **failure criteria** measured against per-direction allowables — landed
+as §3l, on top of this law rather than inside it.
 
 ## 3i. Stress recovery and the error estimate (`EngrCAD.Fea`)
 
@@ -2545,6 +2544,137 @@ essentially IS the numeric-pass floor, which is optimal — a factorization cann
 arithmetic. The complementary lever the todo names, a preconditioned CG warm-started from the
 previous iterate, is a different mechanism (it attacks the numeric cost, not the symbolic one)
 and is filed.
+
+## 3l. Laminates and directional failure (`EngrCAD.Fea`)
+
+`Laminate` (classical lamination theory over a ply stack) and `LaminaStrength` /
+`FailureAnalysis` (Tsai–Wu, Tsai–Hill, maximum stress). Both sit on §3h's `ElasticLaw` and add
+no element type, no assembly path and no solver: one produces a law, the other reads a solved
+result. What is worth recording is where each decision was forced.
+
+### A laminate is a property derivation, so it rides SetElasticity unchanged
+
+`Laminate.ToElasticLaw` returns an ordinary `ElasticLaw` and goes in through
+`StructuralModel.SetElasticity`, exactly as a hand-stated orthotropic law does. Nothing about
+the assembly, the solvers, the recovery or the persistence changed — which is what makes the
+feature reviewable, since the whole of it is arithmetic over inputs and one verified output.
+
+### The homogenisation is mixed, and it is the PCB thermal smear's physics
+
+Plies are bonded, so they share the in-plane STRAIN; they stack, so they share the
+through-thickness STRESS. That is the same parallel/series split `PcbThermal` uses on copper
+(§6d stage 8) — Voigt in plane, Reuss through thickness — and here it is exact rather than a
+mixing rule, because the per-ply condensation can be written down: with the out-of-plane
+indices condensed, `sigma_i = Qbar·eps_i + W·sigma_o` per ply, and averaging by thickness
+gives a 6x6
+
+```
+C* = [[P + Q·R^-1·Q',  Q·R^-1],
+      [R^-1·Q',        R^-1  ]]
+```
+
+with `P = <Qbar>`, `Q = <C_io C_oo^-1>`, `R = <C_oo^-1>`. Two properties fall out rather than
+being arranged. It is **symmetric by construction**, because `<C_oo^-1 C_oi>` is the transpose
+of `<C_io C_oo^-1>` — so Maxwell reciprocity holds as an energy statement, not because the
+last bits were averaged. And **its plane-stress reduction is exactly `A/h`**: setting
+`sigma_o = 0` collapses the whole thing to `P`, which IS the CLT extensional stiffness divided
+by the thickness. So the 3D law a solid element carries and the CLT a design was done with
+cannot disagree in plane. Measured: condensing the assembled 6x6 reproduces `A/h` with a worst
+difference of **0.0**, and a solved bar returns `Ex = 95 991.30` against CLT's 95 991.30.
+
+### The rotation is ASKED, not restated
+
+Each ply's 6x6 comes from `ElasticLaw.TransverselyIsotropic` on a frame rotated by the ply
+angle — the one Voigt rotation in the project, already verified against an independent tensor
+oracle (§3h). `Qbar` is then the static condensation of that matrix, which IS the plane-stress
+reduction a thin ply's free surfaces impose. Writing a second trigonometric `Qbar` expansion
+would have been a second chance to make the engineering-shear mistake §3h exists to record.
+
+The measurable price is stated rather than hidden: the condensation's arithmetic involves
+`nu23` even though the answer does not, so doubling `nu23` moves `D` by an ulp where a
+trig expansion would be bit-identical. That ulp is the *evidence* that the independence is a
+cancellation — a theorem — rather than an accident of which terms were typed.
+
+### A ply angle's sine and cosine come from its magnitude
+
+Quarter turns are read from an exact table (the repository's standing "a quarter turn is a
+sign swap, never a `cos`" rule) and a negative angle takes `sin(|θ|)` negated. Both halves buy
+an EXACT identity where a tolerance would otherwise be needed: a cross-ply's `A16`, `A26`,
+`D16` and `D26` read exactly `0.0`, and a balanced ±θ stack's `A16` cancels bit for bit at an
+angle no table covers. "Balanced means no shear–extension coupling" is then assertable with
+`==`.
+
+### What smearing drops is REPORTED as a number
+
+A solid element carrying one law has no memory of the stacking sequence, so:
+
+- **Bending–extension coupling cannot be represented at all.** `ToElasticLaw` REFUSES an
+  unsymmetric layup by name (naming the largest `B` entry and the coupling ratio) rather than
+  returning a law that is quietly wrong about warping.
+- **Flexural stiffness survives only where `D` agrees with `h²A/12`.**
+  `FlexuralDiscrepancy` measures exactly that: **0.401** for a `[0/90]s` cross-ply, whose
+  outer plies dominate bending. Reported rather than refused, because refusing it would refuse
+  every real laminate.
+- Interlaminar stress and delamination are outside the model — a smeared law has no ply
+  interfaces to separate.
+
+### The failure index is load-normalised, and that is the whole comparability argument
+
+Tsai–Hill's and Tsai–Wu's left-hand sides are quadratic, so their raw values are comparable
+neither with each other nor with max-stress nor with themselves at another load. The published
+`FailureIndex` is `1 / StrengthRatio` — the load fraction of failure — which makes all three
+linear in the load and makes the uniaxial reductions exact: a pure fibre-direction tension
+gives `R = Xt/sigma` for every criterion, which for Tsai–Wu is algebra (the discriminant
+`F1² + 4F11` collapses to `(1/Xt + 1/Xc)²`) rather than an arrangement. The definition is then
+verified through the SOLVER — scale the traction by `R`, re-solve, index 1.000000000000 — the
+oracle `FatigueAnalysis.SafetyFactor` already uses, and the one an independently rewritten
+formula could not provide.
+
+`F12*`, the one Tsai–Wu coefficient no uniaxial test determines, is a stated parameter with a
+default of −0.5 rather than a constant in the evaluator, and `|F12*| >= 1` is refused by name:
+past that the quadratic form stops being positive definite and the failure surface opens into
+a hyperboloid, so some arbitrarily large biaxial state would read as safe. That is §3h's
+"a Cholesky IS the statement" argument one dimension down, in closed form.
+
+### The frame is read from the law, and the strengths never restate it
+
+A directional strength is quoted along the same 1-2-3 axes the moduli are, so
+`LaminaStrength` carries no frame: `ElasticLaw.Frame` is retained and
+`ElasticLaw.ToMaterialFrame` is the one way to ask. A second copy would be a second spelling
+of one fact, free to drift from the stiffness it describes. `ToMaterialFrame` evaluates
+`e_i·(sigma·e_j)` — six dot products, no Voigt vector — so it shares nothing with the
+stiffness rotation next door, which is the §3h oracle rule applied to the production code
+rather than only to the test.
+
+### Evaluated per (node, region) slot, worst-wins at an interface
+
+Both the frame and the allowables belong to a region, so a material interface has one honest
+answer per material (`FailureIndexIn`) and the published per-node field takes the WORST. That
+is deliberately different from how the stress field blends there (§3i): a failure index is a
+max-type quantity, and averaging two materials' indices reports a number neither carries.
+
+### Out-of-plane stress is measured globally, never per node
+
+The criteria consume `sigma1`, `sigma2` and `tau12` only, so
+`FailureResults.MaxOutOfPlaneFraction` says whether that idealisation is defensible. It is the
+largest out-of-plane magnitude ANYWHERE over the largest in-plane magnitude ANYWHERE, and
+dividing per node instead is the small-denominator trap: a lightly stressed node makes the
+quotient large and meaningless, which measured **4.4** on a tension panel loaded purely in its
+plane against **0.029** for the global form.
+
+### No strengths at all is a refusal; some is NaN
+
+Asking for a criterion when no region states a `LaminaStrength` is refused by name — an
+all-NaN field looks like a solve that ran and found nothing. Where some regions state one, the
+others publish NaN, the no-value spelling ranging and the colour map already skip; zero there
+would paint the safest colour on a part nobody has checked.
+
+### Not in v1, named
+
+Thermal and moisture loads on a laminate (CLT's `N_T`/`M_T`), progressive first-ply failure
+with stiffness degradation, Hashin's mode-separated criteria, interlaminar/delamination
+criteria, and buckling of a laminated plate from `D` (which needs a shell element, not a
+smeared solid).
 
 ## 4. Implicit engine
 
