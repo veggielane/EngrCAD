@@ -509,14 +509,112 @@ public static partial class Gears
     /// <summary>
     /// A spur gear solid: the <see cref="Spur"/> profile extruded to
     /// <paramref name="faceWidth"/>, with an optional plain bore. Exact in all three
-    /// representations (the profile is lines and circular arcs).
+    /// representations (the profile is lines and circular arcs). An optional
+    /// <paramref name="hub"/> adds a set-screw boss — a cylinder proud of the +Z web
+    /// face carrying the bore (keyway included) through it, with an optional radial
+    /// set-screw pilot when the bore is plain (see <see cref="GearHubSpec"/>).
     /// </summary>
     public static Shape SpurGear(GearSpec spec, double faceWidth, double boreDiameter = 0,
         KeywaySpec? keyway = null, LighteningSpec? lightening = null,
-        double? fitTolerance = null)
+        double? fitTolerance = null, GearHubSpec? hub = null)
     {
-        var sketch = GearBlank(spec, faceWidth, boreDiameter, keyway, lightening, fitTolerance);
-        return Shape.Extrude(sketch, faceWidth);
+        if (hub is not { } boss)
+        {
+            var sketch = GearBlank(spec, faceWidth, boreDiameter, keyway, lightening, fitTolerance);
+            return Shape.Extrude(sketch, faceWidth);
+        }
+
+        // A HUB (set-screw boss): a cylinder proud of the web. The construction order is
+        // what makes every boolean legal — the gear WITHOUT its bore is unioned with the
+        // hub DISC (their interface is a flush planar ring, the coplanar-fusion tier's
+        // own case; a hub extruded WITH the bore would put two coaxial equal bore walls
+        // in one union, the refused coincident-curved configuration), and the bore prism
+        // is subtracted LAST through both levels, overshooting both ends so every cut is
+        // transversal (the Drill doctrine). The set-screw pilot is a radial cylinder cut
+        // BEFORE the bore, while the hub's centre is still solid — an ordinary blind
+        // flat-bottom hole whose floor the bore prism then removes, opening it into the
+        // bore without its cap ever meeting a face.
+        if (boreDiameter <= 0)
+            throw new ArgumentOutOfRangeException(nameof(hub),
+                "A hub is a boss gripping a shaft; state a boreDiameter for it to grip.");
+        double rootR = spec.RootDiameter / 2;
+        double hubR = boss.Diameter / 2;
+        double innerReach = boreDiameter / 2 + (keyway?.HubDepth ?? 0);
+        if (hubR <= innerReach)
+            throw new ArgumentOutOfRangeException(nameof(hub),
+                $"Hub Ø{boss.Diameter:0.###} does not clear the bore" +
+                (keyway is null ? "" : "'s keyway") + $" (reach radius {innerReach:0.###}).");
+        if (hubR >= rootR)
+            throw new ArgumentOutOfRangeException(nameof(hub),
+                $"Hub Ø{boss.Diameter:0.###} reaches the root circle (diameter {spec.RootDiameter:0.###}); " +
+                "a boss that swallows the tooth roots is a blank redesign, not a hub.");
+        if (!(boss.Projection > 0))
+            throw new ArgumentOutOfRangeException(nameof(hub), "The hub projection must be positive.");
+        if (lightening is { } ringCheck)
+        {
+            double ringR = (ringCheck.CircleDiameter ?? innerReach + rootR) / 2;
+            if (ringR - ringCheck.HoleDiameter / 2 <= hubR)
+                throw new ArgumentOutOfRangeException(nameof(hub),
+                    $"Ø{ringCheck.HoleDiameter:0.###} lightening holes on a Ø{2 * ringR:0.###} circle " +
+                    $"reach the hub wall (radius {hubR:0.###}) — the boss would blind them.");
+        }
+        if (keyway is not null && boss.SetScrewDiameter is not null)
+            throw new ArgumentOutOfRangeException(nameof(hub),
+                "A set screw and a keyway together are refused: the keyed bore's partial-ARC " +
+                "extruded wall against the radial pilot is a surface pair the B-Rep boolean " +
+                "measurably misclassifies — the result was closed, Validate-clean and genus-correct " +
+                "with 69 of the pilot's 158 mm³ of wall removal silently retained (wrong-but-closed; " +
+                "the reproducible fixture is filed in todo.md). Use the keyway alone and drill the " +
+                "pilot in a second setup, or use the set screw with a plain bore.");
+        double screwOffset = 0;
+        if (boss.SetScrewDiameter is { } pilot)
+        {
+            if (!(pilot > 0) || pilot >= boss.Projection)
+                throw new ArgumentOutOfRangeException(nameof(hub),
+                    $"Set screw Ø{pilot:0.###} must be positive and smaller than the hub projection " +
+                    $"({boss.Projection:0.###}).");
+            screwOffset = boss.SetScrewOffset ?? boss.Projection / 2;
+            if (screwOffset - pilot / 2 <= 0 || screwOffset + pilot / 2 >= boss.Projection)
+                throw new ArgumentOutOfRangeException(nameof(hub),
+                    $"Set screw Ø{pilot:0.###} at offset {screwOffset:0.###} leaves the hub band " +
+                    $"(0..{boss.Projection:0.###}).");
+        }
+
+        var blank = GearBlank(spec, faceWidth, boreDiameter, keyway, lightening, fitTolerance,
+            includeBore: false);
+        var body = Shape.Extrude(blank, faceWidth)
+            .Union(Shape.Cylinder(hubR, boss.Projection)
+                .Translate((0, 0, faceWidth + boss.Projection / 2)));
+
+        double over = 0.05 * (faceWidth + boss.Projection);
+        if (boss.SetScrewDiameter is { } screw)
+        {
+            // Radial, along +X — cut BEFORE the bore, while the hub's centre is still
+            // solid: the tool ends in material as an ordinary blind flat-bottom hole,
+            // and the bore prism below then removes the metal holding its bottom,
+            // opening the pilot into the bore. Cutting after the bore instead runs the
+            // pilot wall into the finished bore wall, a perpendicular-cylinder pair
+            // whose traced window measurably truncates at this scale (Ø5 through Ø16).
+            // The keyed combination is refused above, so the bore here is a full
+            // circle whose wall promotes to an exact cylinder.
+            double reach = hubR - boreDiameter / 2;
+            var tool = Shape.Cylinder(screw / 2, reach + 2 * over)
+                .RotateY(Math.PI / 2)
+                .Translate(((boreDiameter / 2 + hubR) / 2, 0, faceWidth + screwOffset));
+            body = body.Subtract(tool);
+        }
+
+        // The bore, once, through both levels — overshooting each end so every cut is
+        // transversal. ONE tool: the plain circle, or the whole keyed profile as one
+        // prism (exact — the keyed prism's partial-arc wall only ever meets planes,
+        // since the set-screw combination is refused above; splitting it into a circle
+        // prism plus a rectangle notch was tried and FAILS differently, the notch's
+        // vertical corner line against the bore cylinder clipping to the TOOL's own
+        // extent and stranding a traced curve inside the face — see todo.md).
+        double height = faceWidth + boss.Projection + 2 * over;
+        var basePlane = new SketchPlane(Frame3d.FromXY((0, 0, -over), Vector3d.UnitX, Vector3d.UnitY));
+        var boreProfile = keyway is { } seat ? KeyedBore(boreDiameter, seat) : Sketch.Circle(boreDiameter / 2);
+        return body.Subtract(Shape.Extrude(boreProfile, height, basePlane));
     }
 
     /// <summary>
@@ -547,7 +645,8 @@ public static partial class Gears
     }
 
     private static Sketch GearBlank(GearSpec spec, double faceWidth, double boreDiameter,
-        KeywaySpec? keyway, LighteningSpec? lightening, double? fitTolerance)
+        KeywaySpec? keyway, LighteningSpec? lightening, double? fitTolerance,
+        bool includeBore = true)
     {
         ArgumentNullException.ThrowIfNull(spec);
         if (!(faceWidth > 0))
@@ -572,9 +671,10 @@ public static partial class Gears
                     $"The keyway reaches radius {boreDiameter / 2 + seat.HubDepth:0.###}, into the " +
                     $"root circle (radius {spec.RootDiameter / 2:0.###}).");
             innerClear = boreDiameter / 2 + seat.HubDepth;
-            blank = blank.WithHole(KeyedBore(boreDiameter, seat));
+            if (includeBore)
+                blank = blank.WithHole(KeyedBore(boreDiameter, seat));
         }
-        else
+        else if (includeBore)
         {
             blank = blank.WithHole(Sketch.Circle(boreDiameter / 2));
         }
@@ -810,3 +910,22 @@ public readonly record struct LighteningSpec
     /// <summary>The bolt circle's diameter, or null for the web's own middle.</summary>
     public double? CircleDiameter { get; }
 }
+
+/// <summary>
+/// A gear HUB (set-screw boss): a cylinder proud of the web on the +Z face, gripping the
+/// shaft the bore carries. The bore (keyway included) continues through it, and an
+/// optional radial set-screw pilot crosses the hub wall on the +X side into the bore —
+/// with a PLAIN bore only: a set screw beside a keyway is refused by name, since the
+/// keyed bore's partial-arc wall against the pilot is a boolean pair the kernel
+/// measurably misclassifies (wrong-but-closed; see todo.md). The pilot diameter is the
+/// caller's (typically a tap drill from <see cref="StandardThreads"/>' chart); the
+/// thread itself is not modelled, the <see cref="StandardHoles"/> convention.
+/// </summary>
+/// <param name="Diameter">The hub cylinder's diameter — must clear the bore (and its
+/// keyway's reach) and stay inside the root circle.</param>
+/// <param name="Projection">How far the boss stands proud of the web face.</param>
+/// <param name="SetScrewDiameter">Radial pilot diameter, null = no set screw.</param>
+/// <param name="SetScrewOffset">The pilot's axial position from the web face; null =
+/// mid-projection.</param>
+public readonly record struct GearHubSpec(
+    double Diameter, double Projection, double? SetScrewDiameter = null, double? SetScrewOffset = null);

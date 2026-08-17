@@ -169,6 +169,88 @@ var light = Gears.SpurGear(new GearSpec(2.5, 30), faceWidth: 8, boreDiameter: 16
 if (light.ToMesh().Volume() <= 0) throw new Exception("the lightened gear is a solid");
 ```
 
+## A set-screw hub
+
+A gear that grips a shaft usually needs more bearing length than its face width, so
+it carries a **hub**: a cylinder proud of the web, with the bore (and its keyway)
+continuing through it. `GearHubSpec` states the boss's diameter and how far it stands
+proud, and — with a plain bore — an optional radial set-screw pilot.
+
+The construction order is what makes every boolean legal. The gear is built **without
+its bore** and unioned with the hub **disc**, so the interface is a flush planar ring
+(the coplanar-fusion case) rather than two coaxial equal-radius bore walls, which is a
+coincident curved pair the kernel refuses; the bore is then subtracted **once**,
+through both levels, overshooting each end so the cut is transversal (the `Drill`
+overshoot doctrine). A set screw is cut *before* the bore, while the hub's centre is
+still solid — an ordinary blind flat-bottom hole whose floor the bore then removes,
+opening it into the bore without its cap ever meeting a face.
+
+```csharp render:gear-hub
+var spec = new GearSpec(module: 2.5, teeth: 24);
+
+// A keyed hub: the DIN 6885 seat runs the full height of the boss.
+var keyed = Gears.SpurGear(spec, faceWidth: 10, boreDiameter: 16,
+    keyway: StandardKeys.For(16), hub: new GearHubSpec(Diameter: 28, Projection: 14));
+
+// A plain-bore hub with a radial set-screw pilot crossing the wall into the bore.
+// The pilot diameter is the caller's — typically a tap drill from StandardThreads.
+var screwed = Gears.SpurGear(spec, faceWidth: 10, boreDiameter: 16,
+    hub: new GearHubSpec(28, 14, SetScrewDiameter: 5));
+
+// The two together are refused BY NAME rather than silently mis-built (see below).
+try
+{
+    Gears.SpurGear(spec, 10, 16, StandardKeys.For(16),
+        hub: new GearHubSpec(28, 14, SetScrewDiameter: 5));
+    throw new Exception("a keyway beside a set screw must be refused");
+}
+catch (ArgumentOutOfRangeException) { }
+
+var scene = new Scene();
+var tab = scene.AddTab("hub");
+var a = new Part("keyed hub", keyed, Palette.Sky, Matrix4d.CreateTranslation((-36, 0, 0)));
+var b = new Part("set-screw hub", screwed, Palette.Coral, Matrix4d.CreateTranslation((36, 0, 0)));
+if (a.GetMesh().Volume() <= 0 || b.GetMesh().Volume() <= 0)
+    throw new Exception("both hubbed gears are solids");
+tab.Add(a);
+tab.Add(b);
+```
+
+![A keyed hub gear beside one with a plain bore and a radial set-screw pilot](images/gear-hub.png)
+
+What the tests hold this to is an **additive identity**: a hubbed gear's volume is the
+same gear without a hub *plus* exactly `(pi*R^2 - bore area) * projection`, to 1e-6
+relative — which is the statement that the flush ring genuinely fused (one shell, not
+two touching solids) and that the bore continued through rather than being re-cut. The
+set screw's claim is topological as well as volumetric: a blind pocket leaves the genus
+alone, so **genus 2** is the assertion that the pilot broke through into the bore, and
+the metal it removes matches the closed-form cylinder-between-two-cylinders integral —
+158.06 mm³ exact against 157.12 measured on the docs' own proportions.
+
+That last figure is a **floor rather than a chord error**: it reads 157.22 / 157.12 /
+157.21 at 32 / 64 / 128 segments per circle, so it does not converge. Both of the
+pilot's cut curves are perpendicular-cylinder pairs, which the marching tracer samples
+by its own arc-length step, and density cannot lower that. It is one-sided (an
+inscribed cross hole can only under-remove), so the measured removal is bounded by the
+exact one.
+
+**A keyway and a set screw together are refused by name**, and the reason is worth
+stating because the result *looks* fine: the keyed bore is subtracted as one prism
+whose wall is a partial **arc** extrusion, and that wall against the radial pilot is a
+surface pair the B-Rep boolean measurably misclassifies. The output is closed,
+`Validate`-clean and genus-correct, and **69 of the pilot's 158 mm³ of wall removal
+simply stays** — the wrong-but-closed outcome no downstream check can see. Splitting
+the bore into a circle prism plus a rectangular notch was tried and fails differently
+(the notch's vertical corner line against the bore cylinder clips to the tool's own
+extent and strands a traced curve inside the face), so the honest answer is the gate:
+use the keyway alone and drill the pilot in a second setup, or use the set screw with a
+plain bore. The kernel finding is filed in `todo.md` with its reproduction.
+
+Refused by name, each naming its number: a hub with no bore to grip, a hub that does
+not clear the bore (or the keyway's reach), a hub reaching the root circle, a
+non-positive projection, a set screw as large as the projection or sitting off the hub
+band, and lightening holes the boss would blind.
+
 ## Putting a pair in mesh
 
 Drawing two gears is not the same as meshing them. `GearMeshing` answers the
