@@ -544,13 +544,15 @@ if (!(decoration.MinScale < 1.0)) throw new Exception($"MinScale {decoration.Min
 if (!(decoration.MaxScale > 1.0)) throw new Exception($"MaxScale {decoration.MaxScale}");
 
 // Which is exactly why the MEAN is not the report: it reads a comfortable ~1% while the
-// tightest pass is several percent closer than it was drawn.
-if (!(decoration.Distortion > 5 * Math.Abs(decoration.MeanScale - 1)))
+// tightest pass is several percent closer than it was drawn. (The factor is the
+// fixture's own margin — it moved from 6.2 to 4.55 when the sphere's meridian
+// sampling became angular — so the guard sits below both spellings.)
+if (!(decoration.Distortion > 4 * Math.Abs(decoration.MeanScale - 1)))
     throw new Exception("the mean would hide it");
 ```
 
-On the test fixture the numbers are `MinScale` 0.9263, `MaxScale` 1.0005, `MeanScale` 0.9882 — a
-mean departure of 1.2% against a worst pass 7.4% tighter than drawn. Read `MinScale` when you
+On the test fixture the numbers are `MinScale` 0.9441, `MaxScale` 1.0014, `MeanScale` 0.9870 — a
+mean departure of 1.3% against a worst pass 5.6% tighter than drawn. Read `MinScale` when you
 need a guaranteed pitch and `MaxScale` when you need a guaranteed clearance; the same curve on a
 *developable* tube measures a distortion of 3.5e-4, which is the whole content of the word.
 

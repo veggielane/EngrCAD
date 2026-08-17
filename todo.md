@@ -1952,23 +1952,24 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     reported like any other ceiling, because the check knows the build DIRECTION and not
     where the plate is. Adding a plate is one plane plus a "within one layer of it" test
     — but it changes the reported area, so it is opt-in and stated, not a default.
-- [ ] **`Shape.Sphere`'s meridian does not refine with `SegmentsPerCircle`** (measured
-  while building the overhang check, and the same shape of defect as the recorded
-  elliptical-prism one). Doubling `SegmentsPerCircle` on a sphere DOUBLES the facet count
-  instead of quadrupling it — 1536 / 3072 / 6144 / 12288 at 32 / 64 / 128 / 256 — because
-  the sphere factory's generator is a rational NURBS arc while `IsAngularlyParameterized`
-  recognizes only `Circle3d` and `Ellipse3d`, so the meridian falls to `curveSamples`.
-  A caller who states a density gets it in one parameter direction and not the other.
-  The measurable consequence: any latitude-quantized quantity is frozen — the overhang
-  cap boundary sits at 119.2776° at every one of those four densities and its area error
-  stays at +2.13% rather than converging. Fix is in `BRepTessellator`'s
-  `IsAngularlyParameterized` (classify a rational arc by GEOMETRY, the way
-  `BrepSelection.Kind` classifies revolved generators by sampling, rather than by curve
-  type — the recorded reason a type switch classifies identical geometry differently).
-  - Verification: the facet count QUADRUPLES per doubling on a sphere and a torus; the
-    overhang cap at a 30° cutoff converges instead of freezing; every committed docs PNG
-    and every golden fingerprint re-taken deliberately, since this moves sphere and torus
-    tessellation everywhere.
+- [ ] **The TORUS meridian still tessellates at `curveSamples` — deferred on the
+  band-with-holes tier, with the measurement that decided it.** The SPHERE half of the
+  meridian-density defect ✅ landed: `MakeSphere`'s generators became `CurveSegment`s
+  over their own meridian `Circle3d` (the whole-solid-fillet corner-arc rule — the
+  angular density rule reads `Underlying`, which a rational NURBS arc hides), so a
+  sphere's facet count now QUADRUPLES per density doubling and the sphere-piercing
+  corpus member's worst agreement finally CONVERGES with density (0.67 → 0.74 → 0.94
+  against the old non-monotone 0.88 → 0.70 → 0.92); the STEP round trip carries the
+  span as a TRIMMED_CURVE with PARAMETER trims (a surface GENERATOR has no edge
+  vertices to carry it — nested segments compose affinely down to the first
+  non-segment base, or a drilled plate's bore wall arrives 10/11 of its span, the
+  drill overshoot exactly). The TORUS was converted the same way, measured, and
+  REVERTED: the angular rows explode the band-with-holes refinement on the recorded
+  torus-cut-with-a-bore member — the 200k split guard exhausts at 192/96 where the
+  NURBS placement converged, and with 100× the budget the face still emerges with a
+  fold — so the torus meridian keeps `curveSamples` until that tier grows the
+  dense-rim row path filed under the trimmed-face items, and `MakeTorus` carries the
+  reason in place.
 - [ ] **ISO 286 fits and tolerance stackups along a mate chain.** The fit tables
   (H7/g6 and friends) are a transcription carrying the verify-against-datasheet flag
   (`StandardHoles`' convention); a stackup is a walk along the existing mate graph

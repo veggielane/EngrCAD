@@ -643,11 +643,42 @@ public static class StepReader
                     "PARABOLA" => Parabola(record),
                     "HYPERBOLA" => Hyperbola(record),
                     "OFFSET_CURVE_3D" => OffsetCurve(record),
+                    "TRIMMED_CURVE" => TrimmedCurve(record),
                     _ => throw new NotSupportedException($"curve type {entity.Keyword} (#{id}) is not supported"),
                 };
             }
             _curves[id] = curve;
             return curve;
+        }
+
+        /// <summary>
+        /// TRIMMED_CURVE with PARAMETER trims — what a surface generator's span rides
+        /// in (a CurveSegment generator has no edge vertices to carry it). The
+        /// parameter form is required: a cartesian trim would need inverse evaluation,
+        /// and nothing this kernel writes uses it.
+        /// </summary>
+        private Curve3d TrimmedCurve(StepRecord record)
+        {
+            var basis = Curve(record.Args[1].AsReference());
+            double t0 = TrimParameter(record.Args[2], record);
+            double t1 = TrimParameter(record.Args[3], record);
+            bool senseAgrees = record.Args[4].AsBool();
+            if (!senseAgrees)
+                (t0, t1) = (t1, t0);
+            return new CurveSegment(basis, t0, t1);
+        }
+
+        private static double TrimParameter(StepValue trim, StepRecord record)
+        {
+            foreach (var item in trim.AsList())
+            {
+                if (item.Kind == StepValueKind.Typed
+                    && item.Text.Equals("PARAMETER_VALUE", StringComparison.OrdinalIgnoreCase))
+                    return item.AsNumber();
+            }
+            throw new NotSupportedException(
+                $"TRIMMED_CURVE ({record.Keyword}) carries no PARAMETER_VALUE trim; cartesian "
+                + "trims are not supported.");
         }
 
         private Line3d Line(StepRecord record)

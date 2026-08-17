@@ -133,8 +133,17 @@ public static partial class SolidFactory
 
         // Generators live in the XZ plane; revolving about +Z sweeps the sphere. Both
         // run with +Z tangent at the equator so ∂u × ∂v points outward.
-        var northArc = NurbsCurve.Arc(center, Vector3d.UnitX, Vector3d.UnitZ, radius, 0, Math.PI / 2);
-        var southArc = NurbsCurve.Arc(center, Vector3d.UnitX, Vector3d.UnitZ, radius, -Math.PI / 2, 0);
+        //
+        // Each generator is a CurveSegment over the meridian Circle3d, NEVER a rational
+        // NURBS arc — the whole-solid-fillet corner-arc rule: a revolve is sampled at
+        // even ANGLES, and the angular density rule (IsAngularlyParameterized) reads
+        // the curve's Underlying, which a rational arc hides. With the NURBS generator
+        // the meridian was frozen at curveSamples whatever segmentsPerCircle said —
+        // doubling the density only doubled the facet count — and every
+        // latitude-quantized quantity stuck (the measured Shape.Sphere defect).
+        var meridian = new Circle3d(center, Vector3d.UnitX, Vector3d.UnitZ, radius);
+        var northArc = new CurveSegment(meridian, 0, Math.PI / 2);
+        var southArc = new CurveSegment(meridian, -Math.PI / 2, 0);
 
         // Equator at the north generator's start ⇒ loop follows the circle (like the
         // cylinder side's bottom loop); at the south generator's end ⇒ opposes it.
@@ -164,6 +173,13 @@ public static partial class SolidFactory
         var a = (axis ?? Vector3d.UnitZ).Normalized();
         var radial = a.ArbitraryPerpendicular(Tolerance.Default);
         var tubeCenter = center + radial * majorRadius;
+        // Still the rational NURBS arcs, DELIBERATELY — the sphere's generators became
+        // CurveSegments over their Circle3d (the angular-density fix), and the torus's
+        // want the same, but the angular rows measurably explode the band-with-holes
+        // refinement on the recorded torus-cut-with-a-bore member (the 200k split guard
+        // exhausts where the NURBS placement converged, and with 100x the budget the
+        // face still folds): the torus waits on that tier's dense-rim row path, filed
+        // in todo.md, and its meridian keeps the curveSamples density until then.
         var outerArc = NurbsCurve.Arc(tubeCenter, radial, a, minorRadius, -Math.PI / 2, Math.PI / 2);
         var innerArc = NurbsCurve.Arc(tubeCenter, radial, a, minorRadius, Math.PI / 2, 3 * Math.PI / 2);
         return Revolve(new Profile([outerArc, innerArc]), center, a);

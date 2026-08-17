@@ -549,19 +549,21 @@ public class TessellationCorpusQualityTests
         var solid = (Shape.Box(20, 20, 20) - Shape.Sphere(12)).ToBrep();
 
         // Committed baselines, not tolerances: a move in EITHER direction wants
-        // understanding before the numbers are updated. Measured 796 / 4 614 / 15 410
-        // facets at worst 0.8832 / 0.7024 / 0.9240.
+        // understanding before the numbers are updated. Measured 816 / 4 572 / 15 592
+        // facets at worst 0.6706 / 0.7422 / 0.9357.
         //
-        // The two finer counts were 4 608 / 15 400 until the monotone sweep's turn test
-        // became a dimensionless sine rather than the exact sign of a cross product that
-        // is zero on a constant-parameter run (see TurnsIntoInterior). This solid carries
-        // such runs, so a handful of pops that round-off used to decide are now declined
-        // and their vertices are fanned from the opposite chain instead — six and ten more
-        // facets, with every worst-agreement figure unchanged to four decimals. That is
-        // the understanding the rule above asks for; the counts are re-committed, not
-        // widened into a tolerance.
+        // Those numbers moved when the sphere's meridian generators became CurveSegments
+        // over their own Circle3d (the angular-density fix): the natural v rows now sit
+        // at even LATITUDES, and the recorded worst agreement finally CONVERGES with
+        // density — 0.67 → 0.74 → 0.94 where the old NURBS-parameter placement read a
+        // non-monotone 0.88 → 0.70 → 0.92, its coarsest row flattered by where the
+        // rational arc's samples happened to cluster. The two finer densities IMPROVE
+        // (the fix's whole point: refining the density now refines the mesh) and only
+        // the 16/8 worst facet got more oblique; the residual scallop columns are the
+        // same filed limitation as ever. That is the understanding the rule above asks
+        // for; the counts are re-committed, not widened into a tolerance.
         foreach (var (segmentsPerCircle, curveSamples, maxTriangles, worstFloor) in
-            (ReadOnlySpan<(int, int, int, double)>)[(16, 8, 1_000, 0.85), (48, 24, 6_000, 0.70), (96, 48, 20_000, 0.90)])
+            (ReadOnlySpan<(int, int, int, double)>)[(16, 8, 1_000, 0.60), (48, 24, 6_000, 0.70), (96, 48, 20_000, 0.90)])
         {
             var report = TessellationQuality.Audit(solid, segmentsPerCircle, curveSamples);
             string where = $"at {segmentsPerCircle}/{curveSamples}: {report.Describe()}";

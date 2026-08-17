@@ -361,10 +361,44 @@ public static class StepWriter
                 $"SURFACE_OF_LINEAR_EXTRUSION('',#{Curve(e.Generator)}," +
                 $"#{Emit($"VECTOR('',#{Direction(e.Direction.Normalized())},{Real(e.Direction.Length)})")})"),
             RevolvedSurface r => Emit(
-                $"SURFACE_OF_REVOLUTION('',#{Curve(r.Generator)}," +
+                $"SURFACE_OF_REVOLUTION('',#{GeneratorCurve(r.Generator)}," +
                 $"#{Emit($"AXIS1_PLACEMENT('',#{Point(r.AxisOrigin)},#{Direction(r.AxisDirection)})")})"),
             _ => throw new NotSupportedException($"{surface.GetType().Name} cannot be exported to STEP yet."),
         };
+
+        /// <summary>
+        /// A surface GENERATOR's curve entity. Simplify's rule for edge curves — a
+        /// CurveSegment flattens to its base because the edge's vertices carry the
+        /// trim — is wrong here, since a generator has no vertices: the span IS part
+        /// of the surface's identity (a sphere's meridian is a quarter of its circle),
+        /// so a segment exports as a TRIMMED_CURVE over its base and the reader
+        /// reconstructs the segment verbatim instead of re-deriving it from rims.
+        /// </summary>
+        private int GeneratorCurve(Curve3d generator)
+        {
+            if (generator is CurveSegment segment)
+            {
+                // NESTED segments (a wrap-split band's generator over an already-split
+                // profile piece) compose down to the first non-segment base, or the
+                // emitted trim would be parameters of a base Simplify flattens away —
+                // measured as a drilled plate's bore wall arriving 10/11 of its own
+                // span (exactly the drill overshoot the inner segment carried). Each
+                // CurveSegment's own domain is [0, 1], so the composition is affine.
+                double start = segment.BaseStart, end = segment.BaseEnd;
+                var basisCurve = segment.Base;
+                while (basisCurve is CurveSegment inner)
+                {
+                    start = inner.BaseStart + (inner.BaseEnd - inner.BaseStart) * start;
+                    end = inner.BaseStart + (inner.BaseEnd - inner.BaseStart) * end;
+                    basisCurve = inner.Base;
+                }
+                int basis = Curve(basisCurve);
+                return Emit(
+                    $"TRIMMED_CURVE('',#{basis},(PARAMETER_VALUE({Real(start)}))," +
+                    $"(PARAMETER_VALUE({Real(end)})),.T.,.PARAMETER.)");
+            }
+            return Curve(generator);
+        }
 
         private int Curve(Curve3d curve)
         {

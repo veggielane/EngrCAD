@@ -176,8 +176,13 @@ public class StepReaderTests
     }
 
     [Fact]
-    public void Sphere_RationalGeneratorsSurviveTheComplexInstanceForm()
+    public void Sphere_CircularGeneratorsSurviveAsExactCircles()
     {
+        // The sphere's meridian generators are CurveSegments over a Circle3d (the
+        // angular-density rule reads Underlying — the measured Shape.Sphere defect's
+        // fix), so they export as trimmed CIRCLE entities and come back as exact
+        // circles: strictly better than the rational B-spline the old construction
+        // carried through the complex-instance form.
         var original = SolidFactory.MakeSphere(1.5);
         var read = ReadSingle(StepWriter.Write(original), out var diagnostics);
         Assert.Empty(diagnostics);
@@ -190,8 +195,10 @@ public class StepReaderTests
         for (int i = 0; i < originalFaces.Count; i++)
         {
             var readSurface = Assert.IsType<RevolvedSurface>(readFaces[i].Surface);
-            var generator = Assert.IsType<NurbsCurve>(readSurface.Generator);
-            Assert.Contains(generator.Weights, w => Math.Abs(w - 1) > 1e-9);
+            // The generator comes back as the SEGMENT it is — a TRIMMED_CURVE over the
+            // exact circle, span verbatim — not the rational B-spline of old.
+            var generator = Assert.IsType<CurveSegment>(readSurface.Generator);
+            Assert.IsType<Circle3d>(generator.Base);
 
             var originalSurface = (RevolvedSurface)originalFaces[i].Surface;
             Assert.Equal(originalSurface.Angle, readSurface.Angle, 12);

@@ -6693,7 +6693,7 @@ whole design. `MeshLocalParam`'s exp map is exact on a plane, near-exact on a de
 and genuinely distorted where Gaussian curvature concentrates, so a conforming curve carries that
 into its own SPACING — the number a bead width is chosen from. What makes the report honest is
 that the EXTREMES are the answer and the mean rides beside them: measured on a 20-radius sphere
-cap, `MinScale` 0.9263, `MaxScale` 1.0005, `MeanScale` 0.9882 — a mean departure of 1.2% against
+cap, `MinScale` 0.9441, `MaxScale` 1.0014, `MeanScale` 0.9870 — a mean departure of 1.2% against
 a worst pass 7.4% tighter than drawn, so a mean-only report would call the map faithful. (The
 same curve on a developable tube measures 3.5e-4, which is the entire content of the word
 "developable".) The measurement is taken on the curve that was actually laid rather than quoted
@@ -10411,6 +10411,29 @@ reader's HTTP cache is busted exactly when a deploy changes the geometry an exam
 would build, and never otherwise, with zero committed churn. Verified through a real
 headless-browser fetch against a clean publish: the server log shows
 `GET /examples/annotations.dll?v=aa4632277efad8041f87cf22994d7b4a`.
+
+**The sphere's meridian density defect is fixed, the torus's half is deferred by a
+measurement, and the STEP finding is the piece worth keeping**: `MakeSphere`'s
+generators are now `CurveSegment`s over the meridian `Circle3d` — the whole-solid
+fillet's corner-arc rule, since the angular density rule reads `Underlying` and a
+rational NURBS arc hides it — so a sphere's facet count quadruples per density
+doubling and the sphere-piercing corpus member's worst agreement CONVERGES with
+density (0.67 → 0.74 → 0.94) where the old NURBS-parameter placement read a
+non-monotone 0.88 → 0.70 → 0.92, its coarsest row flattered by where the rational
+arc's samples clustered. **A surface GENERATOR has no edge vertices to carry its
+trim** — `StepWriter.Simplify`'s flatten-the-segment rule is right for edge curves and
+wrong for generators, so a `CurveSegment` generator now exports as a `TRIMMED_CURVE`
+with PARAMETER trims and the reader reconstructs the segment verbatim (a new
+`TRIMMED_CURVE` case; parameter trims only, refusing cartesian by name). NESTED
+segments compose affinely down to the first non-segment base before emission, or the
+trim is written against a basis `Simplify` flattens away — measured as a drilled
+plate's bore wall arriving at 10/11 of its own span, exactly the drill overshoot the
+inner segment carried. The TORUS conversion was built, measured and REVERTED (the
+recorded institutional-memory shape): angular meridian rows explode the
+band-with-holes refinement on the torus-cut-with-a-bore member — the 200 000-split
+guard exhausts at 192/96 where the NURBS placement converged, and at 100× the budget
+the face still emerges folded — so the torus keeps `curveSamples` until the tier's
+dense-rim row path lands, with the reason recorded at the construction site.
 
 ## 7. Query layer
 

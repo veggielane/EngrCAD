@@ -534,8 +534,8 @@ own map is affine both ways, so the coordinates carry straight over).
   exact on a developable surface and genuinely distorted where Gaussian curvature concentrates,
   so a conforming curve carries that into its own SPACING — the number a bead width is chosen
   from. `MinScale` / `MaxScale` / `Distortion` are measured on the curve that was actually laid:
-  3.5e-4 on a developable tube, and on a 20-radius sphere cap min 0.9263 / max 1.0005 /
-  mean 0.9882 — so the MEAN reads a comfortable 1.2% while the tightest pass is 7.4% closer than
+  3.5e-4 on a developable tube, and on a 20-radius sphere cap min 0.9441 / max 1.0014 /
+  mean 0.9870 — so the MEAN reads a comfortable 1.3% while the tightest pass is 5.6% closer than
   it was drawn. That gap is exactly why the extremes are the report and `MeanScale` rides beside
   them. Read `MinScale` for a guaranteed pitch, `MaxScale` for a guaranteed clearance.
 - **A point past the map BREAKS the run and is counted** (`UnmappedPoints`), because continuing
