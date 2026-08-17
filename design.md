@@ -2789,13 +2789,27 @@ is a measurement.** A two-point rate is a ratio of two errors, and this ladder i
 convergence SEQUENCE: the mesher's red-refinement overshoot sets the element counts, so the rungs
 jump unevenly (4 806 → 11 410 is 2.37×) and the PAIRWISE rates swing **0.2235, 0.3021, 0.2310,
 0.3644, 0.3776** — two of the five ABOVE the smooth-problem 1/3. A band tuned around whichever
-pair happens to bracket the adaptive run's error (the bracketing pair here reads 0.302) would
-fail on a differently loaded box with a message blaming the geometry, which is the one thing this
-assertion must not do. The least-squares slope of `ln(error)` against `ln(N)` over every rung
+pair happens to bracket the adaptive run's error (the bracketing pair here reads 0.302) is
+**FRAGILE rather than FLAKY, which is worse.** Everything in the loop is deterministic and
+asserted so bit for bit, so the bracket does not wander with machine load; it moves on the next
+unrelated LEGITIMATE change — a mesher tweak that shifts the rungs, a different fixture density, a
+tighter solver tolerance — and a pair-tuned band then fails wearing a message about the PHYSICS
+("the clamp singularity is not biting") when what actually moved was the bracket. A flake gets
+re-run and dismissed; this gets believed, which is the one thing this assertion must not do. The least-squares slope of `ln(error)` against `ln(N)` over every rung
 reads **0.271**, comfortably clear, and the asserted bound is the theory constant `1/3` itself
 rather than a tuned number. Note this does NOT contradict the recorded rule that the LAST PAIR is
 the honest estimate of a convergence order (§3c's convergence tables): that rule is for a
-refinement sequence, and this is a set of meshes at assorted sizes. Refinement goes where the singularity is: over the five millimetres nearest the clamp
+refinement SEQUENCE, whose coarse pre-asymptotic head a fit would wrongly weight, and this is a
+set of meshes at ASSORTED SIZES, where no pair is representative.
+
+**The interpolation deliberately kept the local pair, and the general rule is worth more than the
+correction: measure whether the CONSUMER is sensitive before correcting a derived quantity, or
+the correction spreads past the defect.** The instinct on finding a two-point rate untrustworthy
+is to replace it everywhere — which here would have swapped a correct local bracket for a global
+fit and made the headline WORSE while feeling more rigorous. One arithmetic step settled it (the
+ratio moves 1.40× → 1.48× across the whole plausible rate range, so interpolating inside a tight
+bracket barely reads the rate at all) and bounded the fix to the assertion. A correction with no
+measured boundary tends to grow one from taste. Refinement goes where the singularity is: over the five millimetres nearest the clamp
 the mean element size fell to **0.439** of its starting value, over the five nearest the tip to
 **0.989**.
 

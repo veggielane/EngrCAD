@@ -198,11 +198,18 @@ public class AdaptiveRefinementTests(ITestOutputHelper output)
         // ladder is not a convergence SEQUENCE - the mesher's red-refinement overshoot sets
         // the element counts, so the rungs jump unevenly (4 806 -> 11 410 is 2.37x) and the
         // pairwise rates swing 0.2235 to 0.3776, TWO of them above the smooth-problem 1/3.
-        // Asserting on whichever pair happens to bracket the adaptive run's error would fail
-        // on a differently-loaded box with a message blaming the geometry. Note this does not
-        // contradict `FeaConvergenceTests`' rule that the LAST PAIR is the honest estimate of
-        // a convergence ORDER: that rule is for a refinement sequence, and this is a set of
-        // meshes at assorted sizes.
+        //
+        // The failure mode is FRAGILE rather than FLAKY, which is worse. Everything here is
+        // deterministic - `TwoRunsOfTheSameProblemAreIdentical` asserts the rounds bit for bit
+        // - so which pair brackets does NOT wander with machine load. It moves on the next
+        // unrelated LEGITIMATE change: a mesher tweak that shifts the rungs, a different
+        // fixture density, a tighter solver tolerance. At that point a pair-tuned band fails
+        // with a message about the physics ("the clamp singularity is not biting") when what
+        // actually moved was the bracket - and a flake gets re-run and dismissed where this
+        // gets believed. Note this does not contradict `FeaConvergenceTests`' rule that the
+        // LAST PAIR is the honest estimate of a convergence ORDER: that rule is for a
+        // refinement sequence with a pre-asymptotic head, and this is a set of meshes at
+        // assorted sizes where no pair is representative.
         double fitted = FittedLadderRate();
         output.WriteLine(
             $"uniform rate over the whole ladder {fitted:F3} (bracketing pair {rate:F3}); "
