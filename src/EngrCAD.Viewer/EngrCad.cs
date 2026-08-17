@@ -344,6 +344,78 @@ public static class EngrCad
     public static int Run(string[] args, Func<Scene> sceneFactory, string title = "EngrCAD") =>
         RunCore(args, sceneFactory, new EngrCadOptions { Title = title });
 
+    /// <summary>
+    /// <see cref="Run(string[], Func{Scene}, string)"/> for a model whose GEOMETRY is a
+    /// function of time (OpenSCAD's <c>$t</c>): the same verbs, plus
+    /// <c>--animate out.png|out.gif|&lt;directory&gt;</c>, which BAKES the model over
+    /// <c>--frames n</c> (default 24) into an APNG, a GIF, or a numbered PNG sequence.
+    /// <para>Every other verb answers about ONE instant — <c>--t &lt;fraction&gt;</c>
+    /// (default 0), so <c>--render still.png --t 0.35</c> is the model a third of the way
+    /// through. That is a deliberate reduction rather than a limitation: a still, an
+    /// export and a window each show one shape, and a time-varying model's shape at an
+    /// instant is exactly what <c>model(t)</c> returns.</para>
+    /// <para>The windowed modes show that instant and RELOAD it through the hot-reload
+    /// path, not through the animation transport: a morphing model cannot be scrubbed at
+    /// frame rate (each frame is a full lower + tessellate), so it is refused there by
+    /// name — see <see cref="TimeVaryingModel.At"/>.</para>
+    /// </summary>
+    public static int Run(string[] args, Func<double, Scene> model, string title = "EngrCAD") =>
+        RunCore(args, model, new EngrCadOptions { Title = title });
+
+    internal static int RunCore(string[] args, Func<double, Scene> model, EngrCadOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var log = EngrCadLoggers.Resolve(options);
+
+        // The instant every non-animate verb answers about. Parsed up front so a typo
+        // fails fast with a usage error whichever mode was asked for (the --render-style
+        // rule).
+        double instant = 0;
+        int tIndex = Array.IndexOf(args, "--t");
+        if (tIndex >= 0)
+        {
+            if (tIndex + 1 >= args.Length
+                || !double.TryParse(args[tIndex + 1], NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out instant)
+                || !double.IsFinite(instant) || instant is < 0 or > 1)
+            {
+                Log.UsageAnimate(log);
+                return 2;
+            }
+        }
+
+        int frames = 24;
+        int framesIndex = Array.IndexOf(args, "--frames");
+        if (framesIndex >= 0)
+        {
+            if (framesIndex + 1 >= args.Length
+                || !int.TryParse(args[framesIndex + 1], NumberStyles.Integer,
+                        CultureInfo.InvariantCulture, out frames)
+                || frames is < 2 or > 600)
+            {
+                Log.UsageAnimate(log);
+                return 2;
+            }
+        }
+
+        int animateIndex = Array.IndexOf(args, "--animate");
+        if (animateIndex >= 0)
+        {
+            if (animateIndex + 1 >= args.Length)
+            {
+                Log.UsageAnimate(log);
+                return 2;
+            }
+            return BakeHeadless(model, args[animateIndex + 1], frames, options, log);
+        }
+
+        // Everything else is the ordinary program, asked about one instant. The factory
+        // closes over `instant`, so a windowed reload re-reads it — which is what makes
+        // the documented live recipe (hold t, call NotifySourceChanged) work with no
+        // further plumbing.
+        return RunCore(args, () => model(instant), options);
+    }
+
     internal static int RunCore(string[] args, Func<Scene> sceneFactory, EngrCadOptions options)
     {
         var log = EngrCadLoggers.Resolve(options);
@@ -633,6 +705,52 @@ public static class EngrCad
             options.SectionPlanes, options.SectionCombine, preview: null, options.Explode,
             shading: options.Shading, annotationDepth: options.AnnotationDepth);
         Log.WroteImage(log, path, scene.AllParts.Count());
+        return 0;
+    }
+
+    // ---- headless $t bake ----
+
+    private static int BakeHeadless(
+        Func<double, Scene> factory, string path, int frames, EngrCadOptions options, ILogger log)
+    {
+        string extension = Path.GetExtension(path);
+        bool apng = extension.Equals(".png", StringComparison.OrdinalIgnoreCase);
+        bool gif = extension.Equals(".gif", StringComparison.OrdinalIgnoreCase);
+        // No extension = a directory of numbered frames (the ffmpeg escape hatch), which
+        // is a path shape rather than a format and so is spelled by its absence.
+        if (!apng && !gif && extension.Length > 0)
+        {
+            Log.UnsupportedAnimationFormat(log, extension);
+            return 2;
+        }
+        if (!OffscreenRenderer.IsAvailable)
+        {
+            Log.OffscreenUnavailable(log, OffscreenRenderer.UnavailableReason);
+            return 1;
+        }
+
+        var model = new TimeVaryingModel(factory, options.Quality);
+        // One probe at t = 0 says whether there is anything to draw at all, and it is not
+        // wasted: the cache keeps whatever it built for the bake's own first frame.
+        if (!model.At(0).AllParts.Any())
+        {
+            Log.NothingToBake(log, 0);
+            return 1;
+        }
+
+        var baked = apng
+            ? model.RenderApng(path, frames, width: options.RenderWidth, height: options.RenderHeight,
+                style: options.RenderStyle, ambientOcclusion: options.AmbientOcclusion,
+                shading: options.Shading, annotationDepth: options.AnnotationDepth)
+            : gif
+                ? model.RenderGif(path, frames, width: options.RenderWidth, height: options.RenderHeight,
+                    style: options.RenderStyle, ambientOcclusion: options.AmbientOcclusion,
+                    shading: options.Shading, annotationDepth: options.AnnotationDepth)
+                : model.RenderFrames(path, frames, width: options.RenderWidth, height: options.RenderHeight,
+                    style: options.RenderStyle, ambientOcclusion: options.AmbientOcclusion,
+                    shading: options.Shading, annotationDepth: options.AnnotationDepth);
+        Log.BakedModelAnimation(log, path, baked.Frames.Count,
+            baked.Cache.Built, baked.Cache.Reused, baked.Cache.HitRate);
         return 0;
     }
 

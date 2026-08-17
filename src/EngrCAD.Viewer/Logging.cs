@@ -113,6 +113,11 @@ internal static partial class Log
         Message = "--flat requires a file path (.dxf, .svg or .txt)")]
     internal static partial void UsageFlat(ILogger logger);
 
+    [LoggerMessage(EventId = 19, Level = LogLevel.Error,
+        Message = "--animate requires a file path (.png for an APNG, .gif) or a directory for a"
+                + " PNG frame sequence; --frames takes 2-600 and --t a fraction in [0, 1]")]
+    internal static partial void UsageAnimate(ILogger logger);
+
     // ---- headless export / render ----
 
     [LoggerMessage(EventId = 20, Level = LogLevel.Information,
@@ -192,6 +197,26 @@ internal static partial class Log
         Message = "Unsupported flat-pattern format '{Extension}' — use .dxf (cut), .svg (view) or"
                 + " .txt (bend table).")]
     internal static partial void UnsupportedFlatFormat(ILogger logger, string extension);
+
+    // ---- time-varying model bake (--animate) ----
+
+    /// <summary>What a $t bake cost, reported rather than hidden: a frame is a full
+    /// lower + tessellate, so the frame count and the cache's hit rate are the two
+    /// numbers a caller needs to know whether the factory hoisted what it should have.</summary>
+    [LoggerMessage(EventId = 37, Level = LogLevel.Information,
+        Message = "wrote {Path} ({FrameCount} frame(s) baked; {Built} part mesh(es) built,"
+                + " {Reused} reused, {HitRate:P0} cache hit rate)")]
+    internal static partial void BakedModelAnimation(
+        ILogger logger, string path, int frameCount, int built, int reused, double hitRate);
+
+    [LoggerMessage(EventId = 38, Level = LogLevel.Error,
+        Message = "Unsupported animation format '{Extension}' — use .png (APNG), .gif, or a"
+                + " path with no extension for a PNG frame sequence directory.")]
+    internal static partial void UnsupportedAnimationFormat(ILogger logger, string extension);
+
+    [LoggerMessage(EventId = 39, Level = LogLevel.Error,
+        Message = "The model produced no parts at t = {T:0.###}, so there is nothing to bake.")]
+    internal static partial void NothingToBake(ILogger logger, double t);
 
     // ---- live modeling loop ----
 

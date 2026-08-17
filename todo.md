@@ -858,14 +858,27 @@ export — is recorded in CLAUDE.md):
   `SceneTree.IsEffectivelyHidden` exposes the own-AND-ancestors chain per row, pure and
   tested, and the markup asks it rather than restating a visibility rule it could drift
   from; selection still golds, a hidden part being addressable). Nothing open here.
-- [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame. This
-  is the *expensive* cousin of the Animation section above and deliberately separate:
-  that one moves poses and the camera only, which is why it can animate with matrices
-  alone; this one changes geometry, so every frame pays a full lower + tessellate.
-  **Design assessment recorded in design.md** ("$t — assessed and deliberately
-  deferred"): shape is `Func<double, Scene>` + offline frame bake, the work is
-  prefix/identity caching across frames, and it should be built only when a concrete
-  model needs morphing geometry.
+- [ ] **`$t` follow-ups** (v1 ✅ landed — `TimeVaryingModel` + `ModelAnimation` +
+  `--animate`/`--frames`/`--t`, the offline bake with an object-identity geometry cache;
+  see design.md's `$t` record and `docs/examples/animation.md`). Open residuals:
+  - [ ] A **STREAMING bake** that frees each frame's scene once it is drawn. v1 batches
+    through `OffscreenRenderer.RenderSequence`, so the whole clip's meshes are alive at
+    once — fine at 24 frames of a modest model, and the wrong shape for a 300-frame bake
+    of a heavy one. It costs two things that must be given up together: the union-of-every-
+    frame camera (a first pass over bounds would rebuild every scene, so the camera would
+    have to be explicit or first-union-last) and the one-context/one-program batch.
+  - [ ] **Interactive scrubbing of a `$t` model** is refused by name, with the measurement
+    behind the refusal recorded in design.md (20–45 ms of geometry for one instant of a
+    B-Rep model). The honest way in is not a faster bake but a model whose per-frame delta
+    is bounded — e.g. driving ONE `[Param]` through `FeatureHistory` so only the tail of
+    the history re-runs — and then measuring whether the tail is under a frame budget.
+    Do the measurement before designing a transport for it.
+  - [ ] The cache keys on **reference identity**, so a factory that rebuilds a structurally
+    identical sub-graph hits nothing. A structural key (a hash of the operation graph)
+    would catch it and is deliberately not built: it costs a walk per part per frame to
+    save a mesh that may be cheap, and two graphs that hash equal must then be PROVEN to
+    lower identically or the byte-identity guarantee goes. Measure a real factory that
+    cannot hoist before reaching for it.
 - [ ] **DXF/SVG follow-ups** (v1 ✅ landed — `DxfDocument` LINE/ARC/CIRCLE/LWPOLYLINE/TEXT
   with layers and an LTYPE table both ways, exact bulge arcs; `SvgDrawing`
   visible/hidden/section/thin line classes plus sheet-sized output and text over

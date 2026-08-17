@@ -324,18 +324,43 @@ foreach (var s in snippets)
         // 4-second turntable. Output is an APNG at the same images/<id>.png path —
         // an APNG IS a PNG, so the site, the link checker and browsers need nothing new
         // (the site's image service is passthrough, so the frames survive the build).
+        // A snippet may instead declare `Func<double, Scene> timeVaryingModel` — a $t
+        // model, whose GEOMETRY changes with time. That is a different, far more expensive
+        // clip (every frame is a full lower + tessellate), so it is a different variable
+        // rather than a track: an Animation cannot carry one without breaking the rule that
+        // a timeline never touches geometry. The name is spelled out rather than `model`
+        // because a wrong-typed variable of a declared name is an ERROR here (deliberately,
+        // so a fence cannot silently ignore its own input) and `model` is a name ordinary
+        // snippets already use — animation.md's own FEA clip declares a StructuralModel.
         if (!TryReadVariable<Animation>(state, "animation", s, errors, out var declaredAnimation)
+            || !TryReadVariable<Func<double, Scene>>(
+                    state, "timeVaryingModel", s, errors, out var declaredModel)
             || !TryReadVariable<CameraState>(state, "camera", s, errors, out var animateCamera))
             continue;
+        if (declaredAnimation is not null && declaredModel is not null)
+        {
+            errors.Add($"{s.File} ({s.Id}): declare `animation` OR `timeVaryingModel`, not both "
+                     + "— a timeline and a time-varying model are two answers to what a frame is.");
+            continue;
+        }
         var animatePng = Path.Combine(imagesDir, $"{s.Id}.png");
         if (canRender)
         {
             try
             {
-                var animation = declaredAnimation
-                    ?? new Animation(durationSeconds: 4).With(TurntableTrack.Around(scene));
-                animation.RenderApng(scene, animatePng, s.AnimationFrames,
-                    width: 640, height: 448, camera: animateCamera, style: s.Style);
+                if (declaredModel is { } modelFactory)
+                {
+                    new TimeVaryingModel(modelFactory).RenderApng(
+                        animatePng, s.AnimationFrames, durationSeconds: 4,
+                        width: 640, height: 448, camera: animateCamera, style: s.Style);
+                }
+                else
+                {
+                    var animation = declaredAnimation
+                        ?? new Animation(durationSeconds: 4).With(TurntableTrack.Around(scene));
+                    animation.RenderApng(scene, animatePng, s.AnimationFrames,
+                        width: 640, height: 448, camera: animateCamera, style: s.Style);
+                }
                 rendered++;
             }
             catch (Exception ex)

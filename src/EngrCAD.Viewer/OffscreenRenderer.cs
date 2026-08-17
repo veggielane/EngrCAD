@@ -85,6 +85,11 @@ public static class OffscreenRenderer
     /// — assemblies flattened; instances of the same part share one uploaded mesh) and
     /// returns RGBA8 pixels, top row first. See
     /// <see cref="Render(IReadOnlyList{Part}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?, bool)"/>.
+    /// <para><paramref name="sceneBounds"/> states the box the ground grid and the frustum
+    /// planes are read off, instead of the instances' own — what ONE frame of a
+    /// <see cref="Modeling.TimeVaryingModel"/> bake is drawn with, and therefore what a
+    /// still has to be given to be byte-identical to that frame. Null is the incumbent
+    /// per-instance behaviour bit for bit.</para>
     /// </summary>
     public static byte[] Render(
         IReadOnlyList<PartInstance> instances, int width, int height,
@@ -97,7 +102,8 @@ public static class OffscreenRenderer
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
         bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit,
         AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop,
-        (FieldSequenceTrack Track, string FieldName)? fieldStep = null)
+        (FieldSequenceTrack Track, string FieldName)? fieldStep = null,
+        Aabb? sceneBounds = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -112,7 +118,7 @@ public static class OffscreenRenderer
         var cache = new PassCache(gl);
         var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera, furniture,
             style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample,
-            preview, previewWorld, fields, deformFactor, shading, annotationDepth, fieldStep);
+            preview, previewWorld, fields, deformFactor, shading, annotationDepth, fieldStep, sceneBounds);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -122,10 +128,15 @@ public static class OffscreenRenderer
     /// buffers. Only the per-instance matrices and the camera change between frames,
     /// which is the offscreen restatement of the insight that lets the window animate
     /// through <c>SetInstancePoses</c> without touching a GPU buffer.
-    /// <para>Every frame must carry the SAME parts (an animation moves poses, never
-    /// geometry — <see cref="Animation"/>'s load-bearing rule), so the upload cache is
-    /// keyed by <see cref="Part"/> reference and hits from the second frame on. Output
-    /// is byte-identical to calling <see cref="Render(IReadOnlyList{PartInstance}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?, bool, IReadOnlyList{SectionPlane}?, SectionCombine, IReadOnlyList{ValueTuple{Vector3d, Vector3d}}?, Matrix4d?, bool)"/>
+    /// <para>An <see cref="Animation"/>'s frames all carry the SAME parts (it moves poses,
+    /// never geometry — the load-bearing rule), so the upload cache, keyed by
+    /// <see cref="Part"/> reference, hits from the second frame on and that is where the
+    /// batching saving comes from. The cache does not REQUIRE it: a
+    /// <see cref="TimeVaryingModel"/> bake, whose frames legitimately carry different
+    /// geometry, uploads each new part once and keeps the context and the linked programs
+    /// — a smaller but real saving, at a GPU-memory cost of one upload per distinct part
+    /// across the clip. Output is byte-identical to calling
+    /// <see cref="Render(IReadOnlyList{PartInstance}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?, bool, IReadOnlyList{SectionPlane}?, SectionCombine, IReadOnlyList{ValueTuple{Vector3d, Vector3d}}?, Matrix4d?, bool)"/>
     /// once per frame; a test asserts exactly that.</para>
     /// </summary>
     /// <param name="frames">Per frame: the posed instances and the camera to draw them with.</param>
@@ -162,6 +173,11 @@ public static class OffscreenRenderer
     /// applies it; a warm cache re-uploads only the colour floats when the step moved.
     /// Null (the default) keeps every frame on the parts' own displays, bit-identical to
     /// before the parameter existed.</param>
+    /// <param name="sceneBounds">One bounding box for the whole clip, used for the ground
+    /// grid and the frustum planes instead of each frame's own instances. Only a bake whose
+    /// GEOMETRY changes per frame needs it (a jumping grid and a shimmering depth range are
+    /// what a growing model otherwise produces); null is the incumbent per-frame behaviour
+    /// bit for bit.</param>
     public static IReadOnlyList<byte[]> RenderSequence(
         IReadOnlyList<(IReadOnlyList<PartInstance> Instances, CameraState Camera, double DeformFactor,
             IReadOnlyList<SectionPlane>? Sections)> frames,
@@ -173,7 +189,8 @@ public static class OffscreenRenderer
         SectionCombine sectionCombine = SectionCombine.Intersection,
         bool fields = true, ShadingStyle shading = ShadingStyle.Lit,
         AnnotationDepth annotationDepth = AnnotationDepth.AlwaysOnTop,
-        IReadOnlyList<(FieldSequenceTrack Track, string FieldName)?>? fieldSteps = null)
+        IReadOnlyList<(FieldSequenceTrack Track, string FieldName)?>? fieldSteps = null,
+        Aabb? sceneBounds = null)
     {
         ArgumentNullException.ThrowIfNull(frames);
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
@@ -198,7 +215,7 @@ public static class OffscreenRenderer
                 furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
                 sections ?? sectionPlanes, sectionCombine,
                 supersample, preview: null, previewWorld: null, fields, deformFactor, shading, annotationDepth,
-                fieldStep: fieldSteps?[i]);
+                fieldStep: fieldSteps?[i], sceneBounds: sceneBounds);
             pixels.Add(Downsample(oversized, width, height, supersample));
         }
         return pixels;
@@ -354,16 +371,25 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld, bool fields,
         double deformFactor, ShadingStyle shading, AnnotationDepth annotationDepth,
-        (FieldSequenceTrack Track, string FieldName)? fieldStep = null)
+        (FieldSequenceTrack Track, string FieldName)? fieldStep = null,
+        Aabb? sceneBounds = null)
     {
         uint meshProgram = cache.MeshProgram;
         uint lineProgram = cache.LineProgram;
         uint pointProgram = cache.PointProgram;
         uint bgProgram = cache.BackgroundProgram;
 
-        var bounds = Aabb.Empty;
-        foreach (var instance in instances)
-            bounds = bounds.Union(instance.Bounds());
+        // The frame's own bounds, unless the caller states the whole clip's. Only a bake
+        // whose GEOMETRY changes per frame needs the override: the ground grid's 1-2-5
+        // spacing and the frustum's near/far planes are both read off these, so letting
+        // them follow a growing model makes the grid jump and the depth quantisation
+        // shimmer between frames. Null is the incumbent arithmetic exactly.
+        var bounds = sceneBounds ?? Aabb.Empty;
+        if (sceneBounds is null)
+        {
+            foreach (var instance in instances)
+                bounds = bounds.Union(instance.Bounds());
+        }
         var cam = camera ?? DefaultCamera(bounds);
 
         // One plane set for the whole pass: an explicit list wins, otherwise the
