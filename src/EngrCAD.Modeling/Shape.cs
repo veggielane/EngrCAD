@@ -895,6 +895,64 @@ public abstract class Shape
         return new DirectEditShape(this, DirectEditKind.Delete, Vector3d.Zero, faces);
     }
 
+    /// <summary>
+    /// Turns the selected faces about <paramref name="axis"/> by <paramref name="degrees"/> —
+    /// <see cref="DirectEdit.RotateFaces"/>. This is a draft angle put on a body that has no
+    /// history to re-parameterize.
+    ///
+    /// <para>The axis is a HINGE: a face the axis lies in tilts about that line and keeps the
+    /// points on it, which is what a drafting caller means; a face the axis misses swings
+    /// bodily, which is legal and usually not. The carrier itself is turned, so a rotated
+    /// plane is a plane and a rotated cylinder a cylinder about the turned axis — the result
+    /// is exact rather than fitted.</para>
+    ///
+    /// <para>Representation support: <b>B-Rep-Native</b> under any similarity, MIRRORED
+    /// placements included — an ANGLE is preserved by every similarity, and the hinge is
+    /// carried through as an ordinary ray. Implicit bridges through the tessellation; mesh
+    /// comes from the exact B-Rep.</para>
+    /// </summary>
+    public Shape RotateFaces(in Ray3d axis, double degrees, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        ArgumentNullException.ThrowIfNull(faces);
+        if (!double.IsFinite(degrees))
+            throw new ArgumentOutOfRangeException(nameof(degrees), "The rotation angle must be finite.");
+        return new DirectEditShape(
+            this, DirectEditKind.Rotate, new Vector3d(degrees, 0, 0), faces, axis);
+    }
+
+    /// <summary>
+    /// Swaps the selected faces' SURFACES for <paramref name="replacement"/> and re-solves the
+    /// corners — <see cref="DirectEdit.ReplaceFaceSurfaces"/>, OCCT's
+    /// <c>BRepTools_ReShape</c> on a face. A cylinder's wall becomes a cone, a flat top a dome.
+    ///
+    /// <para>Three things are checked at lowering and each is refused BY NAME: a replacement
+    /// whose outward normal opposes the original's (it would turn the solid inside out while
+    /// leaving every loop, count and Euler number unchanged), a corner the new carriers do not
+    /// meet at, and a rim that does not lie on both its carriers. That last one is what bounds
+    /// the operation honestly — a swap whose new rim has no EXACT intersection is declined
+    /// rather than approximated with a chordal curve.</para>
+    ///
+    /// <para>Representation support: <b>B-Rep-Native</b> under a rigid placement; the
+    /// replacement carrier is stated in model coordinates and takes the accumulated
+    /// transform, so a placement no surface family survives is refused by name at lowering.
+    /// Implicit bridges through the tessellation; mesh comes from the exact B-Rep.</para>
+    /// </summary>
+    public Shape ReplaceFaceSurfaces(Surface replacement, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        ArgumentNullException.ThrowIfNull(replacement);
+        ArgumentNullException.ThrowIfNull(faces);
+        return new DirectEditShape(
+            this, DirectEditKind.ReplaceSurface, Vector3d.Zero, faces, null, replacement);
+    }
+
+    /// <inheritdoc cref="RotateFaces(in Ray3d, double, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape RotateFaces(in Ray3d axis, double degrees, FaceSetRef faces) =>
+        RotateFaces(axis, degrees, Selector(faces, nameof(faces)));
+
+    /// <inheritdoc cref="ReplaceFaceSurfaces(Surface, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape ReplaceFaceSurfaces(Surface replacement, FaceSetRef faces) =>
+        ReplaceFaceSurfaces(replacement, Selector(faces, nameof(faces)));
+
     /// <inheritdoc cref="OffsetFaces(double, Func{BrepSolid, IEnumerable{BrepFace}})"/>
     public Shape OffsetFaces(double distance, FaceSetRef faces) =>
         OffsetFaces(distance, Selector(faces, nameof(faces)));

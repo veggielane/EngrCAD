@@ -326,3 +326,130 @@ public sealed class LinearPatternFeature : Feature
         (context.Body ?? throw new InvalidOperationException("LinearPatternFeature needs a body."))
             .PatternLinear(Count, Step);
 }
+
+// ---- direct editing: the operations a body with NO history needs, made parametric ----
+//
+// A direct edit is a Shape graph node, so it already composed and Explain already reported
+// it; what it lacked was a [Param] a design study, a configuration or the properties panel
+// could DRIVE. Wrapping each one is the whole change — the selector is a FaceSetRef, which
+// already serializes and already re-resolves per regeneration, so nothing new had to be
+// invented for the topological-naming half. Each face set is [DeferredInput] for the rim
+// features' reason: the edit resolves it at LOWERING against its own solid, so validating it
+// up front would buy an extra B-Rep lowering per regeneration and learn nothing.
+
+/// <summary>
+/// Pushes the selected faces along their own outward normals — the parametric form of
+/// <see cref="Shape.OffsetFaces(double, FaceSetRef)"/>.
+/// </summary>
+public sealed class OffsetFacesFeature : Feature
+{
+    private readonly FaceSetRef _faces = FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+
+    /// <summary>How far to push, along each face's own outward normal; positive grows the
+    /// solid. Signed on purpose — a bore wall's outward normal points into the void, so a
+    /// positive value closes the hole in.</summary>
+    [Param(Units = "mm", Description = "Offset distance")]
+    public double Distance { get; init; } = 1;
+
+    /// <summary>Which faces to push. Deferred: the edit resolves it at lowering.</summary>
+    [Param(Description = "Faces")]
+    [DeferredInput]
+    public FaceSetRef Faces
+    {
+        get => _faces;
+        init => _faces = value ?? FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+    }
+
+    public override Shape Apply(FeatureContext context) =>
+        (context.Body ?? throw new InvalidOperationException("OffsetFacesFeature needs a body."))
+            .OffsetFaces(Distance, Faces.AsSelector(nameof(Faces)));
+}
+
+/// <summary>
+/// Translates the selected faces — the parametric form of
+/// <see cref="Shape.MoveFaces(in Vector3d, FaceSetRef)"/>.
+/// </summary>
+public sealed class MoveFacesFeature : Feature
+{
+    private readonly FaceSetRef _faces = FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+
+    /// <summary>The displacement. A PLANAR face takes its own projection of it, so moving one
+    /// parallel to itself does nothing at all and several faces moved by one vector each move
+    /// by their own amount; a curved face is carried bodily, axis and all.</summary>
+    [Param(Units = "mm", Description = "Translation")]
+    public Vector3d Translation { get; init; } = new(0, 0, 1);
+
+    /// <inheritdoc cref="OffsetFacesFeature.Faces"/>
+    [Param(Description = "Faces")]
+    [DeferredInput]
+    public FaceSetRef Faces
+    {
+        get => _faces;
+        init => _faces = value ?? FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+    }
+
+    public override Shape Apply(FeatureContext context) =>
+        (context.Body ?? throw new InvalidOperationException("MoveFacesFeature needs a body."))
+            .MoveFaces(Translation, Faces.AsSelector(nameof(Faces)));
+}
+
+/// <summary>
+/// Turns the selected faces about an axis — the parametric form of
+/// <see cref="Shape.RotateFaces(in Ray3d, double, FaceSetRef)"/>, i.e. a draft angle on a
+/// body with no history to re-parameterize.
+/// </summary>
+public sealed class RotateFacesFeature : Feature
+{
+    private readonly FaceSetRef _faces = FaceSetRef.PlanarWithNormal(Vector3d.UnitX);
+    private readonly AxisRef _axis = AxisRef.Y;
+
+    /// <summary>The turn, in degrees about <see cref="Axis"/>.</summary>
+    [Param(Min = -89, Max = 89, Units = "deg", Description = "Rotation angle")]
+    public double AngleDegrees { get; init; } = 5;
+
+    /// <summary>The hinge. A face the axis LIES IN tilts about that line and keeps the points
+    /// on it, which is what a drafting caller means; a face the axis misses swings bodily.</summary>
+    [Param(Description = "Hinge axis")]
+    public AxisRef Axis
+    {
+        get => _axis;
+        init => _axis = value ?? AxisRef.Y;
+    }
+
+    /// <inheritdoc cref="OffsetFacesFeature.Faces"/>
+    [Param(Description = "Faces")]
+    [DeferredInput]
+    public FaceSetRef Faces
+    {
+        get => _faces;
+        init => _faces = value ?? FaceSetRef.PlanarWithNormal(Vector3d.UnitX);
+    }
+
+    public override Shape Apply(FeatureContext context) =>
+        (context.Body ?? throw new InvalidOperationException("RotateFacesFeature needs a body."))
+            .RotateFaces(Axis.Resolve(context, nameof(Axis)), AngleDegrees,
+                Faces.AsSelector(nameof(Faces)));
+}
+
+/// <summary>
+/// Removes the selected faces and heals the wound — the parametric form of
+/// <see cref="Shape.DeleteFaces(FaceSetRef)"/>. It carries no numeric parameter of its own,
+/// which is the point: what a design drives here is the SELECTION.
+/// </summary>
+public sealed class DeleteFacesFeature : Feature
+{
+    private readonly FaceSetRef _faces = FaceSetRef.Cylindrical();
+
+    /// <inheritdoc cref="OffsetFacesFeature.Faces"/>
+    [Param(Description = "Faces to remove")]
+    [DeferredInput]
+    public FaceSetRef Faces
+    {
+        get => _faces;
+        init => _faces = value ?? FaceSetRef.Cylindrical();
+    }
+
+    public override Shape Apply(FeatureContext context) =>
+        (context.Body ?? throw new InvalidOperationException("DeleteFacesFeature needs a body."))
+            .DeleteFaces(Faces.AsSelector(nameof(Faces)));
+}

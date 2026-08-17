@@ -126,4 +126,102 @@ public class DirectEditShapeTests
         Assert.Contains("matched nothing on the lowered solid", error.Message);
         Assert.Contains("OffsetFaces", error.Message);
     }
+
+    // ---- rotate ----
+
+    [Fact]
+    public void RotateFaces_ThroughTheGraph_IsTheExactFrustum()
+    {
+        // A block's +X face hinged on its base line: the XZ section becomes a trapezoid, so
+        // the volume is depth * height * (width + height*tan(theta)/2) — a closed form, not
+        // the area-times-distance answer an offset would give.
+        const double angle = 6;
+        var leaned = Shape.Box(40, 30, 10)
+            .RotateFaces(new Ray3d((20, 0, -5), Vector3d.UnitY), angle,
+                FaceSetRef.PlanarWithNormal(Vector3d.UnitX));
+
+        double lean = 10 * Math.Tan(angle * Math.PI / 180);
+        var bounds = Bounds(leaned);
+        Assert.Equal(20 + lean, bounds.Max.X, 9);
+        Assert.Equal(-20, bounds.Min.X, 9);
+
+        double expected = 30 * 10 * (40 + lean / 2);
+        Assert.Equal(expected, new Part("x", leaned).MassProperties().Volume, 6);
+    }
+
+    [Fact]
+    public void RotateFaces_UnderARigidPlacement_TurnsByTheSameANGLE()
+    {
+        // An angle is preserved by every isometry, so the placement moves the hinge and the
+        // leaned face together and the volume is UNCHANGED — a claim a wrongly transported
+        // axis breaks, since it would hinge about a line the body no longer has.
+        const double angle = 6;
+        var axis = new Ray3d(new Vector3d(20, 0, -5), Vector3d.UnitY);
+        var faces = FaceSetRef.PlanarWithNormal(Vector3d.UnitX);
+        var plain = Shape.Box(40, 30, 10).RotateFaces(axis, angle, faces);
+        var placed = plain.Translate(15, -7, 3);
+
+        double lean = 10 * Math.Tan(angle * Math.PI / 180);
+        double expected = 30 * 10 * (40 + lean / 2);
+        Assert.Equal(expected, new Part("a", plain).MassProperties().Volume, 6);
+        Assert.Equal(expected, new Part("b", placed).MassProperties().Volume, 6);
+
+        // The hinge travelled with the body: the leaned edge is exactly where the placement
+        // put it. Had the axis stayed behind, the face would hinge about a line the body no
+        // longer has and the volume above would already be wrong.
+        var bounds = Bounds(placed);
+        Assert.Equal(15 + 20 + lean, bounds.Max.X, 8);
+        Assert.Equal(3 - 5, bounds.Min.Z, 9);
+    }
+
+    [Fact]
+    public void RotateFaces_IsNativeUnderASimilarity()
+    {
+        var report = Shape.Box(40, 30, 10)
+            .RotateFaces(new Ray3d((20, 0, -5), Vector3d.UnitY), 6,
+                FaceSetRef.PlanarWithNormal(Vector3d.UnitX))
+            .Scale(2)
+            .Explain(TargetRep.Brep);
+        Assert.DoesNotContain(report.Entries, e => e.Support == NodeSupport.Impossible);
+    }
+
+    // ---- replace ----
+
+    [Fact]
+    public void ReplaceFaceSurfaces_TurnsACylinderIntoTheExactFrustum()
+    {
+        const double bottom = 6, top = 3, height = 12;
+        var cone = new RevolvedSurface(
+            new Line3d((bottom, 0, -height / 2), (top, 0, height / 2)),
+            Vector3d.Zero, Vector3d.UnitZ);
+
+        var frustum = Shape.Cylinder(bottom, height)
+            .ReplaceFaceSurfaces(cone, FaceSetRef.Cylindrical(bottom));
+
+        // Pappus' own closed form, matched at the tessellation grade.
+        double expected = Math.PI * height * (bottom * bottom + bottom * top + top * top) / 3;
+        double measured = new Part("frustum", frustum).MassProperties().Volume;
+        Assert.Equal(expected, measured, 3);
+    }
+
+    [Fact]
+    public void ReplaceFaceSurfaces_CarriesItsReplacementThroughThePlacement()
+    {
+        // The carrier is stated in MODEL coordinates, so a placement moves it with the body.
+        // A translated frustum must measure exactly what the un-translated one does.
+        const double bottom = 6, top = 3, height = 12;
+        var cone = new RevolvedSurface(
+            new Line3d((bottom, 0, -height / 2), (top, 0, height / 2)),
+            Vector3d.Zero, Vector3d.UnitZ);
+        var frustum = Shape.Cylinder(bottom, height)
+            .ReplaceFaceSurfaces(cone, FaceSetRef.Cylindrical(bottom));
+
+        double here = new Part("a", frustum).MassProperties().Volume;
+        double there = new Part("b", frustum.Translate(40, -25, 7)).MassProperties().Volume;
+        Assert.Equal(here, there, 9);
+
+        var bounds = Bounds(frustum.Translate(40, -25, 7));
+        Assert.Equal(40 + bottom, bounds.Max.X, 6);
+        Assert.Equal(7 + height / 2, bounds.Max.Z, 9);
+    }
 }

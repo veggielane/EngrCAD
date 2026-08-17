@@ -442,6 +442,19 @@ internal sealed class CarrierBody
         var (start, end) = EdgeVertices[edge];
         var original = Edges[edge];
 
+        // An edge NEITHER of whose carriers moved, between two corners that did not move
+        // either, is the edge it always was — so it is carried over verbatim rather than
+        // re-intersected. That is not an optimization: re-deriving it asks a bounded carrier
+        // (an extrusion's wall) for an intersection its own parameter rectangle may clip
+        // away, which is a refusal about bookkeeping on geometry nothing touched. Gated on
+        // the SELECTIVE paths so the offset family's arithmetic is bit-identical.
+        if (rimFromCarriers
+            && ReferenceEquals(surfaces[a], Faces[a].Surface)
+            && ReferenceEquals(surfaces[b], Faces[b].Surface)
+            && positions[start] == Vertices[start].Position
+            && positions[end] == Vertices[end].Position)
+            return (original.Curve, original.Domain);
+
         if (surfaces[a] is PlaneSurface && surfaces[b] is PlaneSurface)
             return (new Line3d(positions[start], positions[end]), Interval.Unit);
 
@@ -463,8 +476,22 @@ internal sealed class CarrierBody
                 "solid whose curved rims stay perpendicular to their axes.");
         }
 
+        // A DOMAIN-DRIVEN carrier is bounded by its own parameter rectangle and the analytic
+        // intersection is clipped to it, so a face that MOVED reaches past where its
+        // neighbour's rectangle stops and the two "do not meet" for a bookkeeping reason.
+        // Extending both to overshoot the solved corners is the trim-the-surface rule run
+        // the other way; the curve is trimmed back to those corners, so nothing survives it.
+        // Selective paths only — the offset family's carriers keep their own extents.
+        var solveA = surfaces[a];
+        var solveB = surfaces[b];
+        if (rimFromCarriers)
+        {
+            var reach = new[] { positions[start], positions[end] };
+            solveA = TrimToPoints(solveA, reach, extendOnly: true);
+            solveB = TrimToPoints(solveB, reach, extendOnly: true);
+        }
         if (SurfaceCorner.TrySolveCurve(
-                surfaces[a], surfaces[b], positions[start], positions[end],
+                solveA, solveB, positions[start], positions[end],
                 SurfaceCorner.CornerPolicy.ExactOnly, out var corner, out var reason))
             return (corner.Curve, corner.Curve.Domain);
 
@@ -679,10 +706,17 @@ internal sealed class CarrierBody
     }
 
     /// <inheritdoc cref="TrimToLoops"/>
-    /// <remarks>The rule itself, over the boundary points a caller has already sampled — so
+    /// <remarks>
+    /// <para>The rule itself, over the boundary points a caller has already sampled — so
     /// <see cref="DirectEdit"/>'s heal-by-extension, which rewrites loops rather than carrying
-    /// them over, asks the same question rather than restating it.</remarks>
-    internal static Surface TrimToPoints(Surface surface, IReadOnlyList<Vector3d> points)
+    /// them over, asks the same question rather than restating it.</para>
+    /// <para><paramref name="extendOnly"/> keeps whatever the surface already spans and merely
+    /// reaches further to cover the points, which is what a heal wants when it is about to
+    /// INTERSECT two neighbours: shrinking one to the corners it is being asked about would
+    /// answer a question about a surface the body does not have.</para>
+    /// </remarks>
+    internal static Surface TrimToPoints(
+        Surface surface, IReadOnlyList<Vector3d> points, bool extendOnly = false)
     {
         if (points.Count == 0)
             return surface;
@@ -698,13 +732,15 @@ internal sealed class CarrierBody
                 // solve against; its loops are rings at one height and the domain is right.
                 if (Math.Abs(axialB - axialA) <= Tolerance.Default.Linear)
                     return surface;
-                double lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+                double lo = extendOnly ? 0 : double.PositiveInfinity;
+                double hi = extendOnly ? 1 : double.NegativeInfinity;
                 foreach (var point in points)
                 {
                     double t = ((point - revolved.AxisOrigin).Dot(axis) - axialA) / (axialB - axialA);
                     lo = Math.Min(lo, t);
                     hi = Math.Max(hi, t);
                 }
+                (lo, hi) = Pad(lo, hi, extendOnly);
                 if (Math.Abs(lo) <= 1e-12 && Math.Abs(hi - 1) <= 1e-12)
                     return surface; // already exact: leave the object identical
                 return new RevolvedSurface(
@@ -718,13 +754,15 @@ internal sealed class CarrierBody
                 if (lengthSquared <= 0)
                     return surface;
                 var anchor = extruded.Generator.PointAt(extruded.Generator.Domain.Start);
-                double lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+                double lo = extendOnly ? 0 : double.PositiveInfinity;
+                double hi = extendOnly ? 1 : double.NegativeInfinity;
                 foreach (var point in points)
                 {
                     double v = (point - anchor).Dot(extruded.Direction) / lengthSquared;
                     lo = Math.Min(lo, v);
                     hi = Math.Max(hi, v);
                 }
+                (lo, hi) = Pad(lo, hi, extendOnly);
                 if (Math.Abs(lo) <= 1e-12 && Math.Abs(hi - 1) <= 1e-12)
                     return surface;
                 return new ExtrudedSurface(
@@ -735,6 +773,21 @@ internal sealed class CarrierBody
             default:
                 return surface;
         }
+    }
+
+    /// <summary>
+    /// An extension OVERSHOOTS the points it was asked to reach — the Drill doctrine, one
+    /// domain over. A carrier extended to land exactly ON a corner meets its neighbour at the
+    /// very edge of its own parameter rectangle, where the intersection clip's membership test
+    /// is decided by round-off; reaching past makes the crossing transversal, and the curve is
+    /// trimmed back to the solved corners afterwards so nothing of the overshoot survives.
+    /// </summary>
+    private static (double Lo, double Hi) Pad(double lo, double hi, bool extendOnly)
+    {
+        if (!extendOnly)
+            return (lo, hi);
+        double margin = 0.05 * Math.Max(hi - lo, 1);
+        return (lo - margin, hi + margin);
     }
 
     /// <summary>The curve's endpoints when it is straight at the weld tier.</summary>

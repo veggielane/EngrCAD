@@ -214,8 +214,17 @@ public static partial class DirectEdit
                          "end at the same pair of corners, so the edge that replaces it has no endpoints";
                 return false;
             }
+            // A DOMAIN-DRIVEN neighbour must be lengthened before it is intersected — the
+            // trim-the-surface rule running the other way. An extrusion's carrier is bounded
+            // by its own parameter rectangle and the intersection is clipped to it, so a
+            // sketch extrusion's wall stops exactly at the blend's tangency line and the two
+            // neighbours "do not meet" for a bookkeeping reason rather than a geometric one.
+            // Extending to reach the solved corners is what EXTEND means.
+            var reach = new[] { start.Position, end.Position };
             if (!SurfaceCorner.TrySolveCurve(
-                    a.Surface, b.Surface, start.Position, end.Position,
+                    CarrierBody.TrimToPoints(a.Surface, reach, extendOnly: true),
+                    CarrierBody.TrimToPoints(b.Surface, reach, extendOnly: true),
+                    start.Position, end.Position,
                     SurfaceCorner.CornerPolicy.ExactOnly, out var curve, out string? why))
             {
                 reason = $"the two neighbours of a deleted {face.Surface.GetType().Name} face do not meet " +
@@ -242,8 +251,11 @@ public static partial class DirectEdit
             // rather than re-parameterizing the old curve is what keeps a curved edge exact —
             // a box's vertical edge comes back as the Line3d between its new corners, and a
             // bore's rim as the conic through them.
+            var span = new[] { start.Position, end.Position };
             if (!SurfaceCorner.TrySolveCurve(
-                    both[0].Surface, both[1].Surface, start.Position, end.Position,
+                    CarrierBody.TrimToPoints(both[0].Surface, span, extendOnly: true),
+                    CarrierBody.TrimToPoints(both[1].Surface, span, extendOnly: true),
+                    start.Position, end.Position,
                     SurfaceCorner.CornerPolicy.ExactOnly, out var curve, out string? why))
             {
                 reason = $"an edge the wound reaches, at {edge.Curve.PointAt(edge.Domain.Start)}, cannot be " +
