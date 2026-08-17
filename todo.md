@@ -312,11 +312,14 @@ multi-body input, per-facet source-triangle tags, 10-node elements. Residuals be
   `PreventLongEdgeFlips` included, so it is not the flip stage. The seed is that the primitive's
   n-gon caps triangulate as a **one-corner fan** (worst angle 3.74° before any remeshing) and
   the rim is pinned, so the remesher has little freedom on the cap and degrades it. Two
-  separable pieces: the cap fan is a poor triangulation for anything downstream to start from
-  (a fan is the cheapest correct answer, not a good one), and the remesher still has no
-  shape-quality measure of its own to notice — which is the already-filed
-  `RemeshResult` minimum-angle item, here with a fixture that motivates it. Note this is an
-  `EngrCAD.Mesh` item, not an Fea one; it surfaced because the tet mesher is the first consumer
+  separable pieces, and the MEASURE half has since landed — `RemeshResult.Quality` is a
+  `TriangleQualityReport` rated against the remesher's own pinned population, so the
+  degradation is visible to any caller that looks. What remains is the SEED: a better
+  cap triangulation for `MeshPrimitives.Cylinder` (interior Steiner points — a bare
+  centre fan only trades the ear's 3.7° for the apex's 360/n), which is a change to the
+  most widely used primitive in the repository (committed goldens, docs PNGs and tet
+  fixtures all sit on the fan), so it wants its own verification pass, not a rider.
+  `EngrCAD.Mesh`, not Fea; it surfaced because the tet mesher is the first consumer
   that cannot tolerate it.
 - [x] ~~**Sliver removal (the second named gap in tet meshing).**~~ ✅ **done** —
   `TetSmoothing.Smooth` is the optimization-based half (interior-vertex smoothing against a
