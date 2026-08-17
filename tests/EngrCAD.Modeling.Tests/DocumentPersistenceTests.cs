@@ -395,6 +395,34 @@ public class DocumentPersistenceTests
     }
 
     [Fact]
+    public void ResultSequences_RoundTripAsAByteFixedPoint_AndAreWriteOnlyWhenStated()
+    {
+        var doc = Fixture(includeOpaque: false);
+        // No sequence -> no key: a document predating the axis is byte-identical.
+        Assert.DoesNotContain("resultSequences", doc.Save());
+
+        var plate = doc.Scene.Tabs[0].Parts[0];
+        int vertices = plate.GetMesh(doc.Scene.Options).VertexCount;
+        MeshField State(double v) =>
+            MeshField.Scalar("state", "K", [.. Enumerable.Repeat(v, vertices)]);
+        plate.AddResultSequence("Temperature", [(State(300), 0.0), (State(340), 0.5)]);
+
+        string saved = doc.Save();
+        Assert.Contains("resultSequences", saved);
+        var loaded = Document.Load(saved);
+        var reloaded = loaded.Scene.Tabs[0].Parts[0];
+        var sequence = reloaded.Sequence("Temperature");
+        Assert.NotNull(sequence);
+        // The instants round-trip EXACTLY (JSON doubles are shortest-round-trip) and
+        // each step still names a result that actually loaded.
+        Assert.Equal([0.0, 0.5], sequence!.Steps.Select(s => s.Seconds));
+        foreach (var (resultName, _) in sequence.Steps)
+            Assert.NotNull(reloaded.Result(resultName));
+
+        Assert.Equal(saved, loaded.Document.Save());
+    }
+
+    [Fact]
     public void ResultsCanBeLeftOut()
     {
         var json = Fixture().Save(new DocumentSaveOptions { IncludeResults = false });

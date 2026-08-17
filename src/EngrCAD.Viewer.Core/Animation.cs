@@ -189,6 +189,30 @@ public sealed class FieldSequenceTrack : AnimationTrack
         }
     }
 
+    /// <summary>
+    /// The track for a part's saved time axis — the ONE rule connecting a
+    /// <see cref="ResultSequence"/> (document data: the ordered result names and
+    /// instants a transient run published through
+    /// <see cref="Part.AddResultSequence"/>) to its playback, so the saved axis and
+    /// the clip cannot disagree. Refuses by name when the part carries no sequence of
+    /// that name, listing what it does carry.
+    /// </summary>
+    public static FieldSequenceTrack For(Part part, string sequenceName)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        if (part.Sequence(sequenceName) is not { } sequence)
+        {
+            var carried = part.ResultSequences;
+            throw new ArgumentException(
+                $"Part '{part.Name}' has no result sequence '{sequenceName}'. " +
+                (carried.Count == 0
+                    ? "It carries none."
+                    : $"It carries: {string.Join(", ", carried.Select(s => s.Name))}."),
+                nameof(sequenceName));
+        }
+        return new FieldSequenceTrack(sequence.Steps);
+    }
+
     /// <summary>Every step's result name, in run order — what a consumer checks a
     /// part's results against to decide participation.</summary>
     public IReadOnlyList<string> FieldNames => _names;

@@ -208,17 +208,31 @@ rule per frame through the shared upload cache, and the browser viewer applies i
 through a colours-only buffer update — so an exported clip, the desktop window and the
 web viewer all play a transient run's steps from one rule.
 
+The axis itself is **document data**: `Part.AddResultSequence` publishes a run's states
+as ordinary results under derived names ("T @ 0.5s") and records a `ResultSequence` —
+the order and the instants — which persists with the document (write-only-when-stated,
+so a document using none is byte-identical) and from which `FieldSequenceTrack.For`
+builds the playback by one rule. A reloaded document then knows not just its states but
+WHEN they were; the track and the saved axis cannot disagree. A re-published sequence
+under the same name replaces the old one and removes any steps it no longer uses, so a
+re-solve with different instants cannot leave stale twins behind.
+
 ```csharp run:field-sequence
 var part = new Part("plate", Shape.Box(20, 10, 2));
 var mesh = part.GetMesh();
-part.AddResult(MeshField.Sample(mesh, "T@0", "K", p => 300 + p.X));
-part.AddResult(MeshField.Sample(mesh, "T@5", "K", p => 300 + 4 * p.X));
-part.FieldDisplay = new FieldDisplay { Field = "T@0" };
 
-var track = new FieldSequenceTrack([("T@0", 0), ("T@5", 5)]);
-if (track.FieldAt(0) != "T@0" || track.FieldAt(1) != "T@5")
+// Publish the run WITH its time axis: each step becomes a result named "T @ ...s",
+// and the ResultSequence records the order and instants a saved document used to lose.
+part.AddResultSequence("T", [
+    (MeshField.Sample(mesh, "state", "K", p => 300 + p.X), 0.0),
+    (MeshField.Sample(mesh, "state", "K", p => 300 + 4 * p.X), 5.0),
+]);
+part.FieldDisplay = new FieldDisplay { Field = "T @ 0s" };
+
+var track = FieldSequenceTrack.For(part, "T");   // the saved axis IS the playback
+if (track.FieldAt(0) != "T @ 0s" || track.FieldAt(1) != "T @ 5s")
     throw new Exception("t maps over the run's real time");
-if (track.FieldAt(0.49) != "T@0")
+if (track.FieldAt(0.49) != "T @ 0s")
     throw new Exception("hold-last: 2.45 s still shows the 0 s step");
 
 // The run's one range: the union of the steps' own.

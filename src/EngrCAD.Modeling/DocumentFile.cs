@@ -443,6 +443,31 @@ internal static class DocumentWriter
                 });
             }
             json["results"] = results;
+
+            // The time axes over those results, write-only-when-stated: a document
+            // using no sequences is byte-identical to one saved before they existed.
+            if (part.ResultSequences.Count > 0)
+            {
+                var sequences = new JsonArray();
+                foreach (var sequence in part.ResultSequences)
+                {
+                    var steps = new JsonArray();
+                    foreach (var (resultName, seconds) in sequence.Steps)
+                    {
+                        steps.Add(new JsonObject
+                        {
+                            ["result"] = resultName,
+                            ["seconds"] = seconds,
+                        });
+                    }
+                    sequences.Add(new JsonObject
+                    {
+                        ["name"] = sequence.Name,
+                        ["steps"] = steps,
+                    });
+                }
+                json["resultSequences"] = sequences;
+            }
         }
 
         if (part.FieldDisplay is { } display)
@@ -945,6 +970,29 @@ internal static class DocumentReader
                 catch (Exception exception)
                 {
                     warnings.Add($"part '{name}': a result could not be rebuilt ({exception.Message})");
+                }
+            }
+        }
+
+        if (element.TryGetProperty("resultSequences", out var resultSequences))
+        {
+            foreach (var record in resultSequences.EnumerateArray())
+            {
+                try
+                {
+                    var steps = new List<(string, double)>();
+                    foreach (var step in record.GetProperty("steps").EnumerateArray())
+                    {
+                        steps.Add((
+                            step.GetProperty("result").GetString() ?? "",
+                            step.GetProperty("seconds").GetDouble()));
+                    }
+                    part.RestoreResultSequence(new ResultSequence(
+                        record.GetProperty("name").GetString() ?? "", steps));
+                }
+                catch (Exception exception)
+                {
+                    warnings.Add($"part '{name}': a result sequence could not be rebuilt ({exception.Message})");
                 }
             }
         }

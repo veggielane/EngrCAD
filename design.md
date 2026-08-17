@@ -10033,6 +10033,30 @@ their mind about the exaggeration), "(none)" clears it, a display naming a remov
 result stays LISTED (the current-value rule) and legal (resolution reports it), and the
 edit rides the undo stack's byte-identity oracle like every other document edit.
 
+**The time AXIS became document data** (`ResultSequence` + `Part.AddResultSequence` +
+`FieldSequenceTrack.For`; docs `examples/fields.md`): the states were never the gap —
+each stored transient state is an ordinary named result — but the ORDER and the
+INSTANTS lived only in the `FieldSequenceTrack` an application hand-built, so a saved
+document kept every state and lost the axis. `AddResultSequence(name, (field,
+seconds)…)` publishes each step under a derived name (`"T @ 0.5s"` — the seconds in
+"R" form, so the name is a deterministic function of the instant and survives the file
+bit-for-bit) and records the `ResultSequence`, validated to the track's own rules
+BEFORE any mutation (all-or-nothing, so a refused run leaves the part untouched);
+re-publishing under one name REPLACES and removes the steps the new run no longer
+uses — `AddResult`'s replace-by-name rule extended to a whole run, because a re-solve
+with different instants must not leave stale twins behind. The record persists
+write-only-when-stated inside the results gate (a sequence without its states is
+dangling, so `IncludeResults = false` drops both; a sequence-free document is
+byte-identical and save→load→save is a byte fixed point), and
+`FieldSequenceTrack.For(part, name)` is the ONE rule from the saved axis to the
+playback — asserted equal to the hand-built track step for step, with a missing
+sequence refusing by name and listing what the part does carry. Fea stays a leaf: the
+bridge is one app-layer line (`part.AddResultSequence("Temperature",
+transient.States.Select((s, i) => (s.Fields()[0], transient.Times[i])).ToList())`),
+which is the layering the thermal results' own remarks predicted — "a time slider over
+a document's results is a matter of choosing a state rather than of a second API" —
+completed by making WHICH states and WHEN a recorded fact rather than a convention.
+
 **A displaced part's feature edges and wireframe landed as ONE line-program attribute,
 and retiring the no-edges rule kept both halves of its own reasoning**
 (`LineVertex`'s `aDeformOffset` + `uDeformScale`; `PartUpload.FeatureEdgeDeformation`/

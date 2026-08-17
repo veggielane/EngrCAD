@@ -170,6 +170,7 @@ public sealed class Part
 
     // ---- simulation results (fields on the display mesh's vertices) ----
     private readonly List<MeshField> _results = [];
+    private readonly List<ResultSequence> _resultSequences = [];
 
     public Part(string name, Shape shape, PartColor? color = null, Matrix4d? transform = null)
         : this(name, (object)shape, color, transform) { }
@@ -625,6 +626,93 @@ public sealed class Part
     {
         lock (_meshLock)
             return _results.Find(f => f.Name == name);
+    }
+
+    /// <summary>The time axes attached to this part's results — see
+    /// <see cref="AddResultSequence"/>.</summary>
+    public IReadOnlyList<ResultSequence> ResultSequences
+    {
+        get
+        {
+            lock (_meshLock)
+                return [.. _resultSequences];
+        }
+    }
+
+    /// <summary>The result sequence of that name, or null.</summary>
+    public ResultSequence? Sequence(string name)
+    {
+        lock (_meshLock)
+            return _resultSequences.Find(s => s.Name == name);
+    }
+
+    /// <summary>
+    /// Publishes a transient run as results WITH their time axis (chainable): each
+    /// step's field is attached under the derived name
+    /// <see cref="ResultSequence.StepName"/> ("Temperature @ 0.5s"), and the
+    /// <see cref="ResultSequence"/> records the order and the instants — the axis a
+    /// saved document used to lose, and the input <c>FieldSequenceTrack.For</c> builds
+    /// the playback from. The whole call validates BEFORE it mutates (a refused
+    /// sequence leaves the part untouched), and a second sequence under the same name
+    /// REPLACES the first, removing any of the old record's results the new one does
+    /// not reuse — a re-run with different instants must not leave stale twins behind.
+    /// </summary>
+    public Part AddResultSequence(string name, IReadOnlyList<(MeshField Field, double Seconds)> steps)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        var renamed = new List<MeshField>(steps.Count);
+        var recorded = new List<(string ResultName, double Seconds)>(steps.Count);
+        for (int i = 0; i < steps.Count; i++)
+        {
+            var (field, seconds) = steps[i];
+            if (field is null)
+                throw new ArgumentException($"Step {i} carries no field.", nameof(steps));
+            string stepName = ResultSequence.StepName(name, seconds);
+            renamed.Add(new MeshField(stepName, field.Units, field.Components, field.Values, field.Association));
+            recorded.Add((stepName, seconds));
+        }
+        var sequence = new ResultSequence(name, recorded);
+        lock (_meshLock)
+        {
+            int existing = _resultSequences.FindIndex(s => s.Name == name);
+            if (existing >= 0)
+            {
+                var kept = new HashSet<string>(recorded.Select(r => r.ResultName));
+                foreach (var (oldName, _) in _resultSequences[existing].Steps)
+                {
+                    if (!kept.Contains(oldName))
+                        _results.RemoveAll(f => f.Name == oldName);
+                }
+                _resultSequences[existing] = sequence;
+            }
+            else
+            {
+                _resultSequences.Add(sequence);
+            }
+            foreach (var field in renamed)
+            {
+                int at = _results.FindIndex(f => f.Name == field.Name);
+                if (at >= 0)
+                    _results[at] = field;
+                else
+                    _results.Add(field);
+            }
+        }
+        return this;
+    }
+
+    /// <summary>Restores a loaded sequence RECORD without touching the results — the
+    /// document file attaches the step fields separately.</summary>
+    internal void RestoreResultSequence(ResultSequence sequence)
+    {
+        lock (_meshLock)
+        {
+            int existing = _resultSequences.FindIndex(s => s.Name == sequence.Name);
+            if (existing >= 0)
+                _resultSequences[existing] = sequence;
+            else
+                _resultSequences.Add(sequence);
+        }
     }
 
     /// <summary>

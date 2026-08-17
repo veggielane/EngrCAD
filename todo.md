@@ -659,10 +659,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   - [ ] **Two-way coupling** (deformation feeding back into conduction) is a staggered or
     monolithic solver, not an extension of the one-way path. Filed for completeness; the
     one-way direction covers thermal stress, which is what is usually wanted.
-  - [ ] **`Part.Results` has no time axis**, so publishing a transient means choosing one
-    state. That is the "time-varying results (a load step / frequency slider driving
-    `Part.Results`)" item already filed under results follow-ups; the thermal solver is
-    now a second caller wanting it.
 - [ ] **Results/fields follow-ups** (v1 ✅ landed — `MeshField`/`FieldRange` +
   `VtuWriter` in EngrCAD.Mesh, `Part.Results`/`FieldDisplay`/`TryResolveFieldDisplay` in
   Modeling, `ColorMaps`/`FieldRendering`/`FieldLegend` in Viewer.Core, drawn in all

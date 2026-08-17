@@ -450,6 +450,24 @@ public class AnimationTests
     }
 
     [Fact]
+    public void FieldSequenceTrack_For_BuildsFromThePartsSavedAxis()
+    {
+        var part = new Part("plate", Shape.Box(10, 10, 2));
+        MeshField State(double v) => MeshField.Scalar("state", "K", [v]);
+        part.AddResultSequence("T", [(State(1), 0.0), (State(2), 0.5), (State(3), 2.0)]);
+
+        // The one rule: the track built from the saved axis IS the hand-built track.
+        var track = FieldSequenceTrack.For(part, "T");
+        var byHand = new FieldSequenceTrack([("T @ 0s", 0), ("T @ 0.5s", 0.5), ("T @ 2s", 2)]);
+        Assert.Equal(byHand.FieldNames, track.FieldNames);
+        Assert.Equal(byHand.FieldAt(0.3), track.FieldAt(0.3));
+        Assert.Equal(byHand.SecondsAt(1), track.SecondsAt(1));
+
+        var missing = Assert.Throws<ArgumentException>(() => FieldSequenceTrack.For(part, "flux"));
+        Assert.Contains("T", missing.Message); // names what the part DOES carry
+    }
+
+    [Fact]
     public void FieldSequenceTrack_RefusesMalformedRuns()
     {
         Assert.Throws<ArgumentException>(() => new FieldSequenceTrack([]));
