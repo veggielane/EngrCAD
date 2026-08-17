@@ -457,10 +457,11 @@ public static class DocumentEdits
     public static DocumentEdit AddMate(MateSet set, Mate mate) => new MateEdit(set, mate, remove: false);
 
     /// <summary>
-    /// Commits a mate solve as ONE undoable step. Apply captures every occurrence frame
-    /// in the set's assembly TREE first (the safe superset — a deep mate's unknown is a
-    /// nested occurrence's frame, and an untouched frame restores to itself exactly),
-    /// then runs <see cref="MateSet.Solve"/>; Revert restores the captured frames, so
+    /// Commits a mate solve as ONE undoable step. Apply captures every occurrence pose in
+    /// the set's assembly TREE first (the safe superset — a deep mate's unknown is a
+    /// nested occurrence's frame, or a flexible placement's own overlay entry, and an
+    /// untouched pose restores to itself exactly),
+    /// then runs <see cref="MateSet.Solve"/>; Revert restores the captured poses, so
     /// undo takes the whole repose back in one Ctrl+Z. A solve that does not converge
     /// writes NOTHING (the solver's own refuse-loudly contract), so the exception
     /// propagates with the document untouched and the edit is never pushed — the
@@ -475,40 +476,25 @@ public static class DocumentEdits
 
     private sealed class SolveMatesEdit(MateSet set, MateSolverSettings? settings) : DocumentEdit
     {
-        private readonly List<(Occurrence Occurrence, Frame3d Frame)> _before = [];
+        private OccurrencePoses? _before;
 
         public override string Description => "Solve mates";
 
         public override void Apply()
         {
-            _before.Clear();
-            Capture(set.Assembly);
+            _before = OccurrencePoses.Capture(set.Assembly);
             try
             {
                 set.Solve(settings);
             }
             catch
             {
-                _before.Clear(); // nothing was written; hold no stale capture
+                _before = null; // nothing was written; hold no stale capture
                 throw;
             }
         }
 
-        private void Capture(Assembly assembly)
-        {
-            foreach (var occurrence in assembly.Occurrences)
-            {
-                _before.Add((occurrence, occurrence.Frame));
-                if (occurrence.SubAssembly is { } nested)
-                    Capture(nested);
-            }
-        }
-
-        public override void Revert()
-        {
-            foreach (var (occurrence, frame) in _before)
-                occurrence.Frame = frame;
-        }
+        public override void Revert() => _before?.Restore();
     }
 
     /// <summary>Removes a mate; undo restores it at its old index.</summary>

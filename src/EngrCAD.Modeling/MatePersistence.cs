@@ -41,8 +41,7 @@ public sealed partial class MateSet
     /// <summary>The grounded occurrences as sorted paths — a stable file, whatever the
     /// set order. Shared with mechanism persistence so the two files spell grounds
     /// identically.</summary>
-    internal string[] GroundedPaths() => _grounded
-        .Select(o => Assembly.PathTo(o) ?? o.Name)
+    internal string[] GroundedPaths() => _groundedPaths
         .OrderBy(p => p, StringComparer.Ordinal)
         .ToArray();
 
@@ -52,7 +51,7 @@ public sealed partial class MateSet
     {
         try
         {
-            _grounded.Add(Assembly.ResolvePath(path)[^1]);
+            Ground(path);
         }
         catch (ArgumentException exception)
         {

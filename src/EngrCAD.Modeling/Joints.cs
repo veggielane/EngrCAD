@@ -4,7 +4,9 @@ namespace EngrCAD.Modeling;
 
 /// <summary>Composes a <see cref="MateRef"/>'s occurrence chain into world space —
 /// the same outermost-first composition the solver uses, read from the CURRENT
-/// occurrence frames (a world-fixed reference composes through the identity).</summary>
+/// occurrence poses through the <see cref="FlexiblePlacement"/> scope, so a chain
+/// running into a flexible placement reads THAT placement's own internal poses (a
+/// world-fixed reference composes through the identity).</summary>
 internal static class MateRefWorld
 {
     public static Frame3d WorldFrame(in MateRef reference)
@@ -13,10 +15,16 @@ internal static class MateRefWorld
             return Frame3d.WorldXY;
         if (reference.Ancestors is not { } ancestors)
             return occurrence.Frame;
-        var world = ancestors[0].Frame;
-        for (int i = 1; i < ancestors.Count; i++)
-            world = ancestors[i].Frame.Then(world);
-        return occurrence.Frame.Then(world);
+        var scope = FlexiblePlacement.None;
+        Frame3d world = default;
+        for (int i = 0; i <= ancestors.Count; i++)
+        {
+            var link = i < ancestors.Count ? ancestors[i] : occurrence;
+            var local = scope.PoseOf(link);
+            world = i == 0 ? local : local.Then(world);
+            scope = scope.Below(link);
+        }
+        return world;
     }
 
     public static EndValue Evaluate(in MateRef reference)
@@ -102,12 +110,14 @@ public abstract class Joint
         // occurrence whose remaining DOF is the joint's own. When B is world-fixed the
         // roles swap and A is the free side.
         var grounded = B.IsWorld ? B : A;
-        var free = B.IsWorld ? A : B;
         if (grounded.Path is { } groundPath)
             probe.Ground(groundPath);
 
-        var freeOccurrence = free.Occurrence!;
-        var snapshot = freeOccurrence.Frame;
+        // Capture the whole tree, not just the free end's frame: the probe's unknown may
+        // be a POSE SLOT inside a flexible placement's overlay, which a frames-only
+        // restore would silently leave moved (the safe-superset rule the undoable solve
+        // follows).
+        var snapshot = OccurrencePoses.Capture(assembly);
         MateSolveResult result;
         try
         {
@@ -115,7 +125,7 @@ public abstract class Joint
         }
         finally
         {
-            freeOccurrence.Frame = snapshot;
+            snapshot.Restore();
         }
 
         if (!result.Converged)
