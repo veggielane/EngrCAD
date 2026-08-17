@@ -325,6 +325,12 @@
       "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
     },
     {
+      "id": "fea-composites-plate",
+      "page": "examples/fea-composites.md",
+      "live": false,
+      "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
+    },
+    {
       "id": "fea-fatigue-bracket",
       "page": "examples/fea-fatigue.md",
       "live": false,
@@ -464,6 +470,11 @@
     },
     {
       "id": "gear-helical",
+      "page": "examples/gears.md",
+      "live": true
+    },
+    {
+      "id": "gear-hub",
       "page": "examples/gears.md",
       "live": true
     },
