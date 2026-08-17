@@ -149,6 +149,37 @@ public class SceneTreeTests
     }
 
     [Fact]
+    public void PerRowHiddenReadsOwnAndAncestorCheckboxes()
+    {
+        SceneWith(out var tab);
+        var bolt = MakePart("bolt");
+        var clamp = new Assembly("clamp");
+        clamp.Add(bolt);
+        var rig = new Assembly("rig");
+        rig.Add(clamp);
+        tab.Add(rig);
+        var tree = SceneTree.Build(tab);
+        var boltRow = tree.Rows.Single(r => r.Path == "rig/clamp/bolt");
+        var clampRow = tree.Rows.Single(r => r.Path == "rig/clamp");
+
+        // Nothing hidden: every row reads shown (the empty set is the identity).
+        Assert.False(tree.IsEffectivelyHidden(boltRow, null));
+        Assert.False(tree.IsEffectivelyHidden(boltRow, new HashSet<string>()));
+
+        // The row's own checkbox.
+        Assert.True(tree.IsEffectivelyHidden(boltRow, new HashSet<string> { boltRow.Key }));
+
+        // An ANCESTOR's checkbox reaches every row beneath it — the same own-AND-
+        // ancestors chain EffectiveVisibility folds, exposed per row so the tree can
+        // gray what it hides.
+        var hidden = new HashSet<string> { clampRow.Key };
+        Assert.True(tree.IsEffectivelyHidden(boltRow, hidden));
+        Assert.True(tree.IsEffectivelyHidden(clampRow, hidden));
+        var rigRow = tree.Rows.Single(r => r.Path == "rig");
+        Assert.False(tree.IsEffectivelyHidden(rigRow, hidden));
+    }
+
+    [Fact]
     public void HidingAnAssemblyHidesItsWholeSubtree()
     {
         SceneWith(out var tab);

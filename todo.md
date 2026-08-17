@@ -839,9 +839,10 @@ export — is recorded in CLAUDE.md):
   stays the selection mechanism; **web viewport Hidden/Isolated ✅ landed** —
   `EngrCadViewport.ResolveInstances` applies `DebugFilter.Shown` exactly as the window /
   offscreen / `--export` / MCP do, and Ghost renders through `EffectiveDisplayMode`, so with
-  no flags it is the identity): the only residual is a Web-viewer UI polish — the model tree
-  rows could GRAY hidden parts (a tree-row styling change in `EngrCAD.Web`, not a Modeling
-  matter).
+  no flags it is the identity; **tree-row graying ✅ landed** —
+  `SceneTree.IsEffectivelyHidden` exposes the own-AND-ancestors chain per row, pure and
+  tested, and the markup asks it rather than restating a visibility rule it could drift
+  from; selection still golds, a hidden part being addressable). Nothing open here.
 - [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame. This
   is the *expensive* cousin of the Animation section above and deliberately separate:
   that one moves poses and the camera only, which is why it can animate with matrices

@@ -635,5 +635,9 @@
     private string LabelStyle(SceneTreeRow row) =>
         "cursor:pointer; user-select:none; "
         + (row.Kind == SceneTreeRowKind.Assembly ? "font-weight:600; color:#9aa0aa;" : "")
+        // Hidden rows gray out (own checkbox or an ancestor's — the SceneTree rule,
+        // asked rather than restated); selection still golds, since a hidden part is
+        // still addressable and the highlight is UI state, not visibility.
+        + (_tree is not null && _tree.IsEffectivelyHidden(row, _hidden) ? "color:#565b63;" : "")
         + (row.Index == _selectedRow ? "color:#ffd95e;" : "");
 }

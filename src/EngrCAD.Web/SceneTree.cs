@@ -185,4 +185,26 @@ public sealed class SceneTree
         }
         return visible;
     }
+
+    /// <summary>
+    /// Whether one ROW reads as hidden — its own checkbox, or any ancestor's, is
+    /// unchecked. The same own-AND-ancestors chain <see cref="EffectiveVisibility"/>
+    /// folds into the per-instance vector, exposed per row so a tree can GRAY what it
+    /// hides (the rule lives here, pure and tested, and the markup only asks it —
+    /// styling must not restate a visibility chain it could drift from).
+    /// </summary>
+    public bool IsEffectivelyHidden(SceneTreeRow row, IReadOnlySet<string>? hidden)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (hidden is null || hidden.Count == 0)
+            return false;
+        if (hidden.Contains(row.Key))
+            return true;
+        foreach (int ancestor in row.Ancestors)
+        {
+            if (hidden.Contains(Rows[ancestor].Key))
+                return true;
+        }
+        return false;
+    }
 }
