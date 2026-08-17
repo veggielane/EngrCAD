@@ -406,8 +406,16 @@ public sealed class Weldment
         }
 
         // T-joints: an endpoint landing on another run's INTERIOR is a member butting
-        // against a side, which v1 does not trim — the untrimmed member would bury
-        // itself half a section deep in the other. Refuse by name.
+        // against the through member's side. The THROUGH member does nothing — it keeps
+        // its full section past the joint, the same role the butt joint's earlier run
+        // plays — and the abutting member is trimmed back by the through member's
+        // facing wall plane: the butt joint's own arithmetic, applied at a mid-run
+        // point. Detection refuses the shapes that have no one honest answer, all
+        // before any geometry: a COLLINEAR landing (the members overlap along one line
+        // rather than meeting across it), an endpoint on TWO interiors (which wall
+        // trims is ambiguous), and an END-JOINTED endpoint also on an interior (a
+        // three-member confluence, the multi-joint refusal's mid-run twin).
+        var tJointOf = new int?[n, 2];
         for (int i = 0; i < n; i++)
         {
             for (int ei = 0; ei < 2; ei++)
@@ -419,11 +427,24 @@ public sealed class Weldment
                         continue;
                     if ((p - runs[j].Start).Length <= 1e-9 || (p - runs[j].End).Length <= 1e-9)
                         continue; // that is a joint (or a refused multi-joint), handled above
-                    if (DistanceToSegment(p, runs[j].Start, runs[j].End) <= 1e-9)
+                    if (DistanceToSegment(p, runs[j].Start, runs[j].End) > 1e-9)
+                        continue;
+                    if (jointOf[i, ei] is { } endJoint)
                         throw new NotSupportedException(
-                            $"Run {i} ends on the interior of run {j} (a T-joint at {p}). Trimming a member "
-                            + "against another member's side is not supported yet; end the run on the through "
-                            + "member's wall instead, or lay the skeleton out with two-member corner joints.");
+                            $"Run {i}'s endpoint at {p} joins run {endJoint.Partner} AND lies on the interior "
+                            + "of run " + j + " — a three-member confluence. Which pair joins and what closes "
+                            + "the third is a drafting convention, not a formula; separate the members.");
+                    var facing = axes[i] - axes[j] * axes[i].Dot(axes[j]);
+                    if (facing.Length <= 1e-9)
+                        throw new NotSupportedException(
+                            $"Run {i} ends on the interior of COLLINEAR run {j} (at {p}): the members overlap "
+                            + "along one line rather than meeting across it. Split the through run into two "
+                            + "runs meeting at that point instead.");
+                    if (tJointOf[i, ei] is { } other)
+                        throw new NotSupportedException(
+                            $"Run {i}'s endpoint at {p} lies on the interior of runs {other} and {j} at once — "
+                            + "which wall should trim it is ambiguous. Separate the through members.");
+                    tJointOf[i, ei] = j;
                 }
             }
         }
@@ -436,8 +457,8 @@ public sealed class Weldment
         {
             var (s, e) = runs[i];
             var frame = MemberFrame(s, axes[i], options.Up);
-            var startCut = EndCut(profile, runs, axes, jointOf, options, i, end: 0);
-            var endCut = EndCut(profile, runs, axes, jointOf, options, i, end: 1);
+            var startCut = EndCut(profile, runs, axes, jointOf, tJointOf, options, i, end: 0);
+            var endCut = EndCut(profile, runs, axes, jointOf, tJointOf, options, i, end: 1);
             members.Add(BuildMember(profile, options, i, s, e, lengths[i], frame, startCut, endCut, diagonal));
         }
         return new Weldment(profile, members, options);
@@ -468,11 +489,23 @@ public sealed class Weldment
 
     private static PlaneCut? EndCut(
         FrameProfile profile, IReadOnlyList<(Vector3d Start, Vector3d End)> runs,
-        Vector3d[] axes, (int Partner, int PartnerEnd)?[,] jointOf, WeldmentOptions options,
-        int run, int end)
+        Vector3d[] axes, (int Partner, int PartnerEnd)?[,] jointOf, int?[,] tJointOf,
+        WeldmentOptions options, int run, int end)
     {
         if (jointOf[run, end] is not { } joint)
-            return null; // free end: the extrusion's own cap
+        {
+            if (tJointOf[run, end] is not { } through)
+                return null; // free end: the extrusion's own cap
+            // A T-joint: this member's own stored endpoint is the joint point (nothing
+            // on the through member is cut, so no canonical-point pairing arises), and
+            // the trim is the butt joint's facing-wall plane. Detection already refused
+            // the collinear landing, so the wall cut always exists here.
+            var tPoint = end == 0 ? runs[run].Start : runs[run].End;
+            var tKept = end == 0 ? axes[run] : -axes[run];
+            return WallCut(profile, runs, axes, options, run, through, tPoint, tKept)
+                ?? throw new InvalidOperationException(
+                    "A collinear T-joint reached the cut — detection should have refused it.");
+        }
         // The CANONICAL joint point: both members of one joint read the same stored
         // endpoint (the lower run's), so their cut planes share the origin bit-for-bit
         // even when the user's two coincident endpoints differ in the last ulps.
@@ -499,25 +532,39 @@ public sealed class Weldment
         }
 
         // Butt: the earlier run runs through with its own square end; the later run is
-        // trimmed back by the through member's facing wall plane.
-        bool through = run < joint.Partner;
-        if (through)
-            return null;
-        // Facing direction: this member's kept direction, projected perpendicular to the
-        // through member's axis (b is the through member's kept direction, so its axis
-        // line carries ±b).
+        // trimmed back by the through member's facing wall plane. A null WallCut is the
+        // collinear splice: the square end IS flush with the through cap.
+        return run < joint.Partner ? null : WallCut(profile, runs, axes, options, run, joint.Partner, j, a);
+    }
+
+    /// <summary>
+    /// The facing-wall trim plane for a member abutting the SIDE of
+    /// <paramref name="through"/> — the butt joint's arithmetic, shared verbatim with
+    /// the T-joint. Null when the two axes are collinear (no facing direction exists).
+    /// The projection is EVEN in the through axis's sign (b·(a·b) is unchanged by
+    /// negating b, exactly, since IEEE negation is exact), which is what lets a T-joint
+    /// — where the through member extends BOTH ways from the joint — use the same rule
+    /// with the raw axis.
+    /// </summary>
+    private static PlaneCut? WallCut(
+        FrameProfile profile, IReadOnlyList<(Vector3d Start, Vector3d End)> runs, Vector3d[] axes,
+        WeldmentOptions options, int run, int through, in Vector3d joint, in Vector3d a)
+    {
+        // Facing direction: this member's kept direction, projected perpendicular to
+        // the through member's axis line (which carries ± the stored axis).
+        var b = axes[through];
         var facing = a - b * a.Dot(b);
         if (facing.Length <= 1e-9)
-            return null; // collinear splice: the square end IS flush with the through cap
+            return null;
         var w = facing.Normalized();
         // The wall offset: the through member's section extent along w, in ITS frame.
         // The frame's axes depend only on the run's axis direction and Up, so building
         // it from the run start reproduces exactly the frame the through member's own
         // solid is built on.
-        var throughFrame = MemberFrame(runs[joint.Partner].Start, axes[joint.Partner], options.Up);
+        var throughFrame = MemberFrame(runs[through].Start, axes[through], options.Up);
         var wLocal = new Vector2d(w.Dot(throughFrame.X), w.Dot(throughFrame.Y));
-        double offset = FlatWallOffset(profile, wLocal, run, joint.Partner);
-        return new PlaneCut(j + w * offset, w);
+        double offset = FlatWallOffset(profile, wLocal, run, through);
+        return new PlaneCut(joint + w * offset, w);
     }
 
     private static FrameMember BuildMember(

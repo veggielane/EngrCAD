@@ -6042,6 +6042,20 @@ Frames & weldments (`Frames.cs`) follow the same doctrine — a declaration (pro
 skeleton) from which the members, the trims and the cut list are all derived — and
 four decisions carry it:
 
+T-joints completed the joint vocabulary by REUSING the butt cut rather than growing a
+new one: an endpoint on another run's interior leaves the through member untouched
+(the butt joint's own through-run role) and trims the abutting member by the facing
+wall plane — the arithmetic factored into one `WallCut` both joints ask, bit-identical
+for the incumbent butt path because the facing projection `a − b·(a·b)` is EVEN in
+b's sign and IEEE negation is exact, so the T's sign-free raw axis and the butt's
+signed kept direction compute the same bits. Detection refuses the shapes with no one
+honest answer before any geometry: collinear landings (overlap, not a joint), an
+endpoint on two interiors (ambiguous wall), the three-member confluence, and — for
+free, through the shared `FlatWallOffset` — a round-walled through member (the coped
+saddle again). The volume oracle stays the prism-cut identity, now met at a mid-run
+wall: a perpendicular T keeps exactly A·(L − w/2) and a 45° one exactly A·(the
+centroid fiber's distance to the wall crossing), both planar identities at 1e-9.
+
 - **The miter plane's normal is `a − b` and nothing is ever divided.** For unit
   leave-directions `a`, `b` at a joint, the plane with that normal through the joint
   contains both the bisector (`(a+b)·(a−b) = 0`) and the axes' common normal — so the

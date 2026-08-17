@@ -54,6 +54,37 @@ prism cut by planes at both ends has volume `A · (axial distance between the pl
 crossings of the centroid fiber)` — so a mitred member of a centred profile is
 exactly `A·L`, and a closed rectangular frame totals exactly `A · perimeter`.
 
+## T-joints
+
+A run ending on another run's **interior** is a T-joint: the through member keeps its
+full section past the joint — the same role the butt joint's through run plays — and
+the abutting member is trimmed back by the through member's facing wall plane, so the
+weld gap is exactly zero and the volumes stay closed forms (the rail below keeps
+exactly `A · (run length − half the post's width)`).
+
+```csharp render:frames-tee
+var shs = StandardSections.Shs40x3;
+var frame = Weldment.Build(shs,
+[
+    // The through rail, a mid-post butting its side, and an ordinary corner post.
+    (new Vector3d(0, 0, 0), new Vector3d(400, 0, 0)),
+    (new Vector3d(200, 0, 180), new Vector3d(200, 0, 0)),
+    (new Vector3d(0, 0, 180), new Vector3d(0, 0, 0)),
+], new WeldmentOptions { Up = Vector3d.UnitY, Material = Materials.Steel });
+
+var scene = new Scene();
+scene.AddTab("tee").Add(frame.ToAssembly());
+```
+
+![A T-joint: the mid-post trimmed to the through rail's wall](images/frames-tee.png)
+
+What a T-joint refuses is the shapes with no one honest answer, each by name: a
+**collinear** landing (the members overlap along one line — split the through run
+instead), an endpoint on **two** interiors (which wall trims is ambiguous), a
+**three-member confluence** (an end joint whose point also lies on a third run's
+interior), and a **round-walled** through member — that is the coped saddle again,
+refused with the tracer reason.
+
 ## The BOM is the cut list
 
 Every member's `Part` carries `CutLength` — its exact overall axial extent after
@@ -80,12 +111,13 @@ foreach (var (item, quantity, _) in bom.ByItem())
 ## Scope, honestly
 
 Straight members of one profile per weldment; joints of exactly two members. `Butt`
-joints trim the later run back to the earlier (through) member's flat wall — and a
+joints trim the later run back to the earlier (through) member's flat wall, and a
+T-joint trims a run ending mid-member back the same way — while a
 round tube as the through member is the **coped saddle** joint, which is refused by
 name rather than approximated: the saddle is a transcendental cylinder∩cylinder
 intersection the surface-intersection tracer is known to under-seed at
 structural-section scales, so the cut would be a sampled polyline whose error no
-tessellation density can lower. Multi-member joints, T-joints against a member's
-side, zero-angle joints, members consumed by their own end cuts and joint trims of
-Bézier-outline profiles are all refused by name; curved members and corner reliefs
-are future work.
+tessellation density can lower. Multi-member joints, zero-angle joints, members
+consumed by their own end cuts and joint trims of Bézier-outline profiles are all
+refused by name; curved members, mixed profiles per skeleton and corner reliefs are
+future work.

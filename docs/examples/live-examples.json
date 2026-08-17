@@ -458,6 +458,11 @@
       "live": true
     },
     {
+      "id": "frames-tee",
+      "page": "examples/frames.md",
+      "live": true
+    },
+    {
       "id": "gear-helical",
       "page": "examples/gears.md",
       "live": true

@@ -1422,10 +1422,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   `Part.CutLength` → `BomLine.CutLength` cut lists, prism-cut-identity verification,
   coped saddles refused with the tracer reason; design.md §6b). Open, in rough order
   of value:
-  - [ ] **T-joints trimmed to the through member's wall.** v1 refuses an endpoint on
-    another run's interior by name; the trim is the SAME plane-cut machinery as the
-    butt joint (cut plane = the through member's facing wall), so the work is joint
-    DETECTION at a mid-run point plus deciding what the through member does (nothing).
   - [ ] **Mixed profiles per skeleton** (legs SHS, rails angle). The miter still cuts
     both members with one plane; what changes is that the butt wall offset and the
     per-member reach read per-member profiles, and `Weldment.Build` takes a profile

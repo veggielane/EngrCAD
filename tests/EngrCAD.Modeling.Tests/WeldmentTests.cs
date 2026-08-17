@@ -316,14 +316,68 @@ public class WeldmentTests
     }
 
     [Fact]
-    public void TJoints_AreRefusedByName()
+    public void TJoint_TrimsTheAbuttingMemberToTheThroughWall()
     {
-        var refusal = Assert.Throws<NotSupportedException>(() => Weldment.Build(FrameProfile.Flat(20, 10),
+        // A mid-rail butting the side of a through post: the through member keeps its
+        // full length, the rail is trimmed back by HALF the through section (20 of 40).
+        // The prism-cut identity makes both volumes exact planar identities.
+        var shs = FrameProfile.Shs(40, 3);
+        var frame = Weldment.Build(shs,
         [
-            (new Vector3d(0, 0, 0), new Vector3d(50, 0, 0)),
-            (new Vector3d(25, 0, 0), new Vector3d(25, 50, 0)),
+            (new Vector3d(0, 0, 0), new Vector3d(200, 0, 0)),
+            (new Vector3d(100, 150, 0), new Vector3d(100, 0, 0)),
+        ]);
+
+        Assert.Equal(shs.Area * 200, BrepVolume(frame.Members[0].Shape), 1e-9 * shs.Area * 200);
+        Assert.Equal(shs.Area * 130, BrepVolume(frame.Members[1].Shape), 1e-9 * shs.Area * 130);
+        Assert.Equal(130, frame.Members[1].CutLength, 1e-9);
+    }
+
+    [Fact]
+    public void ObliqueTJoint_SatisfiesTheCentroidRule()
+    {
+        // The same wall plane, met at 45 degrees: the centroid fiber crosses y = +10 at
+        // axial distance (100 - 10)*sqrt(2) from the far end, and that IS the volume.
+        var flat = FrameProfile.Flat(20, 10);
+        var frame = Weldment.Build(flat,
+        [
+            (new Vector3d(0, 0, 0), new Vector3d(200, 0, 0)),
+            (new Vector3d(200, 100, 0), new Vector3d(100, 0, 0)),
+        ], new WeldmentOptions { Up = Vector3d.UnitZ });
+
+        double kept = 90 * Math.Sqrt(2);
+        Assert.Equal(flat.Area * kept, BrepVolume(frame.Members[1].Shape), 1e-9 * flat.Area * kept);
+    }
+
+    [Fact]
+    public void TJointRefusals_NameTheirShape()
+    {
+        var shs = FrameProfile.Shs(40, 3);
+        // Collinear landing: the members overlap along one line.
+        var collinear = Assert.Throws<NotSupportedException>(() => Weldment.Build(shs,
+        [
+            (new Vector3d(0, 0, 0), new Vector3d(200, 0, 0)),
+            (new Vector3d(300, 0, 0), new Vector3d(100, 0, 0)),
         ]));
-        Assert.Contains("T-joint", refusal.Message);
+        Assert.Contains("COLLINEAR", collinear.Message);
+
+        // An endpoint on TWO interiors: which wall trims is ambiguous.
+        var ambiguous = Assert.Throws<NotSupportedException>(() => Weldment.Build(shs,
+        [
+            (new Vector3d(0, 0, 0), new Vector3d(200, 0, 0)),
+            (new Vector3d(100, 0, -80), new Vector3d(100, 0, 80)),
+            (new Vector3d(100, 150, 0), new Vector3d(100, 0, 0)),
+        ]));
+        Assert.Contains("ambiguous", ambiguous.Message);
+
+        // A T onto a ROUND wall is the coped case, refused with the tracer reason.
+        var round = Assert.Throws<NotSupportedException>(() => Weldment.Build(
+            FrameProfile.RoundTube(26.9, 2.6),
+        [
+            (new Vector3d(0, 0, 0), new Vector3d(200, 0, 0)),
+            (new Vector3d(100, 150, 0), new Vector3d(100, 0, 0)),
+        ]));
+        Assert.Contains("ROUND", round.Message);
     }
 
     [Fact]
