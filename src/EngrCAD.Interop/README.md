@@ -1052,6 +1052,30 @@ Degenerate placements are refused with guidance rather than answered plausibly: 
 **containing a whole edge** (a sphere cut exactly at its equator — the section runs along
 two faces' shared boundary, where every probe is a tie).
 
+#### Flush planes: the two LIMITS (`FlushLimitsOf`, `FlushSection`)
+
+That refusal stays the default, and `FlushSection` is how a caller states what it wants
+instead. **The primitive is the PAIR, because three consumers want three things**:
+OpenSCAD's `projection(cut = true)` is the set-theoretic `solid ∩ plane`, a drawing's
+section view wants the material the plane actually CUTS, and `Shape.Section`'s own
+contract promises the curve bounding a cross-section. `FlushLimitsOf` returns the limit
+from below and the limit from above (each an ordinary EXACT transversal section of its
+own nudged plane) and `FlushLimits.Union()` derives the set-theoretic answer rather than
+being a fourth one; `CurvedFlushLimitsOf` is the exact-tier twin.
+
+**The naive repair is not a limit at all, and this exists to replace it.** Letting flush
+faces contribute their own regions and unioning with the transversal sections returns, for
+a fused step block (slab footprint A under a boss footprint B ⊂ A sectioned at the step),
+exactly `A∖B` — a region NEITHER limit takes, since the limit from below is A and the one
+from above is B.
+
+The nudge is `FlushNudgeFraction` (1e-6) of the solid's own diagonal — scale-free, and
+derived from two conditions: it must exceed the flush test's own weld tolerance by a wide
+margin and keep the boundary displacement it induces on a 45° wall below the section's
+own chord tolerance. It halves on a ladder if a nudged plane is itself flush and refuses
+by name when the ladder is exhausted. `IsFlushWith` asks the SAME two predicates the
+refusal fires from (`IsFlushFace`, `IsInPlaneEdge`) rather than restating them.
+
 ### Silhouettes (`PlanarSection.SilhouetteOfMesh`)
 
 `projection(cut = false)`: the outline a body casts along the plane's normal. A through

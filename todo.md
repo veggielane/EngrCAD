@@ -830,19 +830,44 @@ export — is recorded in CLAUDE.md):
       while the measurement reads ~1e-5, because reading a normal back needs a bracketed
       1-D solve on the path. Nothing is wrong; a tighter number would need the probe to
       carry the parameters the tracer already knows rather than re-projecting.
-  - [ ] **`OfSolid` on a flush plane** — a plane containing a face or an edge throws
-    (that section is an area, not a curve). **The coplanar-boolean tier landing did NOT
-    unblock this, and the counterexample is worth keeping**: the natural repair — flush
-    faces contribute their regions, everything transversal sections as before, union —
-    equals NO limit section. A fused step block (slab footprint A under a boss footprint
-    B ⊂ A) sectioned at the step plane has flush faces covering only A∖B, the boss's
-    walls merely TOUCH the plane, and the interior under B has no face there at all — so
-    the construction returns A∖B where the limit from below is A and the limit from
-    above is B. A flush section needs INTERIOR classification, and the honest mechanism
-    is the FdmSlicer's own: two ordinary sections nudged ±δ (each exact), returned as
-    the below/above pair or their stated union — a semantics decision (which limit does
-    `projection(cut=true)` mean on a graze?) before an implementation.
-- [ ] `roof()` — straight-skeleton roof over a polygon; low priority
+  - [ ] **`PlanarSection.OfSolid` goes QUIET above about 1000x unit scale**, measured
+    while landing the flush-section limits and NOT introduced by them: a plain
+    transversal section of a plain `Shape.Box(40s, 30s, 20s)` reads the correct 1200 at
+    s = 1 and 1.2e7 at s = 100, then **0 against a true 1.2e9 at s = 1000** and 0 again
+    at s = 10000 — an EMPTY list rather than a refusal, which is the silent direction.
+    The cause is the epsilon ladder: the edge-crossing weld is the ABSOLUTE 1e-9 tier
+    (`weld = Tolerance.Default.Linear`), which at coordinates of 1e4 is two decades below
+    the ulp, so every crossing reads as already-on-plane and nothing is collected. The
+    fix is to make that tier RELATIVE to the solid's own diagonal throughout the file —
+    `PlanarSection.SolidDiagonal` already exists for the flush nudge — which is a wide
+    regression surface (every section, every drawing view, `FdmSlicer`), hence filed
+    rather than done in passing. The boundary is pinned by
+    `FlushSectionTests.SectioningItselfGoesQUIET_AboveAboutAThousandTimesUnitScale...`,
+    so a fix fails that test and names what moved. The companion measurement, also
+    filed rather than fixed: the COPLANAR boolean that fuses the step-block fixture
+    refuses ("arrangement tracing did not close") below about 0.1x, so the working band
+    for a fused flush fixture today is roughly 0.1x .. 100x.
+- [ ] **Roof follow-ups** (`Shape.Roof` ✅ landed — exact straight-skeleton roofs,
+  B-Rep-Native, both event kinds, docs `examples/roof.md`, design.md §6g):
+  - [ ] **A footprint with HOLES**, which is the one thing refused by name. What is
+    missing is the MERGE event, not the topology: the relinking a merge needs is
+    already the split's own code (the same four assignments split one loop and join
+    two), so the work is (a) an event whose first contact is edge-against-EDGE, which
+    is what a rectilinear hole always produces — a hole edge is parallel to the outer
+    edge facing it, so they close along a whole segment rather than at a point — and
+    (b) the VERTEX event that same symmetry forces, a hole corner arriving exactly at
+    an outer wavefront corner. Measured: `[0,10]²` with a centred `[4,6]²` hole puts
+    all four of those at t = 2 simultaneously, so the degenerate case is the COMMON
+    one here rather than an exotic input. The 1-D overlay that resolves a collapsed
+    loop is the piece to generalise.
+  - [ ] **A weighted/mansard roof** — per-edge pitches, i.e. a *weighted* straight
+    skeleton, where a wave's velocity solves `v·n₁ = w₁`, `v·n₂ = w₂`. The velocity
+    solve already has that shape (only the two right-hand sides are 1), so the
+    simulation generalises; what needs re-deriving is the split-event time, which
+    currently reads the unit-speed offset line.
+  - [ ] **A roof over a CURVED footprint**, refused by name today. A curved edge sweeps
+    a curved surface rather than a plane, so this is a different construction (an
+    offset-surface family) rather than a straight-skeleton option.
 - [ ] **Camera-adaptive display quality: the HAND-FEEL is untested** (the feature ✅
   landed opt-in — `EngrCadOptions.AdaptiveDisplayQuality`, the pure `AdaptiveQuality` in
   Viewer.Core, `Part.RefineMesh`'s never-coarsen ratchet, docs `quality.md`). Everything

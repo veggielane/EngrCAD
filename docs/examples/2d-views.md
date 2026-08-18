@@ -193,6 +193,78 @@ and a traced intersection is a polyline to begin with. So a mixed section is hon
 its exact halves stay exact. `Silhouette` has no such mode at all, and that is structural:
 it is the union of projected *triangles*, so there is nothing exact to recover.
 
+### A plane FLUSH with a face
+
+A plane containing a whole face has no cross-section *curve* at all — the intersection
+there is an **area** — so it is refused by default. What it should answer instead is a
+genuine question with three different right answers, so the primitive is the **pair of
+limits** and the caller says which it means.
+
+The fixture that settles it is a fused **step block**: a slab of footprint `A` under a
+boss of footprint `B ⊂ A`, sectioned exactly at the step.
+
+```csharp render:section-flush-step
+var stepBlock =
+    Shape.Box(40, 30, 10).Translate(0, 0, 5)
+    | Shape.Box(20, 15, 10).Translate(0, 0, 15);
+
+var step = new SketchPlane(Frame3d.FromOrthonormal(
+    new Vector3d(0, 0, 10), Vector3d.UnitX, Vector3d.UnitY));
+
+var limits = PlanarSection.FlushLimitsOf(stepBlock.ToBrep(), step.Frame);
+double below = limits.Below.Sum(r => r.Area);     // 1200 — the whole slab
+double above = limits.Above.Sum(r => r.Area);     //  300 — just the boss
+double union = limits.Union().Sum(r => r.Area);   // 1200 — the set-theoretic solid ∩ plane
+
+if (Math.Abs(below - 1200) > 1e-6 || Math.Abs(above - 300) > 1e-6)
+    throw new Exception("the two limits are the slab and the boss");
+
+// The answer nothing here may return is 900 = A∖B, which is what letting flush faces
+// contribute their own regions produces — a region NEITHER limit ever takes.
+foreach (double area in new[] { below, above, union })
+    if (Math.Abs(area - 900) < 1) throw new Exception("that is A∖B, not a limit");
+
+var scene = new Scene();
+scene.Add(new Part("step block", stepBlock));
+```
+
+![The fused step block whose flush section has two different limits](images/section-flush-step.png)
+
+`Shape.Section` and `Shape.SectionExact` take the same choice:
+
+```csharp run:section-flush-policy
+var stepBlock =
+    Shape.Box(40, 30, 10).Translate(0, 0, 5)
+    | Shape.Box(20, 15, 10).Translate(0, 0, 15);
+var step = new SketchPlane(Frame3d.FromOrthonormal(
+    new Vector3d(0, 0, 10), Vector3d.UnitX, Vector3d.UnitY));
+
+double slab = stepBlock.Section(step, flush: FlushSection.Below).Sum(r => r.Area);
+double boss = stepBlock.Section(step, flush: FlushSection.Above).Sum(r => r.Area);
+if (Math.Abs(slab - 1200) > 1e-6 || Math.Abs(boss - 300) > 1e-6)
+    throw new Exception("the policy routes through the same limits");
+
+// The default still refuses, and names the way through.
+try
+{
+    stepBlock.Section(step);
+    throw new Exception("a flush plane must refuse by default");
+}
+catch (NotSupportedException) { }
+```
+
+| Policy | What it means |
+| --- | --- |
+| `FlushSection.Refuse` | The default, and every call that already existed. |
+| `FlushSection.Below` / `Above` | One limit — what a drawing's section view wants when you know which side you are looking at. |
+| `FlushSection.Union` | The set-theoretic `solid ∩ plane`, which is what OpenSCAD's `projection(cut = true)` means. It is *derived* from the pair, not a fourth answer. |
+
+Each limit is an ordinary **exact** transversal section of its own plane, nudged by a
+fraction of the model's own diagonal. Where the boundary is a vertical wall — which is
+what a flush face makes — the section is identical for every small nudge and the limit is
+reproduced exactly; where a wall is sloped it differs by `δ·tan(slope)`, and
+`FlushLimits.Nudge` reports the `δ` that was spent.
+
 ## Silhouette: `projection(cut = false)`
 
 `Shape.Silhouette(plane)` is the outline the shape casts along the plane's normal — the

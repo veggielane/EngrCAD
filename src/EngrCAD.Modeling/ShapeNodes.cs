@@ -125,6 +125,20 @@ internal sealed class LoftShape(
     internal override string Describe() => $"Loft({sections.Count} sections, {style})";
 }
 
+/// <summary>
+/// A straight-skeleton roof over a polygonal sketch (OpenSCAD's <c>roof()</c>). A graph LEAF
+/// whose inputs are a sketch and its plane; the accumulated transform is applied to the
+/// lifted skeleton points at lowering, which is exact for any similarity and changes the
+/// stated pitch under anything else.
+/// </summary>
+internal sealed class RoofShape(Sketch profile, RoofPitch pitch, SketchPlane plane) : Shape
+{
+    public Sketch Profile => profile;
+    public RoofPitch Pitch => pitch;
+    public SketchPlane Plane => plane;
+    internal override string Describe() => $"Roof({profile.Segments.Count} edges, {pitch.Describe()})";
+}
+
 internal sealed class ExtrudeShape : Shape
 {
     public Profile? Profile { get; }

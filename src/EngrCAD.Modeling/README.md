@@ -40,6 +40,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Revolve` (partial/full, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Sweep` (RMF path, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Loft` (sections) / `LoftAlong` (evolution law) | ✅ native (any similarity, MIRRORED included; `SolidFactory.Loft`) · ❌ sheared (chord parameterization is metric) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
+| `Roof(Sketch, pitch)` (OpenSCAD `roof()`) | ✅ native (any similarity, MIRRORED included — planar faces over the footprint's own straight skeleton) · ❌ sheared (it would change the pitch) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `Union` / `Intersect` / `Subtract` | ✅ native (`BrepBoolean`) | ✅ native | ✅ (from B-Rep, else `MeshBoolean`) |
 | `SmoothUnion` / `SmoothIntersect` / `SmoothSubtract` | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Offset` / `Shell(t)` (SDF skin) | ❌ no B-Rep form (`Shell(t)`'s message names the exact overload) | ✅ native | 🔶 polygonized |
@@ -1124,6 +1125,35 @@ the same rotation-minimizing frames `Sweep` uses, scaled by `scale(s)` and rotat
 in-plane by `twist(s)` radians (s = 0 → 1 along the spine), the generated sections
 feeding `Loft` unchanged. Without laws prefer `Sweep`, whose swept surface is exact
 along the whole path — the law is what `LoftAlong` exists for.
+
+## Roofs (`Roof.cs`, `StraightSkeleton.cs`)
+
+`Shape.Roof(sketch, pitchDegrees)` — OpenSCAD's `roof()` — raises a polygonal
+footprint by sweeping every base edge inward at one pitch. The surface is the
+footprint's **straight skeleton**, and the operation is exact rather than an
+approximation: every face is one inclined plane, every ridge and valley a straight
+line, every apex a plane intersection. B-Rep-Native under any similarity; a shear is
+Impossible by name, because it would change the pitch.
+
+`RoofPitch` states the steepness as an ANGLE or a HEIGHT and stores **one** number,
+deriving the other from the footprint's own skeleton — the two spellings cannot
+contradict each other. `Shape.RoofFacts` is the analysis (both spellings, the
+`StraightSkeleton`, and the closed-form enclosed volume) and builds nothing.
+
+`StraightSkeleton.Of(polygon)` is the simulation, and both of its event kinds are
+load-bearing: an **edge event** is an edge shrinking to zero, a **split event** is a
+reflex corner reaching a non-adjacent edge and dividing the wavefront in two. A convex
+footprint has only edge events, so an edge-event-only implementation returns nonsense
+for the first L-shape it meets. A collapsed loop — a wavefront closed head-on onto a
+segment — is resolved as a RIDGE by the 1-D overlay of its own two chains.
+
+What is checked before anything is returned is the one property the construction
+stands on: the faces are simple, positively wound, and their areas sum to the
+footprint's own; a degeneracy the simulation cannot decide refuses by name rather than
+returning a plausible skeleton. Refused: holes (a hole's wavefront grows into the outer
+one — a merge event whose first contact is edge-against-edge for every rectilinear
+footprint), arcs and Béziers in the footprint, and a pitch outside `(0°, 90°)`.
+Docs: `docs/examples/roof.md`.
 
 ## Draft, shell and whole-solid rounding
 
