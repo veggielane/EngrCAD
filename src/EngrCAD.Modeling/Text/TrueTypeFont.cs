@@ -190,6 +190,7 @@ public sealed class TrueTypeFont
     private TrueTypeFont(TrueTypeFont source, double[] coordinates, IReadOnlyDictionary<string, double> settings)
     {
         _data = source._data;
+        _tables = source._tables;   // shared like every other parsed table
         _loca = source._loca;
         _glyfOffset = source._glyfOffset;
         _glyfLength = source._glyfLength;
