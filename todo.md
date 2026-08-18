@@ -1087,11 +1087,23 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     the unsplit one is a T-junction crack. Until then the tier keeps the plain sweep,
     which is exact for the ruled (stepV = ∞) cylinder bands that dominate it.
 - [ ] **Draft follow-ups** (`Draft.Apply` landed with per-face angles in one call, wired
-  as `Shape.Draft`; CURVED faces ✅ landed too — a face of revolution about the pull axis
-  tapers by rotating its generator in its own half-plane, so a drafted cylinder is
-  exactly a cone and a drafted torus band another torus band): curved faces on any OTHER
-  axis (their drafted carrier is not a surface of any family this kernel builds); caps
-  with holes; a non-planar neutral surface.
+  as `Shape.Draft`; CURVED faces ✅ landed — a face of revolution about the pull axis
+  tapers by rotating its generator in its own half-plane, so a drafted cylinder is exactly
+  a cone and a drafted torus band another torus band; caps with HOLES ✅ landed — one
+  closed ring of side faces per cap loop, the hole opening along the pull while the outside
+  closes; a REVERSED face ✅ drafts, the taper reading its lean off the OUTWARD normal so a
+  bore a boolean cut opens rather than plausibly shutting). What is left is refused BY NAME
+  with its geometric reason rather than merely absent:
+  - [ ] **Curved faces on any OTHER axis.** A cylinder lying across the pull tilts every
+    surface point's normal by the angle, and the result is not a plane, a cone, a torus or
+    a revolve — no family this kernel builds. Reaching it needs a new surface type (the
+    general "rotate the normal field" carrier) or a fitted one with its deviation reported,
+    which is the `AllowTraced` shape of decision.
+  - [ ] **A non-planar NEUTRAL SURFACE.** The hinge becomes a CURVE rather than a straight
+    neutral line, so every tapered carrier is a general ruled surface and there is nothing
+    for an exact corner solve to re-intersect. `Draft.Apply(solid, neutralFace, ...)` refuses
+    a non-planar face by name; the honest workaround is to split the part at the parting
+    line and draft each side about its own plane.
 - [ ] **Shelling follow-ups** (`Shelling.Offset/Shell` landed with per-face wall
   thickness, wired as `Shape.Shell(t, openings)`; CURVED faces ✅ landed on the shared
   `CarrierBody` rebuild — a cylinder shells to a cup, a cone frustum to a conical cup, a
@@ -1112,28 +1124,40 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     case now goes through the least-squares corner solve and is CHECKED rather than
     refused wholesale. What is left is the genuinely non-concurrent corner, where the
     offset opens the vertex into a small FACE — corner-patch construction (the
-    `FilletAllEdges` machinery), not a better solve.
-  - [ ] **Adjacent openings** — their shared rim has zero width, so the two openings must
-    MERGE into one rim loop: a topology pass, not new geometry. Attempted and deliberately
-    NOT built during the curved-corner work, because the shape of the fix is not what the
-    note above assumed: the two openings lie on different PLANES, so they cannot become one
-    face. What is actually needed is for each opening's rim annulus to lose its zero-width
-    stretch along the shared edge — the outer edge there IS the inner edge, since neither
-    plane moved — which means re-tracing both rim loops rather than merging them. That is a
-    loop-surgery pass of the same kind `FaceSplitter` does, and doing it half-way would
-    leave a solid that validates and is wrong.
+    `FilletAllEdges` machinery), not a better solve. The curved path's refusal now NAMES
+    the valence and that reason rather than only reporting the solver's residual.
+  - [ ] **Adjacent openings on a CURVED body.** The all-planar path ✅ merges them (the two
+    rims become one loop, the shared edge cut back to the two end pieces both use), and the
+    curved one still refuses by name for a reason the planar fix makes precise: there each
+    piece is a straight sub-segment through corners that provably lie on the shared edge's
+    own LINE, while on a curved shared edge the pieces are sub-CURVES, so each needs its own
+    parameter solved on the shared carrier — and a CLOSED shared rim (a cap meeting a
+    full-turn band) has no two corners to cut back to at all. THREE openings meeting at one
+    vertex are refused on both paths and always will be: the corner there is the meeting of
+    three STATIONARY planes, so the rim closes to a point that no thickness can rescue.
+  - [ ] **An extruded-circle bore's shelled DISPLAY mesh.** Newly reachable now that shell
+    accepts boolean output: `(Shape.Cylinder(20,30) - Shape.Cylinder(9,40)).ToBrep()` shells
+    to an exact, `Validate`-clean two-shell solid whose cavity walls sit at r18 and r11 —
+    and its tessellation refuses by name, because the offset carrier's generator keeps the
+    SOURCE generator's phase (`CircularArc.Rebuild`'s default arm, a `CurveSegment` starting
+    at the fitted angle) while `ConcentricRim` rebuilds the rims on the EDGE's frame, so
+    `BRepTessellator`'s ring-paired-band gate reads the two ring loops as unpaired and the
+    trimmed tier then refuses two winding loops. A `CylinderSurface` bore (a `SolidFactory`
+    operand) is unaffected, so the fix is to make the offset of a full-circle extruded
+    generator carry the rim's phase — or to promote it, which would move existing output and
+    wants the docs-PNG comparison first. Pinned by
+    `ShellDraftVolumeTests.AnExtrudedCircleBoresShellIsExactButItsDISPLAYMeshIsARecordedGAP`.
   - [ ] **Global self-intersection detection** — deliberately unchecked, as in OCCT and
     `OffsetCurve3d`.
-  - [ ] **A REVERSED curved face (boolean output).** Curved OFFSET now accepts a reversed
-    face (`CarrierBody.Recognize(solid, allowReversedFaces: true)`, `Lift` offsets it by
-    `−distance`), but SHELL keeps the refusal because its cavity twin (`Flipped`) hard-codes
-    `IsReversed = true` for the inner face — right for a forward parent, and it needs to be
-    `!parent.IsReversed` for a reversed one. Making shell sense-aware is the same
-    verification pass DRAFT's `Taper` (which reads the lean off the surface normal, not the
-    outward one) also wants; neither is exercised by a `Shape`-level construction today.
-  The `Shape` route exposes one thickness; per-face thickness and per-face draft angles
-  stay kernel-level escape hatches (`Shape.From(...)`) until a selector-to-value
-  vocabulary exists at the Shape level.
+  - [ ] **Per-face thickness and per-face draft angles at the `Shape` level.** The openings
+    half of this is SOLVED and needs no overload: `Shell(t, openings.AsSelector("openings"))`
+    is how the typed `FaceSetRef` vocabulary reaches it, a reference-typed overload being
+    refused because `Shell(t, null)` would become ambiguous at every call site. What is
+    genuinely missing is a selector-to-VALUE vocabulary — a `FaceSetRef` names a SET, and a
+    per-face thickness is a value per face — so the shape that would work is an explicit
+    override list, `Shell(t, (FaceSetRef, double)[] overrides, openings)`, resolved on the
+    lowered solid into the law `Shelling.Shell` already takes. Until then the kernel call is
+    the escape hatch: `Shape.From(Shelling.Shell(solid, law, openings))`.
 - [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot as first-class features
   with faces-to-remove semantics
 - [ ] **Shape-healing follow-ups** (curved-edge RE-TRIMMING — FixGaps' parametric mode,

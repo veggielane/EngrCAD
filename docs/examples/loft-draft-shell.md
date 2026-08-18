@@ -188,8 +188,45 @@ scene.Add(new Part("tapered boss", boss, Palette.Brass));
 
 ![A cylinder drafted into a cone](images/draft-cylinder.png)
 
-Holed caps, profile-folding tapers and curved faces on any *other* axis are refused with
-a message naming the problem.
+**Caps carry holes, and the hole drafts the other way.** A hole's walls are an ordinary
+closed *ring* of side faces whose outward normals point **into** the hole, so the same
+rotate-about-the-neutral-line rule applies to them verbatim — and the consequence is the
+one a mould needs: the outside closes going along the pull while the hole **opens**, so
+the core pin releases. Both rings are exact planes, so the volume is a closed form whose
+second-order terms cancel between them:
+
+```csharp render:draft-cored-plate section:y,0
+var plate = Sketch.Rectangle(40, 40).WithHole(Sketch.Rectangle(16, 16));
+
+// 10 degrees, again far more than a real tool needs, so the lean reads at this size.
+var cored = Shape.Extrude(plate, 12)
+    .Draft(10, neutralOrigin: (0, 0, 0), pullDirection: Vector3d.UnitZ);
+
+var scene = new Scene();
+scene.Add(new Part("cored plate", cored, Palette.Steel));
+```
+
+![A drafted plate whose hole opens upward, sectioned](images/draft-cored-plate.png)
+
+The same holds for a bore a **boolean** cut, which is the closest thing the kernel builds
+to an imported body: a difference marks the subtracted tool's walls reversed, and the
+taper reads its lean off the **outward** normal — the negation of that face's surface
+normal — so the bore drafts open rather than plausibly shut:
+
+```csharp render:draft-cored-bore section:y,0
+var housing = Shape.Cylinder(18, 26) - Shape.Cylinder(8, 40);
+var drafted = housing.Draft(7, neutralOrigin: (0, 0, -13), pullDirection: Vector3d.UnitZ);
+
+var scene = new Scene();
+scene.Add(new Part("cored housing", drafted, Palette.Brass));
+```
+
+![A bored housing drafted so the bore opens upward, sectioned](images/draft-cored-bore.png)
+
+Profile-folding tapers, curved faces on any *other* axis (their drafted carrier is not a
+surface of any family this kernel builds) and a **non-planar neutral surface** (which
+would give every drafted face a curved hinge, and so a general ruled carrier) are refused
+with a message naming the problem.
 
 ## Shell: hollow to constant walls
 
@@ -234,8 +271,51 @@ scene.Add(new Part("conical cup", cone, Palette.Brass,
 
 ![A shelled cylinder and cone, sectioned to show the walls](images/shell-cup.png)
 
+**Openings may be adjacent.** Where two opened faces share an edge the strip between
+their two rims has zero width, so the annulus is cut open and the outer and inner
+boundaries become **one loop** — the shared edge cut back to the two end pieces both rims
+use, and the stretch between the inner corners simply not built. The result is one
+simply-connected rim face per opening rather than an annulus:
+
+```csharp render:shell-open-corner
+var tray = Shape.Box(46, 34, 20).Shell(2.5,
+    s => s.PlanarFacesWithNormal(Vector3d.UnitZ)
+          .Concat(s.PlanarFacesWithNormal(Vector3d.UnitX)));
+
+var scene = new Scene();
+scene.Add(new Part("open corner", tray, Palette.Steel));
+```
+
+![A tray open on its top and one side](images/shell-open-corner.png)
+
+Sectioned, the wall is the same thickness everywhere and the cavity reaches both opening
+planes exactly — which is what makes the volume a difference of two boxes:
+
+```csharp render:shell-open-corner-cut section:y,0
+var tray = Shape.Box(46, 34, 20).Shell(2.5,
+    s => s.PlanarFacesWithNormal(Vector3d.UnitZ)
+          .Concat(s.PlanarFacesWithNormal(Vector3d.UnitX)));
+
+var scene = new Scene();
+scene.Add(new Part("open corner", tray, Palette.Steel));
+```
+
+![The same tray sectioned, showing the merged rim and the constant wall](images/shell-open-corner-cut.png)
+
+Merging the two openings into ONE face would have been the wrong shape of fix — they lie
+on different planes, so that face does not exist. Three openings meeting at one vertex
+*are* refused by name: the rim closes to a point there, which no thickness can rescue.
+
+**A bore a boolean cut shells too.** Its wall is reversed, so the cavity twin must face
+exactly opposite the parent's own outward normal — `!parentReversed` rather than a
+hard-coded flip — and a reversed planar parent's twin is the plane verbatim, since the
+reversal it already carries *is* the flip.
+
 What is refused, by name: a carrier with no exact offset of its own family (swept and
-NURBS surfaces), and a rim the construction cannot reproduce as a concentric circle —
+NURBS surfaces), adjacent openings on a **curved** body (the shared edge's rim pieces
+would be sub-curves, each needing its own parameter solved on the shared carrier, and a
+closed shared rim has no two corners to cut back to), and a rim the construction cannot
+reproduce as a concentric circle —
 which is what catches a *sealed* elbow, whose moved cap planes cut the offset torus in a
 quartic rather than a circle. Open that face instead.
 

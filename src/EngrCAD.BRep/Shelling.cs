@@ -24,12 +24,24 @@ namespace EngrCAD.BRep;
 /// original's own axis and phase) and then VERIFIED against both offset carriers, rather than
 /// intersected and hoped for; a rim the construction cannot reproduce is refused by name.</para>
 ///
+/// <para><b>Adjacent openings MERGE their rims</b> on the all-planar path. Where two opening
+/// faces share an edge the strip between their two rims has zero width, so the annulus is cut
+/// open and the outer and inner boundaries become ONE loop — traced combinatorially, with the
+/// shared edge cut back to the two end pieces both rims use (in opposite directions, which is
+/// what keeps the result two-manifold) and the stretch between the inner corners simply not
+/// built. N non-adjacent shared edges cut a rim into N simply-connected faces. Merging the two
+/// openings into ONE face would have been the wrong shape of fix — they lie on different
+/// planes.</para>
+///
 /// <para><b>What is rejected.</b> Curved faces with no exact offset (swept and NURBS
 /// surfaces); non-circular curved edges, whose offset is not a curve of the same family;
-/// vertices where more than three faces meet on a CURVED body (the polyhedral tier refuses
-/// them too, and the least-squares corner they would need is filed rather than guessed);
-/// adjacent openings (their rim would have zero width); multi-shell inputs; and an offset that
-/// locally folds the solid.</para>
+/// vertices where more than three faces meet on a CURVED body and their moved carriers are no
+/// longer concurrent (the corner opens into a small FACE, which is corner-patch construction
+/// rather than a rebuild); adjacent openings on a CURVED body (the shared edge's pieces would
+/// be sub-CURVES, each needing its own parameter solved on the shared carrier, and a closed
+/// shared rim has no two corners to cut back to at all); three openings meeting at one vertex
+/// (the rim closes to a point); multi-shell inputs; and an offset that locally folds the
+/// solid.</para>
 ///
 /// <para><b>What is NOT checked.</b> Local folding is caught — a collapsed or reversed edge,
 /// a loop that turned inside out — but a thickness larger than a distant feature can still
@@ -61,10 +73,10 @@ public static partial class Shelling
     {
         ArgumentNullException.ThrowIfNull(distance);
         if (CarrierBody.IsCurved(solid))
-            // Reversed faces are allowed on the OFFSET path: Lift moves each face along its
-            // OUTWARD normal, which is well-defined for the subtracted-tool walls a boolean
-            // marks reversed, so a bore this kernel cut can be offset (DirectEdit.OffsetFaces).
-            return CarrierBody.Recognize(solid, allowReversedFaces: true).Offset(distance);
+            // Reversed faces are ordinary input: Lift moves each face along its OUTWARD normal,
+            // which is well-defined for the subtracted-tool walls a boolean marks reversed, so
+            // a bore this kernel cut can be offset (DirectEdit.OffsetFaces).
+            return CarrierBody.Recognize(solid).Offset(distance);
         var polyhedron = Polyhedron.Recognize(solid);
         var offsets = new double[polyhedron.Faces.Length];
         for (int f = 0; f < offsets.Length; f++)
@@ -100,8 +112,10 @@ public static partial class Shelling
     /// <remarks>
     /// The inner boundary is the solid offset inward by <paramref name="thickness"/> — except
     /// through the openings, whose planes do not move, so the cavity reaches the opening
-    /// exactly and the rim is a flat annulus of the wall thickness. Openings must not be
-    /// adjacent: two openings sharing an edge would leave a zero-width rim there.
+    /// exactly and the rim is a flat annulus of the wall thickness. Two openings sharing an
+    /// edge leave a zero-width strip there, so their rims MERGE into one loop along it (see
+    /// the class remarks); three openings meeting at one vertex close the rim to a point and
+    /// are refused by name.
     /// </remarks>
     public static BrepSolid Shell(BrepSolid solid, double thickness, Func<BrepFace, bool>? openingSelector = null)
     {
@@ -146,12 +160,29 @@ public static partial class Shelling
         if (openings == faceCount)
             throw new ArgumentException("Every face was selected as an opening; nothing would be left.",
                 nameof(openingSelector));
-        foreach (var (a, b) in polyhedron.FacePairs)
+
+        // Edges between two openings: their rim strip has zero width, so the two rims MERGE
+        // into one loop there instead of each carrying its own annulus (see RimLoops).
+        var shared = new bool[polyhedron.Edges.Length];
+        bool anyShared = false;
+        for (int e = 0; e < shared.Length; e++)
         {
-            if (opening[a] && opening[b])
-                throw new NotSupportedException(
-                    "Two adjacent faces were selected as openings; the rim between them would have zero " +
-                    "width. Open them one at a time, or merge them into a single opening first.");
+            var (a, b) = polyhedron.FacePairs[e];
+            shared[e] = opening[a] && opening[b];
+            anyShared |= shared[e];
+        }
+        // Every refusal fires before a single position moves (the rim-surgery rule), which is
+        // also what keeps the message honest: a vertex with three openings has its corner at
+        // the meeting of three STATIONARY planes, so it does not move at all and the later
+        // "the wall consumes the rim" arithmetic would name the thickness for a configuration
+        // no thickness can fix.
+        if (anyShared)
+        {
+            for (int f = 0; f < faceCount; f++)
+            {
+                if (opening[f])
+                    polyhedron.RequireTraceableRim(f, shared);
+            }
         }
 
         // Openings do not move: the cavity must reach exactly to the removed face's plane.
@@ -178,6 +209,13 @@ public static partial class Shelling
         }
         var outerEdges = polyhedron.BuildEdges(outerVertices);
         var innerEdges = polyhedron.BuildEdges(innerVertices);
+        // A shared edge contributes its two END pieces and nothing else: the stretch between
+        // the two inner corners is where the two rims would have overlapped, and belongs to
+        // neither. Built once per edge and used by BOTH rims (in opposite directions), which
+        // is what keeps the result two-manifold.
+        var pieces = anyShared
+            ? polyhedron.SplitSharedEdges(shared, outerVertices, innerVertices)
+            : null;
 
         var outerFaces = new List<BrepFace>(faceCount);
         var innerFaces = new List<BrepFace>(faceCount);
@@ -192,12 +230,16 @@ public static partial class Shelling
             {
                 // Rim: the removed face's own loops (their coedges supply the second use of
                 // every edge the removed face used to carry) plus the inner opening as a
-                // hole, wound opposite.
-                var loops = polyhedron.MapLoops(f, outerEdges, reverse: false);
-                loops.AddRange(polyhedron.MapLoops(f, innerEdges, reverse: true));
-                rimFaces.Add(new BrepFace(
-                    polyhedron.PlaneSurfaceFor(f, polyhedron.Planes[f], outerPositions, flipped: false), loops)
-                    .DescendsFrom(polyhedron.Faces[f]));
+                // hole, wound opposite — unless an adjacent face is also an opening, in which
+                // case the two boundaries meet along the shared edge and RimLoops traces the
+                // merged result instead. ONE FACE PER LOOP, because a merged rim is a set of
+                // simply-connected pieces rather than one annulus.
+                foreach (var loops in polyhedron.RimLoops(f, outerEdges, innerEdges, shared, pieces))
+                {
+                    rimFaces.Add(new BrepFace(
+                        polyhedron.PlaneSurfaceFor(f, polyhedron.Planes[f], outerPositions, flipped: false),
+                        loops).DescendsFrom(polyhedron.Faces[f]));
+                }
                 continue;
             }
 
@@ -436,6 +478,169 @@ public static partial class Shelling
                     Interval.Unit, vertices[start], vertices[end]);
             }
             return edges;
+        }
+
+        /// <summary>
+        /// Refuses an opening whose merged rim cannot be traced: two CONSECUTIVE shared edges,
+        /// which is three openings meeting at the vertex between them. The corner there is the
+        /// meeting of three stationary planes, so it does not move, the rim closes to a point,
+        /// and there is no width in any direction to build from — a configuration no thickness
+        /// can rescue, which is why it is named here rather than left to the arithmetic
+        /// downstream.
+        /// </summary>
+        public void RequireTraceableRim(int face, bool[] shared)
+        {
+            var loop = Faces[face].OuterLoop;
+            int n = loop.Coedges.Count;
+            for (int j = 0; j < n; j++)
+            {
+                if (shared[EdgeIndex[loop.Coedges[j].Edge]]
+                    && shared[EdgeIndex[loop.Coedges[(j + 1) % n].Edge]])
+                    throw new NotSupportedException(
+                        "Three faces meeting at one vertex were all selected as openings, so the rim " +
+                        "closes to a point there and has no width in any direction. Open two of them and " +
+                        "cut the third as a boolean.");
+            }
+        }
+
+        /// <summary>
+        /// Each edge between two OPENINGS split into the two pieces its rims actually use.
+        ///
+        /// <para>The stretch between the two inner corners is where the two rims would have
+        /// overlapped at zero width and belongs to neither, so it is simply not built; what
+        /// remains is one piece at each end, from the outer vertex to the inner one. Both
+        /// pieces are shared BY REFERENCE with the neighbouring opening's rim, which traverses
+        /// them the other way — that is what makes each of them used exactly twice.</para>
+        ///
+        /// <para><b>The inner corner lies ON the shared edge's line, and that is a theorem
+        /// rather than a hope</b>: both opening planes stay put, so the offset corner is the
+        /// meeting point of two unmoved planes and one moved one, and the two unmoved planes
+        /// already intersect in exactly this edge's line. It is CHECKED at the weld tier all
+        /// the same, because a higher-valence corner reaches the same point through a
+        /// least-squares solve rather than through that argument.</para>
+        /// </summary>
+        public (BrepEdge Low, BrepEdge High)?[] SplitSharedEdges(
+            bool[] shared, BrepVertex[] outerVertices, BrepVertex[] innerVertices)
+        {
+            var pieces = new (BrepEdge, BrepEdge)?[Edges.Length];
+            for (int e = 0; e < Edges.Length; e++)
+            {
+                if (!shared[e])
+                    continue;
+                var (vs, ve) = EdgeVertices[e];
+                var a = outerVertices[vs].Position;
+                var b = outerVertices[ve].Position;
+                var direction = b - a;
+                double lengthSquared = direction.LengthSquared;
+                double length = Math.Sqrt(lengthSquared);
+                var innerStart = innerVertices[vs].Position;
+                var innerEnd = innerVertices[ve].Position;
+                double ts = (innerStart - a).Dot(direction) / lengthSquared;
+                double te = (innerEnd - a).Dot(direction) / lengthSquared;
+                double tolerance = Tolerance.Default.Linear * Math.Max(1, length);
+                if (((innerStart - a) - direction * ts).Length > tolerance
+                    || ((innerEnd - a) - direction * te).Length > tolerance)
+                    throw new NotSupportedException(
+                        "An edge between two openings has an inner corner off its own line, so the two " +
+                        "opening planes are not both stationary there. Open one of the two faces instead.");
+                if (!(ts > 0) || !(te < 1) || !(ts < te))
+                    throw new ArgumentException(
+                        "The wall thickness consumes the rim along an edge between two openings: the two " +
+                        "inner corners meet or fall outside the edge, so there is no rim left to build.");
+                pieces[e] = (
+                    new BrepEdge(new Line3d(a, innerStart), Interval.Unit, outerVertices[vs], innerVertices[vs]),
+                    new BrepEdge(new Line3d(innerEnd, b), Interval.Unit, innerVertices[ve], outerVertices[ve]));
+            }
+            return pieces;
+        }
+
+        /// <summary>
+        /// The loops of the rim face(s) an opening contributes — one entry per FACE.
+        ///
+        /// <para>With no adjacent opening this is the classic annulus: the removed face's own
+        /// loop, plus the inner opening as a hole wound the other way, on one face. Where a
+        /// neighbouring face is ALSO an opening the two boundaries touch along their shared
+        /// edge, so the annulus is cut open and the outer and inner boundaries become ONE
+        /// loop — which is why merging the two openings into a single face was never the right
+        /// shape of fix (they lie on different planes) and re-tracing each rim is.</para>
+        ///
+        /// <para>The trace is combinatorial and needs no geometry at all: walk the outer loop;
+        /// at a shared edge take its first piece, dive into the reversed inner loop and follow
+        /// it BACKWARDS until the next shared edge, whose second piece brings the walk back out
+        /// onto the outer boundary. Every non-shared outer position lies on exactly one such
+        /// component, so N non-adjacent shared edges cut the rim into N pieces — each a
+        /// simply-connected face of its own rather than a loop of a shared one.</para>
+        /// </summary>
+        public List<List<BrepLoop>> RimLoops(
+            int face, BrepEdge[] outerEdges, BrepEdge[] innerEdges,
+            bool[] shared, (BrepEdge Low, BrepEdge High)?[]? pieces)
+        {
+            var loop = Faces[face].OuterLoop;
+            int n = loop.Coedges.Count;
+            var sharedAt = new bool[n];
+            bool any = false;
+            for (int j = 0; j < n; j++)
+            {
+                sharedAt[j] = shared[EdgeIndex[loop.Coedges[j].Edge]];
+                any |= sharedAt[j];
+            }
+            if (!any)
+            {
+                var annulus = MapLoops(face, outerEdges, reverse: false);
+                annulus.AddRange(MapLoops(face, innerEdges, reverse: true));
+                return [annulus];
+            }
+
+            // No consecutive-shared check here: RequireTraceableRim has already run, before
+            // any position moved. Restating it would be a second copy of one rule.
+            BrepCoedge Outer(int j) =>
+                new(outerEdges[EdgeIndex[loop.Coedges[j].Edge]], loop.Coedges[j].SameSense);
+            // The reversed inner loop's element for position k: the same edge, opposite sense.
+            BrepCoedge InnerReversed(int k) =>
+                new(innerEdges[EdgeIndex[loop.Coedges[k].Edge]], !loop.Coedges[k].SameSense);
+            // Which end piece a rim meets first depends on which way IT traverses the shared
+            // edge, so the two rims take the same two objects in opposite orders and senses.
+            (BrepEdge Low, BrepEdge High) Pieces(int j) =>
+                pieces![EdgeIndex[loop.Coedges[j].Edge]]
+                ?? throw new InvalidOperationException("A shared edge was not split.");
+            BrepCoedge Enter(int j) => loop.Coedges[j].SameSense
+                ? new BrepCoedge(Pieces(j).Low, sameSense: true)
+                : new BrepCoedge(Pieces(j).High, sameSense: false);
+            BrepCoedge Exit(int j) => loop.Coedges[j].SameSense
+                ? new BrepCoedge(Pieces(j).High, sameSense: true)
+                : new BrepCoedge(Pieces(j).Low, sameSense: false);
+
+            var faces = new List<List<BrepLoop>>();
+            var consumed = new bool[n];
+            for (int start = 0; start < n; start++)
+            {
+                if (sharedAt[start] || consumed[start])
+                    continue;
+                var coedges = new List<BrepCoedge>();
+                int j = start;
+                do
+                {
+                    if (!sharedAt[j])
+                    {
+                        consumed[j] = true;
+                        coedges.Add(Outer(j));
+                        j = (j + 1) % n;
+                        continue;
+                    }
+                    coedges.Add(Enter(j));
+                    int k = (j + n - 1) % n;
+                    while (!sharedAt[k])
+                    {
+                        coedges.Add(InnerReversed(k));
+                        k = (k + n - 1) % n;
+                    }
+                    coedges.Add(Exit(k));
+                    j = (k + 1) % n;
+                }
+                while (j != start);
+                faces.Add([new BrepLoop(coedges)]);
+            }
+            return faces;
         }
 
         /// <summary>
