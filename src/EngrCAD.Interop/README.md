@@ -1027,7 +1027,8 @@ edge (a whole sphere is one face with no edge — the fit is still reported).
   bore rim is as smooth as asked for; curved sections are INSCRIBED polygons (the same
   one-sided contract as `Sketch.ToRegions`), straight sections exact.
 
-Three things make the B-Rep route close reliably:
+Five things make the B-Rep route close reliably, and the last two were paid for by
+twisted extrusions (whose bands are curved AND traced, so they exercise both at once):
 
 1. **Edge crossings are the loop-assembly key.** A section curve leaves a face exactly
    where the plane crosses one of the face's EDGES, and that edge is shared with the
@@ -1046,6 +1047,25 @@ Three things make the B-Rep route close reliably:
    `FaceGeometry.Contains`'s one-sided upward ray sees no crossing and calls the probe
    outside — which returned an empty section for every sphere. When the two disagree the
    probe is between the rim and the pole, hence inside.
+
+4. **The midpoint probe is SNAPPED to an exact sample where the curve is polyline-backed.**
+   A traced polyline lies on its surface only at its VERTICES, so a mid-chord probe is off
+   the surface by the chord's own sagitta and the containment pullback simply fails — the
+   fourth site that had to ASK `FaceGeometry.ExactSampleParameters` rather than restate the
+   midpoint. Containment is constant along a piece by construction (the pieces are
+   partitioned exactly at the trim crossings), so moving the probe to a sample strictly
+   inside the piece cannot change an answer that was already reachable; a curve that is not
+   polyline-backed keeps the arithmetic midpoint bit for bit.
+5. **The node broad phase is scaled to the FACE, not to the weld tier.** Which crossings
+   might belong to a face is decided against `face.Bounds()`, and `BrepQueries.Bounds`
+   SAMPLES a curved surface — so the box is systematically small by its own sampling
+   sagitta and growing it by the weld is not sound in the EXCLUDE direction. Measured on a
+   twisted 20-tooth gear (760 curved bands on a 44-unit body), a section endpoint escaped
+   its own face's box by **6.6e-5**, the crossing was never offered to the face, the run
+   carried no node index and the section came back EMPTY at **13 of 49** heights swept —
+   an alignment phenomenon, not a threshold. Admitting an extra candidate costs nothing
+   (`TryParameterOf` declines a node not within the weld of this curve) while excluding a
+   real one loses the whole loop, so the margin is deliberately generous.
 
 Degenerate placements are refused with guidance rather than answered plausibly: a plane
 **flush with a planar face** (the section there is an area, not a curve) and a plane

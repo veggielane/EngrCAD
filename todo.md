@@ -796,13 +796,14 @@ export — is recorded in CLAUDE.md):
 - [ ] **Twisted-extrusion residuals** (`TwistedSurface` ✅ landed — a twist is
   B-Rep-**Native**, holes included, with the `A*h` volume identity and quadratic
   convergence; see design.md §5 "Twisted extrusions"):
-  - [ ] **The MESH and IMPLICIT lowerings still go through `TwistedExtrusion`**, the
-    direct section sweep, rather than through the exact B-Rep's own tessellation — so
-    one declaration currently has two geometries, differing by whatever the sweep's
-    slice count and the tessellator's densities disagree about. Left deliberately, so
-    every committed render and every existing mesh/implicit consumer stays byte-identical
-    at the landing; switching them is a separate measured change (compare the two
-    volumes and the docs PNGs before adopting, and decide what `slices` then means).
+  - [ ] **`slices` is now inert for a plain twisted extrude, and the parameter should
+    say so.** `ShapeCompiler.ToMesh` takes the highest-fidelity route available, so a
+    twisted body tessellates its exact B-Rep and the direct section sweep is not reached
+    — one declaration, one geometry (asserted as bit equality between a 2-slice and a
+    64-slice `ToMesh`), which is the right outcome. What is left is the API: `slices`
+    still reads as a fidelity knob at every call site and now only bites where the B-Rep
+    cannot lower (a twisted body welded into a mesh, e.g. the herringbone apex). Either
+    document it there or route the mesh lowering through it deliberately.
   - [ ] **Rim features refuse on a twisted body** — `Shape.Fillet`/`Chamfer` on the top
     or bottom cap reports "Straight rim edges need planar neighbor faces", which is
     correct today (the neighbour is a `TwistedSurface`, and the band would have to meet

@@ -786,7 +786,14 @@ operations. Depends only on `EngrCAD.Core`.
     and every domain-driven grid re-trimmed. `Shelling` supplies offset carriers and `Draft`
     tapered ones; the machinery between is identical.
 - **`SurfaceIntersection`** — `Intersect(a, b, region)`: exact analytic curves for the
-  common quadric pairs (lines, circles, exact ellipses), plane ⊥ helical-axis cuts
+  common quadric pairs (lines, circles, exact ellipses), **a plane perpendicular to a
+  `TwistedSurface`'s axis** (`TryPlaneTwistedSection` — the section is the generator
+  carried through that height's own section map, so it is exact for ANY generator shape;
+  it matters for the same reason its extruded twin does, that the ends are the
+  generator's OWN points mapped, so consecutive profile segments hand over their shared
+  corner BIT-FOR-BIT and the outline closes — without it a twisted circle sections to
+  nothing and a 760-segment gear profile comes back a self-crossing loop), plane ⊥
+  helical-axis cuts
   (exact `SpiralArc3d` on the band's own frame — the SAME arithmetic
   `MakeThreadedRod`'s cap cuts use, so seams weld; a dz = 0 helicoid ramp cuts in an
   exact radial line), **any COAXIAL surface of revolution with a straight (radius, axial)

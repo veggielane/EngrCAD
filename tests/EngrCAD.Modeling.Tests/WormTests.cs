@@ -330,7 +330,7 @@ public class WormTests
     // ---- honest representation support ----
 
     [Fact]
-    public void Worm_IsExact_AndTheWheelSaysItIsNot()
+    public void Worm_AndItsWheel_AreBothExact()
     {
         var spec = new WormSpec(2, 2, 20);
         var pair = Gears.WormPair(spec, 30);
@@ -340,9 +340,14 @@ public class WormTests
         Assert.True(worm.Explain(TargetRep.Brep).IsConvertible);
         Assert.NotNull(worm.ToBrep());
 
-        // The wheel is a twisted extrusion and says so rather than pretending.
+        // The wheel is a twisted extrusion, which is exact too now that a twist has an
+        // analytic side surface — so BOTH members of the pair are B-Rep solids, and what
+        // the wheel is still honest about is a different thing entirely (it is a crossed-
+        // helical gear rather than a throated worm wheel, so it touches at a POINT).
         var wheel = Gears.WormWheel(pair, faceWidth: 10);
-        Assert.False(wheel.Explain(TargetRep.Brep).IsConvertible);
+        Assert.True(wheel.Explain(TargetRep.Brep).IsConvertible);
+        var wheelSolid = wheel.ToBrep();
+        wheelSolid.Validate();
         var wheelMesh = wheel.ToMesh();
         Assert.True(wheelMesh.IsClosed);
     }

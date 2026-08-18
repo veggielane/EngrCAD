@@ -59,9 +59,10 @@ scene.Add(new Part("tapered boss",
   body carries the same guarantees every other exact solid does — `Validate()` passes,
   it survives booleans, it archives losslessly, and its volume converges quadratically.
 
-`slices` therefore only affects the **mesh** lowering (a direct section sweep) and the
-implicit one on top of it; the B-Rep is exact whatever it says. `Explain(target)`
-reports each case.
+`slices` sizes the direct section sweep, which is now reached only where the B-Rep
+cannot lower — `ToMesh` takes the highest-fidelity route available, so a twisted body
+tessellates its exact solid and a 2-slice call and a 64-slice one produce the *same*
+mesh. `Explain(target)` reports each case.
 
 The volume is the identity that says the surface is right. Every section of a twisted
 prism is the base section *rotated*, and a rotation preserves area — so a pure twist

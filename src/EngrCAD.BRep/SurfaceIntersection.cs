@@ -86,6 +86,23 @@ public static class SurfaceIntersection
             TryPlaneExtrudedSection(planeB, extrudedA, out var sectionA))
             return sectionA;
 
+        // The same rule one twist further: a plane PERPENDICULAR TO THE TWIST AXIS sections a
+        // twisted band in the generator carried through that section's own affine map — a
+        // rotation times a positive diagonal scale times a lift, so the section is the
+        // generator TRANSFORMED and therefore exact for any generator shape. It matters for
+        // exactly the reason the extruded arm does: the section's endpoints are the
+        // generator's own points mapped, so consecutive profile segments hand over their
+        // shared corner BIT-FOR-BIT and the outline closes. Without it a twisted body's
+        // section is a chain of independently traced polylines, which measurably does not
+        // close — a twisted circle sectioned to nothing, and a 760-segment gear profile came
+        // back as a self-crossing loop.
+        if (a is PlaneSurface twistPlaneA && b is TwistedSurface twistedB &&
+            TryPlaneTwistedSection(twistPlaneA, twistedB, out var twistSectionB))
+            return twistSectionB;
+        if (b is PlaneSurface twistPlaneB && a is TwistedSurface twistedA &&
+            TryPlaneTwistedSection(twistPlaneB, twistedA, out var twistSectionA))
+            return twistSectionA;
+
         // Planar carriers meeting at an angle. An extrusion of a STRAIGHT generator is
         // geometrically a plane, but a BOUNDED one: the analytic line must be clipped to
         // the parallelogram it actually covers, not just to the query region — an
@@ -1382,6 +1399,55 @@ public static class SurfaceIntersection
             return true; // recognized configuration, but no transversal section
 
         curves.Add(generator.Transformed(Matrix4d.CreateTranslation(d * v)));
+        return true;
+    }
+
+    /// <summary>
+    /// A plane perpendicular to a <see cref="TwistedSurface"/>'s axis cuts it in the
+    /// generator carried through <see cref="TwistedSurface.TransformTo"/> — the section map
+    /// at that height, which is a similarity in the axis frame's own plane. Returns false
+    /// where the configuration is not recognized (an oblique plane, or a generator that does
+    /// not lie in one plane perpendicular to the axis), and true with NO curves where it is
+    /// recognized but there is no transversal section — the extruded arm's own contract.
+    /// </summary>
+    private static bool TryPlaneTwistedSection(
+        PlaneSurface plane, TwistedSurface twisted, out List<Curve3d> curves)
+    {
+        curves = [];
+        var n = plane.Normal.Normalized();
+        var axis = twisted.Axis.Z;
+        // Perpendicular to the axis, i.e. the plane's normal IS the axis: anything oblique
+        // cuts the twisted band in a transcendental curve and belongs to the tracer.
+        if (n.Cross(axis).Length > Tolerance.Default.Linear)
+            return false;
+
+        double advance = n.Dot(axis) * twisted.Height;
+        if (Math.Abs(advance) <= Tolerance.Default.Linear)
+            return false;
+
+        // The generator must lie in ONE plane perpendicular to the axis, measured on the
+        // ACTUAL curve (the section map moves nothing axially, so this is exactly the
+        // condition for every section to be the generator mapped).
+        var generator = twisted.Generator;
+        var domain = generator.Domain;
+        double height = n.Dot(generator.PointAt(domain.Start) - plane.Origin);
+        const int samples = 16;
+        for (int i = 1; i <= samples; i++)
+        {
+            double h = n.Dot(generator.PointAt(domain.ParameterAt((double)i / samples)) - plane.Origin);
+            if (Math.Abs(h - height) > Tolerance.Default.Linear)
+                return false;
+        }
+
+        double v = -height / advance;
+        // Strictly interior in LENGTH units, the extruded arm's rule verbatim: a plane flush
+        // with either rim is the coplanar case, and splitting there fabricates slivers.
+        if (v < 0 || v > 1 ||
+            Math.Abs(v * advance) <= Tolerance.Default.Linear ||
+            Math.Abs((1 - v) * advance) <= Tolerance.Default.Linear)
+            return true; // recognized configuration, but no transversal section
+
+        curves.Add(generator.Transformed(twisted.TransformTo(v)));
         return true;
     }
 

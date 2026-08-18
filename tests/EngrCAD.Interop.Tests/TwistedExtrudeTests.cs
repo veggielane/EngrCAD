@@ -97,6 +97,68 @@ public class TwistedExtrudeTests
         Assert.Equal(exact, MeasuredVolume(Twisted(Twist, sx, sy)), Math.Abs(exact) * 1e-6);
     }
 
+    // ---- the transverse section ----
+
+    [Fact]
+    public void TheTransverseSectionIsTheGENERATORMapped_SoTheOutlineCloses()
+    {
+        // A plane perpendicular to the twist axis cuts a twisted band in the generator
+        // carried through that height's own section map — a similarity — so the section is
+        // EXACT and, what matters more, consecutive profile segments hand over their shared
+        // corner bit-for-bit. Without that arm the section is a chain of independently
+        // traced polylines that measurably does not close.
+        //
+        // The oracle is the volume identity read one dimension down: a rotation preserves
+        // area, so the transverse section of a twisted prism encloses exactly the base
+        // sketch's area at EVERY height.
+        var sketch = Sketch.Rectangle(Side, Side);
+        var shape = Shape.Extrude(sketch, Height, twist: Twist);
+        foreach (double z in new[] { 3.0, 17.5, 31.0 })
+        {
+            var regions = shape.Section(SketchPlane.At((0, 0, z), Vector3d.UnitX, Vector3d.UnitY));
+            double area = Assert.Single(regions).Area;
+            Assert.Equal(Side * Side, area, Side * Side * 1e-9);
+        }
+    }
+
+    [Fact]
+    public void ACurvedProfileSectionsToo_AndItsAreaIsTheSketchsOwn()
+    {
+        // The case that fails without the analytic arm: every segment of these profiles is
+        // an ARC, whose traced section is chordal and whose ends therefore do not weld.
+        // A circle's section carries the flattening of ONE arc, so it is compared against
+        // the untwisted extrusion's own section rather than against the exact area — the
+        // two must agree exactly, since a rotation cannot change what the flattening costs.
+        var circle = Sketch.Circle(10);
+        double untwisted = Shape.Extrude(circle, Height, twist: 0)
+            .Section(SketchPlane.At((0, 0, 20), Vector3d.UnitX, Vector3d.UnitY))
+            .Single().Area;
+        double twisted = Shape.Extrude(circle, Height, twist: Twist)
+            .Section(SketchPlane.At((0, 0, 20), Vector3d.UnitX, Vector3d.UnitY))
+            .Single().Area;
+        Assert.Equal(untwisted, twisted, untwisted * 1e-9);
+    }
+
+    [Fact]
+    public void EveryHeightSections_OnAProfileOfHundredsOfSegments()
+    {
+        // The regression this exists for: a face's bounding box is SAMPLED for a curved
+        // surface, so growing it by the weld tier is not a sound broad phase for "which
+        // plane crossings might belong to this face". A twisted gear's section endpoint
+        // escaped its own face's box by 6.6e-5 — hundreds of times the weld — the crossing
+        // was never offered to the face, the run carried no node index, and the section
+        // came back EMPTY at 13 of 49 heights swept. It is an ALIGNMENT phenomenon, not a
+        // threshold, so the fixture is a sweep rather than a height that happens to work.
+        var gear = Gears.HelicalGear(new GearSpec(module: 2, teeth: 18), 20, 20);
+        var solid = gear.ToBrep();
+        for (double z = 1.0; z < 20; z += 1.5)
+        {
+            var frame = Frame3d.FromXY(new Vector3d(0, 0, z), Vector3d.UnitX, Vector3d.UnitY);
+            var regions = PlanarSection.OfSolid(solid, frame);
+            Assert.True(regions.Count == 1, $"at z = {z} the section came back with {regions.Count} regions");
+        }
+    }
+
     // ---- convergence ----
 
     [Fact]

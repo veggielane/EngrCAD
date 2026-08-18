@@ -4646,6 +4646,50 @@ symmetric in the mirror plane cannot show that the section was reflected too, th
 recorded secretly-benign-fixture trap — measuring 4.0e-15 from the reflected declaration
 and 11.19 from the un-negated one.
 
+**The transverse SECTION needed its own analytic arm, and it is `TryPlaneExtrudedSection`
+one twist further.** A plane perpendicular to the twist axis cuts a twisted band in the
+generator carried through that height's own section map — a rotation times a positive
+diagonal scale times a lift — so the section is the generator TRANSFORMED, exact for any
+generator shape. It matters for exactly the reason the extruded arm does, which is not
+accuracy: the section's endpoints are the generator's OWN points mapped, so consecutive
+profile segments hand over their shared corner BIT-FOR-BIT and the outline closes. Without
+it every twisted body's section is a chain of independently traced polylines, and the
+measurements say what that costs — a twisted circle sectioned to NOTHING, a twisted
+rounded rectangle and a twisted slot likewise, and a 760-segment gear profile came back as
+a self-crossing loop naming the two segments that crossed. The arm is APPENDED beside the
+extruded one and fires only for a plane whose normal is the twist axis, which no incumbent
+geometry can reach.
+
+**Two further defects surfaced behind it, and both are recorded rules recurring.** First,
+the containment probe: `PlanarSection` probes a section piece at its parameter MIDPOINT,
+and a traced polyline lies on its surface only at its VERTICES — so on a curved band a
+mid-chord probe is off the surface by the chord's own sagitta and the pullback simply
+fails, which is the fourth site that had to ASK `FaceGeometry.ExactSampleParameters`
+rather than restate the midpoint. Containment is constant along a piece by construction
+(the pieces are partitioned exactly at the trim crossings), so snapping the probe to a
+sample strictly inside the piece cannot change an answer that was already reachable.
+Second, and the one worth keeping: **a face's bounding box is SAMPLED for a curved
+surface, so growing it by the WELD tier is not a sound broad phase.** `PlanarSection`
+selects the plane crossings that might belong to a face by testing them against
+`face.Bounds().Expanded(weld)`, and a twisted gear band's own section endpoint escaped its
+own box by **6.6e-5** on a 44-unit body — hundreds of times the weld. The crossing was
+then never offered to the face, the run carried no node index, the chain could not close,
+and the section came back EMPTY at **13 of 49** heights swept, the other 36 being perfect:
+an ALIGNMENT phenomenon rather than a threshold, which is why the fixture is a sweep. The
+margin is now scaled to the FACE (the sagitta is a property of the face's own span) and is
+sound in the direction that matters, since admitting an extra candidate costs nothing —
+`TryParameterOf` declines a node that is not within the weld of this curve — while
+excluding a real one loses the whole loop.
+
+**And the MESH route followed for free, which was not the plan.** `ShapeCompiler.ToMesh`
+takes the highest-fidelity route available, so a twisted body now tessellates its exact
+B-Rep instead of sweeping section rings: one declaration, ONE geometry, asserted as BIT
+equality between a 2-slice and a 64-slice `ToMesh` (which is the statement that the sweep
+is not what ran). The reach is wider than the feature — a HELICAL GEAR is
+`Shape.Extrude(..., twist, ...)`, so it became exact in all three representations with no
+gear-side change, and a crossed-helical pair with it, while a herringbone stays mesh-only
+for its OWN reason: its apex is a mesh weld BY INDEX rather than a topological joint.
+
 Refused by name: a STEP export (no AP214 entity — the swept bucket, with `BrepArchive`
 round-tripping it losslessly instead), an axis lying in the profile plane, a
 non-positive or non-finite height, and a sheared or non-uniformly scaled placement
