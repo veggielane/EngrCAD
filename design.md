@@ -401,10 +401,14 @@ convention. What is exact and what is fitted is stated rather than blurred:
   stated distance stays exact rather than being fitted to round-off.
 
 The tilt is small and real, which is exactly why it needs a witness rather than a membership
-band: the excess over the naive radial offset is `r′²/(2(R + R²/r))`, some 0.006 on a Ø12 slot
-cap and **0.07** on a tight Ø4 one — so the regression fixture is a tight cap under a steep law,
-and the assertion is the closed-form-derived witness (the swept set reaches past the radial
-boundary; the built region has that point), which a generous membership band cannot see.
+band: the excess over the naive radial offset is `r′²/(2(R + R²/r))`, where **r′ is dr/dθ, the
+law's rate per RADIAN of the arc** — R times its rate per unit arc length, and dropping that
+factor understates the excess by R², which is the transcription error this paragraph exists to
+have already made. On a tight Ø4 cap whose law falls 3.0 → 0.5 over its πR of arc that is
+0.796²/(2(2 + 4/1.75)) = **0.074**, against a few thousandths on a Ø12 one — so the regression
+fixture is the tight cap, and the assertion is the closed-form-derived witness (the swept set
+reaches past the radial boundary; the built region has that point), which a generous membership
+band cannot see.
 
 ### Refused by name
 

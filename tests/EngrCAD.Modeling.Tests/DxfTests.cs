@@ -454,6 +454,40 @@ public class DxfTests
     }
 
     /// <summary>
+    /// A QUADRATIC is the one degree the sketch does not carry and does not refuse: degree
+    /// ELEVATION to a cubic is EXACT (the quadratic Bézier `p0 p1 p2` is the cubic
+    /// `p0, p0 + 2/3(p1−p0), p2 + 2/3(p1−p2), p2`), so it is elevated rather than reported —
+    /// unlike degree 4, where reduction would be a fit. The fixture is a GENERAL quadratic
+    /// knot vector (single interior knots, three spans), so the elevation is applied to each
+    /// decomposed span rather than to a curve that was already one Bézier.
+    /// </summary>
+    [Fact]
+    public void AQuadraticSpline_IsDegreeElevatedExactlyRatherThanRefused()
+    {
+        Vector2d[] control = [(0, 0), (6, 9), (14, -6), (22, 7), (30, 0)];
+        double[] knots = [0, 0, 0, 1, 2, 3, 3, 3];
+        var source = new NurbsCurve2d(2, control, null, knots);
+
+        var document = new DxfDocument();
+        document.Add(new DxfSpline(control, 2, knots));
+        document.Add(new DxfLine(source.PointAt(source.Domain.End), (30, -12)));
+        document.Add(new DxfLine((30, -12), (0, -12)));
+        document.Add(new DxfLine((0, -12), source.PointAt(source.Domain.Start)));
+
+        var sketch = Assert.Single(document.ToSketches(out var diagnostics));
+        Assert.Empty(diagnostics);
+
+        // Three knot spans, each elevated to its own cubic — nothing merged, nothing dropped.
+        var cubics = sketch.ToCurves().OfType<BezierCurve2d>().ToList();
+        Assert.Equal(3, cubics.Count);
+
+        // Elevation is a change of basis, so the claim is EXACTNESS rather than a tolerance.
+        var (fromCurves, fromSpline) = Hausdorff(cubics, source);
+        Assert.True(fromCurves < 1e-12, $"the elevated cubics drift off the quadratic by {fromCurves}");
+        Assert.True(fromSpline < 1e-12, $"the quadratic is uncovered by up to {fromSpline}");
+    }
+
+    /// <summary>
     /// The general decomposition reaches the narrow case bit-identically — no arithmetic
     /// runs where an interior knot's multiplicity already equals the degree — which is why
     /// routing every spline through it changed nothing for the files this library writes.

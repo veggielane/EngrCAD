@@ -251,11 +251,16 @@ public class CurvedVariableOffsetTests
     /// swept boundary of a varying disc along an ARC is NOT the radial offset `R + r(θ)`. The
     /// tangency foot tilts off the radial by `sin φ = dr/ds`, so the set reaches further out
     /// along a ray than the radial construction claims — the maximum of
-    /// `s(θ) = R cos θ + √(r² − R² sin²θ)` sits at `θ* = r′/(R + R²/r)` rather than at 0, and
-    /// the excess is `r′²/(2(R + R²/r))`.
+    /// `s(θ) = R cos θ + √(r(θ)² − R² sin²θ)` sits at `θ* = r′/(R + R²/r)` rather than at 0,
+    /// and the excess is `r′²/(2(R + R²/r))`, where **r′ is dr/dθ — the rate per RADIAN of the
+    /// arc, i.e. R times the rate per unit arc length**. Dropping that factor of R is the easy
+    /// transcription error and it understates the excess by R², so the substitution is written
+    /// out below rather than left to the reader.
     ///
     /// <para>The fixture is a TIGHT cap under a steep law so the excess is a measurable 0.07
-    /// rather than a few thousandths, and the witness is picked by the closed-form oracle
+    /// rather than a few thousandths: R = 2 and the law falls 3.0 → 0.5 over the cap's πR of
+    /// arc, so r′ = 2.5/π = 0.796 per radian, r = 1.75 at mid-cap, and
+    /// 0.796²/(2(2 + 4/1.75)) = 0.0739. The witness is then picked by the closed-form oracle
     /// itself: scan outward, find where the swept set really ends, and assert both that it
     /// passes the radial boundary and that the built region reaches there.</para>
     /// </summary>
