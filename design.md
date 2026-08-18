@@ -338,6 +338,96 @@ Each engine uses the data structure its mathematics wants:
   rather than a silent upgrade — the same call the 3D twin makes) and not a refusal, since it
   measures and the consumer decides.
 
+## 2b. Variable 2D offsets
+
+A constant offset grows every part of an outline by one distance. A **variable** offset lets
+the distance change around the boundary — a clearance that opens toward one end, a draft that
+eases off, a wall thicker where it carries load. Four decisions carry it, and three of them
+turned out to be derivations rather than choices.
+
+**The slab is the external TANGENT slab.** The swept region of a linearly varying disc along a
+segment is bounded by the external tangent line of the two end circles, tilted off the normal
+by `sin φ = Δr/L` — not by the line through the two offset endpoints, which under-covers near
+the smaller end by exactly the tangency wedge. The tangency condition is one line:
+`m̂·(L·d̂ + Δr·m̂) = 0` gives `m̂·d̂ = −sin φ`, so `m̂ = n̂·cos φ − d̂·sin φ` for **any** unit n̂
+perpendicular to d̂ — which is why the same formula serves the inward collar with the normal
+flipped, and why an arc needs no separate derivation (below).
+
+**Erosion needs no frame, and the design question the backlog filed does not arise.** The
+classical inward offset is `B ∖ dilate(B ∖ R, d)`, and for a variable law the frame B's own
+boundary appears to need distances. It does not: dilating `B ∖ R` gives
+`(B ∖ R) ∪ collar ∪ frameCollar`, and subtracting that from B leaves `R ∖ collar` **exactly**,
+since the frame sits farther from R than any distance reaches. So an erosion is the region
+minus the inward collar, built from the same tangent slabs and round joins with the normal
+flipped — no frame, no frame distances, one construction. (The constant path keeps its frame:
+all-equal distances DELEGATE to it, so that case stays bit-identical rather than being
+recomputed a second way.)
+
+**Which corners take a join swaps with the direction, and it is a derivation.** A point just
+outside a REFLEX corner has no nearest boundary point at the vertex — the outward normal cone
+is empty there — which is why the outward pass fills convex corners only. Inside, the same
+argument runs the other way: a point near a CONVEX corner projects onto one of the two edges,
+while a reflex corner opens an inward cone of exactly `α − 180°`. The trap is that
+`Cross(−a, −b)` equals `Cross(a, b)` **exactly**, so negating both normals does not flip which
+corners the gate admits (the same identity that once cost `Region2dOffset.Stroke` every
+clockwise corner's outer fill); the inward pass hands the pair to the join in the REVERSED
+order, which does.
+
+**A hole's law is the outline's law.** A distance is how far the material advances into the
+VOID, on every loop alike, so one positive law grows the outline and shrinks each hole with no
+separate rule — which is not a convention adopted here but a consequence of the canonical form
+already keeping material on the LEFT of every loop, making "away from the material" one
+direction per loop.
+
+### The curved tier is where something is finally fitted
+
+`CurvedRegion2dOffset` is exact everywhere else in its file, so the variable twin is the one
+place a departure exists — and it is REPORTED rather than absorbed, the `BiArcFit.MaxDeviation`
+convention. What is exact and what is fitted is stated rather than blurred:
+
+- a STRAIGHT edge's varying-offset boundary is still a straight tangent line, so its slab is an
+  exact quadrilateral, and a vertex join is still an exact circular sector. **A polygonal
+  outline is therefore exact in this tier** — deviation exactly zero, and a larger area than
+  the polygonal tier's own answer, whose round joins are inscribed chords.
+- an ARC's is not. Substituting the arc into the same tangency condition gives
+  `q(u) = C + (R + σ·r(u)·cos φ)·û(u) − sign(sweep)·r(u)·sin φ·t̂(u)`, with `sin φ = Δr/L` constant
+  along the edge — a **spiral**, representable in no tier whose vocabulary is lines and
+  circles. It is fitted by recursive bisection with a circle through three points per span,
+  measured against the true curve rather than bounded by a formula (which is also what catches
+  a three-point circle that picked the wrong branch), and every span's ENDPOINTS are exact
+  spiral points so consecutive pieces weld bit-for-bit and the tolerance is spent strictly
+  between joints.
+- an edge whose law is locally CONSTANT takes an exact concentric branch, so a bore under one
+  stated distance stays exact rather than being fitted to round-off.
+
+The tilt is small and real, which is exactly why it needs a witness rather than a membership
+band: the excess over the naive radial offset is `r′²/(2(R + R²/r))`, some 0.006 on a Ø12 slot
+cap and **0.07** on a tight Ø4 one — so the regression fixture is a tight cap under a steep law,
+and the assertion is the closed-form-derived witness (the swept set reaches past the radial
+boundary; the built region has that point), which a generous membership band cannot see.
+
+### Refused by name
+
+A MIXED-SIGN law (the radius would pass through zero, where the swept set is not defined — the
+two stretches are offset separately and composed); a zero or non-finite distance; an edge whose
+distance changes by more than its own LENGTH (the larger end's disc swallows the sweep and no
+external tangent exists); a cubic Bézier in the curved tier (the constant tier's own refusal —
+a cubic's offset is a degree-10 algebraic curve); and an arc whose offset reaches its own
+CENTRE, where the swept boundary has a cusp rather than a spiral and the constant tier's
+pie-slice degeneration has no varying-radius counterpart.
+
+### The `Sketch` exposure states a LAW, not a list
+
+`Sketch.Offset(law)` takes the distance as a function of POSITION. A per-vertex list cannot be
+the sketch-level spelling: an outline is FLATTENED before it becomes a region, so "one distance
+per vertex" is one distance per CHORD of a flattened arc — a count the caller cannot know and
+an order that depends on winding and on hole nesting. A positional law is independent of all
+three and composes with holes for free. The cost is stated rather than hidden: the law is
+SAMPLED at the boundary vertices and interpolated linearly in arc length, so an AFFINE law is
+reproduced exactly along every straight edge — and the oracle for "exactly" is that refining
+the sampling does not move the answer (measured under 1e-6, where a quadratic control moves
+100× that, which is what stops the first assertion being a statement about nothing).
+
 ## 3. Mesh engine
 
 - **Half-edge with explicit boundary half-edges**: every undirected edge is two
@@ -3500,6 +3590,39 @@ correctness condition" rule the helical-band and ring-paired-band work recorded.
 the prism matches the *discrete* truth `(n/2)·a·b·sin(2π/n)·h` as an **identity**, which is
 only available in closed form because nothing along the chain is flattened — the strongest
 form of test this feature could have.
+
+### Bézier decomposition (`BSplineDecomposition`) — a kernel operation, not a reader's
+
+`ToBezierSegments` is The NURBS Book **A5.6**: insert each interior knot up to full
+multiplicity and every span becomes its own clamped Bézier piece. It lives in
+`EngrCAD.BRep` beside `BSplineBasis` rather than inside `DxfReader`, and the reasons are
+the usual layering ones plus one specific to this operation — it is a **change of basis**,
+so it belongs where the basis does, and putting it in a reader would leave the same
+arithmetic to be rewritten the next time something needs a spline in pieces (a projected
+silhouette, an IGES 126, `Sketch.FromCurves`).
+
+Three properties decide its shape. **Control points travel HOMOGENEOUS** `(w·P, w)`, which
+costs nothing for the non-rational case (all weights 1) and makes the rational case fall
+out rather than being refused — so what a *consumer* refuses is about the consumer's own
+vocabulary, which is exactly the split the DXF reader now spells (a rational spline has no
+polynomial `CubicSeg` form; a degree past 3 has no sketch segment; neither is a limit of
+the decomposition, and both messages say so). **The core is dimension-agnostic**, one
+private routine over `double[][]`, so the 2D and 3D entry points cannot drift. And
+**decomposing a curve already in Bézier form runs no arithmetic at all** — the insertion
+loop's trip count is `degree − multiplicity`, which is zero there — so the result is
+**bit-identical** to the input's own control points. That is what let the DXF reader's
+hand-rolled four-at-a-time split be deleted rather than kept beside it: one path where
+there were two, with the old path's outputs provably unchanged.
+
+The verification bar is that a decomposition is EXACT, so it is asserted by dense sampling
+against the source curve (≤ 1e-12) rather than by a tolerance, on fixtures a Bézier-form
+one cannot stand in for — a uniform UNCLAMPED spline, a clamped cubic with single interior
+knots, degree 5, and a rational arc with real weights. The number that says why it matters
+is the **mutation**: splitting that clamped cubic's control points four at a time, the way
+a Bézier-form reader does, lands **7.49** from the curve. And for non-rational cubics there
+are now two independent exact routes — knot insertion, and `NurbsCurve2d.TryToCurvedEdges`'
+Hermite data — which are cross-checked against each other (1e-12), each being wrong in a
+different way if it were wrong at all.
 
 ### The curved 2D tier — and why it is a PARALLEL type
 

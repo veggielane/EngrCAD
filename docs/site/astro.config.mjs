@@ -119,6 +119,7 @@ document.addEventListener('click', function (event) {
           items: [
             { label: 'Sketching', slug: 'examples/sketching' },
             { label: '2D sketch booleans', slug: 'examples/sketch-booleans' },
+            { label: 'Variable 2D offsets', slug: 'examples/variable-offset' },
             { label: '2D views (offset, section, silhouette)', slug: 'examples/2d-views' },
             { label: 'Space-filling curves & 2D infill', slug: 'examples/infill' },
             { label: 'DXF & SVG (2D interchange)', slug: 'examples/dxf-svg' },

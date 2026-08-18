@@ -358,6 +358,22 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   sketch into several regions or consume it entirely, so the result is always a list —
   no inverted loops, because Core's `Region2dOffset` offsets by UNIONING one primitive
   per edge and per corner rather than chasing edges.
+  **`Offset(law)` / `OffsetExact(law)` take a VARIABLE distance** — a clearance that opens
+  toward one end, a draft that eases off — stated as a function of POSITION, with the sign
+  carrying grow-versus-shrink and a self-disagreeing law refused by name. A positional law
+  rather than a list of distances because a sketch's outline is FLATTENED before it becomes
+  a region: "one distance per vertex" would be one per CHORD of a flattened arc, a count
+  the caller cannot know and an order that depends on winding and on hole nesting, where a
+  function of position is independent of all three and composes with holes for free (a
+  positive law grows the outline AND shrinks each bore, one rule). What it costs is stated:
+  the law is SAMPLED at the boundary vertices and interpolated linearly in arc length, so an
+  AFFINE law is exact along every straight edge — refining the sampling does not move the
+  answer, measured under 1e-6 where a quadratic control moves 100× that — while a curved law
+  carries the flattening's own sampling, and the chord tolerance is the knob for both.
+  `OffsetExact(law)` returns Core's `CurvedVariableOffset`, so it reports `MaxDeviation`:
+  exactly zero for a polygonal outline (better than the flattened route, whose joins are
+  inscribed) and the measured fit where an arc's swept boundary — a spiral — had to be
+  approximated. Docs page `examples/variable-offset.md`.
 - **`sketch.ToCurvedRegions(chordTolerance)` / `Sketch.FromCurvedRegion(region)` plus
   `UnionExact` / `IntersectExact` / `SubtractExact` / `OffsetExact`** are the EXACT
   curved route, and the one to reach for when the result becomes a solid. Lines and
