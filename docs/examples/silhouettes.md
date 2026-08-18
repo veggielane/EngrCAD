@@ -125,8 +125,11 @@ them. `SilhouetteCurve.Fidelity` says which you have:
 
 Beside it, `Deviation` reports the largest `|N̂·v̂|` over the curve's own samples: the
 **sine of the angle** by which the reported curve misses being edge-on. It is
-dimensionless and comparable across every curve kind, and an exact analytic answer reads
-round-off.
+dimensionless and comparable across every curve kind. Its own floor is the *surface's*
+inverse evaluation rather than the answer's accuracy — the probe has to project each
+sample back to read a normal — so an exactly-constructed circle reads about `1e-9` while
+its radius holds to nine decimals. Read the closed form for the claim and the deviation
+for corroboration.
 
 ## Faces that have no silhouette curve are named
 
