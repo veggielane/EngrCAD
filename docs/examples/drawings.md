@@ -210,13 +210,193 @@ if (!text.Contains("(PLATE)"))
 ```
 
 (A PDF cannot render as a docs image the way an SVG can, so this fence verifies the
-file rather than showing it; the tests go further, re-reading the file through an
-independently written PDF parser and asserting every polyline's coordinates round-trip
-bit for bit.)
+file rather than showing it; the figures below show the SHEET each PDF carries, and the
+tests go further, re-reading every file through an independently written PDF parser and
+asserting the coordinates round-trip bit for bit.)
 
 `sheet.SaveSvg(path)`, `sheet.SaveDxf(path)` and `sheet.SavePdf(path)` write files;
 `sheet.ToSvg()`, `sheet.ToDxf()` and `sheet.ToPdf()` hand back the document if you
 would rather post-process it.
+
+### What a PDF can carry beyond its line work
+
+Four things the writer will do on request. **Every one of them is opt-in, and asking
+for none writes exactly the file above, byte for byte** — that property is asserted by
+a byte comparison rather than argued, which is what makes each of them safe to reach
+for on a drawing you have already issued.
+
+```csharp
+var pdf = sheet.ToPdf(new PdfSheetOptions
+{
+    Layers = true,                             // toggleable layers in the reader
+    Compress = true,                           // Flate, ~5x smaller
+    Font = PdfFont.Embed(font),                // the drafting symbols, non-Latin text
+});
+```
+
+| | plate, A4 | bracket, A3 |
+| --- | --- | --- |
+| plain | 21 560 B | 108 358 B |
+| `Layers` | 22 272 B | 109 070 B |
+| `Compress` | **4 490 B (20.8%)** | **20 456 B (18.9%)** |
+| both | 4 987 B | 20 988 B |
+| `Font` embedded (Segoe UI Symbol) | 29 018 B | — |
+| `Font` + `Compress` | 9 631 B | — |
+
+(win-x64. The embedded row is the whole cost of a **subset**: the source font is a
+2.5 MB, 9 410-glyph file and the drawing's own characters add 7 458 bytes to the sheet.)
+
+#### An embedded font — the symbols WinAnsi cannot spell
+
+The built-in Helvetica is encoded as WinAnsi, which has no form for the drafting depth
+(↧), counterbore (⌴) or countersink (⌵) signs — a hole callout carrying one is refused
+by name rather than silently mangled — and the diameter sign ⌀ only survives as its
+O-stroke stand-in Ø. `PdfFont.Embed(font)` carries a real TrueType font as a **subset
+of the glyphs the drawing actually uses**, addressed by glyph index, so the encoding has
+no repertoire to be outside of and the symbols simply travel:
+
+```csharp svg:drawing-pdf-symbols
+string fonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+var font = TrueTypeFont.Load(Path.Combine(fonts, "seguisym.ttf"));
+
+var top = SketchPlane.At((0, 0, 9), Vector3d.UnitX, Vector3d.UnitY);
+var housing = Shape.Cylinder(30, 18).Translate(0, 0, 9)
+    .Drill(HoleSpec.Counterbore(8, 15, 6), [new Vector2d(0, 0)], depth: 20, top);
+
+var sheet = new DrawingSheet(SheetFormat.A4);
+var section = new DrawingView(new Part("housing", housing),
+                              StandardViews.DirectionFor("front")!.Value, "SECTION A-A")
+{
+    Scale = 1,
+    Center = (150, 120),
+    SectionThrough = (0, 0, 0),
+};
+
+// The callout a hole table prints. Three of these characters have NO WinAnsi form, so
+// the built-in Helvetica refuses the string outright; an embedded font carries them.
+section.Annotate(new SheetNote((0, 18), (34, 26), "\u23008 \u21A712\n\u2334\u230015 \u21A76"));
+section.Annotate(SheetLinearDimension.Horizontal((-30, 0), (30, 0), -18));
+sheet.Add(section);
+sheet.Title = sheet.Title with { Title = "BEARING HOUSING", DrawingNumber = "EC-1044" };
+
+// The built-in Helvetica cannot write this sheet AT ALL - the depth sign has no WinAnsi
+// form, so the writer refuses BY NAME rather than dropping the character.
+try
+{
+    sheet.ToPdf();
+    throw new Exception("the standard-14 font should have refused the depth sign");
+}
+catch (NotSupportedException refusal) when (refusal.Message.Contains("U+21A7"))
+{
+    // Named, as it should be.
+}
+
+// With the font embedded, the same sheet writes and the symbols travel verbatim.
+var bytes = sheet.ToPdf(new PdfSheetOptions { Font = PdfFont.Embed(font) });
+if (!System.Text.Encoding.Latin1.GetString(bytes).Contains("/FontFile2"))
+    throw new Exception("the subset font program did not reach the file");
+
+var svg = sheet.ToSvg();
+```
+
+![A sectioned housing whose note carries the depth and counterbore symbols](images/drawing-pdf-symbols.svg)
+
+The subset is a **deterministic function of the glyph set** — the same drawing writes
+the same bytes, because the font's own `created`/`modified` date stamps are zeroed on
+the way in (they are the /Info problem wearing a font's clothes) and the glyphs are
+visited in index order. It keeps the original glyph NUMBERING rather than renumbering,
+which is what lets a composite glyph carry its components across untouched; the cost is
+stated rather than hidden, in that the tables are sized by the largest glyph index used
+rather than by the count. A PostScript (`.otf`) font is refused by name.
+
+#### Toggleable layers
+
+`Layers = true` puts each line class in a PDF **optional-content group**, named with the
+same `SheetLayers` names the SVG groups and the DXF layer table use — so hidden detail,
+hatch, dimensions and the title block can be switched off in a reader exactly as they
+can in a drafting package. It costs a few hundred bytes and moves the declared version
+to PDF 1.5 (optional content is a 1.5 feature).
+
+```csharp run:drawing-pdf-layers
+var plate = new Part("plate", Shape.Box(60, 40, 12)
+    .Drill(HoleSpec.Simple(10), [new Vector2d(0, 0)], depth: 14,
+        SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY)));
+var sheet = DrawingSheet.StandardLayout(plate, SheetFormat.A4);
+
+// Asking for nothing writes the file it always wrote, byte for byte.
+if (!sheet.ToPdf().SequenceEqual(sheet.ToPdf(PdfSheetOptions.Default)))
+    throw new Exception("an all-default options value must be the incumbent file");
+
+byte[] layered = sheet.ToPdf(new PdfSheetOptions { Layers = true });
+string text = System.Text.Encoding.Latin1.GetString(layered);
+if (!text.StartsWith("%PDF-1.5"))
+    throw new Exception("optional content needs PDF 1.5");
+foreach (string layer in new[] { SheetLayers.Visible, SheetLayers.Hidden, SheetLayers.TitleBlock })
+{
+    if (!text.Contains($"/Type /OCG /Name ({layer})"))
+        throw new Exception($"the {layer} layer did not reach the PDF");
+}
+// Marked content must nest: one EMC for every BDC.
+int opened = System.Text.RegularExpressions.Regex.Matches(text, @"/OC /OC\d+ BDC").Count;
+int closed = System.Text.RegularExpressions.Regex.Matches(text, @"\bEMC\b").Count;
+if (opened == 0 || opened != closed)
+    throw new Exception($"unbalanced marked content: {opened} BDC against {closed} EMC");
+```
+
+#### Flate compression
+
+`Compress = true` deflates the content stream (and any embedded font program) — about a
+**fivefold** reduction on a real sheet. It is off by default because an uncompressed
+ASCII drawing is what makes a revision diffable and what every assertion here reads
+directly; turn it on for a very large sheet. The byte fixed point survives, and the
+stronger claim the tests make is that **inflating recovers the uncompressed writer's own
+stream byte for byte** — compression is a re-spelling and nothing else.
+
+#### A loose profile, with the approximation named
+
+PDF paths are lines and **cubic Béziers**, so `PdfDrawing.Add(sketch, ...)` writes a
+sketch's straight segments and its Béziers EXACTLY (a quadratic having already elevated
+to a cubic losslessly on the way into the sketch) while a circular or elliptical arc —
+which has no exact PDF form at all — is approximated in the mode you name, to within the
+tolerance you state. The returned `PdfSketchReport` says which segments were which and
+measures the deviation from the construction, so nothing has to be guessed at:
+
+```csharp svg:drawing-pdf-profile
+// Lines and arcs, plus one cubic: a bracket outline with a bore.
+var profile = Sketch.Start(0, 0)
+    .LineTo(40, 0)
+    .ArcTo((52, 12), radius: 12, clockwise: false)
+    .LineTo(52, 30)
+    .BezierTo((40, 42), (14, 42), (0, 30))
+    .Close()
+    .WithHole(Sketch.Circle(new Vector2d(26, 18), 7));
+
+// Cubic Béziers ride into the file verbatim; the arcs do not, so they are approximated
+// by the standard k = (4/3)tan(theta/4) construction to a stated 0.01 mm.
+var pdf = new PdfDrawing { Margin = 6 };
+var report = pdf.Add(profile, PdfCurveMode.Kappa, tolerance: 0.01);
+if (report.ApproximatedSegments == 0 || report.MaxDeviation > 0.01)
+    throw new Exception($"expected arcs approximated within the tolerance, got {report}");
+pdf.SaveFile(Path.Combine(Scratch, "bracket-profile.pdf"));
+
+// The same profile as SVG, which CAN carry an arc exactly - so this picture is the
+// geometry the PDF approximates, not the approximation.
+var drawing = new SvgDrawing { Margin = 6 };
+drawing.Add(profile);
+var svg = drawing.ToSvg();
+```
+
+![A bracket profile with an arc corner, a cubic top edge and a bore](images/drawing-pdf-profile.svg)
+
+`PdfCurveMode.Flatten` writes polylines instead; both honour the same stated deviation,
+and the cubic route reaches it far more cheaply — measured on a rounded rectangle with a
+bore at a 0.01 mm tolerance, **1 278 bytes against 5 074**, at a measured deviation of
+1.6e-3 against 9.8e-3. The error of the cubic construction has an exact closed form,
+`PdfDrawing.ArcCubicDeviation`, which is worth knowing for two reasons: the cubic lies
+strictly OUTSIDE the arc (it never cuts into the part), and the error falls as the
+**sixth** power of the span, so halving the number of spans multiplies it by 64 rather
+than by the 16 a fourth-order rule would give. A quarter turn reads 2.7253e-4 of the
+radius.
 
 ## The shared frame
 

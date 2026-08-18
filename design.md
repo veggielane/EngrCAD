@@ -7175,10 +7175,73 @@ A drawing is a *document*, not a picture, and the whole design follows from that
   doubles; the one formatting caveat is that PDF's number grammar has no exponent
   form, so sub-1e-4 magnitudes take fixed notation — a grammar constraint, not a
   tolerance). Poppler's `pdftotext` independently recovers every text run.
-  Deliberately absent: `Add(Sketch)` (PDF paths are lines + cubics, so a circular
-  arc has no exact form and an overload would silently flatten), layers (PDF needs
-  optional-content groups for those; filed), and a CLI route (sheets are produced by
-  code and docs fences, not by `--export`, for SVG and DXF alike).
+  Deliberately absent: a CLI route (sheets are produced by code and docs fences, not
+  by `--export`, for SVG and DXF alike).
+- **The four follow-ups landed as OPT-IN settings, and "opt-in" is a byte comparison
+  rather than a promise.** `PdfSheetOptions` (and `PdfDrawing.Font`/`Compress`/the
+  per-add `layer`) carry an embedded font subset, optional-content layers, Flate and
+  sketch export; passing none — or an all-default value — writes the incumbent file
+  BYTE FOR BYTE, asserted directly, which is the property that makes each of them
+  safe to reach for on a drawing already issued. Four decisions carry them.
+  **(a) The embedded subset is a deterministic function of the glyph set, and glyph
+  INDICES are kept rather than renumbered.** The determinism is not a nicety: the
+  writer's whole design is the byte fixed point, so a font program carrying its own
+  `created`/`modified` stamps is the /Info problem wearing a font's clothes and they
+  are ZEROED (`checkSumAdjustment` IS computed, being a function of the subset's own
+  bytes). Keeping the numbering is what makes a COMPOSITE glyph safe — a composite
+  places its components by INDEX, so renumbering means rewriting every composite
+  record, a second parse of the format and the one place a subsetter silently blanks
+  an accented glyph — and it makes the PDF side trivial (`/CIDToGIDMap /Identity`:
+  the CID a string carries IS the glyph index). The cost is stated rather than
+  hidden: `loca` and `hmtx` are sized by the largest kept index rather than by the
+  count. **A `cmap` is emitted although a CIDFontType2 never consults one** (PDF
+  32000-1 §9.7.4.2), for a VERIFICATION reason — with it the subset is a standalone
+  TrueType font the kernel's own reader can re-read, so every kept glyph's outline
+  and advance are comparable against the original's; a font program nothing can
+  decode is a font program nothing can check. That comparison is the oracle, and the
+  reader has never seen the subsetter. A PostScript (`CFF `) font is refused BY NAME:
+  subsetting one re-indexes charstrings, local and global subroutines and FDSelect,
+  a separate `FontFile3` path, and a refusal beats a plausible font a reader draws
+  as blanks. What it buys is what WinAnsi cannot spell — the depth, counterbore and
+  countersink signs a hole callout emits — and it retires the ⌀→Ø substitution for
+  that path (Poppler recovers U+2300/U+21A7/U+2334 verbatim through `/ToUnicode`).
+  **(b) Layers are one OCG per line class in FIRST-USE order**, named with the same
+  `SheetLayers` names the SVG groups and the DXF layer table use, so a reader's layer
+  panel says what a drafting package's does; object numbering stays a function of
+  content (the 1..5 spine is untouched and the optional objects append after it), and
+  the declared version moves to PDF 1.5 only when a layer is named. **(c) Flate is
+  opt-in for the reason the v1 record already gives** — an uncompressed ASCII stream
+  is what makes a revision diffable and what every committed assertion reads — with
+  the level PINNED rather than defaulted, and the test asserting the strong form:
+  **inflating recovers the uncompressed writer's own stream byte for byte**, so
+  compression is a re-spelling and nothing else. Honest scope: .NET's deflate is not
+  a specified byte stream, so the fixed point is a claim about a given runtime, which
+  is exactly what the test measures. Measured on this box (win-x64): an A4 plate
+  21 560 → 4 490 B (20.8%), an A3 bracket 108 358 → 20 456 B (18.9%); the embedded
+  subset of a 2.5 MB, 9 410-glyph font adds 7 458 B to the plate.
+  **(d) `Add(Sketch)` ships with the split NAMED rather than as a silent
+  flattening.** Lines and cubic Béziers are EXACT in either mode (a quadratic having
+  already elevated losslessly into the sketch), only arcs are approximated, and
+  `PdfSketchReport` returns the counts and the deviation MEASURED from the
+  construction. The `Kappa` mode's error has an exact closed form: substituting the
+  `k = (4/3)tan(θ/4)` control points collapses the Bézier's squared radius to
+  `1 + (4τ⁶/(1+τ²)²)·u²(1−4u²)²` with `τ = tan(θ/4)` and `u = t − ½`, from which
+  three properties fall out rather than being arranged — the error is never negative
+  (the cubic lies strictly OUTSIDE the arc and never cuts into the part), it vanishes
+  at both ends AND at the midpoint (which is what fixes k), and `u²(1−4u²)²` peaks at
+  exactly 1/27. So the deviation is `r(√(1 + 4τ⁶/(27(1+τ²)²)) − 1)`, which expands to
+  **θ⁶/55296 per unit radius — SIXTH order**, so halving the number of spans
+  multiplies the error by 64 and not by the 16 a fourth-order rule would give, and
+  reads 2.7253e-4·r at a quarter turn (the figure usually quoted). Two testing rules
+  came out of measuring it. **A uniform scan is the wrong instrument for a maximum**:
+  sampled every 1/64 the same curve reads 0.005440 against the true 0.005451, short
+  by 0.2% purely because no sample lands on the peak — UNDER, so it flatters the
+  construction rather than convicting it — and the derivation already says where the
+  peak is (`t = ½ ± 1/(2√3)`), so that is where the file is asked, with the dense scan
+  kept as the one-sided bound. And **an asymptotic law is asserted as a limit**: the
+  64× ratio reads 64.19 at a quarter turn and closes on 64 as the span shrinks, so the
+  test states the approach rather than demanding the constant where it does not hold
+  (a fourth-order rule would read 16 everywhere, so the two are never confusable).
 - **One frame, shared by the mechanical AND the schematic sheet, extracted ADDITIVELY.**
   The paper, the border and the title block used to be carried twice — once by the
   mechanical `DrawingSheet` and once, deliberately re-implemented, by the ECAD

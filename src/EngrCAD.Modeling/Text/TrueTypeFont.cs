@@ -52,6 +52,7 @@ public sealed class TrueTypeFont
     private const int MaxCompositeDepth = 8;
 
     private readonly byte[] _data;
+    private readonly IReadOnlyDictionary<string, TableRecord> _tables;
     private readonly int[]? _loca;                // GlyphCount + 1 offsets into glyf (glyf fonts only)
     private readonly int _glyfOffset;
     private readonly int _glyfLength;
@@ -66,6 +67,7 @@ public sealed class TrueTypeFont
     private TrueTypeFont(byte[] data, IReadOnlyDictionary<string, TableRecord> tables)
     {
         _data = data;
+        _tables = tables;
         var span = data.AsSpan();
 
         // ---- head: em square and the loca index width ----
@@ -240,6 +242,71 @@ public sealed class TrueTypeFont
         if (_gpos is not null)
             return _gpos.Kerning(leftGlyphIndex, rightGlyphIndex);
         return _kerning is not null && _kerning.TryGetValue((leftGlyphIndex, rightGlyphIndex), out double value) ? value : 0;
+    }
+
+    // ---- raw tables (the PDF subset embedder's seam) -------------------------
+    //
+    // A subset font is assembled from tables this reader has ALREADY located, so the
+    // table directory is exposed rather than parsed a second time — the recurring "ask
+    // the one rule, never restate it" lesson: a second directory walk could disagree
+    // with this one about where 'glyf' begins and nothing would catch it.
+
+    /// <summary>A copy of one sfnt table's bytes, or null when the font has no such
+    /// table. Used by <c>PdfFontSubset</c> to carry <c>head</c>, <c>hhea</c> and
+    /// <c>maxp</c> across verbatim (with the few fields a subset must restate).</summary>
+    internal byte[]? RawTable(string tag) =>
+        _tables.TryGetValue(tag, out var record) ? _data[record.Offset..(record.Offset + record.Length)] : null;
+
+    /// <summary>One glyph's raw <c>glyf</c> record — empty for a blank glyph (the
+    /// format's own encoding, equal <c>loca</c> offsets). Null for a CFF font, which
+    /// has no <c>glyf</c> table at all.</summary>
+    internal byte[]? RawGlyph(int glyphIndex)
+    {
+        if (_loca is null)
+            return null;
+        int start = _loca[glyphIndex], end = _loca[glyphIndex + 1];
+        return end <= start ? [] : _data[(_glyfOffset + start)..(_glyfOffset + end)];
+    }
+
+    /// <summary>Advance width of one glyph in font units (<c>hmtx</c>).</summary>
+    internal int AdvanceWidthUnits(int glyphIndex) => _advanceWidths[glyphIndex];
+
+    /// <summary>Left side bearing of one glyph in font units (<c>hmtx</c>).</summary>
+    internal int LeftSideBearingUnits(int glyphIndex) => _leftSideBearings[glyphIndex];
+
+    /// <summary>
+    /// The glyphs a composite glyph places directly (empty for a simple or blank glyph).
+    /// A subset must carry a composite's components or its outline is lost, and the
+    /// component indices are read here — beside <see cref="ReadCompositeGlyph"/>, which
+    /// owns the same record layout — rather than re-derived by a second parser.
+    /// </summary>
+    internal IReadOnlyList<int> CompositeComponents(int glyphIndex)
+    {
+        if (_loca is null)
+            return [];
+        int start = _loca[glyphIndex], end = _loca[glyphIndex + 1];
+        if (end <= start || end > _glyfLength)
+            return [];
+        var reader = new FontReader(_data.AsSpan(_glyfOffset, _glyfLength), start);
+        if (reader.ReadInt16() >= 0)
+            return [];                                   // simple glyph: no components
+        reader.Skip(8);                                  // bounding box
+        var components = new List<int>();
+        int flags;
+        do
+        {
+            flags = reader.ReadUInt16();
+            components.Add(reader.ReadUInt16());
+            reader.Skip((flags & CompArgsAreWords) != 0 ? 4 : 2);
+            if ((flags & CompHaveScale) != 0)
+                reader.Skip(2);
+            else if ((flags & CompHaveXYScale) != 0)
+                reader.Skip(4);
+            else if ((flags & CompHaveTwoByTwo) != 0)
+                reader.Skip(8);
+        }
+        while ((flags & CompMoreComponents) != 0);
+        return components;
     }
 
     // ---- table directory -----------------------------------------------------
