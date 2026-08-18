@@ -34,7 +34,7 @@ namespace EngrCAD.Interop;
 /// has the same restriction implicitly (<see cref="MeshPlaneCut"/> keeps on-plane vertices
 /// where they are).</para>
 /// </summary>
-public static class PlanarSection
+public static partial class PlanarSection
 {
     /// <summary>Default flattening of curved section geometry: 1 µm sagitta, matching
     /// <c>Sketch.DefaultChordTolerance</c> and <c>Region2dOffset.DefaultArcTolerance</c>.</summary>
@@ -43,6 +43,15 @@ public static class PlanarSection
     /// <summary>Minimum samples per section curve — enough that a probe midpoint cannot
     /// straddle a whole feature even when the chord tolerance asks for very few.</summary>
     private const int MinimumCurveSamples = 8;
+
+    /// <summary>
+    /// How far a flush plane is nudged to read a limit, as a fraction of the solid's own
+    /// diagonal — scale-free, and derived from the two conditions it has to meet: it must
+    /// exceed the flush test's own weld tolerance by a wide margin (1e-6 of a 60-unit model is
+    /// 6e-5, some 60 000 weld tiers) and it must keep the boundary displacement it induces on
+    /// a 45° wall below the section's own <see cref="DefaultChordTolerance"/>.
+    /// </summary>
+    public const double FlushNudgeFraction = 1e-6;
 
     /// <summary>
     /// The cross-section of a closed mesh through <paramref name="plane"/>, in the plane's
@@ -78,13 +87,22 @@ public static class PlanarSection
     /// own 2D coordinates. Curved section geometry is flattened to
     /// <paramref name="chordTolerance"/> (regions are polygonal); straight sections are exact.
     /// </summary>
-    /// <exception cref="NotSupportedException">The plane is flush with a planar face.</exception>
+    /// <param name="flush">What to do when the plane is flush with a planar face or contains a
+    /// whole edge. <see cref="FlushSection.Refuse"/> (the default, and every incumbent call)
+    /// throws; the other members read the limits through
+    /// <see cref="FlushLimitsOf"/>.</param>
+    /// <exception cref="NotSupportedException">The plane is flush with a planar face and
+    /// <paramref name="flush"/> is <see cref="FlushSection.Refuse"/>.</exception>
     public static IReadOnlyList<Region2d> OfSolid(
-        BrepSolid solid, in Frame3d plane, double chordTolerance = DefaultChordTolerance)
+        BrepSolid solid, in Frame3d plane, double chordTolerance = DefaultChordTolerance,
+        FlushSection flush = FlushSection.Refuse)
     {
         ArgumentNullException.ThrowIfNull(solid);
         if (!(chordTolerance > 0))
             throw new ArgumentOutOfRangeException(nameof(chordTolerance), "The chord tolerance must be positive.");
+
+        if (TryFlush(solid, plane, chordTolerance, flush) is { } limited)
+            return limited;
 
         var origin = plane.Origin;
         var normal = plane.Z;
@@ -158,13 +176,19 @@ public static class PlanarSection
     /// "lies on the carrier" is not "IS the carrier", and the reason a transformed or
     /// segment-wrapped curve needs no special case here.</para>
     /// </summary>
-    /// <exception cref="NotSupportedException">The plane is flush with a planar face.</exception>
+    /// <inheritdoc cref="OfSolid" path="/param[@name='flush']"/>
+    /// <exception cref="NotSupportedException">The plane is flush with a planar face and
+    /// <paramref name="flush"/> is <see cref="FlushSection.Refuse"/>.</exception>
     public static IReadOnlyList<CurvedRegion2d> CurvedOfSolid(
-        BrepSolid solid, in Frame3d plane, double chordTolerance = DefaultChordTolerance)
+        BrepSolid solid, in Frame3d plane, double chordTolerance = DefaultChordTolerance,
+        FlushSection flush = FlushSection.Refuse)
     {
         ArgumentNullException.ThrowIfNull(solid);
         if (!(chordTolerance > 0))
             throw new ArgumentOutOfRangeException(nameof(chordTolerance), "The chord tolerance must be positive.");
+
+        if (TryCurvedFlush(solid, plane, chordTolerance, flush) is { } limited)
+            return limited;
 
         var origin = plane.Origin;
         var normal = plane.Z;
@@ -445,15 +469,24 @@ public static class PlanarSection
 
     private static void RejectFlushFace(BrepFace face, in Vector3d origin, in Vector3d normal)
     {
-        if (!face.IsPlanar(out var faceOrigin, out var faceNormal))
-            return;
-        if (!faceNormal.IsParallelTo(normal, Tolerance.Default))
-            return;
-        if (Math.Abs((faceOrigin - origin).Dot(normal)) > Tolerance.Default.Linear)
+        if (!IsFlushFace(face, origin, normal))
             return;
         throw new NotSupportedException(
             "The section plane is flush with a planar face, so the cross-section there is an area rather than a curve. "
-            + "Offset the plane off the face.");
+            + "Offset the plane off the face, or state which limit you mean with a FlushSection policy "
+            + "(PlanarSection.FlushLimitsOf reads both).");
+    }
+
+    /// <summary>The flush-face PREDICATE, so the refusal and <see cref="IsFlushWith"/> read one
+    /// rule rather than two spellings of it (two planes coincide iff they are parallel AND a
+    /// point of one lies on the other).</summary>
+    internal static bool IsFlushFace(BrepFace face, in Vector3d origin, in Vector3d normal)
+    {
+        if (!face.IsPlanar(out var faceOrigin, out var faceNormal))
+            return false;
+        if (!faceNormal.IsParallelTo(normal, Tolerance.Default))
+            return false;
+        return Math.Abs((faceOrigin - origin).Dot(normal)) <= Tolerance.Default.Linear;
     }
 
     /// <summary>
@@ -464,16 +497,25 @@ public static class PlanarSection
     /// </summary>
     private static void RejectInPlaneEdge(BrepEdge edge, in Vector3d origin, in Vector3d normal, double weld)
     {
+        if (!IsInPlaneEdge(edge, origin, normal, weld))
+            return;
+        throw new NotSupportedException(
+            "The section plane contains a whole edge of the solid, so the cross-section runs along the boundary "
+            + "of two faces at once. Offset the plane off the edge, or state which limit you mean with a "
+            + "FlushSection policy (PlanarSection.FlushLimitsOf reads both).");
+    }
+
+    /// <summary>The in-plane-edge PREDICATE, shared with <see cref="IsFlushWith"/>.</summary>
+    internal static bool IsInPlaneEdge(BrepEdge edge, in Vector3d origin, in Vector3d normal, double weld)
+    {
         const int probes = 5;
         for (int i = 0; i <= probes; i++)
         {
             var point = edge.Curve.PointAt(edge.Domain.ParameterAt(i / (double)probes));
             if (Math.Abs((point - origin).Dot(normal)) > weld)
-                return;
+                return false;
         }
-        throw new NotSupportedException(
-            "The section plane contains a whole edge of the solid, so the cross-section runs along the boundary "
-            + "of two faces at once. Offset the plane off the edge.");
+        return true;
     }
 
     /// <summary>

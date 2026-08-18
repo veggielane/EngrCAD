@@ -158,6 +158,19 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with the loft's chord-length parameterization"));
                 break;
+
+            case RoofShape:
+                // Similarities only (mirrored included): a roof is defined by LENGTHS and
+                // ANGLES — the offset distance a wavefront travelled and the slope it rises
+                // at — and a similarity preserves both, so a uniform scale scales the
+                // skeleton and the height together and the stated pitch survives. A shear
+                // would leave the faces planar and silently change every pitch in the roof.
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "planar faces over the polygon's own straight skeleton; every ridge is an exact line")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear changes the roof's pitch, which is the one thing it states"));
+                break;
             case BooleanShape b:
                 ClassifyBrep(b.A, m, entries);
                 ClassifyBrep(b.B, m, entries);
@@ -355,7 +368,7 @@ internal static class ShapeCompiler
                 break;
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
                 or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape
-                or SheetMetalShape or DirectEditShape:
+                or SheetMetalShape or DirectEditShape or RoofShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "tessellated B-Rep wrapped in a mesh SDF"));
                 break;
@@ -729,6 +742,15 @@ internal static class ShapeCompiler
                     loftHoles = placedHoles;
                 }
                 return SolidFactory.Loft(placed, loftHoles, loft.Style);
+            }
+
+            case RoofShape roof:
+            {
+                // Similarity only (mirrored included) — the decomposition is a pure GATE and
+                // `m` is applied verbatim to the lifted skeleton points, which is exact
+                // because a similarity takes planes to planes and preserves the pitch.
+                DecomposeSimilarity(m, shape, out _, out _, out _);
+                return Roof.Build(roof.Profile, roof.Pitch, roof.Plane, m).Solid;
             }
 
             case BooleanShape boolean:
@@ -1126,7 +1148,7 @@ internal static class ShapeCompiler
 
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
                 or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape
-                or SheetMetalShape or DirectEditShape:
+                or SheetMetalShape or DirectEditShape or RoofShape:
             case SourceShape { Geometry: BrepSolid }:
                 return BridgeToSdf(shape, m, quality);
 

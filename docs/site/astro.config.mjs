@@ -137,6 +137,7 @@ document.addEventListener('click', function (event) {
             { label: 'Lattices', slug: 'examples/lattices' },
             { label: 'The SDF vocabulary', slug: 'examples/sdf-vocabulary' },
             { label: 'Loft, draft & shell', slug: 'examples/loft-draft-shell' },
+            { label: 'Roofs (straight skeleton)', slug: 'examples/roof' },
             { label: 'Direct editing', slug: 'examples/direct-editing' },
             { label: 'Transforms & patterns', slug: 'examples/transforms-patterns' },
             { label: 'Text', slug: 'examples/text' },

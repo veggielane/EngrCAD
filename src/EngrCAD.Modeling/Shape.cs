@@ -268,6 +268,60 @@ public abstract class Shape
     }
 
     /// <summary>
+    /// The <b>straight-skeleton roof</b> over a polygonal sketch — OpenSCAD's <c>roof()</c>:
+    /// every base edge sweeps its own plane inward at the stated pitch, and the roof is where
+    /// those planes meet.
+    ///
+    /// <para><b>It is an EXACT operation, not a polygonal approximation.</b> Every face is one
+    /// inclined plane, every ridge and valley is a straight line, and every apex is a plane
+    /// intersection — the same closed-form arithmetic <c>Draft</c> and <c>Shelling</c> already
+    /// do — so the roof is B-Rep-<b>Native</b>, mesh comes from that exact B-Rep, and implicit
+    /// is bridged through it. A rectangle's roof really is the textbook hip roof, with its
+    /// ridge exactly <c>length − width</c> long.</para>
+    ///
+    /// <para><b>Both events matter.</b> A convex footprint only ever collapses edges; a
+    /// non-convex one also SPLITS, a reflex corner reaching an opposing edge and dividing the
+    /// wavefront in two — which is what puts the valley in an L-shaped roof. Both are
+    /// simulated; see <see cref="StraightSkeleton"/>.</para>
+    ///
+    /// <para><b>Refused by name:</b> a footprint with HOLES (a hole's wavefront grows into the
+    /// outer one, a merge whose first contact is edge-against-edge for every rectilinear
+    /// input — roof the outline and subtract the hole's own solid), a footprint carrying arcs
+    /// or Béziers (a curved edge sweeps a curved surface, and the straight skeleton is defined
+    /// for straight edges), and a sheared or non-uniformly scaled placement (it would change
+    /// the pitch, which is the one thing the roof states).</para>
+    /// </summary>
+    /// <param name="sketch">A polygonal closed sketch — the footprint.</param>
+    /// <param name="pitchDegrees">The angle every roof plane makes with the base, strictly
+    /// between 0 and 90.</param>
+    /// <param name="plane">Where the footprint sits; defaults to the world XY plane.</param>
+    public static Shape Roof(Sketch sketch, double pitchDegrees, SketchPlane? plane = null) =>
+        Roof(sketch, RoofPitch.FromAngle(pitchDegrees), plane);
+
+    /// <summary>
+    /// <see cref="Roof(Sketch, double, SketchPlane?)"/> with the steepness stated either way
+    /// — <see cref="RoofPitch.FromAngle"/> or <see cref="RoofPitch.FromHeight"/>. The two are
+    /// one number, related by the footprint's own skeleton, so they cannot disagree.
+    /// </summary>
+    public static Shape Roof(Sketch sketch, RoofPitch pitch, SketchPlane? plane = null)
+    {
+        ArgumentNullException.ThrowIfNull(sketch);
+        return new RoofShape(sketch, pitch, plane ?? SketchPlane.XY);
+    }
+
+    /// <summary>
+    /// What the roof over <paramref name="sketch"/> turns out to be — its pitch AND its
+    /// height (each derived from the one the caller stated), the straight skeleton it stands
+    /// on, and the closed-form volume it encloses. An analysis, so it builds nothing and
+    /// ignores any placement.
+    /// </summary>
+    public static RoofFacts RoofFacts(Sketch sketch, RoofPitch pitch, SketchPlane? plane = null)
+    {
+        ArgumentNullException.ThrowIfNull(sketch);
+        return Modeling.Roof.Build(sketch, pitch, plane ?? SketchPlane.XY, Matrix4d.Identity).Facts;
+    }
+
+    /// <summary>
     /// Lofts through sketches, each placed by its own <see cref="SketchPlane"/> — the
     /// sketch-first spelling of <see cref="Loft(IReadOnlyList{Profile}, LoftStyle)"/>,
     /// matching the <see cref="Extrude(Sketch, double, SketchPlane?)"/> vocabulary.
@@ -1726,15 +1780,23 @@ public abstract class Shape
     /// <para>Exact geometry is used when the shape lowers to B-Rep (fidelity set by
     /// <paramref name="chordTolerance"/> alone, so a bore rim is as smooth as asked for);
     /// otherwise the section is taken from the display mesh at
-    /// <paramref name="quality"/>. Move the plane off any flush face or in-plane edge — a
-    /// section that runs along a face is an area, not a curve, and is refused.</para>
+    /// <paramref name="quality"/>. A plane FLUSH with a face (or containing a whole edge) has
+    /// no cross-section curve at all — the intersection there is an area — so it is refused by
+    /// default; <paramref name="flush"/> states which limit you mean instead, and
+    /// <see cref="PlanarSection.FlushLimitsOf"/> hands back both.</para>
     /// </summary>
+    /// <param name="flush">What a flush plane should answer:
+    /// <see cref="FlushSection.Refuse"/> (the default),
+    /// <see cref="FlushSection.Below"/>/<see cref="FlushSection.Above"/> for one limit, or
+    /// <see cref="FlushSection.Union"/> for the set-theoretic <c>solid ∩ plane</c> — which is
+    /// what OpenSCAD's <c>projection(cut = true)</c> means. Applies to the B-Rep route only.</param>
     public IReadOnlyList<Region2d> Section(
         SketchPlane plane,
         double chordTolerance = PlanarSection.DefaultChordTolerance,
-        MeshQuality? quality = null) =>
+        MeshQuality? quality = null,
+        FlushSection flush = FlushSection.Refuse) =>
         CanConvertTo(TargetRep.Brep)
-            ? PlanarSection.OfSolid(ToBrep(), plane.Frame, chordTolerance)
+            ? PlanarSection.OfSolid(ToBrep(), plane.Frame, chordTolerance, flush)
             : PlanarSection.OfMesh(ToMesh(quality), plane.Frame);
 
     /// <summary>
@@ -1749,10 +1811,12 @@ public abstract class Shape
     /// curved 2D tier deliberately does not carry, and a traced intersection is a polyline
     /// to begin with. So a mixed section is honest, and its exact halves stay exact.</para>
     /// </summary>
+    /// <inheritdoc cref="Section" path="/param[@name='flush']"/>
     /// <exception cref="ShapeConversionException">The shape has no B-Rep form.</exception>
     public IReadOnlyList<CurvedRegion2d> SectionExact(
-        SketchPlane plane, double chordTolerance = PlanarSection.DefaultChordTolerance) =>
-        PlanarSection.CurvedOfSolid(ToBrep(), plane.Frame, chordTolerance);
+        SketchPlane plane, double chordTolerance = PlanarSection.DefaultChordTolerance,
+        FlushSection flush = FlushSection.Refuse) =>
+        PlanarSection.CurvedOfSolid(ToBrep(), plane.Frame, chordTolerance, flush);
 
     /// <summary>
     /// The OUTLINE the shape casts along <paramref name="plane"/>'s normal, as 2D regions

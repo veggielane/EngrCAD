@@ -11035,6 +11035,137 @@ band on its MID so the statistical mean shifts exactly when a tolerance is
 asymmetric, the textbook treatment stated rather than implied) and the model-attached
 dimension scheme that would make derivation honest is filed as the follow-up.
 
+## 6f. Roofs — the straight skeleton (`EngrCAD.Modeling`)
+
+`Shape.Roof(sketch, pitch)` is OpenSCAD's `roof()`: a polygonal footprint raised by
+sweeping every base edge inward at one pitch. **It is an exact operation and the design
+turns on saying so.** Each roof face is the single plane through its base edge inclined
+at the pitch, each ridge and valley is a straight line, and each apex is a plane
+intersection — the same closed-form arithmetic `Draft`'s corner solve and `Shelling`'s
+`SurfaceCorner` already do. So it is B-Rep-**Native**, its mesh is that exact B-Rep
+tessellated, and its implicit form is bridged through it; a *shear* is Impossible by
+name, because a roof is defined by lengths and angles and a shear preserves neither,
+where a uniform scale scales the skeleton and the height together and the stated pitch
+survives.
+
+**Both event kinds are load-bearing, and the convex-only version is a subset that
+returns nonsense rather than refusing.** An EDGE event is an edge shrinking to zero;
+a SPLIT event is a reflex corner reaching a non-adjacent edge and dividing the
+wavefront in two, which is what puts the valley in an L-shaped roof. Running the
+L-shape fixture through a simulation with splits disabled does not produce a worse
+roof — it produces no closed skeleton at all, which is the mutation the test asserts.
+
+**Three decisions carry the simulation.**
+
+**(a) A wave's velocity is the solution of `v·n₁ = v·n₂ = 1`, and its REFLEXIVITY is a
+property of its own two edges** rather than of the corner it descends from — a wave
+created by an event joins two edges that were never adjacent, so an index into the
+polygon's corner table answers for the wrong pair. The first build did exactly that
+and its L-shape never found the split.
+
+**(b) A collapsed loop is a RIDGE, and the arcs it contributes are a 1-D OVERLAY.**
+When two anti-parallel edges close head-on the wave between them has no finite
+velocity, and the loop degenerates onto a segment: it runs out along that segment
+carrying one edge's face and back carrying another's, so each elementary stretch is
+covered exactly twice and those two faces are what the arc separates. A two-wave loop
+is the smallest member (an L-shape's arm closing at t = 3), a footprint with a
+collinear run on one edge gives a three-wave one whose overlay yields two arcs, and a
+loop whose waves have all met at one point contributes no arc at all. The parameters
+along that segment are read from the INTERNED NODES rather than from the raw
+trajectories — the interning is what already decided which waves are at one point, and
+reading the raw positions instead split a fully-converged regular star into elementary
+intervals **1e-29** wide that every chain then covered, which the overlay correctly
+refused as a stretch covered more than twice.
+
+**(c) The verification is structural and the refusal is by name.** Before anything is
+returned, every skeleton face is walked as a cycle (each node used by exactly two arcs),
+required to be positively wound, and their areas required to sum to the polygon's own.
+A degeneracy the event simulation cannot decide therefore refuses rather than returning
+a plausible skeleton — the `BrepBoolean.Verified` argument, in a different engine.
+
+**Verified against closed forms, never against a picture.** A regular n-gon's roof is a
+pyramid of exactly `area · height / 3` (3/4/5/6/8/12 sides, 1e-9 relative). A rectangle
+is the textbook hip roof and the RIDGE is what proves the skeleton rather than the
+volume: exactly two interior nodes, both at `width/2`, exactly `length − width` apart,
+with the volume `tan(pitch)·(L·W²/4 − W³/12)` derived by integrating `min(x, L−x, y,
+W−y)` over the rectangle. The L-shape `[0,30]×[0,6] ∪ [18,30]×[0,20]` was decomposed by
+hand — four interior nodes at (3,3), (21,3), (24,6), (24,14); six faces summing to the
+footprint's own 348; enclosed volume exactly **738** at 45° — and is asserted node for
+node. Height and pitch are asserted to be one number two ways (state one, read the
+other back, re-state it, and the slopes agree bit-close while the apex is the solid's
+own tallest vertex).
+
+**Two measured findings.** **A regular STAR is not a split-event fixture, and that is
+the opposite of the obvious guess**: its reflex corners' bisectors point at the CENTRE,
+because the notch between two points is *exterior*, so they all march inward together
+and the whole wavefront resolves by edge events — measured at ZERO splits and one
+interior node for 5-point stars at inner radii 4, 8 and 14 and for a 6-point star,
+which is now what that test asserts. Breaking the symmetry with a jittered radius
+brings the splits back (two, on both a 5- and a 7-point star). And a **rectilinear
+L-shape's split is always SIMULTANEOUS with its own arm's ridge event**, structurally
+rather than by coincidence: the reflex corner sits at height h above the bottom edge
+and descends at unit speed in y, so it reaches that edge's wavefront at t = h/2, which
+is exactly when a strip of height h pinches. So the "isolated split" fixture has to
+slant an edge to separate them, and both fixtures are kept.
+
+**Holes are refused BY NAME** with the geometric reason rather than supported: a hole's
+wavefront GROWS while the outer one shrinks, so the two meet in a MERGE event whose
+first contact is — for every rectilinear footprint, since a hole edge is parallel to
+the outer edge facing it — an edge against an EDGE rather than the vertex-against-edge
+point this simulation is built from; and the relinking a merge needs is already the
+split's own code, so what is missing is the event, not the topology. Roofing the
+outline and subtracting the hole's own solid is the stated way through. Arcs and
+Béziers are refused for a different reason (a curved edge sweeps a curved surface, so
+the straight skeleton is not defined for it), and a pitch outside `(0°, 90°)` because a
+flat slab and a vertical wall are not roofs.
+
+## 6g. A flush section — which limit does `projection(cut = true)` mean?
+
+`PlanarSection.OfSolid` refuses a plane flush with a planar face, because that section
+is an AREA rather than a curve. The natural repair — flush faces contribute their
+regions, everything transversal sections as before, union — is **not a limit of the
+section at all**, and the counterexample is worth keeping: a fused step block (slab
+footprint A under a boss footprint B ⊂ A) sectioned at the step plane has flush faces
+covering only `A∖B`, the boss's walls merely TOUCH the plane, and the interior under B
+has no face there at all. That construction returns `A∖B`, where the limit from below
+is A and the limit from above is B — a region neither limit ever takes.
+
+**The semantics decision is that there is no single right answer, and that is itself
+the finding.** Three consumers want three things: OpenSCAD's `projection(cut = true)`
+is the set-theoretic `solid ∩ plane`, a drawing's section view wants the material the
+plane actually CUTS, and `Shape.Section`'s own contract promises the curve bounding a
+cross-section. So the primitive is the PAIR — `PlanarSection.FlushLimits` returns the
+limit from below and the limit from above, each an ordinary exact transversal section —
+and the caller states which it means. The set-theoretic intersection is then the UNION
+of the two, which is a derivation rather than a fourth answer: a point of the plane is
+in the closed solid exactly when it is a limit of solid points from one side or the
+other. `A∖B` is not reachable by any of them.
+
+**The default stays the REFUSAL**, and the refusal names the call that answers. A graze
+is nearly always a modelling accident — the caller meant just above or just below — and
+a section is consumed by area measurements, DXF export and drawing hatch, none of which
+can tell a grazed answer from a real cut. Refusing is the one outcome that cannot be
+silently wrong; the opt-in `FlushSection` policy is how a caller says which limit it
+means.
+
+**A measurement the work turned up and did not cause**: `PlanarSection.OfSolid` itself
+goes QUIET above about 1000x unit scale — a plain transversal section of a plain box
+reads 1200 at 1x and 1.2e7 at 100x, then **0 against a true 1.2e9 at 1000x** — because
+its edge-crossing weld is the ABSOLUTE 1e-9 tier, which at coordinates of 1e4 sits below
+the ulp, so every crossing reads as already-on-plane and nothing is collected. An empty
+list rather than a refusal is the silent direction, so the boundary is pinned by test and
+filed; making that tier relative to the solid's own diagonal is the fix, and its
+regression surface is every section and every drawing view.
+
+**The nudge is the FdmSlicer's own mechanism and its honesty is stated rather than
+implied.** `δ` is a fraction of the model's own diagonal (scale-free, the epsilon
+ladder), each nudged section is an ordinary EXACT transversal section of its own plane,
+and the only approximation is that a plane at `z ± δ` is not the limit at `z`: where
+the boundary is locally a vertical prism — which is what a flush face makes, and every
+case the feature exists for — the section is IDENTICAL for every small δ and the answer
+is the limit exactly; where a wall is sloped it differs by `δ·tan(slope)`, which is
+reported rather than hidden.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`
