@@ -236,15 +236,17 @@ var pdf = sheet.ToPdf(new PdfSheetOptions
 
 | | plate, A4 | bracket, A3 |
 | --- | --- | --- |
-| plain | 21 560 B | 108 358 B |
-| `Layers` | 22 272 B | 109 070 B |
-| `Compress` | **4 490 B (20.8%)** | **20 456 B (18.9%)** |
-| both | 4 987 B | 20 988 B |
+| plain | 21 560 B | 111 652 B |
+| `Layers` | 22 272 B | 112 820 B |
+| `Compress` | **4 490 B (20.8%)** | **21 133 B (18.9%)** |
+| both | 4 987 B | 21 785 B |
 | `Font` embedded (Segoe UI Symbol) | 29 018 B | — |
 | `Font` + `Compress` | 9 631 B | — |
 
-(win-x64. The embedded row is the whole cost of a **subset**: the source font is a
-2.5 MB, 9 410-glyph file and the drawing's own characters add 7 458 bytes to the sheet.)
+(win-x64, on this page's own two fixtures — the plate from the `SavePdf` example above
+and the annotated A3 bracket from the top of the page — so the figures are ones you can
+rebuild. The embedded row is the whole cost of a **subset**: the source font is a 2.5 MB,
+9 410-glyph file and the drawing's own characters add 7 458 bytes to the sheet.)
 
 #### An embedded font — the symbols WinAnsi cannot spell
 
@@ -379,6 +381,18 @@ if (report.ApproximatedSegments == 0 || report.MaxDeviation > 0.01)
     throw new Exception($"expected arcs approximated within the tolerance, got {report}");
 pdf.SaveFile(Path.Combine(Scratch, "bracket-profile.pdf"));
 
+// The other mode flattens the arcs to polylines. It honours the same tolerance and is
+// strictly worse on both counts, which is the durable claim rather than the byte totals
+// quoted below: cubics are smaller AND land closer to the arc they stand in for.
+var flat = new PdfDrawing { Margin = 6 };
+var flatReport = flat.Add(profile, PdfCurveMode.Flatten, tolerance: 0.01);
+if (flat.ToPdf().Length <= pdf.ToPdf().Length)
+    throw new Exception("the cubic route should be the smaller file");
+if (flatReport.MaxDeviation <= report.MaxDeviation)
+    throw new Exception("the cubic route should be the closer approximation");
+if (flatReport.ExactSegments != report.ExactSegments)
+    throw new Exception("the lines and the cubic are exact in either mode");
+
 // The same profile as SVG, which CAN carry an arc exactly - so this picture is the
 // geometry the PDF approximates, not the approximation.
 var drawing = new SvgDrawing { Margin = 6 };
@@ -389,9 +403,9 @@ var svg = drawing.ToSvg();
 ![A bracket profile with an arc corner, a cubic top edge and a bore](images/drawing-pdf-profile.svg)
 
 `PdfCurveMode.Flatten` writes polylines instead; both honour the same stated deviation,
-and the cubic route reaches it far more cheaply — measured on a rounded rectangle with a
-bore at a 0.01 mm tolerance, **1 278 bytes against 5 074**, at a measured deviation of
-1.6e-3 against 9.8e-3. The error of the cubic construction has an exact closed form,
+and the cubic route reaches it far more cheaply — measured on the bracket profile above
+at its stated 0.01 mm tolerance, **1 084 bytes against 3 853**, at a measured deviation
+of 3.3e-3 against 9.9e-3. The error of the cubic construction has an exact closed form,
 `PdfDrawing.ArcCubicDeviation`, which is worth knowing for two reasons: the cubic lies
 strictly OUTSIDE the arc (it never cuts into the part), and the error falls as the
 **sixth** power of the span, so halving the number of spans multiplies it by 64 rather

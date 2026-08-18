@@ -248,12 +248,23 @@ public class PdfFollowUpTests
         Assert.Equal("Type1", PdfReadback.Parse(pdf.ToPdf()).Font.Subtype);
     }
 
-    [SkippableFact]
+    /// <summary>
+    /// A refusal that SKIPS is a refusal nothing has shown to fire, so this drives the
+    /// SYNTHETIC CFF font the outline tests already build rather than hunting an installed
+    /// `.otf` — the machine's font folder is not a fixture, and on a box with no PostScript
+    /// font the one guard standing between a caller and a font program a reader would draw
+    /// as blanks would never run.
+    /// </summary>
+    [Fact]
     public void APostScriptFontIsRefusedByName()
     {
-        Skip.If(SystemFonts.CffSkipReason is not null, SystemFonts.CffSkipReason);
-        var pdf = new PdfDrawing { Font = PdfFont.Embed(SystemFonts.CffFont) };
-        pdf.AddText(new Vector2d(0, 0), "A", 5);
+        var cff = TrueTypeFont.Load(SyntheticCffFont.Build());
+        Assert.True(cff.HasPostScriptOutlines);
+
+        // 'I' is one of the glyphs the synthetic CFF font draws, so the add succeeds and
+        // the refusal is the SUBSET's — reached where a caller would meet it, at the write.
+        var pdf = new PdfDrawing { Font = PdfFont.Embed(cff) };
+        pdf.AddText(new Vector2d(0, 0), "I", 5);
         var refusal = Assert.Throws<NotSupportedException>(() => pdf.ToPdf());
         Assert.Contains("CFF", refusal.Message, StringComparison.Ordinal);
     }
@@ -600,6 +611,46 @@ public class PdfFollowUpTests
         Assert.Equal(2, stroke.Subpaths.Count);
         Assert.All(stroke.Subpaths, s => Assert.True(s.Closed));
         Assert.Equal(4, stroke.Subpaths[1].Curves.Count);   // the bore, as four cubics
+    }
+
+    // ================================================================ the default path
+
+    /// <summary>
+    /// The DEFAULT writer's own bytes, pinned by a committed fingerprint — the one check
+    /// no in-build assertion can make. "Asking for nothing writes what it always wrote"
+    /// is a claim about two BUILDS, so the tests either compare a run against a constant
+    /// measured before the options existed, or they cannot state it at all; every other
+    /// assertion here compares two calls of the same binary and would pass just as
+    /// happily if the whole default path had moved together. These three hashes were
+    /// measured on the parent commit and are reproduced by this one (the `Region2dGolden`
+    /// convention): the two sheet routes and the loose <see cref="PdfDrawing"/> one, which
+    /// is the path a caller reaches without a <see cref="DrawingSheet"/> at all.
+    /// </summary>
+    [Fact]
+    public void TheDefaultOutputIsTheFileTheWriterAlwaysWrote()
+    {
+        static string Hash(byte[] bytes) =>
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+
+        byte[] title = TitleSheet().ToPdf();
+        Assert.Equal(1736, title.Length);
+        Assert.Equal(
+            "C7A3F8F5B4AAA6C53539FB36D9BD7E8FB20404EB920EED237265A0D67CE55589", Hash(title));
+
+        byte[] plate = PlateSheet().ToPdf();
+        Assert.Equal(21560, plate.Length);
+        Assert.Equal(
+            "6D302EE661C187D1B1ED539E30B2E1A08613650174C6234BEFE4AD77A83B2288", Hash(plate));
+
+        var loose = new PdfDrawing { Margin = 6 };
+        loose.AddPolyline([new Vector2d(0, 0), new Vector2d(40, 0), new Vector2d(40, 25),
+                           new Vector2d(0, 25)], closed: true);
+        loose.AddSegments([(new Vector2d(5, 5), new Vector2d(35, 20))]);
+        loose.AddText(new Vector2d(4, 28), "AIO CIAO", 3.5);
+        byte[] bytes = loose.ToPdf();
+        Assert.Equal(1002, bytes.Length);
+        Assert.Equal(
+            "106290164AED8ED199B376C1A7B359AC3601514B8BBFBF53CE8ADCF10BF7499E", Hash(bytes));
     }
 
     // --------------------------------------------------------------------- helpers

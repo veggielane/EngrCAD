@@ -7181,8 +7181,15 @@ A drawing is a *document*, not a picture, and the whole design follows from that
   rather than a promise.** `PdfSheetOptions` (and `PdfDrawing.Font`/`Compress`/the
   per-add `layer`) carry an embedded font subset, optional-content layers, Flate and
   sketch export; passing none — or an all-default value — writes the incumbent file
-  BYTE FOR BYTE, asserted directly, which is the property that makes each of them
-  safe to reach for on a drawing already issued. Four decisions carry them.
+  BYTE FOR BYTE, which is the property that makes each of them safe to reach for on a
+  drawing already issued. **That claim is about two BUILDS, and no in-build assertion
+  can make it**: every other check here compares two calls of ONE binary, so it would
+  pass just as happily if the whole default path had moved together. So the three
+  default fixtures — a title-block sheet, a drilled plate's four-view layout, and the
+  loose `PdfDrawing` route a caller reaches with no `DrawingSheet` at all — are pinned
+  by COMMITTED byte fingerprints, measured on the parent commit and reproduced by this
+  one (the `Region2dGolden` convention), and the guard is mutation-checked by a
+  one-character change to the emitted header. Four decisions carry the four settings.
   **(a) The embedded subset is a deterministic function of the glyph set, and glyph
   INDICES are kept rather than renumbered.** The determinism is not a nicety: the
   writer's whole design is the byte fixed point, so a font program carrying its own
@@ -7202,7 +7209,10 @@ A drawing is a *document*, not a picture, and the whole design follows from that
   reader has never seen the subsetter. A PostScript (`CFF `) font is refused BY NAME:
   subsetting one re-indexes charstrings, local and global subroutines and FDSelect,
   a separate `FontFile3` path, and a refusal beats a plausible font a reader draws
-  as blanks. What it buys is what WinAnsi cannot spell — the depth, counterbore and
+  as blanks. **That refusal is driven by the SYNTHETIC CFF font the outline tests
+  already build, not by hunting an installed `.otf`** — the machine's font folder is
+  not a fixture, so a skip on a box carrying no PostScript font would leave the one
+  guard between a caller and an undecodable font program never shown to fire. What it buys is what WinAnsi cannot spell — the depth, counterbore and
   countersink signs a hole callout emits — and it retires the ⌀→Ø substitution for
   that path (Poppler recovers U+2300/U+21A7/U+2334 verbatim through `/ToUnicode`).
   **(b) Layers are one OCG per line class in FIRST-USE order**, named with the same
@@ -7217,7 +7227,7 @@ A drawing is a *document*, not a picture, and the whole design follows from that
   compression is a re-spelling and nothing else. Honest scope: .NET's deflate is not
   a specified byte stream, so the fixed point is a claim about a given runtime, which
   is exactly what the test measures. Measured on this box (win-x64): an A4 plate
-  21 560 → 4 490 B (20.8%), an A3 bracket 108 358 → 20 456 B (18.9%); the embedded
+  21 560 → 4 490 B (20.8%), an A3 bracket 111 652 → 21 133 B (18.9%); the embedded
   subset of a 2.5 MB, 9 410-glyph font adds 7 458 B to the plate.
   **(d) `Add(Sketch)` ships with the split NAMED rather than as a silent
   flattening.** Lines and cubic Béziers are EXACT in either mode (a quadratic having

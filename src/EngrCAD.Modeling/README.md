@@ -3450,8 +3450,10 @@ bit-identical) and by Poppler's `pdftotext` recovering every text run. Docs:
 **Four things a PDF can carry beyond its line work, every one OPT-IN** — `PdfSheetOptions`
 on `SheetWriter.ToPdf`/`SavePdf`, and `PdfDrawing.Font`/`Compress`/the `layer` arguments
 underneath. **Asking for none writes exactly the file the writer always wrote, byte for
-byte** (asserted by a byte comparison, not argued), which is what makes each safe to reach
-for on an issued drawing.
+byte**, which is what makes each safe to reach for on an issued drawing — and since that
+is a claim about two BUILDS rather than about two calls of one, the three default fixtures
+are pinned by COMMITTED byte fingerprints measured on the parent commit, not by a
+same-binary comparison that would pass if the whole default path had moved together.
 
 - **An embedded font subset** (`PdfFont.Embed(font)`, `PdfFontSubset`). WinAnsi has no form
   for the drafting depth (U+21A7), counterbore (U+2334) or countersink (U+2335) signs, and

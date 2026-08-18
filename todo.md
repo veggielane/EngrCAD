@@ -947,8 +947,18 @@ export — is recorded in CLAUDE.md):
     UNITS, so a surrogate pair is refused as a character the font has no glyph for — the
     message is honest but names the wrong thing. Iterating runes would fix both the
     message and the capability; no consumer has asked.
-  - [ ] **A dashed sketch path's arcs on a TABBED or RAMPED pass** has the same shape as
-    the CAM arc residual and is filed there, not here.
+  - [ ] **A SIMPLE-font embedding beside the CID one.** An embedded font always takes the
+    `/Identity-H` CID path, so every text string is two bytes per glyph where the built-in
+    Helvetica spends one — a Latin-only drawing that embeds a font for one symbol pays that
+    on all of its text. A `/TrueType` simple font over WinAnsi would halve it and CANNOT
+    spell the drafting symbols, so the honest form is a per-drawing choice (or an automatic
+    one taken from the glyph set), not a replacement; nobody has measured a sheet where it
+    matters, which is why it is filed rather than built.
+  - [ ] **Cross-reference and object STREAMS (PDF 1.5).** The xref stays a plain table and
+    each object its own uncompressed block, which is what makes a revision diffable and
+    what every committed assertion reads directly — the same argument Flate is opt-in for.
+    A very large sheet would shrink further with both; it would also need the twin decoder
+    taught a second xref form, so it is one job rather than two.
 
 What remains against the reference B-Rep kernel (covered: primitives,
 extrude/revolve/sweep, booleans, rim fillets/chamfers, drilled holes, conics + offset
