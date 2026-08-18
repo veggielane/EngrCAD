@@ -26,6 +26,19 @@ public class AnnotationReferenceTests
         return new Part("plate", shape, Palette.Steel);
     }
 
+    /// <summary>The reference-typed constructors are private (they would collide with the
+    /// point-form ones under a target-typed <c>new</c>), so a factory's result carries its
+    /// placement by assignment — which is what `Label`/`Tolerance` being settable buys.</summary>
+    private static T Placed<T>(
+        T annotation, Vector3d offset = default, string? label = null,
+        ToleranceSpec? tolerance = null) where T : Annotation
+    {
+        annotation.Offset = offset;
+        annotation.Label = label;
+        annotation.Tolerance = tolerance;
+        return annotation;
+    }
+
     private static Document DocumentWith(params Annotation[] annotations)
     {
         var scene = new Scene();
@@ -42,17 +55,13 @@ public class AnnotationReferenceTests
     public void ReferenceBackedDimensions_AreAByteFixedPointAndWarnAboutNothing()
     {
         var document = DocumentWith(
-            new LinearDimension(FaceRef.Top, FaceRef.Bottom)
-            {
-                Offset = (0, 0, 12),
-                Tolerance = ToleranceSpec.Symmetric(0.1),
-            },
-            new AngularDimension(
-                FaceRef.Top, FaceRef.Extreme(FaceSetRef.PlanarWithNormal(Vector3d.UnitX), Vector3d.UnitX))
-            {
-                Label = "90 NOM",
-            },
-            new RadialDimension(EdgeSetRef.Circular(4), diameter: true) { Offset = (0, -10, 0) });
+            Placed(LinearDimension.BetweenFaces(FaceRef.Top, FaceRef.Bottom),
+                offset: (0, 0, 12), tolerance: ToleranceSpec.Symmetric(0.1)),
+            Placed(AngularDimension.BetweenFaces(FaceRef.Top,
+                FaceRef.Extreme(FaceSetRef.PlanarWithNormal(Vector3d.UnitX), Vector3d.UnitX)),
+                label: "90 NOM"),
+            Placed(RadialDimension.OnEdge(EdgeSetRef.Circular(4), diameter: true),
+                offset: (0, -10, 0)));
 
         string first = document.Save();
         var loaded = Document.Load(first);
@@ -82,7 +91,7 @@ public class AnnotationReferenceTests
         // writing a descriptor that parses back to nothing.
         var opaque = FaceRef.One(FaceSetRef.From("firstTwo", s => s.Faces.Take(1)));
         Assert.False(opaque.IsSerializable);
-        var document = DocumentWith(new LinearDimension(opaque, FaceRef.Bottom));
+        var document = DocumentWith(LinearDimension.BetweenFaces(opaque, FaceRef.Bottom));
         var loaded = Document.Load(document.Save());
         Assert.Empty(loaded.Document.Scene.AllParts.Single().Annotations);
         Assert.Contains(loaded.Warnings, w => w.Contains("selector"));
@@ -94,7 +103,7 @@ public class AnnotationReferenceTests
     public void AReferenceBackedDimension_MeasuresExactlyWhatItsLambdaTwinMeasures()
     {
         var plate = Plate();
-        var byRef = new LinearDimension(FaceRef.Top, FaceRef.Bottom);
+        var byRef = LinearDimension.BetweenFaces(FaceRef.Top, FaceRef.Bottom);
         var byLambda = LinearDimension.BetweenFaces(
             s => FaceRef.Top.Resolve(s, "a"), s => FaceRef.Bottom.Resolve(s, "b"));
         plate.Annotate(byRef);
@@ -113,7 +122,7 @@ public class AnnotationReferenceTests
         // what makes this a single-edge selection rather than an arbitrary pick among
         // two coaxial rims (the plate's bore has one at each face).
         var cone = new Part("cone", Shape.Cone(bottomRadius: 4, topRadius: 0, height: 10));
-        cone.Annotate(new RadialDimension(EdgeSetRef.Circular(4), diameter: true));
+        cone.Annotate(RadialDimension.OnEdge(EdgeSetRef.Circular(4), diameter: true));
         var resolved = cone.ResolveAnnotations().Single();
         Assert.Equal(8.0, resolved.Value, 9);
         Assert.Equal("⌀" + "8", resolved.Text);   // diameter sign; source stays ASCII
@@ -128,14 +137,14 @@ public class AnnotationReferenceTests
         // cardinality is a claim checked where the reference resolves — the contract
         // FaceRef.One already states for faces.
         var plate = Plate();
-        plate.Annotate(new RadialDimension(EdgeSetRef.Circular()));
+        plate.Annotate(RadialDimension.OnEdge(EdgeSetRef.Circular()));
         var error = Assert.Throws<InvalidOperationException>(() => plate.ResolveAnnotations());
         Assert.Contains("expected exactly one edge", error.Message);
         Assert.Contains("found 2", error.Message);   // the bore's two rims
     }
 
     [Fact]
-    public void ATolerancedReferenceDimension_SurvivesAsDataButNeedsAPartWithARecIPE()
+    public void ATolerancedReferenceDimension_SurvivesAsDataButNeedsAPartWithARecipe()
     {
         // The BOUNDARY, pinned rather than papered over. The reference now round-trips —
         // the tolerance and the descriptor are both data — but RESOLVING it after a load
@@ -144,10 +153,9 @@ public class AnnotationReferenceTests
         // annotation refuses by name. That is the Shape-graph-serialization gap showing
         // through, not an annotation one: it is exactly what `DocumentLoadResult.Snapshots`
         // exists to report, and a history-backed part regenerates and resolves normally.
-        var document = DocumentWith(new LinearDimension(FaceRef.Top, FaceRef.Bottom)
-        {
-            Tolerance = ToleranceSpec.Limits(0.2, 0.1),   // limits are MAGNITUDES
-        });
+        var document = DocumentWith(Placed(
+            LinearDimension.BetweenFaces(FaceRef.Top, FaceRef.Bottom),
+            tolerance: ToleranceSpec.Limits(0.2, 0.1)));   // limits are MAGNITUDES
 
         // it measures before the round trip...
         var before = document.Scene.AllParts.Single().ResolveAnnotations().Single();

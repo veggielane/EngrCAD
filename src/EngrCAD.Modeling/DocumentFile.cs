@@ -1121,18 +1121,15 @@ internal static class DocumentReader
                 LoadVector(element.GetProperty("a")),
                 LoadVector(element.GetProperty("b")))
             { Label = label, Tolerance = tolerance },
-            "linearFaces" => new LinearDimension(
+            "linearFaces" => LinearDimension.BetweenFaces(
                 FaceRef.Parse(element.GetProperty("faceA").GetString() ?? ""),
-                FaceRef.Parse(element.GetProperty("faceB").GetString() ?? ""))
-            { Label = label, Tolerance = tolerance },
-            "angularFaces" => new AngularDimension(
+                FaceRef.Parse(element.GetProperty("faceB").GetString() ?? "")),
+            "angularFaces" => AngularDimension.BetweenFaces(
                 FaceRef.Parse(element.GetProperty("faceA").GetString() ?? ""),
-                FaceRef.Parse(element.GetProperty("faceB").GetString() ?? ""))
-            { Label = label, Tolerance = tolerance },
-            "radialEdge" => new RadialDimension(
+                FaceRef.Parse(element.GetProperty("faceB").GetString() ?? "")),
+            "radialEdge" => RadialDimension.OnEdge(
                 EdgeSetRef.Parse(element.GetProperty("edge").GetString() ?? ""),
-                element.TryGetProperty("diameter", out var dia) && dia.GetBoolean())
-            { Label = label, Tolerance = tolerance },
+                element.TryGetProperty("diameter", out var dia) && dia.GetBoolean()),
             "note" => new LeaderNote(
                 LoadVector(element.GetProperty("anchor")), element.GetProperty("text").GetString() ?? "")
             { Label = label },
@@ -1149,6 +1146,10 @@ internal static class DocumentReader
             return null;
         }
         annotation.Offset = offset;
+        // Label and Tolerance are applied here rather than in each arm, so the
+        // reference-backed kinds (built through their factories) carry them too.
+        annotation.Label ??= label;
+        annotation.Tolerance ??= tolerance;
         return annotation;
     }
 

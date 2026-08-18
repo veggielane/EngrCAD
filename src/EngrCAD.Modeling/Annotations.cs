@@ -128,7 +128,7 @@ public abstract class Annotation
 {
     /// <summary>Optional display-text override; when null, dimensions show their
     /// formatted measured value and notes show their own text.</summary>
-    public string? Label { get; init; }
+    public string? Label { get; set; }
 
     /// <summary>
     /// Placement vector in part-local space: where the dimension line (or note text)
@@ -140,7 +140,7 @@ public abstract class Annotation
     /// <summary>Optional tolerance text appended to a dimension's formatted value
     /// ("40 &#xB1;0.1"); ignored when <see cref="Label"/> overrides the text, and by
     /// notes/datums (they have no measured value to tolerance).</summary>
-    public ToleranceSpec? Tolerance { get; init; }
+    public ToleranceSpec? Tolerance { get; set; }
 
     /// <summary>A measured value's display text: the label override when set, else the
     /// formatted value plus any <see cref="Tolerance"/> suffix.</summary>
@@ -243,11 +243,12 @@ public sealed class LinearDimension : Annotation
         return new LinearDimension(faceA, faceB);
     }
 
-    /// <inheritdoc cref="BetweenFaces(FaceRef, FaceRef)"/>
-    /// <remarks>A constructor as well as a factory because <see cref="Annotation.Label"/>
-    /// and <see cref="Annotation.Tolerance"/> are init-only, so only a <c>new</c>
-    /// expression can carry them.</remarks>
-    public LinearDimension(FaceRef faceA, FaceRef faceB)
+    /// <remarks>Deliberately PRIVATE: a public reference-typed constructor collides with
+    /// the point-form one under a target-typed <c>new(...)</c>, since such an argument is
+    /// convertible to every candidate and the check happens after overload resolution —
+    /// the same hazard that keeps <c>Shape.Shell</c> from taking a reference-typed
+    /// overload. <see cref="BetweenFaces(FaceRef, FaceRef)"/> is the public route.</remarks>
+    private LinearDimension(FaceRef faceA, FaceRef faceB)
         : this(s => faceA.Resolve(s, "faceA"), s => faceB.Resolve(s, "faceB"))
     {
         _refA = faceA;
@@ -420,8 +421,9 @@ public sealed class AngularDimension : Annotation
         return new AngularDimension(faceA, faceB);
     }
 
-    /// <inheritdoc cref="BetweenFaces(FaceRef, FaceRef)"/>
-    public AngularDimension(FaceRef faceA, FaceRef faceB)
+    /// <remarks>Private for the reason
+    /// <see cref="LinearDimension"/>'s reference constructor states.</remarks>
+    private AngularDimension(FaceRef faceA, FaceRef faceB)
         : this(s => faceA.Resolve(s, "faceA"), s => faceB.Resolve(s, "faceB"))
     {
         _refA = faceA;
@@ -558,8 +560,9 @@ public sealed class RadialDimension : Annotation
         _diameter = diameter;
     }
 
-    /// <inheritdoc cref="OnEdge(EdgeSetRef, bool)"/>
-    public RadialDimension(EdgeSetRef edge, bool diameter = false)
+    /// <remarks>Private for the reason
+    /// <see cref="LinearDimension"/>'s reference constructor states.</remarks>
+    private RadialDimension(EdgeSetRef edge, bool diameter)
         : this(s => One(edge, s), diameter) => _ref = edge;
 
     /// <summary>An <see cref="EdgeSetRef"/> is set-valued and a radial dimension needs
