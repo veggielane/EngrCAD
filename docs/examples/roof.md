@@ -28,7 +28,7 @@ if (Math.Abs(facts.Height - 12 * Math.Tan(35 * Math.PI / 180)) > 1e-9)
     throw new Exception("a hip roof's apex is half the width risen at the pitch");
 
 var scene = new Scene();
-scene.Add(new Part("roof", roof) { Color = PartColor.FromRgb(178, 92, 66) });
+scene.Add(new Part("roof", roof) { Color = new PartColor(0.70f, 0.36f, 0.26f) });
 ```
 
 ![A hip roof over a rectangle](images/roof-hip.png)
@@ -82,7 +82,7 @@ if (facts.Skeleton.SplitEvents < 1)
     throw new Exception("an L-shape's reflex corner must reach the opposite edge");
 
 var scene = new Scene();
-scene.Add(new Part("L roof", Shape.Roof(footprint, 45)) { Color = PartColor.FromRgb(150, 120, 96) });
+scene.Add(new Part("L roof", Shape.Roof(footprint, 45)) { Color = new PartColor(0.59f, 0.47f, 0.38f) });
 ```
 
 ![An L-shaped roof, with the valley its reflex corner produces](images/roof-lshape.png)
@@ -106,7 +106,7 @@ var slot = Sketch.Polygon(
 ]);
 
 var scene = new Scene();
-scene.Add(new Part("slotted roof", Shape.Roof(slot, 38)) { Color = PartColor.FromRgb(120, 132, 150) });
+scene.Add(new Part("slotted roof", Shape.Roof(slot, 38)) { Color = new PartColor(0.47f, 0.52f, 0.59f) });
 ```
 
 ![A slotted footprint, whose two reflex corners split one edge twice](images/roof-slot.png)
@@ -129,7 +129,7 @@ for (int i = 0; i < 10; i++)
 }
 
 var scene = new Scene();
-scene.Add(new Part("star roof", Shape.Roof(Sketch.Polygon(corners), 42)) { Color = PartColor.FromRgb(196, 150, 72) });
+scene.Add(new Part("star roof", Shape.Roof(Sketch.Polygon(corners), 42)) { Color = new PartColor(0.77f, 0.59f, 0.28f) });
 ```
 
 ![A five-pointed star roof](images/roof-star.png)

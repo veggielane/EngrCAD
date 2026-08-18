@@ -298,6 +298,11 @@ public class RoofTests
     {
         var sketch = LShape();
         var mirrored = Shape.Roof(sketch, 45).Mirror(Vector3d.Zero, Vector3d.UnitX);
+
+        // A reflection is a similarity, so the roof stays NATIVE rather than being bridged —
+        // which is the claim, and it is asserted rather than inferred from the build working.
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+
         var solid = mirrored.ToBrep();
         solid.Validate();
         var mesh = mirrored.ToMesh();
