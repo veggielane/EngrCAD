@@ -16,9 +16,20 @@ namespace EngrCAD.Modeling;
 /// <c>hhea</c>/<c>hmtx</c>, plus optional <c>kern</c> (format 0), <c>name</c> and
 /// <c>OS/2</c>. Hinting is skipped — a rasterization concern, and modeled text is
 /// resolution independent.
-/// <para><b>Not supported:</b> TrueType Collections (<c>.ttc</c>) and variable-font
-/// <c>CFF2</c> tables — both are detected and rejected with a message naming the
-/// limitation rather than producing wrong geometry.</para>
+/// <para><b>Variable fonts</b> are read in all three flavours: <c>fvar</c>/<c>avar</c>
+/// declare the design space, <c>gvar</c> varies <c>glyf</c> outlines (with IUP and
+/// phantom points), <c>CFF2</c> varies PostScript ones (with <c>blend</c>), and
+/// <c>HVAR</c> varies advance widths. <see cref="WithVariation(ValueTuple{string, double}[])"/>
+/// returns a font at a chosen point of that space and every consumer — <c>Shape.Text</c>,
+/// text on a path, the layout engine — is untouched, because a varied font IS a font.
+/// At the default coordinate the outlines are BIT-IDENTICAL to the un-instanced read.</para>
+/// <para><b>Not supported:</b> TrueType Collections (<c>.ttc</c>), and the variation
+/// tables that carry no outline or advance — <c>MVAR</c> (so <see cref="Ascender"/>,
+/// <see cref="Descender"/> and a declared <see cref="CapHeight"/> stay the default
+/// instance's), <c>VVAR</c>, <c>cvar</c> (hinting, which is skipped anyway), <c>STAT</c>
+/// (a style-naming table) and feature variations in <c>GSUB</c>/<c>GPOS</c>. Side
+/// bearings deliberately do not vary either: outlines carry absolute coordinates here,
+/// so a bearing is metadata nothing places geometry by.</para>
 /// <para>Glyph outlines are cached per index and the type is immutable after loading,
 /// so one font instance can be shared across threads (e.g. <c>Scene.PreMesh</c>).</para>
 /// </summary>
@@ -26,6 +37,8 @@ namespace EngrCAD.Modeling;
 /// <code>
 /// var font = TrueTypeFont.Load(@"C:\Windows\Fonts\arial.ttf");
 /// var plate = Shape.Text("ENGRCAD", font, size: 8, height: 1.5);
+///
+/// var bold = TrueTypeFont.Load(@"C:\Windows\Fonts\bahnschrift.ttf").WithVariation(("wght", 700));
 /// </code>
 /// </example>
 public sealed class TrueTypeFont
@@ -56,12 +69,28 @@ public sealed class TrueTypeFont
     private readonly int _glyfOffset;
     private readonly int _glyfLength;
     private readonly CffOutlines? _cff;           // PostScript outlines (OTTO fonts only)
+    private readonly Cff2Outlines? _cff2;         // variable PostScript outlines
     private readonly int[] _advanceWidths;        // font units, per glyph
     private readonly int[] _leftSideBearings;
     private readonly CharacterMap _cmap;
     private readonly Dictionary<(int Left, int Right), double>? _kerning;
     private readonly GposKerning? _gpos;
+    private readonly FontVariations? _variations; // fvar + avar: the design space
+    private readonly GlyphVariationStore? _gvar;  // glyf outline deltas
+    private readonly MetricsVariations? _hvar;    // advance-width deltas
+    private readonly double _declaredCapHeight;   // OS/2 sCapHeight, 0 when the font states none
     private readonly ConcurrentDictionary<int, Glyph> _glyphs = new();
+
+    /// <summary>Normalized axis coordinates this instance draws at. EMPTY for a font
+    /// nobody has varied — which is what makes an un-instanced read do no delta work at
+    /// all, rather than doing it and finding every scalar zero.</summary>
+    private readonly double[] _coordinates = [];
+
+    /// <summary>User-unit settings behind <see cref="_coordinates"/>, clamped to each
+    /// axis's own range (so the report is what was DRAWN, and re-applying it is a fixed
+    /// point).</summary>
+    private readonly IReadOnlyDictionary<string, double> _variationSettings =
+        new Dictionary<string, double>(StringComparer.Ordinal);
 
     private TrueTypeFont(byte[] data, IReadOnlyDictionary<string, TableRecord> tables)
     {
@@ -76,7 +105,7 @@ public sealed class TrueTypeFont
             throw new FontFormatException($"head.unitsPerEm is {UnitsPerEm}; the format allows 16..16384.");
         head.Skip(30);                                   // created/modified/bbox/macStyle/lowestRecPPEM/fontDirectionHint
         int indexToLocFormat = head.ReadInt16();
-        bool hasGlyf = tables.ContainsKey("glyf") || !tables.ContainsKey("CFF ");
+        bool hasGlyf = tables.ContainsKey("glyf") || (!tables.ContainsKey("CFF ") && !tables.ContainsKey("CFF2"));
         if (hasGlyf && indexToLocFormat is not (0 or 1))
             throw new FontFormatException($"head.indexToLocFormat is {indexToLocFormat}; expected 0 (short) or 1 (long).");
 
@@ -106,13 +135,21 @@ public sealed class TrueTypeFont
             _glyfOffset = glyf.Offset;
             _glyfLength = glyf.Length;
         }
-        else
+        else if (tables.ContainsKey("CFF "))
         {
             var cff = Table(tables, "CFF ");
             _cff = CffOutlines.Read(data, cff.Offset, cff.Length);
             if (_cff.GlyphCount != GlyphCount)
                 throw new FontFormatException(
                     $"CFF CharStrings holds {_cff.GlyphCount} glyphs but maxp.numGlyphs is {GlyphCount}.");
+        }
+        else
+        {
+            var cff2 = Table(tables, "CFF2");
+            _cff2 = Cff2Outlines.Read(data, cff2.Offset, cff2.Length);
+            if (_cff2.GlyphCount != GlyphCount)
+                throw new FontFormatException(
+                    $"CFF2 CharStrings holds {_cff2.GlyphCount} glyphs but maxp.numGlyphs is {GlyphCount}.");
         }
 
         // ---- cmap: character -> glyph index ----
@@ -121,8 +158,60 @@ public sealed class TrueTypeFont
         // ---- optional tables ----
         _gpos = tables.TryGetValue("GPOS", out var gpos) ? GposKerning.Read(span, gpos.Offset) : null;
         _kerning = tables.TryGetValue("kern", out var kern) ? ReadKerning(span, kern) : null;
-        FamilyName = tables.TryGetValue("name", out var name) ? ReadFamilyName(span, name) : "";
-        CapHeight = ReadCapHeight(span, tables);
+        var names = tables.TryGetValue("name", out var name) ? ReadNames(span, name) : [];
+        FamilyName = names.GetValueOrDefault(16) ?? names.GetValueOrDefault(1) ?? "";
+
+        // ---- variations: the design space, then the deltas over it ----
+        if (tables.TryGetValue("fvar", out var fvar))
+        {
+            _variations = FontVariations.Read(span, fvar.Offset, fvar.Length,
+                tables.TryGetValue("avar", out var avar) ? avar.Offset : null,
+                nameId => names.GetValueOrDefault(nameId) ?? "");
+        }
+        if (_variations is not null)
+        {
+            if (tables.TryGetValue("gvar", out var gvar))
+                _gvar = GlyphVariationStore.Read(data, gvar.Offset, _variations.Axes.Count, GlyphCount);
+            if (tables.TryGetValue("HVAR", out var hvar))
+                _hvar = MetricsVariations.Read(span, hvar.Offset);
+            _variationSettings = DefaultSettings(_variations);
+        }
+
+        _declaredCapHeight = ReadDeclaredCapHeight(span, tables);
+        CapHeight = MeasureCapHeight();
+    }
+
+    /// <summary>Clones a loaded font at another point of its design space: every parsed
+    /// table is SHARED (they are immutable), only the coordinate and the glyph cache are
+    /// new. A varied font is a font — which is what lets every consumer stay
+    /// untouched.</summary>
+    private TrueTypeFont(TrueTypeFont source, double[] coordinates, IReadOnlyDictionary<string, double> settings)
+    {
+        _data = source._data;
+        _loca = source._loca;
+        _glyfOffset = source._glyfOffset;
+        _glyfLength = source._glyfLength;
+        _cff = source._cff;
+        _cff2 = source._cff2;
+        _advanceWidths = source._advanceWidths;
+        _leftSideBearings = source._leftSideBearings;
+        _cmap = source._cmap;
+        _kerning = source._kerning;
+        _gpos = source._gpos;
+        _variations = source._variations;
+        _gvar = source._gvar;
+        _hvar = source._hvar;
+        _declaredCapHeight = source._declaredCapHeight;
+        UnitsPerEm = source.UnitsPerEm;
+        GlyphCount = source.GlyphCount;
+        Ascender = source.Ascender;
+        Descender = source.Descender;
+        LineGap = source.LineGap;
+        FamilyName = source.FamilyName;
+
+        _coordinates = coordinates;
+        _variationSettings = settings;
+        CapHeight = MeasureCapHeight();
     }
 
     // ---- public surface ------------------------------------------------------
@@ -178,11 +267,12 @@ public sealed class TrueTypeFont
     /// <c>kern</c> table.</summary>
     public bool HasKerning => _gpos is not null || _kerning is not null;
 
-    /// <summary>True when outlines come from a PostScript <c>CFF </c> table (cubic
-    /// Béziers, <c>OTTO</c>-flavoured <c>.otf</c>); false for TrueType <c>glyf</c>
-    /// quadratics. Either way the outlines map onto <see cref="Sketch"/> segments
-    /// exactly — see <see cref="GlyphContour.IsCubic"/>.</summary>
-    public bool HasPostScriptOutlines => _cff is not null;
+    /// <summary>True when outlines come from a PostScript table — <c>CFF </c> or its
+    /// variable-font successor <c>CFF2</c> (cubic Béziers, <c>OTTO</c>-flavoured
+    /// <c>.otf</c>); false for TrueType <c>glyf</c> quadratics. Either way the outlines
+    /// map onto <see cref="Sketch"/> segments exactly — see
+    /// <see cref="GlyphContour.IsCubic"/>.</summary>
+    public bool HasPostScriptOutlines => _cff is not null || _cff2 is not null;
 
     /// <summary>
     /// The em size that renders flat capitals <paramref name="capHeight"/> tall —
@@ -228,6 +318,102 @@ public sealed class TrueTypeFont
         }
         glyph = null!;
         return false;
+    }
+
+    // ---- variable fonts ------------------------------------------------------
+
+    /// <summary>True when the font declares <c>fvar</c> axes, i.e. when
+    /// <see cref="WithVariation(ValueTuple{string, double}[])"/> has somewhere to
+    /// go.</summary>
+    public bool IsVariable => _variations is not null;
+
+    /// <summary>The font's design axes in their own order; empty for a static
+    /// font.</summary>
+    public IReadOnlyList<VariationAxis> VariationAxes => _variations?.Axes ?? [];
+
+    /// <summary>The named points of the design space the font itself ships ("Bold",
+    /// "Condensed"); empty for a static font.</summary>
+    public IReadOnlyList<NamedInstance> NamedInstances => _variations?.Instances ?? [];
+
+    /// <summary>
+    /// The user-unit coordinate this font instance draws at, per axis tag — the axis
+    /// defaults for a variable font nobody has varied, and empty for a static one.
+    /// Values are as CLAMPED to their axis range, so this reports what was drawn and
+    /// feeding it back to <see cref="WithVariation(IReadOnlyDictionary{string, double})"/>
+    /// is a fixed point.
+    /// </summary>
+    public IReadOnlyDictionary<string, double> Variation => _variationSettings;
+
+    /// <summary>
+    /// This font at another point of its design space —
+    /// <c>font.WithVariation(("wght", 700), ("wdth", 75))</c>. Axes the caller says
+    /// nothing about take their own default; a value outside an axis's range is CLAMPED
+    /// (the specification's own rule, so no coordinate can be asked for and fail to
+    /// draw); an axis the font does not have is refused BY NAME.
+    /// <para>The result is an ordinary <see cref="TrueTypeFont"/> sharing this one's
+    /// parsed tables, so it costs one glyph cache and no re-parsing, and every consumer
+    /// — <c>Shape.Text</c>, <c>Shape.TextOnPath</c>, <c>TextFeature</c>, the layout
+    /// engine — takes it with no change at all.</para>
+    /// </summary>
+    public TrueTypeFont WithVariation(params (string Axis, double Value)[] settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var map = new Dictionary<string, double>(settings.Length, StringComparer.Ordinal);
+        foreach (var (axis, value) in settings)
+            map[axis ?? throw new ArgumentException("An axis tag is null.", nameof(settings))] = value;
+        return WithVariation(map);
+    }
+
+    /// <inheritdoc cref="WithVariation(ValueTuple{string, double}[])"/>
+    public TrueTypeFont WithVariation(IReadOnlyDictionary<string, double> settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (_variations is not { } variations)
+            throw new FontFormatException(
+                $"'{FamilyName}' is not a variable font: it declares no 'fvar' axes, so there is no design space to move in.");
+        if (variations.AvarRefusal is { } refusal)
+            throw new FontFormatException(refusal);
+
+        var resolved = DefaultSettings(variations);
+        foreach (var (tag, value) in settings)
+        {
+            int axis = variations.IndexOf(tag);
+            if (axis < 0)
+                throw new FontFormatException(
+                    $"'{FamilyName}' has no '{tag}' axis; it carries {string.Join(", ", variations.Axes.Select(a => a.Tag))}.");
+            if (!double.IsFinite(value))
+                throw new FontFormatException($"Axis '{tag}' was given {value}, which is not a finite coordinate.");
+            resolved[tag] = Math.Clamp(value, variations.Axes[axis].Minimum, variations.Axes[axis].Maximum);
+        }
+        return new TrueTypeFont(this, variations.Normalize(resolved), resolved);
+    }
+
+    /// <summary>
+    /// This font at one of its own named instances — <c>font.WithNamedInstance("Bold")</c>.
+    /// A named instance is a coordinate the caller could have typed, so this is sugar
+    /// over <see cref="WithVariation(IReadOnlyDictionary{string, double})"/> and shares
+    /// every one of its rules; an unknown name is refused listing what the font does
+    /// carry.
+    /// </summary>
+    public TrueTypeFont WithNamedInstance(string name)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        foreach (var instance in NamedInstances)
+        {
+            if (string.Equals(instance.Name, name, StringComparison.OrdinalIgnoreCase))
+                return WithVariation(instance.Coordinates);
+        }
+        throw new FontFormatException(NamedInstances.Count == 0
+            ? $"'{FamilyName}' declares no named instances."
+            : $"'{FamilyName}' has no named instance '{name}'; it carries {string.Join(", ", NamedInstances.Select(i => i.Name))}.");
+    }
+
+    private static Dictionary<string, double> DefaultSettings(FontVariations variations)
+    {
+        var defaults = new Dictionary<string, double>(variations.Axes.Count, StringComparer.Ordinal);
+        foreach (var axis in variations.Axes)
+            defaults[axis.Tag] = axis.Default;
+        return defaults;
     }
 
     /// <summary>Kerning adjustment between two glyphs in font units (negative pulls
@@ -280,12 +466,9 @@ public sealed class TrueTypeFont
             tables[tag] = new TableRecord(offset, length);
         }
 
-        if (!tables.ContainsKey("glyf") && !tables.ContainsKey("CFF "))
+        if (!tables.ContainsKey("glyf") && !tables.ContainsKey("CFF ") && !tables.ContainsKey("CFF2"))
             throw new FontFormatException(
-                tables.ContainsKey("CFF2")
-                    ? "This font stores outlines in a variable-font 'CFF2' table, which is not supported " +
-                      "(static 'glyf' and 'CFF ' outlines are)."
-                    : "The font has neither a 'glyf' nor a 'CFF ' table; there are no outlines to read.");
+                "The font has no 'glyf', 'CFF ' or 'CFF2' table; there are no outlines to read.");
         return tables;
     }
 
@@ -345,19 +528,27 @@ public sealed class TrueTypeFont
         return glyph;
     }
 
+    /// <summary>Left side bearing, advance width, top side bearing, advance height —
+    /// the four points every glyph's point list is extended by so that a variable font
+    /// can vary its METRICS with the machinery it varies its outline with.</summary>
+    private const int PhantomPointCount = 4;
+
     private Glyph ReadGlyph(int index, int depth)
     {
         double advance = _advanceWidths[index];
         double bearing = _leftSideBearings[index];
+        if (_cff2 is not null)
+            return new Glyph(index, _cff2.ReadGlyph(index, _coordinates), advance + MetricsDelta(index), bearing);
         if (_cff is not null)
-            return new Glyph(index, _cff.ReadGlyph(index), advance, bearing);
+            return new Glyph(index, _cff.ReadGlyph(index), advance + MetricsDelta(index), bearing);
 
         int start = _loca![index], end = _loca[index + 1];
 
         // Equal offsets mean "no outline" — space and other blank glyphs. This is the
-        // format's own encoding, not an error.
+        // format's own encoding, not an error. A blank glyph still carries the four
+        // phantom points, so its ADVANCE can vary even though nothing is drawn.
         if (end <= start)
-            return new Glyph(index, [], advance, bearing);
+            return new Glyph(index, [], advance + VaryPoints(index, new Vector2d[PhantomPointCount], []), bearing);
         if (end > _glyfLength)
             throw new FontFormatException(
                 $"loca entry for glyph {index} ends at {end}, past the {_glyfLength}-byte glyf table.");
@@ -365,16 +556,49 @@ public sealed class TrueTypeFont
         var reader = new FontReader(_data.AsSpan(_glyfOffset, _glyfLength), start);
         int contourCount = reader.ReadInt16();
         reader.Skip(8);                                  // xMin/yMin/xMax/yMax — recomputed from points
-        var contours = contourCount >= 0
-            ? ReadSimpleGlyph(ref reader, contourCount)
-            : ReadCompositeGlyph(ref reader, index, depth);
-        return new Glyph(index, contours, advance, bearing);
+        return contourCount >= 0
+            ? ReadSimpleGlyph(ref reader, index, contourCount, advance, bearing)
+            : ReadCompositeGlyph(ref reader, index, depth, advance, bearing);
     }
 
-    private static List<GlyphContour> ReadSimpleGlyph(ref FontReader reader, int contourCount)
+    /// <summary>The advance-width delta for a glyph whose outline carries no phantom
+    /// points of its own (a PostScript one), which is <c>HVAR</c>'s job alone.</summary>
+    private double MetricsDelta(int index) =>
+        _coordinates.Length > 0 && _hvar is not null ? _hvar.AdvanceDelta(index, _coordinates) : 0;
+
+    /// <summary>
+    /// Moves a glyph's points to the current instance, and reports how far its advance
+    /// width moves with them. <paramref name="points"/> carries the glyph's own points
+    /// followed by <see cref="PhantomPointCount"/> phantoms (whose coordinates are never
+    /// read — each is its own one-point contour); only the glyph's own points are
+    /// written back.
+    /// </summary>
+    private double VaryPoints(int index, Vector2d[] points, IReadOnlyList<int> contourEnds)
+    {
+        if (_coordinates.Length == 0)
+            return 0;
+
+        int own = points.Length - PhantomPointCount;
+        double phantomAdvance = 0;
+        if (_gvar?.Deltas(index, points, contourEnds, _coordinates) is { } deltas)
+        {
+            for (int i = 0; i < own; i++)
+                points[i] += deltas[i];
+            // The first phantom is the left side bearing point and the second the
+            // advance-width point, so the advance moves by exactly their difference.
+            phantomAdvance = deltas[own + 1].X - deltas[own].X;
+        }
+        // HVAR SUPERSEDES the phantom points where a font carries it, and that is not a
+        // preference: a font with HVAR is entitled to omit phantom deltas from gvar
+        // altogether, which is the whole reason the table exists.
+        return _hvar is not null ? _hvar.AdvanceDelta(index, _coordinates) : phantomAdvance;
+    }
+
+    private Glyph ReadSimpleGlyph(
+        ref FontReader reader, int index, int contourCount, double advance, double bearing)
     {
         if (contourCount == 0)
-            return [];
+            return new Glyph(index, [], advance + VaryPoints(index, new Vector2d[PhantomPointCount], []), bearing);
 
         var endPoints = new int[contourCount];
         for (int i = 0; i < contourCount; i++)
@@ -408,6 +632,11 @@ public sealed class TrueTypeFont
         var xs = ReadCoordinates(ref reader, flags, FlagXShort, FlagXSameOrPositive);
         var ys = ReadCoordinates(ref reader, flags, FlagYShort, FlagYSameOrPositive);
 
+        var outline = new Vector2d[pointCount + PhantomPointCount];
+        for (int i = 0; i < pointCount; i++)
+            outline[i] = new Vector2d(xs[i], ys[i]);
+        advance += VaryPoints(index, outline, endPoints);
+
         var contours = new List<GlyphContour>(contourCount);
         int from = 0;
         foreach (int last in endPoints)
@@ -420,11 +649,11 @@ public sealed class TrueTypeFont
             }
             var points = new GlyphPoint[count];
             for (int i = 0; i < count; i++)
-                points[i] = new GlyphPoint(new Vector2d(xs[from + i], ys[from + i]), (flags[from + i] & FlagOnCurve) != 0);
+                points[i] = new GlyphPoint(outline[from + i], (flags[from + i] & FlagOnCurve) != 0);
             contours.Add(new GlyphContour(points));
             from = last + 1;
         }
-        return contours;
+        return new Glyph(index, contours, advance, bearing);
     }
 
     private static int[] ReadCoordinates(ref FontReader reader, byte[] flags, byte shortBit, byte sameBit)
@@ -448,13 +677,20 @@ public sealed class TrueTypeFont
         return values;
     }
 
-    private List<GlyphContour> ReadCompositeGlyph(ref FontReader reader, int index, int depth)
+    /// <summary>One placement inside a composite glyph, with its offset kept RAW — a
+    /// variable font varies exactly that offset, and Apple's SCALED_COMPONENT_OFFSET
+    /// puts it through the 2x2 afterwards.</summary>
+    private readonly record struct Component(
+        int Glyph, double Dx, double Dy, double A, double B, double C, double D, bool ScaledOffset);
+
+    private Glyph ReadCompositeGlyph(
+        ref FontReader reader, int index, int depth, double advance, double bearing)
     {
         if (depth >= MaxCompositeDepth)
             throw new FontFormatException(
                 $"Composite glyph {index} nests deeper than {MaxCompositeDepth} levels (cyclic component reference?).");
 
-        var contours = new List<GlyphContour>();
+        var components = new List<Component>();
         int flags;
         do
         {
@@ -496,15 +732,37 @@ public sealed class TrueTypeFont
                 c = reader.ReadF2Dot14();
                 d = reader.ReadF2Dot14();
             }
-            // Microsoft's default is an UNSCALED offset; only SCALED_COMPONENT_OFFSET
-            // (Apple's convention) puts the offset through the 2x2.
-            if ((flags & CompScaledOffset) != 0)
-                (dx, dy) = (a * dx + c * dy, b * dx + d * dy);
 
             if (component == index)
                 throw new FontFormatException($"Composite glyph {index} references itself.");
             if ((uint)component >= (uint)GlyphCount)
                 throw new FontFormatException($"Composite glyph {index} references glyph {component}, past the {GlyphCount}-glyph font.");
+
+            components.Add(new Component(component, dx, dy, a, b, c, d, (flags & CompScaledOffset) != 0));
+        }
+        while ((flags & CompMoreComponents) != 0);
+
+        // A composite has no outline of its own, so what a variable font varies is the
+        // COMPONENT OFFSETS: one point per component, each its own one-point contour, so
+        // a component no tuple names simply does not move.
+        var offsets = new Vector2d[components.Count + PhantomPointCount];
+        var ends = new int[components.Count];
+        for (int i = 0; i < components.Count; i++)
+        {
+            offsets[i] = new Vector2d(components[i].Dx, components[i].Dy);
+            ends[i] = i;
+        }
+        advance += VaryPoints(index, offsets, ends);
+
+        var contours = new List<GlyphContour>();
+        for (int k = 0; k < components.Count; k++)
+        {
+            var (component, _, _, a, b, c, d, scaledOffset) = components[k];
+            double dx = offsets[k].X, dy = offsets[k].Y;
+            // Microsoft's default is an UNSCALED offset; only SCALED_COMPONENT_OFFSET
+            // (Apple's convention) puts the offset through the 2x2.
+            if (scaledOffset)
+                (dx, dy) = (a * dx + c * dy, b * dx + d * dy);
 
             foreach (var contour in LoadGlyph(component, depth + 1).Contours)
             {
@@ -518,8 +776,7 @@ public sealed class TrueTypeFont
                 contours.Add(new GlyphContour(points));
             }
         }
-        while ((flags & CompMoreComponents) != 0);
-        return contours;
+        return new Glyph(index, contours, advance, bearing);
     }
 
     // ---- optional tables -----------------------------------------------------
@@ -562,27 +819,30 @@ public sealed class TrueTypeFont
         return pairs.Count == 0 ? null : pairs;
     }
 
-    private static string ReadFamilyName(ReadOnlySpan<byte> data, TableRecord name)
+    /// <summary>Every <c>name</c>-table string by id, preferring the Windows platform's
+    /// record and keeping the first of equal preference. The family name reads through
+    /// it (id 16 first, then id 1) and so do the variation axis and instance names —
+    /// one rule, so a font naming its axes in one platform's records and its family in
+    /// another is read the same way for both.</summary>
+    private static Dictionary<int, string> ReadNames(ReadOnlySpan<byte> data, TableRecord name)
     {
         var reader = new FontReader(data, name.Offset);
         reader.Skip(2);                                  // format
         int count = reader.ReadUInt16();
         int stringOffset = reader.ReadUInt16();
 
-        string best = "";
-        int bestScore = -1;
+        var best = new Dictionary<int, string>();
+        var bestScore = new Dictionary<int, int>();
         for (int i = 0; i < count; i++)
         {
             int platform = reader.ReadUInt16();
             reader.Skip(4);                              // encodingID / languageID
-            int nameId = reader.ReadUInt16();
+            int id = reader.ReadUInt16();
             int length = reader.ReadUInt16();
             int offset = reader.ReadUInt16();
-            if (nameId is not (1 or 16))
-                continue;                                // 1 = family, 16 = typographic family (preferred)
 
-            int score = (nameId == 16 ? 2 : 0) + (platform == 3 ? 1 : 0);
-            if (score <= bestScore)
+            int score = platform == 3 ? 1 : 0;
+            if (bestScore.TryGetValue(id, out int previous) && score <= previous)
                 continue;
             int at = name.Offset + stringOffset + offset;
             if (at < 0 || length < 0 || at + length > data.Length)
@@ -593,27 +853,33 @@ public sealed class TrueTypeFont
             string text = platform is 3 or 0 ? Encoding.BigEndianUnicode.GetString(bytes) : Encoding.Latin1.GetString(bytes);
             if (text.Length == 0)
                 continue;
-            best = text;
-            bestScore = score;
+            best[id] = text;
+            bestScore[id] = score;
         }
         return best;
     }
 
-    private double ReadCapHeight(ReadOnlySpan<byte> data, IReadOnlyDictionary<string, TableRecord> tables)
+    /// <summary>OS/2 version 2 added sCapHeight at offset 88; 0 means the font states
+    /// none. <c>MVAR</c> would vary it and is not read, so a DECLARED cap height is the
+    /// default instance's whatever a font is varied to — while a MEASURED one follows
+    /// the outline it was measured from.</summary>
+    private static double ReadDeclaredCapHeight(
+        ReadOnlySpan<byte> data, IReadOnlyDictionary<string, TableRecord> tables)
     {
-        // OS/2 version 2 added sCapHeight at offset 88; earlier versions (and fonts that
-        // write 0) fall back to measuring a flat capital, then to the ascender.
-        if (tables.TryGetValue("OS/2", out var os2) && os2.Length >= 90)
-        {
-            var reader = new FontReader(data, os2.Offset);
-            if (reader.ReadUInt16() >= 2)
-            {
-                reader.Position = os2.Offset + 88;
-                double declared = reader.ReadInt16();
-                if (declared > 0)
-                    return declared;
-            }
-        }
+        if (!tables.TryGetValue("OS/2", out var os2) || os2.Length < 90)
+            return 0;
+        var reader = new FontReader(data, os2.Offset);
+        if (reader.ReadUInt16() < 2)
+            return 0;
+        reader.Position = os2.Offset + 88;
+        double declared = reader.ReadInt16();
+        return declared > 0 ? declared : 0;
+    }
+
+    private double MeasureCapHeight()
+    {
+        if (_declaredCapHeight > 0)
+            return _declaredCapHeight;
         foreach (char probe in "HX")
         {
             if (TryGetGlyph(probe, out var glyph) && !glyph.IsEmpty && glyph.Bounds.Max.Y > 0)

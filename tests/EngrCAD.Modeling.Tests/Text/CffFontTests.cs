@@ -335,8 +335,10 @@ public class CffFontTests
         Assert.Contains("Type 2", error.Message);
     }
 
+    /// <summary>CFF2 is READ now (see <c>Cff2FontTests</c>); what is refused by name is a
+    /// malformed one — this stub declares version 0, which no CFF2 is.</summary>
     [Fact]
-    public void Cff2VariableFonts_AreRejectedByName()
+    public void AMalformedCff2_IsRejectedByName()
     {
         var error = Assert.Throws<FontFormatException>(
             () => TrueTypeFont.Load(SyntheticCffFont.BuildCff2Stub()));

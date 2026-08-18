@@ -11271,6 +11271,159 @@ band on its MID so the statistical mean shifts exactly when a tolerance is
 asymmetric, the textbook treatment stated rather than implied) and the model-attached
 dimension scheme that would make derivation honest is filed as the follow-up.
 
+## 6f. Variable fonts (`EngrCAD.Modeling`)
+
+A variable font carries one set of outlines plus **deltas** along named **axes**, so one
+file spans a family. `TrueTypeFont.WithVariation(("wght", 700))` returns an *instanced*
+font and nothing downstream changes: `Shape.Text`, `TextOnPath`, `TextFeature`, layout and
+kerning all take it exactly as they take a static font. That is not an accident of the API
+shape — instancing **moves control points** and introduces no new curve kind, so modelled
+variable text is still Native in B-Rep, mesh and implicit.
+
+### The instanced font is a clone, not a mode
+
+`WithVariation` returns a new `TrueTypeFont` sharing every parsed table with its source and
+differing only in a normalised coordinate array. Two consequences follow, and both are
+load-bearing.
+
+**The default coordinate is bit-identical to the un-instanced read.** Every region's scalar
+is exactly zero at the default, the delta accumulation skips zero-scalar terms entirely, and
+so no point is touched at all. The tests compare `DoubleToInt64Bits`, not a tolerance —
+first on synthetic fonts, then over every glyph a string touches in a real shipped one. A
+tolerance there would have hidden the question rather than answered it.
+
+**A font object carries its own coordinate**, so a variation cannot be smuggled past a
+consumer that did not ask for it, and there is no ambient "current instance" for two call
+sites to disagree about.
+
+### Normalisation, and where `avar` sits
+
+An axis value is normalised piecewise-linearly, split **at the default** so the default maps
+to exactly 0, and clamped outside the axis's own range — the specification's rule, and the
+honest one: a design space has edges, and refusing there would refuse a legal request. `avar`
+version 1 then warps that normalised value through a segment map. `avar` version 2 is refused
+by name because its mapping *graph* can make one axis's value depend on another: that is a
+different normalisation, not a bigger table.
+
+### The region scalar is a PRODUCT, and the exact-zero clause is what makes it compose
+
+A `gvar` tuple applies over a region of axis space, and its weight at a coordinate is the
+product of one factor per axis. The clause that matters is that **an axis whose peak is
+exactly 0 contributes exactly 1** rather than 0 — which is what lets a tuple that speaks
+about weight alone apply at any width, and what lets an intermediate tuple compose with a
+shared one. The mutation that proves a fixture reads it is summing the factors instead of
+multiplying: on the synthetic two-tuple glyph that reads 225 where the product reads 337.5.
+
+### IUP is verified against both ways it can be wrong
+
+Inferred Unreferenced Points is the rule that moves the points a tuple does not name: per
+contour and per axis, a point between two touched anchors **interpolates** by coordinate, and
+one outside their range **translates** by the nearer anchor. "A delta appeared" is not a test
+of it — a nearest-neighbour rule and a no-op both produce plausible outlines — so the fixture
+gives its two touched points **different** deltas, which separates interpolation (110 and 220
+at the interior points) from nearest-neighbour and from nothing, with the outside-the-range
+translate clause as its own case. Equal anchor coordinates translate if the deltas agree and
+contribute nothing if they do not; a single touched point translates its whole contour.
+
+### Advances: phantom points, and `HVAR` superseding them
+
+A glyph's outline is followed by four **phantom points**, of which two carry the horizontal
+metrics; the advance delta is exactly `d(pp2).X - d(pp1).X`. Where the font ships `HVAR` that
+supersedes them, because `HVAR` is the authority the font itself nominates. Either way a
+layout width is measurably the instance's own: a synthetic `"II"` lays out 800 then 950, and
+Segoe UI Variable lays "Handgloves" out 493.85 then 556.59 from light to heavy — the text is
+not merely drawn fatter in the same space.
+
+Composite glyphs vary their **component offsets** rather than their component outlines
+(each component is one point, its own one-point contour), which is why an accented character
+tracks its base glyph's instance for free.
+
+### CFF2 was a factoring, not a second interpreter
+
+A CFF2 charstring is a Type 2 charstring with two extra operators (`vsindex`, `blend`), a
+bare Top DICT and 32-bit INDEX counts. So the work was to extract `Type2Interpreter` — the
+shared machine: stack, number encodings, local and global subrs with the count-dependent
+bias, and the whole path and flex operator family — and let each dialect add only what it
+owns (Type 2 the width prefix, `endchar` and `seac`; CFF2 `blend`, `vsindex` and a 513-deep
+stack). `CffPrimitives` holds the INDEX and DICT readers both need.
+
+**The extraction's own oracle is the committed CFF exact-coordinate suite**, which passes
+unchanged: a refactor of a charstring interpreter is exactly the change that would otherwise
+be validated by "the letters still look like letters".
+
+`blend` reads its region scalars from the CFF2 variation store — **the same
+`ItemVariationStore` `HVAR` uses** — so a blended charstring and a varied advance cannot
+disagree about what a region means, and rewrites the *n* base values in place, which is what
+lets the operator appear anywhere an operand list may.
+
+One reader change fell out of it: `CffPrimitives.ParseDict` stopped at operator 21. CFF1
+leaves 22..27 reserved and CFF2 spends three of them, and since none of those bytes is a
+valid *operand* either, admitting them changes no well-formed CFF1 parse.
+
+### What is refused, and why each is a different question
+
+Refusals here are not a budget; each named table is a different question rather than more of
+the same one.
+
+- **`avar` version 2** — a mapping graph, so one axis's value can depend on another.
+- **`cvar`** — hinting deltas, and the hinting interpreter is never run (modelled text is
+  resolution independent).
+- **`MVAR` / `VVAR`** — varied line metrics and vertical advances, which nothing here
+  consumes yet.
+- **`STAT`** — names a coordinate for a UI; carries no geometry.
+- **Feature variations** (`FeatureVariations` in `GSUB`/`GPOS`) — substituting a *different
+  glyph* past a coordinate threshold. That changes which outline is drawn rather than where
+  its points are, so it belongs with shaping, not with variation.
+
+### Persistence: nothing new travels, deliberately
+
+A variation is data, and it still does not enter `SaveHistory` — because the **font** does
+not. `TextFeature` carries its font as a constructor input, a font is a binary blob with no
+data form, and the feature is already opaque to whole-history persistence (type, name and
+`[Param]` values are written; a load skips it with a warning unless a `resolveOpaque` hook
+supplies the instance). The variation rides on the font object that hook returns. Writing the
+coordinate separately would create exactly one new failure mode — a saved coordinate that
+disagrees with the font it is applied to — in exchange for nothing, so it is not written.
+
+### Verification
+
+Synthetic fonts built byte by byte (`SyntheticVariableFont`, `SyntheticCff2Font`), because
+only a font whose deltas you chose can be checked at exact coordinates: axis normalisation at
+default / extreme / intermediate / clamped, `avar`'s segment map (the fixture's test weight
+normalises to exactly 0.5 and maps to exactly 0.75, so every expectation is an exact binary
+fraction), decoded outline coordinates, the advance identities, the product-vs-sum mutation,
+the IUP mutations, and the CFF2 blend and `vsindex` selections. Beside them, a real shipped
+variable font (Bahnschrift, or Segoe UI Variable) carries the messy half — thousands of
+glyphs, real shared tuples, real packed point numbers, real `HVAR` — with **structural and
+relational** assertions only: heavier is heavier, cap height does not move with weight, the
+default instance is bit-identical, a named instance resolves to its own recorded coordinate.
+What a bold instance's outline *is* is not ours to pin down; that it is heavier than the
+light one is.
+
+### The docs page carries no rendered figure, deliberately
+
+Every other example page renders a picture from a snippet the documentation build executes,
+and this one does not. The build has no variable font it can rely on: the font-using examples
+load from the system font folder (`arial.ttf`, `segoeui.ttf`, `verdana.ttf` — present on
+every Windows install including the Server SKU the docs workflow runs on), and no variable
+font carries that guarantee, Bahnschrift having arrived with a Windows 10 desktop update and
+Segoe UI Variable being Windows 11 only.
+
+Four figures were built and rendered on a developer machine before this was worked out, and
+they were **removed** rather than committed. A committed PNG whose snippet cannot run on the
+build machine is the worst of both: `dotnet run --project tools/EngrCAD.DocsGen -- docs`
+fails the deploy outright (the workflow's own note — "any example snippet that fails to
+compile or run still fails the build"), and if it did not, the picture would be one nobody
+could regenerate. The page states the constraint in its own text rather than leaving a gap
+where a reader would expect a picture, and the `run:` fence that checks the two load-bearing
+properties is guarded so it verifies them wherever a variable font exists and skips silently
+where none does.
+
+Shipping a permissively-licensed variable font as a committed docs asset would fix it, and is
+filed rather than taken: it is a licensing and repository-weight decision, and the tests do
+not need it (they build their own fonts byte by byte, which is stronger).
+
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

@@ -114,13 +114,20 @@ internal static class SyntheticCffFont
         return Assemble(tables);
     }
 
-    /// <summary>A minimal OTTO container whose only content table is an (empty)
-    /// <c>CFF2</c> — for the variable-font rejection path.</summary>
+    /// <summary>An otherwise complete OTTO font whose outline table is a MALFORMED
+    /// <c>CFF2</c> (version 0, which no CFF2 is) — the by-name refusal path. Every other
+    /// table is present, so the refusal has to come from the CFF2 reader rather than from
+    /// a missing required table.</summary>
     public static byte[] BuildCff2Stub()
     {
         var tables = new SortedDictionary<string, byte[]>(StringComparer.Ordinal)
         {
             ["CFF2"] = [0, 0, 0, 0],
+            ["cmap"] = Cmap(),
+            ["head"] = Head(),
+            ["hhea"] = Hhea(),
+            ["hmtx"] = Hmtx(),
+            ["maxp"] = Maxp(),
         };
         return Assemble(tables);
     }

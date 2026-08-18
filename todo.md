@@ -723,35 +723,30 @@ What remains from mapping OpenSCAD's feature set against EngrCAD (the covered gr
 primitives, 3D booleans, transforms, linear/rotate extrude + RMF sweep, STEP/STL/OBJ/PNG
 export — is recorded in CLAUDE.md):
 
-- [ ] **Text follow-ups** (`Shape.Text` ✅ landed — dependency-free TrueType reader,
-  glyphs → exact sketch segments, containment-based counter detection, layout with
-  `kern` kerning; **CFF/OpenType-PostScript outlines ✅ landed** — `CffOutlines`, Type 2
-  charstrings → cubic `BezierTo`, CID-keyed via FDArray/FDSelect, every `.otf` opens;
-  **GPOS kerning ✅ landed** — `GposKerning`, PairPos 1+2 incl. Extension lookups, with
-  the spec's GPOS-over-legacy-`kern` precedence; **text on a curve ✅ landed** —
-  `Shape.TextOnPath`/`TextOutlines.SketchesOnPath` over a `GlyphPose`, glyphs placed
-  rigidly by mapping control points only (exact, because a Bézier is an affine
-  combination of them), arc-length spacing, mid-advance anchoring, left-normal "up",
-  closed paths wrapping and multi-line refused by name; **vertical alignment ✅ landed** —
-  `TextStyle.VerticalAlign`, measured from the font's ascender/descender rather than the
-  ink; **`TextFeature` ✅ landed** — `TextFeature(text, font)` in `StandardFeatures.cs`,
-  `[Param]` Size/Height/LetterSpacing/Engrave/Plane, emboss/engrave with the Drill
-  overshoot, the text+font as CONSTRUCTOR inputs so a fresh instance re-runs and the
-  regeneration cache covers the font without the snapshot naming it, opaque to persistence
-  by name since a font has no data form): **variable fonts** (`fvar`/`gvar`, incl. `CFF2` —
-  rejected loudly today; PRODUCT-SIZED — fvar/avar axis parsing, gvar per-glyph delta
-  interpolation with IUP, and CFF2's separate blend charstring interpreter, each with its
-  own synthetic-font fixture); **`seac` accent composition ✅
-  landed** — charset formats 0/1/2 parsed off DICT op 15 (absent/0 = the ISOAdobe
-  identity; the predefined Expert charsets refuse at seac by name), the 256-entry
-  Standard Encoding table transcribed (⚠ verify-against-datasheet), and the 4-argument
-  endchar composes base + accent shifted by (adx, ady) VERBATIM — Type 2 carries no
-  sidebearing operands, so the Type 1 asb correction has nothing to correct, the
-  decision documented in place. A nested seac component refuses by name (the spec
-  forbids it, and the refusal is what bounds the recursion); unresolvable codes name
-  the code. Verified coordinate-for-coordinate on synthetic fonts, with the charset
-  tests choosing codes the TABLE routes to different glyphs than the identity would —
-  which is what proves the table was read rather than assumed.
+- [ ] **Variable-font follow-ups** (`fvar`/`avar` axes and named instances, `gvar`
+  per-glyph deltas with IUP, the phantom-point/`HVAR` advance, and `CFF2` `blend`/`vsindex`
+  ✅ all landed — `Text/Variations.cs`, `Text/GlyphVariations.cs`, `Text/Cff2Outlines.cs`,
+  `TrueTypeFont.WithVariation`; the default coordinate is bit-identical to the un-instanced
+  read, and every refusal below is by name today): **`avar` version 2** (its axis-mapping
+  GRAPH lets one axis's value depend on another — a different normalisation, not a bigger
+  table, so it needs its own evaluation order and its own fixture); **`MVAR`/`VVAR`** (varied
+  line metrics and vertical advances — cheap to read, but nothing consumes them until
+  vertical layout exists, so reading them would ship an untested table); **`STAT`** (names a
+  coordinate for a UI — no geometry, so it is a presentation feature and belongs with a font
+  picker rather than with the kernel); **`cvar`** (hinting deltas; blocked by design, since
+  the hinting interpreter is never run and modelled text is resolution independent);
+  **feature variations** (`GSUB`/`GPOS` `FeatureVariations` — substituting a DIFFERENT glyph
+  past a coordinate threshold, which changes which outline is drawn rather than where its
+  points are, so it is shaping work and wants the whole `GSUB` substitution machinery this
+  reader does not have). Also: **a rendered docs figure** — `docs/examples/text.md` §Variable
+  fonts deliberately carries none, because the docs build (windows-latest, Windows Server)
+  has no variable font it can rely on: the font-using examples load `arial`/`segoeui`/
+  `verdana`, which every Windows SKU has, while Bahnschrift arrived with a Windows 10 desktop
+  update and Segoe UI Variable is Windows 11 only, so a figure would either fail the deploy
+  or ship a picture nobody could regenerate (four were built and rendered before this was
+  worked out, and were removed rather than committed). The fix is a permissively-licensed
+  variable font committed as a docs asset — a licensing and repository-weight decision, and
+  one the TESTS do not need, since they build their own fonts byte by byte.
 - [x] ~~mirror B-Rep completion, remaining nodes~~ ✅ **landed in full** — revolve/sweep/
   rim/drill earlier (axis negation `F∘R(d,θ)∘F = R(−F·d, θ)` for revolves, intrinsic RMF
   for sweeps, isometry-commuting surgery for rims/drills), and now `Draft` /
