@@ -23,6 +23,13 @@ public static class SheetLayers
     public const string Dimensions = "dimensions";
     public const string Border = "border";
     public const string TitleBlock = "titleblock";
+
+    /// <summary>Drawing SYMBOLS rather than dimensions or part geometry: the projection
+    /// symbol, a broken view's break line, a detail view's boundary circle. Its own layer
+    /// because a reader toggling "dimensions" wants the numbers off and the drawing's
+    /// conventional marks left alone. Nothing writes to it unless a sheet asks for one of
+    /// those, so a sheet that predates it is byte-identical.</summary>
+    public const string Symbol = "symbol";
 }
 
 /// <summary>
@@ -210,9 +217,21 @@ public sealed record TitleBlock
     /// layout so it cannot contradict the views it labels.</summary>
     public string Project { get; init; } = "";
 
-    /// <summary>Sheet number within a set, e.g. "1 / 3". Carried for completeness; not rendered
-    /// by the current layouts (see <see cref="Project"/>).</summary>
+    /// <summary>Sheet number within a set, e.g. "1 / 3". Rendered by
+    /// <see cref="Iso7200TitleBlock"/> (one of ISO 7200's four MANDATORY data fields); the
+    /// engineering and schematic layouts do not print it.</summary>
     public string Sheet { get; init; } = "";
+
+    /// <summary>ISO 7200's "document type" data field (DRAWING, PARTS LIST, ...). Rendered by
+    /// <see cref="Iso7200TitleBlock"/> only, so a sheet using another layout is unaffected.</summary>
+    public string DocumentType { get; init; } = "";
+
+    /// <summary>ISO 7200's "approved by" data field — who signed the drawing off, as opposed to
+    /// <see cref="Author"/>, who drew it.</summary>
+    public string ApprovedBy { get; init; } = "";
+
+    /// <summary>ISO 7200's language code for the drawing's text (an ISO 639 code, "en").</summary>
+    public string Language { get; init; } = "";
 
     /// <summary>Block width, sheet mm (clamped to the drawing area).</summary>
     public double Width { get; init; } = 180;
@@ -231,13 +250,20 @@ public sealed record TitleBlock
 /// <param name="Dimensions">Drafting line work (dimension lines, leaders, balloons).</param>
 /// <param name="Texts">The view's label and any annotation text.</param>
 /// <param name="Bounds">Extent on the sheet, line work only.</param>
+/// <param name="Symbols">Drawing SYMBOLS with their own layers — a section's cutting line, a
+/// detail's circle, a broken view's break lines. Separate from
+/// <paramref name="Dimensions"/> (which is all one layer) because a cutting line is
+/// chain-dashed on the section layer while a break line is continuous on the symbol layer,
+/// and a reader toggling dimensions off wants the drawing's conventions left alone. Empty
+/// for a view that carries none, so a sheet predating them is byte-identical.</param>
 public sealed record DrawingViewContent(
     IReadOnlyList<HiddenLineRun> Runs,
     IReadOnlyList<Region2d> CutRegions,
     IReadOnlyList<(Vector2d A, Vector2d B)> Hatch,
     IReadOnlyList<(Vector2d A, Vector2d B)> Dimensions,
     IReadOnlyList<SheetText> Texts,
-    Aabb Bounds);
+    Aabb Bounds,
+    IReadOnlyList<(Vector2d A, Vector2d B, string Layer)>? Symbols = null);
 
 /// <summary>
 /// One projected view on a sheet: a set of instances, a direction to look from, a
@@ -257,8 +283,10 @@ public sealed record DrawingViewContent(
 public sealed class DrawingView
 {
     private readonly List<PartInstance> _instances;
+    private readonly DrawingView? _source;
     private HiddenLineResult? _projected;
     private IReadOnlyList<Region2d>? _cutRegions;
+    private (IReadOnlyList<HiddenLineRun> Runs, Aabb Bounds)? _content;
 
     /// <summary>A view of an explicit instance list.</summary>
     public DrawingView(IReadOnlyList<PartInstance> instances, in Vector3d direction, string label = "")
@@ -268,6 +296,16 @@ public sealed class DrawingView
         Direction = direction.Normalized(Tolerance.Default);
         Frame = StandardViews.SheetFrame(Direction);
         Label = label;
+    }
+
+    /// <summary>A view that SHARES another view's projection — the detail view's
+    /// constructor. Sharing rather than re-projecting is what makes a detail provably a
+    /// clip of its parent rather than a second answer to the same question.</summary>
+    private DrawingView(DrawingView source, string label)
+        : this(source.Instances, source.Direction, label)
+    {
+        _source = source;
+        Options = source.Options;
     }
 
     /// <summary>A view of a whole scene, assemblies flattened.</summary>
@@ -370,26 +408,103 @@ public sealed class DrawingView
         return annotation;
     }
 
+    /// <summary>
+    /// The region of the parent's projection this view shows, for a DETAIL view; null for an
+    /// ordinary one. Setting it clips the view's line work to the disc — see
+    /// <see cref="DetailOf"/>, which is how one is normally made.
+    /// </summary>
+    public ViewDetail? Detail
+    {
+        get;
+        set
+        {
+            field = value;
+            _content = null;
+        }
+    }
+
+    /// <summary>
+    /// The band of the view's own coordinates removed by a BREAK; null for an ordinary view.
+    /// A dimension across the break still measures the part's true length — see
+    /// <see cref="ViewBreak"/> for why that needs no special case.
+    /// </summary>
+    public ViewBreak? Break
+    {
+        get;
+        set
+        {
+            field = value;
+            _content = null;
+        }
+    }
+
+    /// <summary>
+    /// The view this one was DERIVED from, and the letter labelling the pair. A sheet reads
+    /// it to draw the mark on the parent — a section's cutting line, a detail's circle — so
+    /// the two views cannot state different things about the same derivation.
+    /// </summary>
+    public ViewOrigin? DerivedFrom { get; set; }
+
     /// <summary>Discards the cached projection (after a geometry or option change).</summary>
     public void Invalidate()
     {
         _projected = null;
         _cutRegions = null;
+        _content = null;
     }
 
     /// <summary>The raw projection in VIEW-LOCAL model coordinates (unscaled,
-    /// unplaced) — computed once and reused across layout passes.</summary>
+    /// unplaced) — computed once and reused across layout passes. A detail view returns its
+    /// parent's, since it is a clip of exactly that.</summary>
     public HiddenLineResult Projected =>
-        _projected ??= HiddenLineRemoval.Project(
-            _instances, Frame,
-            [.. HiddenLineRemoval.CutLoops(_instances, Frame, Options)], EdgeSource.Cut, Options);
+        _source is not null
+            ? _source.Projected
+            : _projected ??= HiddenLineRemoval.Project(
+                _instances, Frame,
+                [.. HiddenLineRemoval.CutLoops(_instances, Frame, Options)], EdgeSource.Cut, Options);
+
+    /// <summary>
+    /// The line work this view actually draws, in view-local model coordinates: the
+    /// projection with any <see cref="Detail"/> clip and <see cref="Break"/> map applied.
+    /// Identical to <see cref="Projected"/>'s runs and bounds for a plain view.
+    /// </summary>
+    public (IReadOnlyList<HiddenLineRun> Runs, Aabb Bounds) Content
+    {
+        get
+        {
+            if (_content is { } cached)
+                return cached;
+            var runs = Projected.Runs;
+            if (Detail is { } detail)
+                runs = detail.Clip(runs);
+            if (Break is { } split)
+                runs = split.Apply(runs);
+            var bounds = ReferenceEquals(runs, Projected.Runs) ? Projected.Bounds : BoundsOf(runs);
+            return (_content = (runs, bounds)).Value;
+        }
+    }
+
+    /// <summary>The extent this view occupies in its own model coordinates — the projection's
+    /// bounds for a plain view, the clipped or broken extent otherwise.</summary>
+    public Aabb ContentBounds => Content.Bounds;
+
+    private static Aabb BoundsOf(IReadOnlyList<HiddenLineRun> runs)
+    {
+        var bounds = Aabb.Empty;
+        foreach (var run in runs)
+        {
+            foreach (var p in run.Points)
+                bounds = bounds.Union(new Vector3d(p.X, p.Y, 0));
+        }
+        return bounds;
+    }
 
     /// <summary>The view's size on the sheet (line work only), mm.</summary>
     public Vector2d Size
     {
         get
         {
-            var bounds = Projected.Bounds;
+            var bounds = ContentBounds;
             return bounds.IsEmpty
                 ? Vector2d.Zero
                 : new Vector2d(bounds.Size.X * Scale, bounds.Size.Y * Scale);
@@ -397,27 +512,42 @@ public sealed class DrawingView
     }
 
     /// <summary>The view's content placed on the sheet.</summary>
-    public DrawingViewContent Compute()
+    public DrawingViewContent Compute() => Compute(null);
+
+    /// <summary>
+    /// The view's content placed on the sheet, plus any MARKERS other views asked to be
+    /// drawn on this one (a section's cutting line, a detail's circle). The sheet gathers
+    /// them from every view's <see cref="DerivedFrom"/>, so a marker is a fact about the
+    /// derived view drawn in this view's coordinates rather than a second declaration.
+    /// </summary>
+    public DrawingViewContent Compute(IReadOnlyList<ViewMarker>? markers)
     {
-        var projected = Projected;
-        if (projected.Bounds.IsEmpty)
+        var (contentRuns, contentBounds) = Content;
+        if (contentBounds.IsEmpty)
             return new DrawingViewContent([], [], [], [], [], Aabb.Empty);
 
-        var origin = new Vector2d(projected.Bounds.Center.X, projected.Bounds.Center.Y);
+        var origin = new Vector2d(contentBounds.Center.X, contentBounds.Center.Y);
         double scale = Scale;
         var center = Center;
         // The one placement rule, as a value so an annotation can be handed it: model
-        // space to paper is a uniform scale about the view's own centre.
-        Func<Vector2d, Vector2d> ToSheet = p => (p - origin) * scale + center;
+        // space to paper is a uniform scale about the view's own centre. A BROKEN view
+        // folds its map in here, which is exactly what leaves a dimension's VALUE true
+        // (read from its anchors) while its anatomy follows the shortened drawing.
+        var split = Break;
+        Func<Vector2d, Vector2d> Place = p => (p - origin) * scale + center;
+        Func<Vector2d, Vector2d> ToSheet =
+            split is null ? Place : p => Place(split.Map(p));
 
-        var runs = new List<HiddenLineRun>(projected.Runs.Count);
+        var runs = new List<HiddenLineRun>(contentRuns.Count);
         var bounds = Aabb.Empty;
-        foreach (var run in projected.Runs)
+        foreach (var run in contentRuns)
         {
+            // Place, not ToSheet: Content has ALREADY applied the break's map to the line
+            // work (it is what shortened the view), so mapping again would fold it twice.
             var points = new Vector2d[run.Points.Count];
             for (int i = 0; i < run.Points.Count; i++)
             {
-                points[i] = ToSheet(run.Points[i]);
+                points[i] = Place(run.Points[i]);
                 bounds = bounds.Union(new Vector3d(points[i].X, points[i].Y, 0));
             }
             runs.Add(run with { Points = points });
@@ -447,6 +577,24 @@ public sealed class DrawingView
         foreach (var annotation in Annotations)
             annotation.Build(ToSheet, Style, dimensions, texts);
 
+        // Drawing conventions, each on its own layer: this view's own break lines and the
+        // marks other views asked for. Markers read the view's MODEL bounds, so they are
+        // placed against the part rather than against whatever the paper happens to hold.
+        var symbols = new List<(Vector2d A, Vector2d B, string Layer)>();
+        if (split is not null)
+        {
+            foreach (var line in split.BreakLines(contentBounds))
+            {
+                for (int i = 0; i + 1 < line.Count; i++)
+                    symbols.Add((Place(line[i]), Place(line[i + 1]), SheetLayers.Symbol));
+            }
+        }
+        if (markers is not null)
+        {
+            foreach (var marker in markers)
+                marker.Build(ToSheet, Style, contentBounds, symbols, texts);
+        }
+
         if (!string.IsNullOrEmpty(Label))
         {
             // The label goes below EVERYTHING the view drew, dimension text included —
@@ -462,7 +610,68 @@ public sealed class DrawingView
                 Label, SheetLettering.LabelHeight, SheetTextAnchor.Center, SheetLayers.Visible));
         }
 
-        return new DrawingViewContent(runs, regions, hatch, dimensions, texts, bounds);
+        return new DrawingViewContent(runs, regions, hatch, dimensions, texts, bounds, symbols);
+    }
+
+    /// <summary>
+    /// A SECTION of <paramref name="parent"/>: a view along <paramref name="direction"/> cut
+    /// at <paramref name="through"/>, labelled "SECTION A-A", carrying the reference that
+    /// puts the cutting line on the parent.
+    ///
+    /// <para>Refused BY NAME when the plane would not show as a line on the parent (the
+    /// two directions must be square — see <see cref="SectionCuttingLine"/>), so the pair is
+    /// rejected at the call rather than at the sheet.</para>
+    /// </summary>
+    public static DrawingView SectionOf(
+        DrawingView parent, in Vector3d direction, in Vector3d through, string letter)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentException.ThrowIfNullOrEmpty(letter);
+        var section = new DrawingView(parent.Instances, direction, $"SECTION {letter}-{letter}")
+        {
+            Options = parent.Options,
+            Scale = parent.Scale,
+            SectionThrough = through,
+            DerivedFrom = new ViewOrigin(parent, letter, ViewOriginKind.Section),
+        };
+        _ = SectionCuttingLine.For(parent, section, letter);   // refuse here, not at the sheet
+        return section;
+    }
+
+    /// <summary>
+    /// A DETAIL of <paramref name="parent"/>: the disc of radius <paramref name="radius"/>
+    /// about <paramref name="centre"/> (in the parent's projected model coordinates), drawn
+    /// at <paramref name="magnification"/> times the parent's scale.
+    ///
+    /// <para>It SHARES the parent's projection, so it is a clip of exactly the line work the
+    /// parent shows and cannot differ from it. A parent carrying a SECTION is refused by
+    /// name: its hatched cut faces are regions rather than line work, and clipping a region
+    /// to a circle is a 2D boolean this view deliberately does not perform.</para>
+    /// </summary>
+    public static DrawingView DetailOf(
+        DrawingView parent, in Vector2d centre, double radius, double magnification, string letter)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentException.ThrowIfNullOrEmpty(letter);
+        if (!(radius > 0))
+            throw new ArgumentOutOfRangeException(nameof(radius), "A detail's radius must be positive.");
+        if (!(magnification > 0))
+            throw new ArgumentOutOfRangeException(
+                nameof(magnification), "A detail's magnification must be positive.");
+        if (parent.SectionThrough is not null)
+            throw new InvalidOperationException(
+                $"'{parent.Label}' is a section view, and a detail of one would have to clip its "
+                + "hatched cut faces to the circle — a 2D region boolean this view does not do. "
+                + "Take the detail from an unsectioned view.");
+
+        double scale = parent.Scale * magnification;
+        var detail = new DrawingView(parent, $"DETAIL {letter}  {DrawingScales.Format(scale)}")
+        {
+            Scale = scale,
+            Detail = new ViewDetail(centre, radius),
+            DerivedFrom = new ViewOrigin(parent, letter, ViewOriginKind.Detail),
+        };
+        return detail;
     }
 
     /// <summary>
@@ -614,10 +823,27 @@ public sealed class DrawingSheet
             Format = Format,
             Margin = Margin,
             Title = Title,
-            Layout = new EngineeringTitleBlock(scale, Projection),
+            Layout = TitleBlockLayoutOverride ?? new EngineeringTitleBlock(scale, Projection),
             Standards = Standards,
+            // The frame draws the ISO 128 projection symbol only if the standards ask for
+            // it; handing over the angle costs nothing and keeps the symbol's own facts the
+            // sheet's rather than the caller's.
+            Projection = Projection,
         };
     }
+
+    /// <summary>
+    /// Draw the title block with a layout other than the engineering three-band one —
+    /// <see cref="Iso7200TitleBlock.Default"/>, say. Null (the default) keeps the incumbent
+    /// block, so a sheet that says nothing looks exactly as it did.
+    /// </summary>
+    public TitleBlockLayout? TitleBlockLayoutOverride { get; set; }
+
+    /// <summary>
+    /// The parts list drawn above the title block, and the source of the item numbers
+    /// <see cref="BomBalloons"/> puts on the views. Null (the default) draws none.
+    /// </summary>
+    public SheetPartsList? PartsList { get; set; }
 
     public DrawingSheet Add(DrawingView view)
     {
@@ -765,7 +991,10 @@ public sealed class DrawingSheet
 
     private static Vector2d Extent(DrawingView view)
     {
-        var bounds = view.Projected.Bounds;
+        // ContentBounds, not the raw projection: a broken view is SHORTER than the part it
+        // draws, and laying the sheet out from the part's own length would waste the paper
+        // the break exists to save.
+        var bounds = view.ContentBounds;
         return bounds.IsEmpty ? Vector2d.Zero : new Vector2d(bounds.Size.X, bounds.Size.Y);
     }
 
@@ -789,16 +1018,58 @@ public sealed class DrawingSheet
         lines.AddRange(frame.Lines);
         texts.AddRange(frame.Texts);
 
+        // The view-to-view pass: every derived view contributes ONE mark to the view it
+        // came from, gathered in view order so the sheet is a deterministic function of its
+        // views. This is the whole of the reference the sheet model used to lack.
+        var markers = Markers();
+
         foreach (var view in _views)
         {
-            var content = view.Compute();
+            var content = view.Compute(markers.GetValueOrDefault(view));
             runs.AddRange(content.Runs);
             hatch.AddRange(content.Hatch);
             texts.AddRange(content.Texts);
             foreach (var (a, b) in content.Dimensions)
                 lines.Add((a, b, SheetLayers.Dimensions));
+            if (content.Symbols is { } symbols)
+                lines.AddRange(symbols);
         }
+
+        PartsList?.Build(this, lines, texts);
         return new SheetContent(runs, hatch, lines, texts, Format);
+    }
+
+    /// <summary>
+    /// The marks each view must draw for the views derived from it, keyed by REFERENCE so
+    /// two views with the same label stay distinct. A derived view whose parent is not on
+    /// this sheet is skipped (its mark has nowhere to go); a parent that is itself BROKEN is
+    /// refused by name, since a cutting line across a break would have to be drawn in two
+    /// pieces and no convention here says which.
+    /// </summary>
+    private Dictionary<DrawingView, List<ViewMarker>> Markers()
+    {
+        // A DrawingView is a class with reference equality, so the default comparer already
+        // keys by identity — two views that happen to share a label stay distinct.
+        var markers = new Dictionary<DrawingView, List<ViewMarker>>();
+        foreach (var view in _views)
+        {
+            if (view.DerivedFrom is not { } origin || !_views.Contains(origin.Parent))
+                continue;
+            if (origin.Parent.Break is not null)
+                throw new InvalidOperationException(
+                    $"'{origin.Parent.Label}' is a broken view, so a mark for '{view.Label}' would "
+                    + "have to be drawn across the break in two pieces. Derive from an unbroken view.");
+            ViewMarker marker = origin.Kind switch
+            {
+                ViewOriginKind.Section => SectionCuttingLine.For(origin.Parent, view, origin.Letter),
+                ViewOriginKind.Detail => DetailCircle.For(view, origin.Letter),
+                _ => throw new InvalidOperationException($"Unknown view derivation {origin.Kind}."),
+            };
+            if (!markers.TryGetValue(origin.Parent, out var list))
+                markers[origin.Parent] = list = [];
+            list.Add(marker);
+        }
+        return markers;
     }
 }
 

@@ -62,6 +62,14 @@ public sealed record DrawingFrame
     /// to a sheet that predates it.</summary>
     public FrameStandards Standards { get; init; } = FrameStandards.None;
 
+    /// <summary>
+    /// The projection angle the sheet's views are laid out in, for
+    /// <see cref="FrameStandards.ProjectionSymbol"/> to draw. Null (the default) means the
+    /// frame does not know — a schematic has no projection at all — and no symbol is drawn
+    /// whatever the standards say.
+    /// </summary>
+    public ProjectionAngle? Projection { get; init; }
+
     /// <summary>The border rectangle, sheet mm (bottom-left, top-right).</summary>
     public Aabb Border => new(
         new Vector3d(Margin, Margin, 0),
@@ -105,6 +113,12 @@ public sealed record DrawingFrame
             new Vector3d(border.Max.X, border.Min.Y + Title.Height, 0));
         AddRectangle(lines, block, TitleBlockLayer);
         Layout.Build(block, Title, TitleBlockLayer, lines, texts);
+
+        // The ISO 128 projection symbol sits beside the title block, so it is drawn after
+        // the block whose rectangle places it. Opt-in twice over (the standard must ask for
+        // it AND the frame must know its angle), so nothing that predates it moves.
+        if (Projection is { } angle)
+            Standards.AddProjectionSymbol(lines, block, border, angle, BorderLayer);
 
         return new FrameGeometry(lines, texts);
     }
@@ -299,10 +313,12 @@ public sealed class SchematicTitleBlock : TitleBlockLayout
 /// border and the paper edge, so it never touches the drawing area, and it is emitted on the
 /// frame's <c>BorderLayer</c>.</para>
 ///
-/// <para><b>Scope, stated:</b> the zone COUNT is derived from a nominal field size
-/// (<see cref="NominalZone"/>) rather than transcribed from ISO 5457's per-size table; the
-/// mechanism — a numbered/lettered grid with centring marks — is faithful, the exact per-sheet
-/// zone counts are filed as a follow-up.</para>
+/// <para><b>Where the zone COUNT comes from.</b> ISO 5457 fixes a count per sheet size, and
+/// <see cref="Iso5457Zones"/> transcribes that small table; a sheet whose paper matches an
+/// A-series size takes the standard's own count, and any other paper falls back to rounding the
+/// border to a nominal field size (<see cref="NominalZone"/>). The fallback is not a lesser
+/// answer for a custom sheet — it IS what the standard says a field should be, 25–75 mm — but
+/// for a standard sheet the table is the standard's word rather than our arithmetic.</para>
 /// </summary>
 public sealed record FrameStandards
 {
@@ -312,8 +328,20 @@ public sealed record FrameStandards
     /// <summary>Draw the ISO 5457 centring marks at the middle of each side.</summary>
     public bool CentringMarks { get; init; }
 
+    /// <summary>
+    /// Draw the ISO 128 projection symbol — the truncated cone in two views — beside the title
+    /// block. Needs <see cref="DrawingFrame.Projection"/> to be set as well, since the symbol
+    /// states the sheet's own projection angle and a frame that does not know it must not guess.
+    /// </summary>
+    public bool ProjectionSymbol { get; init; }
+
+    /// <summary>Height of the projection symbol, mm — the frustum's LARGE diameter, which is
+    /// what the symbol's overall height is.</summary>
+    public double SymbolHeight { get; init; } = 9;
+
     /// <summary>Nominal zone field size, mm — ISO 5457 recommends 25–75 mm; the column and row
-    /// counts round the border's width and height to this.</summary>
+    /// counts round the border's width and height to this when the paper matches no size in
+    /// <see cref="Iso5457Zones"/>.</summary>
     public double NominalZone { get; init; } = 50;
 
     /// <summary>Cap height of the zone labels, mm.</summary>
@@ -340,18 +368,33 @@ public sealed record FrameStandards
             AddCentringMarks(lines, border, paper, layer);
     }
 
-    /// <summary>Column count across the border for a given width (ISO 5457's field grid).</summary>
+    /// <summary>Column count across the border for a given width, from the NOMINAL field size —
+    /// the fallback for a paper ISO 5457 does not tabulate (see <see cref="ZonesFor"/>).</summary>
     public int Columns(double borderWidth) => Math.Max(1, (int)Math.Round(borderWidth / NominalZone));
 
-    /// <summary>Row count down the border for a given height.</summary>
+    /// <summary>Row count down the border for a given height, from the nominal field size.</summary>
     public int Rows(double borderHeight) => Math.Max(1, (int)Math.Round(borderHeight / NominalZone));
+
+    /// <summary>
+    /// The zone counts a sheet of this paper gets: ISO 5457's own tabulated pair when the paper
+    /// is one of the sizes the standard covers (in either orientation), else the nominal-field
+    /// rounding of the border. The one rule the grid reads, so a caller can ask what a sheet
+    /// will get without drawing it.
+    /// </summary>
+    public (int Columns, int Rows) ZonesFor(
+        double paperWidth, double paperHeight, double borderWidth, double borderHeight)
+    {
+        if (Iso5457Zones.TryFor(paperWidth, paperHeight, out int along, out int across))
+            return paperWidth >= paperHeight ? (along, across) : (across, along);
+        return (Columns(borderWidth), Rows(borderHeight));
+    }
 
     private void AddZoneGrid(
         List<(Vector2d A, Vector2d B, string Layer)> lines, List<SheetText> texts,
         in Aabb border, in Aabb paper, string layer)
     {
         double left = border.Min.X, right = border.Max.X, bottom = border.Min.Y, top = border.Max.Y;
-        int cols = Columns(border.Size.X), rows = Rows(border.Size.Y);
+        var (cols, rows) = ZonesFor(paper.Size.X, paper.Size.Y, border.Size.X, border.Size.Y);
         double cellW = border.Size.X / cols, cellH = border.Size.Y / rows;
 
         // Dividing lines across the top and bottom margin bands (per column) and the left and
@@ -405,6 +448,73 @@ public sealed record FrameStandards
         lines.Add((new Vector2d(paper.Max.X, cy), new Vector2d(border.Max.X - reach, cy), layer));
     }
 
+    /// <summary>
+    /// The ISO 128 projection symbol, DERIVED rather than transcribed: it is a truncated cone
+    /// drawn in two views, so it is built by projecting one.
+    ///
+    /// <para>Put the frustum's axis along the sheet's x with its SMALL end to the left. The
+    /// side view is then the trapezoid, and the other view is the one looking along the axis at
+    /// that small end — i.e. a view from the LEFT. The sheet's own projection rule places a view
+    /// from the left on the left in THIRD angle and on the right in FIRST angle, so the pair of
+    /// concentric circles swaps sides while the trapezoid does not. That is the whole content of
+    /// the symbol, and reading it off the layout rule rather than off a picture is what stops the
+    /// symbol and the layout disagreeing.</para>
+    /// </summary>
+    internal void AddProjectionSymbol(
+        List<(Vector2d A, Vector2d B, string Layer)> lines,
+        in Aabb block, in Aabb border, ProjectionAngle projection, string layer)
+    {
+        if (!ProjectionSymbol || !(SymbolHeight > 0))
+            return;
+
+        double large = SymbolHeight;             // the frustum's large diameter
+        double small = large / 2;                // and its small one, the classic 1:2 symbol
+        double length = large * 1.5;             // axial length of the frustum
+        double gap = large * 0.5;                // between the two views
+        double width = length + gap + large;
+        double pad = SheetLettering.TitleBlockPadding;
+
+        double rightEdge = block.Min.X - pad;
+        double x0 = Math.Max(border.Min.X + pad, rightEdge - width);
+        double cy = block.Min.Y + block.Size.Y / 2;
+
+        // Third angle: the view from the left goes on the LEFT. First angle mirrors it.
+        bool circlesLeft = projection == ProjectionAngle.Third;
+        double circleCx = circlesLeft ? x0 + large / 2 : x0 + width - large / 2;
+        double coneLeft = circlesLeft ? x0 + large + gap : x0;
+
+        AddCircle(lines, new Vector2d(circleCx, cy), large / 2, layer);
+        AddCircle(lines, new Vector2d(circleCx, cy), small / 2, layer);
+
+        // The trapezoid: small end left, large end right, whichever side it sits on.
+        var a = new Vector2d(coneLeft, cy - small / 2);
+        var b = new Vector2d(coneLeft, cy + small / 2);
+        var c = new Vector2d(coneLeft + length, cy + large / 2);
+        var d = new Vector2d(coneLeft + length, cy - large / 2);
+        lines.Add((a, b, layer));
+        lines.Add((b, c, layer));
+        lines.Add((c, d, layer));
+        lines.Add((d, a, layer));
+
+        // One axis line through both views, the centre line the symbol is drawn about.
+        lines.Add((new Vector2d(x0 - pad / 2, cy), new Vector2d(x0 + width + pad / 2, cy), layer));
+    }
+
+    /// <summary>The symbol's circles as chorded polygons (the writers speak segments).</summary>
+    private static void AddCircle(
+        List<(Vector2d A, Vector2d B, string Layer)> lines, in Vector2d centre, double radius, string layer)
+    {
+        const int segments = 48;
+        var previous = centre + new Vector2d(radius, 0);
+        for (int i = 1; i <= segments; i++)
+        {
+            double angle = 2 * Math.PI * i / segments;
+            var point = centre + new Vector2d(Math.Cos(angle), Math.Sin(angle)) * radius;
+            lines.Add((previous, point, layer));
+            previous = point;
+        }
+    }
+
     /// <summary>A zone row letter (ISO 5457 omits I and O to avoid confusion with 1 and 0, and
     /// doubles a letter — AA, BB — past 24 rows).</summary>
     private static string ZoneLetter(int index)
@@ -413,5 +523,175 @@ public sealed record FrameStandards
         int rep = index / alphabet.Length + 1;
         char c = alphabet[index % alphabet.Length];
         return new string(c, rep);
+    }
+}
+/// <summary>
+/// ISO 5457's own per-size zone counts: how many fields the grid reference system divides a
+/// standard sheet into, along its long side and across its short one.
+///
+/// <para><b>&#x26A0; Transcribed &#x2014; verify against the datasheet</b> (ISO 5457:1999,
+/// the grid reference system), the <c>StandardHoles</c>/<c>SheetMaterials</c> convention. The
+/// figures are stated here in the standard's own terms &#x2014; a count per size, long side
+/// first &#x2014; so a reader can check them against the table rather than against arithmetic.
+/// What DOES check itself is that every row lands inside the standard's own 25&#x2013;75 mm
+/// field-size window once the border is taken off the paper, which is the property the counts
+/// exist to give and which a mistyped row would break.</para>
+///
+/// <para>The match is on the PAPER's own dimensions rather than on a format NAME, so a sheet
+/// turned <see cref="SheetFormat.Portrait"/> and a custom format that happens to be A3 both get
+/// A3's counts &#x2014; the counts are a property of the paper, and a name is not.</para>
+/// </summary>
+public static class Iso5457Zones
+{
+    // (long side mm, short side mm, divisions ALONG the long side, divisions across the short).
+    private static readonly (double Long, double Short, int Along, int Across)[] Table =
+    [
+        (1189, 841, 24, 16),   // A0
+        (841, 594, 16, 12),    // A1
+        (594, 420, 12, 8),     // A2
+        (420, 297, 8, 6),      // A3
+        (297, 210, 6, 4),      // A4
+    ];
+
+    /// <summary>Every tabulated size, as (long mm, short mm, along, across) &#x2014; the
+    /// transcription itself, so a test can read the rows rather than restate them.</summary>
+    public static IReadOnlyList<(double Long, double Short, int Along, int Across)> Rows => Table;
+
+    /// <summary>
+    /// The counts for a paper of these dimensions in either orientation, or false when ISO 5457
+    /// does not tabulate it. <paramref name="along"/> is the count on the LONG side.
+    /// </summary>
+    public static bool TryFor(double width, double height, out int along, out int across)
+    {
+        double longSide = Math.Max(width, height);
+        double shortSide = Math.Min(width, height);
+        foreach (var row in Table)
+        {
+            // The tabulated sizes are whole millimetres and a SheetFormat states them exactly,
+            // so this is an exact-semantic match rather than a tolerance: a paper either is one
+            // of the standard's sizes or it is a custom sheet the nominal path serves.
+            if (row.Long == longSide && row.Short == shortSide)
+            {
+                along = row.Along;
+                across = row.Across;
+                return true;
+            }
+        }
+        along = across = 0;
+        return false;
+    }
+}
+
+/// <summary>
+/// One ISO 7200 data field: the caption a title block prints for it and whether the standard
+/// makes it mandatory.
+/// </summary>
+/// <param name="Caption">The caption as the block prints it.</param>
+/// <param name="Mandatory">True for the standard's mandatory data fields.</param>
+public sealed record Iso7200Field(string Caption, bool Mandatory);
+
+/// <summary>
+/// The ISO 7200 title block: the standard's own data fields, laid out in three bands.
+///
+/// <para><b>&#x26A0; The FIELD LIST is transcribed &#x2014; verify against the datasheet</b>
+/// (ISO 7200:2004, data fields in title blocks), the <c>StandardHoles</c> convention. It is
+/// published as <see cref="Fields"/> so the transcription is the thing a test reads, and the
+/// four MANDATORY fields &#x2014; legal owner, identification number, date of issue and sheet
+/// number &#x2014; are marked as such, because "which fields must be present" is the one part of
+/// the standard a layout can silently get wrong.</para>
+///
+/// <para>Every field maps onto a <see cref="TitleBlock"/> member; a field whose value is empty
+/// prints its caption and nothing else, which is what a blank form does and is honest about
+/// what the drawing has not said. Two fields exist only for this layout
+/// (<see cref="TitleBlock.DocumentType"/> and <see cref="TitleBlock.ApprovedBy"/>) plus the
+/// language code; they default to empty, so a sheet using the engineering layout is
+/// byte-identical to one that predates them.</para>
+/// </summary>
+public sealed class Iso7200TitleBlock : TitleBlockLayout
+{
+    /// <summary>The transcribed field list, in the order the block prints them.</summary>
+    public static IReadOnlyList<Iso7200Field> Fields { get; } =
+    [
+        new("LEGAL OWNER", Mandatory: true),
+        new("TITLE", Mandatory: false),
+        new("SUPPLEMENTARY TITLE", Mandatory: false),
+        new("IDENTIFICATION NUMBER", Mandatory: true),
+        new("DOC. TYPE", Mandatory: false),
+        new("REV", Mandatory: false),
+        new("CREATED BY", Mandatory: false),
+        new("APPROVED BY", Mandatory: false),
+        new("DATE OF ISSUE", Mandatory: true),
+        new("LANG", Mandatory: false),
+        new("SHEET", Mandatory: true),
+    ];
+
+    private readonly double _textHeight;
+
+    /// <summary>Builds the layout at a stated field text height (ISO 3098's 3.5 mm by
+    /// default, the same lettering the engineering block uses).</summary>
+    public Iso7200TitleBlock(double textHeight = SheetLettering.TextHeight) => _textHeight = textHeight;
+
+    /// <summary>The default ISO 7200 layout.</summary>
+    public static Iso7200TitleBlock Default { get; } = new();
+
+    internal override void Build(
+        in Aabb block, TitleBlock title, string layer,
+        List<(Vector2d A, Vector2d B, string Layer)> lines, List<SheetText> texts)
+    {
+        double pad = SheetLettering.TitleBlockPadding;
+        double x = block.Min.X + pad;
+        double right = block.Max.X - pad;
+        double h = block.Size.Y;
+        double rule1 = block.Min.Y + h * 0.55;   // title band above
+        double rule2 = block.Min.Y + h * 0.275;  // identification band, then the people band
+
+        lines.Add((new Vector2d(block.Min.X, rule1), new Vector2d(block.Max.X, rule1), layer));
+        lines.Add((new Vector2d(block.Min.X, rule2), new Vector2d(block.Max.X, rule2), layer));
+
+        // Band 1 -- the legal owner, the title and its supplementary title.
+        double ownerY = block.Max.Y - pad - _textHeight;
+        Caption(x, ownerY + _textHeight * 1.1, "LEGAL OWNER");
+        Value(x, ownerY, title.Company);
+        double titleY = rule1 + pad * 0.5;
+        Caption(right, titleY + _textHeight * 1.1, "TITLE", right: true);
+        Value(right, titleY, title.Title, right: true, height: SheetLettering.TitleHeight);
+        if (title.Project.Length > 0)
+            Value(x, titleY, title.Project, height: _textHeight);
+
+        // Band 2 -- identification number, document type, revision.
+        double idY = rule2 + (rule1 - rule2 - _textHeight) / 2;
+        double column2 = (right - x) / 3;
+        Field(x, idY, "IDENTIFICATION NUMBER", title.DrawingNumber);
+        Field(x + column2, idY, "DOC. TYPE", title.DocumentType);
+        Field(x + 2 * column2, idY, "REV", title.Revision);
+
+        // Band 3 -- who made it, who signed it, when, in what language, which sheet.
+        double byY = block.Min.Y + (rule2 - block.Min.Y - _textHeight) / 2;
+        double column3 = (right - x) / 5;
+        Field(x, byY, "CREATED BY", title.Author);
+        Field(x + column3, byY, "APPROVED BY", title.ApprovedBy);
+        Field(x + 2 * column3, byY, "DATE OF ISSUE", title.Date);
+        Field(x + 3 * column3, byY, "LANG", title.Language);
+        Field(x + 4 * column3, byY, "SHEET", title.Sheet);
+
+        void Field(double fx, double fy, string caption, string value)
+        {
+            Caption(fx, fy + _textHeight * 1.1, caption);
+            Value(fx, fy, value);
+        }
+
+        void Caption(double cx, double cy, string caption, bool right = false) =>
+            texts.Add(new SheetText(
+                new Vector2d(cx, cy), caption, SheetLettering.SmallTextHeight,
+                right ? SheetTextAnchor.Right : SheetTextAnchor.Left, layer));
+
+        void Value(double vx, double vy, string value, bool right = false, double height = 0)
+        {
+            if (value.Length == 0)
+                return;
+            texts.Add(new SheetText(
+                new Vector2d(vx, vy), value, height > 0 ? height : _textHeight,
+                right ? SheetTextAnchor.Right : SheetTextAnchor.Left, layer));
+        }
     }
 }

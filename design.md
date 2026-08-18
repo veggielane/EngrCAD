@@ -7571,9 +7571,104 @@ A drawing is a *document*, not a picture, and the whole design follows from that
   the frame reads), and `FrameStandards` is the opt-in ISO 5457 border — a zone grid
   (column numbers, row letters, I and O omitted) and centring marks drawn in the margin
   band so they never touch the drawing area, **OFF by default** (`FrameStandards.None`) so
-  nothing existing moves. The ISO 7200 field layout is filed (a full new layout wants its
-  datasheet); the zone COUNTS here come from a nominal field size rather than ISO 5457's
-  exact per-size table.
+  nothing existing moves.
+- **The three sheet standards the frame was missing.** The ISO 5457 zone COUNTS are now the
+  standard's own, transcribed per sheet size (`Iso5457Zones`, ⚠ verify-against-datasheet:
+  A0 24×16, A1 16×12, A2 12×8, A3 8×6, A4 6×4 along the long side by across the short
+  one), with the nominal-field rounding kept as the fallback for a paper the standard does
+  not tabulate — which is not a lesser answer, since 25–75 mm *is* what the standard says a
+  field should be. The match is on the PAPER's own dimensions rather than a format NAME, so
+  a `.Portrait` sheet and a custom format that happens to be A3 both get A3's counts (the
+  counts are a property of the paper; a name is not). **The transcription is checked by the
+  property a mistyped row would break** rather than by re-typing it: every row's implied
+  field size must land inside the standard's own 25–75 mm window once the border is off the
+  paper. And because a table replacing a rounding is a change to existing output, the change
+  REPORTS which sheets move: **A0, A1 and A2 each gain one division** where the rounding fell
+  short, **A3 and A4 are unchanged**, so every committed A3/A4 drawing is byte-identical.
+  The **ISO 7200 field layout** is a second `TitleBlockLayout` beside the engineering one,
+  and the transcription that matters is its FIELD LIST (`Iso7200TitleBlock.Fields`, ⚠
+  verify-against-datasheet), published so a test reads it back rather than restating it —
+  with the four MANDATORY fields marked, because "which fields must be present" is the one
+  part of the standard a layout can silently get wrong. It rides as an override
+  (`DrawingSheet.TitleBlockLayoutOverride`), so a sheet that says nothing keeps the
+  engineering block. And the **ISO 128 projection symbol** is DERIVED rather than
+  transcribed, which is the interesting one: put the frustum's axis along the sheet's x with
+  its small end to the left and the second view is the one looking along the axis at that
+  small end — a view from the LEFT — so the sheet's OWN layout rule (a view from the left
+  goes left in third angle, right in first) decides which side the pair of concentric
+  circles sits on, while the trapezoid does not move. Reading the symbol off the layout rule
+  rather than off a picture is what stops the symbol and the layout disagreeing; it needs
+  BOTH halves to ask for it (`FrameStandards.ProjectionSymbol` and a frame that knows its
+  `Projection`), so a schematic frame — which has no projection at all — cannot draw one.
+- **The view-to-view reference, and the three derived views it carries.** The sheet model had
+  no way for one view to say anything about another, which is why a section view was drawn
+  correctly and unmarked on its parent. `ViewOrigin` is that reference — a parent view, a
+  letter, and which derivation it is — and `DrawingSheet.Compute` walks it once, in view
+  order, building a `ViewMarker` per derived view and handing it to the PARENT's own
+  `Compute`. So a mark is a fact about the CHILD drawn in the PARENT's coordinates, with no
+  second declaration to drift. **A marker is deliberately not a `SheetAnnotation`**: an
+  annotation is a dimension or note the caller placed, all of it on the dimensions layer,
+  whereas a marker is a drawing CONVENTION with its own layers (a cutting line is
+  chain-dashed on the section layer, a detail circle continuous on the new symbol layer) and
+  is derived rather than stated — hence `DrawingViewContent.Symbols`, a layered segment list
+  beside the one-layer `Dimensions`, empty for a view that carries none.
+  **The cutting line's own correctness condition is a statement about orthographic
+  projection, not a chosen restriction**: projecting a plane along a direction that is not
+  IN it covers the whole sheet, so the plane shows as a LINE exactly when the section's
+  direction is perpendicular to the parent's — which is precisely the standard layout's own
+  arrangement, and anything else is refused BY NAME at the call rather than at the sheet.
+  A **detail view SHARES its parent's projection** rather than re-projecting: that is what
+  makes it provably a clip of exactly the line work the parent shows rather than a second
+  answer to the same question, and it is why the oracle is exact — a detail whose disc
+  contains the whole parent clips nothing, so at magnification 2 it draws exactly twice the
+  parent's sheet line length. A **broken view** is a monotone MAP on the view's own
+  coordinates (identity below the band, a shift above it, the band compressed onto the gap)
+  applied where the placement is applied, plus a clip that removes the band's interior from
+  the line work. **That is what keeps its dimensions true with no special case**: a
+  `SheetAnnotation` reads its VALUE from its anchors in model coordinates and draws its
+  anatomy through the view's map, so a dimension spanning the break measures the part's real
+  length while its arrows land on the shortened drawing — the value never went through the
+  break at all. The break's gap is stated in MODEL units deliberately: a paper gap would make
+  the view's size a function of the drawing scale and the scale a function of the view's
+  size, which is circular.
+- **Auto-dimensioning reads the graph, and its placement rule is stated rather than
+  searched.** `AutoDimension.Apply` places overall extents plus one callout per hole family,
+  and it reads the construction graph exactly as `HoleTable.For(part)` does — the same
+  reason a hole table cannot put an M6 callout on an M10 hole. Only the PATTERN is inferred,
+  and both recognitions are closed form: a bolt circle is "every point the same distance from
+  their centroid", which is what `LocationSet.Polar` constructs, so its diameter comes back
+  as exactly twice that distance; a grid is "the distinct x and y coordinates are evenly
+  spaced and every combination is present", so its pitches are exactly what `Grid` was given.
+  Anything else is reported as NO pattern rather than an approximate one. A family whose axis
+  is not along the line of sight gets no callout at all, since a callout on an edge-on hole
+  points at a rectangle. **The placement is three disjoint bands** — width below, height
+  left, callouts out to a common column on the right one text block apart — which is what
+  makes "nothing it places overlaps anything else or the view" a property a test asserts
+  rather than a hope, where a packing search would have to be trusted.
+- **A BOM balloon anchors on VISIBLE line work of the occurrence it labels**, which is why
+  `HiddenLineRun` now carries the occurrence PATH of the instance that produced it. Two
+  failure modes are structural without it: a balloon on a dashed edge points through the
+  material at something the reader cannot see, and one on the neighbour's outline labels the
+  wrong part. Which point is a DECISION rather than a search — the extreme point along the
+  leader's own direction, ties broken by run order — so it is deterministic and the leader
+  always runs outward. `SheetPartsList` and `BomBalloons` read ONE `Bom`, the item number
+  being its own line index, so a drawing cannot label a part with a number its own list does
+  not carry. **The fixture that proves it needed correcting once**, which is the finding
+  worth keeping: on a scene of two separated parts the visibility half of the claim held
+  vacuously (a hidden run never won the extreme test), so dropping the visibility filter
+  entirely changed nothing — the fixture now hides one part's extreme corner behind its
+  neighbour, and both halves are mutation-checked.
+- **One real defect came out of the wiring, and it belonged to the PDF writer**: an
+  auto-dimensioned sheet could not be written to PDF at all, because a hole callout carries
+  the depth arrow U+21A7 and the WinAnsi encoder refuses any character it cannot carry BY
+  NAME. The refusal is right — a silent `?` in a dimension is a wrong drawing — and what
+  was missing is that the depth, counterbore and countersink symbols have no single glyph to
+  stand in for them the way U+2300 has O-stroke. They are now spelled out in the WORD forms
+  ASME Y14.5 itself permits (`PdfDrawing.DraftingWords`: DEEP, CBORE, CSK), which is the
+  diameter sign's substitution generalised to the symbols that cannot become a character.
+  **It can only turn a REFUSAL into output** — every one of them threw before — so no PDF
+  that already existed moves a byte, which is what makes it safe to add to a format whose
+  whole claim is a byte fixed point.
 
 ## 6d. ECAD — schematics and the connectivity data model (`EngrCAD.Ecad`)
 

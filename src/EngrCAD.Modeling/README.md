@@ -3422,8 +3422,10 @@ usable on its own.
 
 **Hidden-line removal** (`HiddenLineRemoval.Project`) projects instances into a view
 frame (`StandardViews.SheetFrame` — X sheet-right, Y sheet-up, Z toward the viewer) and
-returns classified 2D polylines: `HiddenLineRun(Points, Visibility, Source)`, visible or
-hidden, from a modelled edge or a mesh-derived silhouette. Two edge sets go in — a
+returns classified 2D polylines: `HiddenLineRun(Points, Visibility, Source, Instance)`,
+visible or hidden, from a modelled edge or a mesh-derived silhouette, each naming the
+occurrence path of the instance that produced it (what lets a BOM balloon anchor on the
+line work of the part it labels rather than on whatever is nearest). Two edge sets go in — a
 part's `GetFeatureEdges` (the ACTUAL B-Rep edge curves for a B-Rep part, so a bore rim
 is a smooth circle at any mesh quality) and, for the curved surfaces with no modelled
 edge at their outline, the display mesh's view-dependent silhouette, faceted and
@@ -3542,8 +3544,77 @@ opt-in sheet-standard furniture — the ISO 5457 zone grid (column numbers, row 
 omitted) and centring marks, drawn in the margin band so they never reach the drawing area —
 OFF by default (`FrameStandards.None`), so nothing existing moves; `FrameStandards.Iso5457`
 turns them on. The `TitleBlock` gained `Project` and `Sheet` (N-of-M) fields for completeness
-(scale stays derived, never a settable field it could contradict); the ISO 7200 field layout
-is filed. Docs: `docs/examples/drawings.md#the-shared-frame`.
+(scale stays derived, never a settable field it could contradict).
+Docs: `docs/examples/drawings.md#the-shared-frame`.
+
+**Sheet standards** (`FrameStandards`, `Iso5457Zones`, `Iso7200TitleBlock`). The ISO 5457 zone
+COUNTS are the standard's own, transcribed per sheet size (A0 24x16, A1 16x12, A2 12x8,
+A3 8x6, A4 6x4, along the long side by across the short one) with the nominal-field rounding
+kept as the fallback for a paper the standard does not tabulate. The match is on the PAPER's
+own dimensions rather than a format name, so a portrait sheet and a custom format that
+happens to be A3 both get A3's counts. A0, A1 and A2 each gain one division against the old
+rounding; A3 and A4 are unchanged, so every committed A3/A4 drawing is byte-identical.
+`Iso7200TitleBlock` is a second `TitleBlockLayout` printing ISO 7200's data fields, with the
+four the standard makes mandatory marked as such in `Iso7200TitleBlock.Fields` (the
+transcription a test reads back, so the layout cannot silently drop one); it rides as an
+override (`DrawingSheet.TitleBlockLayoutOverride`), so a sheet that says nothing keeps the
+engineering block. `FrameStandards.ProjectionSymbol` draws the ISO 128 truncated-cone symbol,
+DERIVED rather than transcribed: put the frustum's axis along the sheet's x with its small end
+to the left and the second view is the one looking along the axis at that small end, so the
+sheet's OWN layout rule (a view from the left goes left in third angle, right in first) decides
+which side the pair of concentric circles sits on. It needs both halves to ask for it -- the
+standards must switch it on and the frame must know its `Projection` -- so a schematic frame,
+which has no projection, cannot draw one.
+
+**Derived views** (`DrawingView.SectionOf`/`DetailOf`, `ViewBreak`, `ViewMarker`). One view can
+now say something about another: `ViewOrigin` is a parent view, a letter and which derivation
+it is, and `DrawingSheet.Compute` walks it once, building a marker per derived view and handing
+it to the PARENT's own compute -- so a mark is a fact about the child drawn in the parent's
+coordinates, with no second declaration to drift. A marker is deliberately NOT a
+`SheetAnnotation`: an annotation is something the caller placed, all of it on the dimensions
+layer, whereas a marker is a drawing CONVENTION with its own layers (a cutting line
+chain-dashed on the section layer, a detail circle continuous on the new `SheetLayers.Symbol`),
+hence `DrawingViewContent.Symbols`, a layered segment list beside the one-layer `Dimensions`.
+A **cutting line** shows as a line exactly when the section's direction is perpendicular to the
+parent's -- projecting a plane along a direction not in it covers the whole sheet -- and
+anything else is refused by name at the call. A **detail view** SHARES its parent's projection
+rather than re-projecting, which makes it provably a clip of exactly the line work the parent
+shows: at magnification 2 a detail whose disc contains the whole parent draws exactly twice the
+parent's sheet line length. A **broken view** is a monotone MAP on the view's own coordinates
+(identity below the band, a shift above it, the band compressed onto the gap) applied where the
+placement is applied, plus a clip; that is what keeps its dimensions TRUE with no special case,
+since a `SheetAnnotation` reads its value from its anchors in model coordinates and draws its
+anatomy through the map. The break's gap is stated in MODEL units, deliberately: a paper gap
+would make the view's size a function of the scale and the scale a function of the view's size.
+
+**Auto-dimensioning** (`AutoDimension.Apply`) places the overall extents of a view plus one
+callout per hole family, reading the construction graph exactly as `HoleTable.For(part)` does
+-- the same reason a hole table cannot put an M6 callout on an M10 hole. Only the PATTERN is
+inferred and both recognitions are closed form (a bolt circle is "every point the same distance
+from their centroid", a grid is "the distinct x and y coordinates are evenly spaced and every
+combination is present"); anything else is reported as no pattern rather than an approximate
+one, and a family whose axis is not along the line of sight gets no callout at all. Everything
+it adds is an ordinary annotation on the view, so explicit placement stays the contract. The
+placement is three disjoint bands -- width below, height left, callouts out to a common column
+on the right one text block apart -- which is what makes "nothing it places overlaps anything
+else or the view" a property a test asserts rather than a hope.
+
+**Balloons and a parts list** (`SheetPartsList`, `BomBalloons.Attach`). Both read ONE `Bom`, the
+item number being its own line index, so a drawing cannot label a part with a number its own
+list does not carry. A balloon's leader anchors on a VISIBLE point of the line work of the
+occurrence it labels (`HiddenLineRun.Instance`), never on a dashed edge -- which would point
+through the material at something the reader cannot see -- and never on a neighbour's outline;
+a part with no visible line work in that view simply gets no balloon. Which point is a DECISION
+rather than a search (the extreme point along the leader's own direction, ties broken by run
+order), so it is deterministic and the leader always runs outward.
+
+**One PDF finding rode along**: an auto-dimensioned sheet could not be written to PDF at all,
+because a hole callout carries the depth arrow U+21A7 and the WinAnsi encoder refuses any
+character it cannot carry by name (rightly -- a silent `?` in a dimension is a wrong drawing).
+The depth, counterbore and countersink symbols have no single glyph to stand in for them the
+way U+2300 has O-stroke, so they are spelled out in the WORD forms ASME Y14.5 permits
+(`PdfDrawing.DraftingWords`: DEEP, CBORE, CSK). It can only turn a REFUSAL into output, so no
+PDF that already existed moves a byte.
 
 ## Time-varying models (`TimeVaryingModel.cs`)
 
