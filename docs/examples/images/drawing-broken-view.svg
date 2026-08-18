@@ -1,0 +1,94 @@
+<svg viewBox="0 -210 297 210" width="297mm" height="210mm" xmlns="http://www.w3.org/2000/svg">
+  <g transform="scale(1,-1)">
+    <g id="visible" class="visible" fill="none" stroke="#111111" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M112 114 L112 126 L112 114" />
+      <path d="M188 114 L188 126 L188 114" />
+      <path d="M188 114 L188 114.45672280493228 L188 114 L153 114" />
+      <path d="M147 114 L112 114" />
+      <path d="M112 126 L147 126" />
+      <path d="M153 126 L188 126" />
+      <path d="M112 116.66657860188238 L112 115.01118232618472" />
+      <path d="M112 124.98881767381526 L112 123.33342139811761" />
+      <path d="M112 121.17054193209677 L112 125.88471168241938 L112 121.17054193209677 L112 123.33342139811761" />
+      <path d="M112 115.01118232618472 L112 116.66657860188238" />
+      <path d="M188 124.24264068711929 L188 125.54327719506773 L188 122.29610059419055 L188 124.24264068711929" />
+      <path d="M188 115.75735931288072 L188 120" />
+      <path d="M188 117.70389940580947 L188 125.54327719506773 L188 114.45672280493228 L188 122.29610059419055" />
+    </g>
+    <g id="border" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 10 L287 10" />
+      <path d="M287 10 L287 200" />
+      <path d="M287 200 L10 200" />
+      <path d="M10 200 L10 10" />
+    </g>
+    <g id="titleblock" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M107 10 L287 10" />
+      <path d="M287 10 L287 50" />
+      <path d="M287 50 L107 50" />
+      <path d="M107 50 L107 10" />
+      <path d="M107 36.66666666666667 L287 36.66666666666667" />
+      <path d="M107 23.333333333333336 L287 23.333333333333336" />
+    </g>
+    <g id="dimensions" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M112 112.83333333333333 L112 96.25" />
+      <path d="M188 112.83333333333333 L188 96.25" />
+      <path d="M112 98 L188 98" />
+      <path d="M112 98 L114.91666666666667 99.02083333333333" />
+      <path d="M112 98 L114.91666666666667 96.97916666666667" />
+      <path d="M188 98 L185.08333333333334 96.97916666666667" />
+      <path d="M188 98 L185.08333333333334 99.02083333333333" />
+      <path d="M110.83333333333333 114 L96.25 114" />
+      <path d="M110.83333333333333 126 L96.25 126" />
+      <path d="M98 114 L98 126" />
+      <path d="M98 114 L96.97916666666667 116.91666666666667" />
+      <path d="M98 114 L99.02083333333333 116.91666666666667" />
+      <path d="M98 126 L99.02083333333333 123.08333333333333" />
+      <path d="M98 126 L96.97916666666667 123.08333333333333" />
+    </g>
+    <g id="symbol" class="thin" fill="none" stroke="#111111" stroke-width="0.18" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M147 113.39999999999999 L149.1 114.5" />
+      <path d="M149.1 114.5 L144.9 115.6" />
+      <path d="M144.9 115.6 L149.1 116.7" />
+      <path d="M149.1 116.7 L144.9 117.8" />
+      <path d="M144.9 117.8 L149.1 118.9" />
+      <path d="M149.1 118.9 L144.9 120" />
+      <path d="M144.9 120 L149.1 121.1" />
+      <path d="M149.1 121.1 L144.9 122.2" />
+      <path d="M144.9 122.2 L149.1 123.3" />
+      <path d="M149.1 123.3 L144.9 124.4" />
+      <path d="M144.9 124.4 L149.1 125.5" />
+      <path d="M149.1 125.5 L147 126.60000000000001" />
+      <path d="M153 113.39999999999999 L155.1 114.5" />
+      <path d="M155.1 114.5 L150.9 115.6" />
+      <path d="M150.9 115.6 L155.1 116.7" />
+      <path d="M155.1 116.7 L150.9 117.8" />
+      <path d="M150.9 117.8 L155.1 118.9" />
+      <path d="M155.1 118.9 L150.9 120" />
+      <path d="M150.9 120 L155.1 121.1" />
+      <path d="M155.1 121.1 L150.9 122.2" />
+      <path d="M150.9 122.2 L155.1 123.3" />
+      <path d="M155.1 123.3 L150.9 124.4" />
+      <path d="M150.9 124.4 L155.1 125.5" />
+      <path d="M155.1 125.5 L153 126.60000000000001" />
+    </g>
+  </g>
+  <g id="titleblock" fill="#111111" stroke="none" font-family="Helvetica, Arial, sans-serif">
+    <text x="110" y="-40.833333333333336" font-size="7.142857142857143" text-anchor="start">DRIVE SHAFT</text>
+    <text x="110" y="-32.1" font-size="3.5714285714285716" text-anchor="start">DWG</text>
+    <text x="110" y="-28.250000000000004" font-size="5" text-anchor="start">EC-1121</text>
+    <text x="168" y="-32.1" font-size="3.5714285714285716" text-anchor="start">MATERIAL</text>
+    <text x="226" y="-32.1" font-size="3.5714285714285716" text-anchor="start">FINISH</text>
+    <text x="110" y="-18.76666666666667" font-size="3.5714285714285716" text-anchor="start">DRAWN</text>
+    <text x="168" y="-18.76666666666667" font-size="3.5714285714285716" text-anchor="start">DATE</text>
+    <text x="226" y="-18.76666666666667" font-size="3.5714285714285716" text-anchor="start">REV</text>
+    <text x="284" y="-14.916666666666668" font-size="5" text-anchor="end">SCALE 1:2</text>
+    <text x="284" y="-28.250000000000004" font-size="5" text-anchor="end">THIRD ANGLE</text>
+  </g>
+  <g id="dimensions" fill="#111111" stroke="none" font-family="Helvetica, Arial, sans-serif">
+    <text x="150" y="-93.33333333333333" font-size="5" text-anchor="middle">400</text>
+    <text x="95.08333333333333" y="-118.25" font-size="5" text-anchor="middle">24</text>
+  </g>
+  <g id="visible" fill="#111111" stroke="none" font-family="Helvetica, Arial, sans-serif">
+    <text x="150" y="-85.33333333333333" font-size="7.142857142857143" text-anchor="middle">SHAFT</text>
+  </g>
+</svg>

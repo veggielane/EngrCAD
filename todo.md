@@ -1348,45 +1348,43 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] **HLR / drawing follow-ups** (v1 ✅ landed — `HiddenLineRemoval` classifying exact
   B-Rep feature edges against the display mesh, `DrawingSheet`/`DrawingView` with
   third/first-angle standard layouts and section views, `SheetAnnotation` dimensions,
-  SVG/DXF sheet export; `docs/examples/drawings.md`):
+  SVG/DXF/PDF sheet export; ✅ the derived-view wave landed too — the view-to-view
+  reference with cut-plane indication, detail and broken views, auto-dimensioning,
+  BOM-linked balloons with a parts list, and the three sheet standards; see
+  `docs/examples/drawings.md` and design.md §6c):
   - [ ] **Exact HLR** (OCCT `HLRBRep`): project edges AND true silhouette curves and
     classify algebraically against every face, instead of ray-casting against the
     display mesh. Blocked on the B-Rep silhouette item in the OpenSCAD section — with
     exact silhouette curves the rest is the same splitting machinery the boolean
     already has. The seam is right today (a list of classified 2D polylines), so this
     is a swap behind `HiddenLineRemoval.Project`, not a rewrite of the sheet layer.
-  - [ ] **Auto-dimensioning**: a first pass placing the obvious dimensions (overall
-    extents per view, hole diameters and their bolt-circle or grid spacing) from the
-    graph's own `DrillShape`/`LocationSet` nodes, the way `HoleTable.For(part)` already
-    reads them. Explicit placement stays the contract; this is a starting point, not a
-    replacement.
-  - [ ] **BOM-linked balloons**: `SheetBalloon` draws a circled string today, and `Bom`
-    already numbers distinct parts — connecting them means picking a leader anchor per
-    occurrence from the projection (a visible point on that instance's line work) and
-    emitting a parts-list table beside the title block.
-  - [ ] **More sheet standards** (the shared `DrawingFrame` landed with the ISO 5457 zone
-    grid + centring marks and the B-series/ANSI paper table; these three remain). The
-    third/first-angle projection SYMBOL as geometry rather than the words the title block
-    prints today. An **ISO 7200 field layout** — a full new `TitleBlockLayout` beside the
-    engineering and schematic ones (its own cell arrangement; wants a datasheet to get the
-    exact fields right, which is why it was filed rather than half-built), which is what the
-    `TitleBlock.Project`/`Sheet` fields already carry data for. **Exact per-size ISO 5457
-    zone COUNTS**: `FrameStandards` derives the column/row count from a nominal field size,
-    where ISO 5457 fixes a specific count per sheet size in a small table — transcribe it
-    (verify-against-datasheet), keeping the nominal-size path as the fallback for a custom
-    sheet.
-  - [ ] **Detail views** (a scaled-up circle of a region) and **broken views** (a long
-    part with its middle removed). Both are clipping problems on top of the existing
-    view, not new projections.
-  - [ ] **Cut-plane indication**: a section view is drawn correctly but nothing marks
-    WHERE it was cut on its parent view — the chain-dashed cutting line with its arrows
-    and letters. Needs a view-to-view reference, which the sheet model does not have
-    yet.
   - [ ] **Corner resolution**: within one bias step of a model vertex the local-surface
     read picks up the far side's faces, so a hidden run stops that far short of its
     corner (measured: three junctions on a box cost 0.037 of an analytic 57.155, i.e.
     one bias each). Absorbed by the minimum-run rule and far below drawing resolution,
     but an exact HLR would not have it at all.
+  - [ ] **Derived-view residuals**, each refused BY NAME today with its own reason: a
+    DETAIL of a section view (its hatched cut faces are regions, and clipping a region
+    to a circle is a 2D boolean the view deliberately does not perform — the break map
+    has the same gap, so a broken section is refused too); a MARK on a broken parent (a
+    cutting line across a break would have to be drawn in two pieces and no convention
+    here says which); a detail whose boundary is the conventional freehand break rather
+    than a full circle; and section-view *identification* beyond one letter (a sheet
+    carrying A-A and B-B works, but nothing checks that two sections did not claim the
+    same letter).
+  - [ ] **Auto-dimensioning beyond the obvious**: v1 places overall extents and one
+    callout per hole family, and the placement rule is three disjoint bands (below,
+    left, a right-hand column), which is what makes non-overlap provable rather than
+    hoped for. What it does not do: chain or ordinate dimensioning off a stated datum,
+    dimensions between FEATURES (two bore centres) rather than to the view's extents,
+    a solve that packs dimensions into the space actually available, and any awareness
+    of the OTHER views on the sheet — two views dimensioned automatically can both
+    state the same 90 mm width, which a drafter would put on one of them.
+  - [ ] **A parts list that is more than a table**: `SheetPartsList` prints item, qty,
+    name and material from one `Bom`, and a balloon anchors on visible line work of the
+    occurrence it labels. Filed: balloon LEADER placement is a fixed direction (they can
+    collide on a busy assembly, where a real drafter fans them round the part), stacked
+    balloons for a fastener stack, and a list that continues onto a second sheet.
 - [ ] **Document framework residuals** (the OCAF assessment's verdict held: do NOT port
   OCAF's label-tree/attribute model; `Scene`/`Tab`/`Part` with `FeatureHistory` as the
   parametric core is the document, and one versioned envelope is the persistence. Landed:
