@@ -173,13 +173,166 @@ TrueType outlines: `head`, `maxp`, `cmap` (formats 4 and 12), `loca`, `glyf` (si
 `kern` and `OS/2`. The reader is hand-rolled and dependency-free, like the PNG writer.
 
 OpenType/CFF fonts (`.otf`, PostScript Type 2 charstrings — cubic Béziers) load the
-same way, including CID-keyed fonts; `font.HasPostScriptOutlines` reports which flavour
-you got. A nameplate in an `.otf` face is exactly the code above with a different path —
+same way, including CID-keyed fonts and the variable **`CFF2`** flavour;
+`font.HasPostScriptOutlines` reports which flavour you got. A nameplate in an `.otf` face is exactly the code above with a different path —
 `TrueTypeFont.Load(@"C:\path\to\SourceSans3-Regular.otf")` — and the geometry is just as
 exact, with cubic glyph walls becoming exact NURBS profiles in B-Rep.
 
-TrueType Collections (`.ttc`) and variable-font `CFF2` tables are **rejected with a
-clear message** rather than partially misread — support for them is future work.
+Variable fonts load too, in both flavours — `glyf` outlines varied by `gvar`, and
+PostScript `CFF2` charstrings blended by their own variation store. See below.
+
+TrueType Collections (`.ttc`) are **rejected with a clear message** rather than
+partially misread — support for them is future work.
+
+## Variable fonts
+
+A variable font ships one set of outlines plus **deltas** along named **axes** — weight,
+width, optical size — so one file spans a whole family. `WithVariation` picks a point in
+that space and hands back an ordinary font:
+
+```csharp
+var bold = font.WithVariation(("wght", 700), ("wdth", 75));
+var text = Shape.Text("SLOT", bold, size: 12, height: 2);
+```
+
+Everything downstream is untouched: `Shape.Text`, `TextOnPath`, `TextFeature`, layout,
+kerning and the three representations all take the instanced font exactly as they take a
+static one. Instancing moves control points; it invents no new curve kind, so **modelled
+variable text is still Native in B-Rep, mesh and implicit**.
+
+What the font tells you about itself:
+
+| Member | Answer |
+| --- | --- |
+| `font.IsVariable` | Does it carry an `fvar` table at all? |
+| `font.VariationAxes` | Tag, minimum, default, maximum, UI name, hidden flag. |
+| `font.NamedInstances` | The named points the designer shipped ("Bold", "Condensed Light"). |
+| `font.Variation` | The coordinate *this* font object sits at (empty for an un-instanced one). |
+| `font.WithNamedInstance(name)` | An instance by its own name. |
+| `font.DefaultSettings` | Every axis at its default. |
+
+A coordinate outside an axis's range **clamps** rather than throwing (the specification's
+own rule — a design space has edges), and an unknown axis tag is refused by name.
+
+A whole family from one file, then, without a second font to keep in step:
+
+```csharp
+string fonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+var font = TrueTypeFont.Load(Path.Combine(fonts, "bahnschrift.ttf"));
+var weight = font.VariationAxes.Single(a => a.Tag == "wght");
+
+var plane = SketchPlane.At((0, 0, 2), Vector3d.UnitY, -Vector3d.UnitX);
+foreach (double w in new[] { weight.Minimum, weight.Default, weight.Maximum })
+{
+    var instance = font.WithVariation(("wght", w));
+    var letters = Shape.Text("SLOT", instance, instance.EmSizeForCapHeight(9), height: 1.2,
+        plane, new TextStyle { Align = TextAlign.Center });
+    // ... place it
+}
+```
+
+The letters get heavier without getting **taller** — that is what separates a real weight
+axis from scaling the text, and it is asserted rather than eyeballed: the cap height of a
+varied glyph does not move with weight.
+
+### Why this page has no rendered figure
+
+Every other example here renders a picture from a snippet the documentation build actually
+executes. This one does not, and the reason is worth stating rather than leaving as a gap:
+**the build has no variable font it can rely on.** The examples that need a font load one
+from the system font folder (`arial.ttf`, `segoeui.ttf`, `verdana.ttf` — present on every
+Windows install, including the Server SKU the docs build runs on), and there is no variable
+font with that guarantee: Bahnschrift arrived with a Windows 10 desktop update and Segoe UI
+Variable is Windows 11 only. A figure that renders on a developer's laptop and not on the
+build machine is worse than no figure — it would either fail the deploy or quietly ship a
+picture nobody could regenerate.
+
+So the geometry is verified where it can be checked exactly instead: against **synthetic
+fonts built byte by byte** in the test suite, whose deltas are chosen so every expected
+coordinate is an exact binary fraction, and against whatever real variable font a developer
+machine happens to have (structural claims only — heavier is heavier, the default instance
+is bit-identical). If you have one installed, the snippet below runs those checks on it.
+
+### Two properties worth knowing
+
+**The default coordinate is bit-identical to the un-instanced font.** Not close — identical:
+every region's scalar is exactly zero at the default, so nothing is added to any point, and
+the check is a bit comparison rather than a tolerance.
+
+**Layout follows the instance's own advances.** A variable font may vary its advance widths
+(through `HVAR`, or through the glyph's own phantom points where it does not), so a heavier
+instance genuinely lays a string out wider — the text is not simply drawn fatter in the same
+space. Measured on Segoe UI Variable: `"Handgloves"` at 100 em units lays out **493.85** at
+the light end of the weight axis and **556.59** at the heavy end, 12.7% wider.
+
+Both are checked here on whatever variable font this machine has, and skipped when it has
+none:
+
+```csharp run:text-variable-properties
+string fonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+string? path = new[] { "bahnschrift.ttf", "SegUIVar.ttf" }
+    .Select(name => Path.Combine(fonts, name)).FirstOrDefault(File.Exists);
+
+if (path is not null)
+{
+    var font = TrueTypeFont.Load(path);
+    var weight = font.VariationAxes.Single(a => a.Tag == "wght");
+
+    // Layout follows the instance's own advances.
+    double light = TextOutlines.AdvanceWidth("Handgloves", font.WithVariation(("wght", weight.Minimum)), 100);
+    double heavy = TextOutlines.AdvanceWidth("Handgloves", font.WithVariation(("wght", weight.Maximum)), 100);
+    if (heavy < light - 1e-9)
+        throw new Exception($"a bold instance should not lay out narrower: {heavy} vs {light}");
+
+    // The default coordinate reproduces the un-instanced outlines exactly.
+    var defaulted = font.WithVariation();
+    foreach (char c in "Handgloves")
+    {
+        if (!font.TryGetGlyphIndex(c, out int index))
+            continue;
+        var plain = font.GetGlyph(index);
+        var same = defaulted.GetGlyph(index);
+        for (int k = 0; k < plain.Contours.Count; k++)
+            for (int i = 0; i < plain.Contours[k].Points.Count; i++)
+                if (BitConverter.DoubleToInt64Bits(plain.Contours[k].Points[i].Position.X)
+                    != BitConverter.DoubleToInt64Bits(same.Contours[k].Points[i].Position.X))
+                    throw new Exception($"the default instance moved a point of '{c}'");
+    }
+}
+```
+
+### What it reads, and what it refuses
+
+Read: `fvar` (axes and named instances), `avar` version 1 (the piecewise segment maps that
+warp a normalised coordinate), `gvar` (per-glyph deltas — shared and embedded peak tuples,
+intermediate regions, shared and private packed point numbers, packed deltas, and **IUP**
+for the points a tuple does not name), the four **phantom points** that carry a varied
+advance, composite glyphs (whose component *offsets* vary), `HVAR` where present, and
+`CFF2` (`vsindex`/`blend` over an item variation store).
+
+Refused **by name**, each for its own reason rather than as a gap to be discovered:
+
+- **`avar` version 2** — its axis-mapping graph can make one axis's value depend on another,
+  which is a different normalisation, not a bigger table.
+- **`cvar`** — hinting deltas; this kernel never runs the hinting interpreter.
+- **`MVAR` / `VVAR`** — varied *metrics* (line gap, underline, vertical advances) that
+  nothing here consumes yet.
+- **`STAT`** — the style-attribute table a UI uses to name a coordinate; it carries no
+  geometry.
+- **Feature variations** (`GSUB`/`GPOS` `FeatureVariations`) — substituting a *different
+  glyph* past a coordinate threshold, which changes which outline is drawn rather than
+  where its points are.
+
+### Persistence
+
+A variation is data, and it still does not travel through `SaveHistory` — because the
+**font** does not. A `TextFeature` carries its font as a constructor input, a font is a
+binary blob with no data form, and the feature is already opaque to whole-history
+persistence (its type, name and `[Param]` values are written; a load skips it with a warning
+unless a `resolveOpaque` hook rebuilds it). The variation travels *with* the font object the
+hook supplies, so there is nothing extra to serialize and — more usefully — no way for a
+saved coordinate to disagree with the font it was measured against.
+
 
 ## Engraving
 

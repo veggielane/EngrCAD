@@ -1660,9 +1660,8 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
   (formats 4 and 12), `loca`, `glyf` (simple **and** composite glyphs, with the
   repeat/short-vector coordinate compression), `hhea`/`hmtx`, plus optional `kern`
   (format 0), `name` and `OS/2`. Hinting instructions are skipped — modeled text is
-  resolution independent. **TrueType Collections (`.ttc`) and variable-font `CFF2`
-  tables are rejected with a message naming the limitation**, never silently
-  mis-modeled.
+  resolution independent. **TrueType Collections (`.ttc`) are rejected with a message
+  naming the limitation**, never silently mis-modeled.
 - **OpenType/CFF (`.otf`) fonts work too** (`Text/CffOutlines.cs`): `OTTO` containers
   store glyphs as PostScript Type 2 charstrings — cubic Béziers — parsed by the same
   hand-rolled approach (INDEX/DICT structures, local + global subroutines with the
@@ -1676,6 +1675,26 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
   the synthetic-font tests pin decoded outlines to exact coordinates (CFF's cousin of
   TrueType's implied-midpoint subtlety). Legacy `seac` accent composition and the
   Type 2 arithmetic operators are rejected by name.
+- **Variable fonts load in both flavours** (`Text/Variations.cs`,
+  `Text/GlyphVariations.cs`, `Text/Cff2Outlines.cs`): `fvar` axes and named instances,
+  `avar` version 1 segment maps, `gvar` per-glyph deltas (shared and embedded peak
+  tuples, intermediate regions, shared and private packed point numbers, packed deltas,
+  **IUP** for the points a tuple does not name, composite-glyph component offsets, and
+  the four phantom points that carry a varied advance), `HVAR` where present, and
+  `CFF2`'s `blend`/`vsindex` over the same `ItemVariationStore` `HVAR` reads.
+  `font.WithVariation(("wght", 700))` returns an instanced font, so `Shape.Text`,
+  `TextOnPath`, `TextFeature` and layout are untouched — instancing moves control points
+  and invents no new curve kind, so modelled variable text stays Native in all three
+  representations. `IsVariable`/`VariationAxes`/`NamedInstances`/`Variation`/
+  `WithNamedInstance`/`DefaultSettings` are the surface; an out-of-range coordinate
+  **clamps** (the specification's own rule) and an unknown axis tag is refused by name.
+  **The default coordinate is bit-identical to the un-instanced read** — every region's
+  scalar is exactly zero there, so nothing is added to any point, and the tests compare
+  bits rather than a tolerance. Refused by name, each because it is a different question
+  rather than a bigger table: `avar` version 2 (its mapping graph makes one axis depend
+  on another), `cvar` (hinting deltas — the interpreter is never run), `MVAR`/`VVAR`
+  (varied metrics nothing here consumes), `STAT` (naming, no geometry) and feature
+  variations (substituting a different *glyph*, not moving points).
 - **Size is the em size** (the typographic meaning of "12 point"); capitals are shorter.
   When a drawing specifies letter height, convert with `font.EmSizeForCapHeight(h)`.
 - **The origin is the baseline** at the start of the first line — x along the writing
@@ -3501,8 +3520,7 @@ untouched (a volumetric grid is not a per-radius quantity).
 
 Sketch constraint solver (see todo.md), mesh→B-Rep import
 (unlock blends → B-Rep), fillets on `Shape` with edge selectors, ellipsoid surfaces for
-non-uniformly scaled spheres. For text: text on a curve, variable fonts (`fvar`/`gvar`/
-`CFF2`), and B-Rep booleans for sketch-extrusion tools (which
+non-uniformly scaled spheres. For text: B-Rep booleans for sketch-extrusion tools (which
 would make engraving B-Rep-native). For standard components: more families (button and
 countersunk heads, nuts, washers, bearings), higher body fidelity (hex sockets, modeled
 threads on the shank, knurled inserts), and stacks that anchor into a placed component
