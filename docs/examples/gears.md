@@ -19,9 +19,9 @@ distance against its mate's outline.
 | Form | Route | Exact in | The honest limit |
 |---|---|---|---|
 | **Spur** (involute) | biarc-fitted involute flanks, deviation reported | all three | — |
-| **Helical** | the spur profile as the *transverse* section, twisted extrusion | mesh, implicit | a twist has no exact B-Rep form |
+| **Helical** | the spur profile as the *transverse* section, twisted extrusion | all three | — |
 | **Herringbone** | two opposite-hand halves welded by index at a mirror plane | mesh, implicit | the apex relief groove is refused — see below |
-| **Crossed helical** | two helicals on skew shafts, `Σ = β₁ + β₂` | mesh, implicit | **point** contact, so it carries little load |
+| **Crossed helical** | two helicals on skew shafts, `Σ = β₁ + β₂` | all three | **point** contact, so it carries little load |
 | **Rack** | straight flanks — the involute's own limit | all three | — |
 | **Worm** | a thread: one boolean-free helical sweep of a ZA profile | all three | — |
 | **Worm wheel** | a helical gear at the worm's lead angle | mesh, implicit | the **crossed-helical approximation**, not a throated wheel |
@@ -370,9 +370,12 @@ spur profile as the **transverse** section and rides the twisted extrusion, so t
 helix angle is realised as a twist of `faceWidth·tan β / r_pitch` radians over the
 face.
 
-The representation cost is real and `Explain` states it: a twist has no exact
-B-Rep form, so a helical gear is **mesh and implicit only** where a spur gear is
-exact in all three. Helix angles are limited to ±60°.
+A helical gear is **exact in all three representations**, as a spur gear is: the
+twisted extrusion's side surfaces are analytic (`TwistedSurface`), so the lowering
+is B-Rep-Native and `Explain` says so. A 24-tooth, module-2 gear at a 20 degree
+helix lowers to a Validate-clean 915-face solid whose tessellation closes — one
+exact surface per biarc of every flank. Helix angles are limited to plus or minus
+60 degrees.
 
 ```csharp render:gear-helical
 // The same 24-tooth spec cut straight and at a 20-degree helix, side by side.

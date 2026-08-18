@@ -4568,6 +4568,89 @@ reverses B's kept faces *properly*: loops re-wound (order and senses) in additio
 there. Boolean results therefore pass `Validate()` and Euler–Poincaré with the correct
 genus.
 
+### Twisted extrusions — an exact surface, and what the u density has to be
+
+A twisted extrusion had been B-Rep-**Impossible**, lowering to a direct mesh section
+sweep, which cost it everything a solid gets from being exact: no STEP or archive, no
+booleans, no filleting, and a volume that converged with the *slice count* rather than
+with the tessellation. `TwistedSurface` closes it, and the surface was never the hard
+part — the section map is a rotation times a positive diagonal scale, so
+
+```
+P(u, v) = R_z(theta*v) . diag(lerp(1, sx, v), lerp(1, sy, v)) . C(u) + h*v*zhat
+```
+
+in the axis frame, with `dP/du` the rotated and scaled generator derivative and `dP/dv`
+the sum of a scale term, a `theta*J` rotation term and `h*zhat`. Inverse evaluation is
+the swept family's own structure — **two decoupled 1-D solves**, since the section map
+moves nothing axially, so `v` is fixed by the axial coordinate alone and `u` follows
+from a 2-D match against that section — with the recorded multi-seed rule (refine from
+every local minimum *and its two neighbours*), because a folded generator otherwise
+returns the mirrored parameter silently.
+
+**The volume identity is what makes the surface checkable rather than plausible.** Every
+section of a twisted prism is the base section *rotated*, and a rotation preserves area,
+so Cavalieri gives exactly `A*h` for **any** twist angle; a linear taper multiplies it by
+the prismatoid factor `(1 + s + s^2)/3`, and a per-axis taper by
+`(2 + sx + sy + 2*sx*sy)/6`, which reduces to the frustum factor at `sx == sy`. A
+construction that shears, double-counts or mis-maps a section cannot land on those
+numbers, where "the shape looks twisted" is satisfied by almost anything. Measured
+(win-x64, 128 segments per circle) on a 20x20 square twisted a quarter turn over 40:
+16000.000584 against 16000, and 3.6e-8 / 4.6e-8 / 5.4e-8 relative for the taper family —
+the grade of the tessellate-then-Richardson measurement, not of the geometry, which is
+exact. The tessellation then converges on those values quadratically: errors
+104.27 / 27.58 / 9.169 / 2.600 / 0.6504 / 0.1626 at 16/32/64/128/256/512 segments per
+circle, ratios ... 3.997 / 3.999, monotone throughout — so the recorded fixed-sampling
+FLOOR signature (a stalling, sign-flipping error) is excluded rather than assumed away.
+
+**The u density is the one thing that had to be got right, and it is the mesh route's own
+recorded lesson turned into a rule.** A wall panel lerps a long edge's lateral rotation
+linearly, so a profile subdivided only by its own curvature converges FIRST order however
+fine `v` gets — which is exactly why the mesh sweep needed twist-matched profile
+subdivision (measured deficit 286 -> 33 -> 8.2 at 8/64/256 slices). `TwistedSurface.
+PanelSegments` sizes `u` so no wall panel spans more than one `segmentsPerCircle` step of
+ARC at the section's own radius, and the instrument is mutation-checked rather than
+trusted: at 64 and 128 a one-panel side measures a convergence ratio of 2.30 (first
+order) where the production count measures 3.99.
+
+**`PanelSegments` is a property of the SURFACE, not of an edge** — the finding that cost a
+real defect. Asking it of the edge's own curve in `SampleEdge` and of the generator in
+`GridParams` rounds the two apart the moment the top scale is ANISOTROPIC, because a top
+edge's length-to-radius ratio is no longer the bottom's; `IsFullDomainFace` then fails
+and the face drops to the trimmed path. Measured on a 0.5 x 1.5 taper: 5152 faces
+against 1076 for the isotropic control, with the volume OSCILLATING
+(14513 / 14089 / 14685 / 14399 / 14536 at 32..512) rather than converging. Scanning BOTH
+sections and taking the finer count fixes it — 1256 faces, 14673.96 against a
+closed-form 14666.67 at 64, the isotropic control's own grade.
+
+**The tracer must LAND on a twisted band's rails**, which is what unblocked
+`Shape.Section` on a twisted body. `TryLandOnDomain` was gated on the anisotropic seed
+pass, and a twisted square's aspect (~2) sits under that threshold, so each of the four
+branches stopped ~0.19 short at BOTH ends and left 0.59 corner gaps — an outline that
+crosses itself, refused three stages downstream with a message about the loop. The gate
+is widened by NAME (either surface is twisted) rather than by lowering the aspect
+threshold, because the recorded revert says a wider scope reaches whole-solid fillet
+bands and trades one refusal for another. A twisted section now returns one region of
+area exactly 400.000000 with a branch spanning exactly 20.0000.
+
+Placement follows the family's rules with one derivation. `GeometryTransform` carries the
+twist, height, scale and domain VERBATIM under a proper rigid motion — a similarity
+preserves angles, so the twist RATE is an angle per unit `v` and does not scale, while
+the height is a length and rides the uniform factor. A reflection is refused there (it is
+a proper-motion seam) and answered one layer up by `Shape.Mirror`, which re-DECLARES the
+twist with the opposite sign: under a reflection F, `F.Rot(Z, theta).F = Rot(F.Z, -theta)`,
+so the reflected solid is the same profile about the mapped axis with the twist negated,
+and the per-axis scale is untouched because a diagonal scale on the mapped axes is the
+same diagonal scale. Verified on an **L** section rather than a square — a section
+symmetric in the mirror plane cannot show that the section was reflected too, the
+recorded secretly-benign-fixture trap — measuring 4.0e-15 from the reflected declaration
+and 11.19 from the un-negated one.
+
+Refused by name: a STEP export (no AP214 entity — the swept bucket, with `BrepArchive`
+round-tripping it losslessly instead), an axis lying in the profile plane, a
+non-positive or non-finite height, and a sheared or non-uniformly scaled placement
+(it would change the section family, so it is not a re-placement at all).
+
 ### Direct editing (`DirectEdit`) — the operation an imported body needs
 
 Every other modelling operation here edits a RECIPE. An imported STEP or IGES body has

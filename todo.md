@@ -793,12 +793,25 @@ export — is recorded in CLAUDE.md):
   tangent exists). Also open: the CURVED tier's variable twin (`CurvedRegion2dOffset`
   — a variable offset of an ARC is a spiral, not an arc, so it needs a fit tier), and
   `Sketch.Offset` exposure once erosion composes.
-- [ ] **Twist-extrude follow-ups** (`Shape.Extrude(sketch, height, twist, scale, slices)`
-  ✅ landed — taper = B-Rep-Native ruled loft, twist = direct mesh section sweep with
-  twist-matched profile subdivision + collinear-chord-zip caps, implicit via mesh SDF):
-  an exact twisted B-Rep surface type would make twist Native (big kernel feature, low
-  priority); tapered sketches with holes are B-Rep-Native now (loft sections carry
-  holes).
+- [ ] **Twisted-extrusion residuals** (`TwistedSurface` ✅ landed — a twist is
+  B-Rep-**Native**, holes included, with the `A*h` volume identity and quadratic
+  convergence; see design.md §5 "Twisted extrusions"):
+  - [ ] **The MESH and IMPLICIT lowerings still go through `TwistedExtrusion`**, the
+    direct section sweep, rather than through the exact B-Rep's own tessellation — so
+    one declaration currently has two geometries, differing by whatever the sweep's
+    slice count and the tessellator's densities disagree about. Left deliberately, so
+    every committed render and every existing mesh/implicit consumer stays byte-identical
+    at the landing; switching them is a separate measured change (compare the two
+    volumes and the docs PNGs before adopting, and decide what `slices` then means).
+  - [ ] **Rim features refuse on a twisted body** — `Shape.Fillet`/`Chamfer` on the top
+    or bottom cap reports "Straight rim edges need planar neighbor faces", which is
+    correct today (the neighbour is a `TwistedSurface`, and the band would have to meet
+    a surface whose tangent turns along the rim). A twisted body's cap rim is a genuine
+    manufacturing feature, so the blend surface it needs is worth costing.
+  - [ ] **No STEP entity**, so a scene carrying a twisted body throws by name on
+    `--export .step` exactly as a helical thread or a loft does (`BrepArchive` carries
+    it losslessly). An approximating NURBS export would be the escape hatch, and would
+    have to state its deviation.
 - [ ] **Planar-view follow-ups** (`PlanarSection.OfMesh`/`OfSolid`/`SilhouetteOfMesh` +
   `Shape.Section`/`Shape.Silhouette` ✅ landed — both OpenSCAD `projection` modes):
   - [x] ~~**`Region2dBoolean` leaves ~1e-7-area pinholes at near-tangency.**~~ **CLOSED

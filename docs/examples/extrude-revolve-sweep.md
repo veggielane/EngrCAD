@@ -48,16 +48,83 @@ scene.Add(new Part("tapered boss",
 
 ![A star profile twisted through a quarter turn beside a tapered square boss](images/extrude-twist.png)
 
-Representation support is honest about what each case is:
+**Both cases are B-Rep-Native**, and each for its own reason:
 
-- A **pure taper** (`twist: 0`) is **B-Rep-Native** — every straight side sweeps an
-  exact plane through the scaling centre, so the solid is a ruled loft between the
-  base and the scaled top (a tapered sketch *with holes* is B-Rep-Impossible until
-  loft sections support holes; cut the hole after the taper, or use mesh/implicit).
-- A **nonzero twist** has no analytic side surface, so it is B-Rep-Impossible: the
-  mesh lowering sweeps section rings directly (`slices` controls the ring count;
-  omitted, it derives from the twist and the mesh quality), and the implicit lowering
-  wraps that mesh in a mesh SDF. `Explain(target)` reports each case.
+- A **pure taper** (`twist: 0`) is a ruled loft — every straight side sweeps an exact
+  plane through the scaling centre, so the solid is the skin between the base section
+  and the scaled top, holes included.
+- A **twist** has an exact analytic side surface too. `TwistedSurface` is
+  `P(u, v) = R_z(theta*v) . diag(lerp(1, sx, v), lerp(1, sy, v)) . C(u) + h*v*zhat`:
+  one surface per profile segment, with both partials in closed form, so the twisted
+  body carries the same guarantees every other exact solid does — `Validate()` passes,
+  it survives booleans, it archives losslessly, and its volume converges quadratically.
+
+`slices` therefore only affects the **mesh** lowering (a direct section sweep) and the
+implicit one on top of it; the B-Rep is exact whatever it says. `Explain(target)`
+reports each case.
+
+The volume is the identity that says the surface is right. Every section of a twisted
+prism is the base section *rotated*, and a rotation preserves area — so a pure twist
+encloses **exactly** the untwisted volume `A*h`, whatever the twist angle. A linear
+taper multiplies it by the prismatoid factor `(1 + s + s^2)/3`, and a per-axis taper by
+`(2 + sx + sy + 2*sx*sy)/6`, which reduces to the frustum factor at `sx == sy`. Measured
+on a 20x20 square twisted a quarter turn over 40 (win-x64, 128 segments per circle):
+16000.000584 against 16000 for the pure twist, and 3.8e-8 to 5.4e-8 relative for the
+tapered cases — the grade of reading a volume off the tessellation, not of the geometry.
+
+### A twisted profile with holes
+
+A hole twists about the **same axis** as the outline, so its inner skin is one more
+twisted surface per hole segment and nothing about the construction changes:
+
+```csharp render:extrude-twist-holes
+var plate = Sketch.Rectangle(30, 30)
+    .WithHole(Sketch.Circle(new Vector2d(8, 8), 6))
+    .WithHole(Sketch.Circle(new Vector2d(-8, -8), 6));
+
+var scene = new Scene();
+scene.Add(new Part("twisted plate", Shape.Extrude(plate, 45, twist: Math.PI / 3), Palette.Brass));
+```
+
+![A square plate with two bores extruded through a 60-degree twist](images/extrude-twist-holes.png)
+
+### Twist and taper together
+
+The two compose — the section at height fraction `t` is scaled per axis *and* rotated,
+so an anisotropic taper is an ordinary case rather than a third parameter:
+
+```csharp render:extrude-twist-taper
+var scene = new Scene();
+scene.Add(new Part("square to slot",
+    Shape.Extrude(Sketch.Rectangle(26, 26), 50, twist: Math.PI / 2, scale: (0.4, 1.1)),
+    Palette.Steel));
+```
+
+![A square section twisted a quarter turn while tapering to a narrow slot](images/extrude-twist-taper.png)
+
+### What being exact buys: booleans on a twisted body
+
+This is the figure the mesh route could not produce. A cross-hole through a twisted,
+tapered column is an ordinary exact B-Rep boolean — the tool's cylinder meets each
+twisted band transversally, the bore rim is a real edge, and the result passes
+`Validate()`:
+
+```csharp render:extrude-twist-boolean
+var column = Shape.Extrude(Sketch.Rectangle(24, 24), 60, twist: Math.PI / 2, scale: 0.7);
+var bore = Shape.Cylinder(5, 60).Rotate(Vector3d.UnitX, 90).Translate(0, 0, 30);
+
+var scene = new Scene();
+scene.Add(new Part("bored column", column - bore, Palette.Copper));
+```
+
+![A twisted tapered column with a cross hole bored through it](images/extrude-twist-boolean.png)
+
+Refused by name rather than approximated: a **STEP export** of a twisted body (the
+format has no entity for the surface — the swept bucket, alongside helical threads and
+lofts; `BrepArchive` round-trips it losslessly instead), and a **sheared or
+non-uniformly scaled placement** (it would change the section family, so it is not a
+re-placement at all). Rim features refuse on a twisted side face for the reason they
+always do — a straight rim edge needs planar neighbours.
 
 ## Extrude and cut *until* a face
 

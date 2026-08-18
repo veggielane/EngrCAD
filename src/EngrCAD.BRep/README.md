@@ -234,7 +234,30 @@ operations. Depends only on `EngrCAD.Core`.
   P(u, v) = O + X·r(v)·cos u + Y·r(v)·sin u + Z·(z(v) + pitch·u/2π) with (r(v), z(v))
   linear from `ProfileStart` to `ProfileEnd`, u a finite turning-angle interval spanning
   all turns (NOT periodic — the axial advance makes every u distinct, so inverse
-  evaluation never wraps a seam), v ∈ [0, 1]; and `LoftedSurface` — the lateral skin of a
+  evaluation never wraps a seam); **`TwistedSurface`** — the side surface of a twisted
+  and/or tapered extrusion, one per profile segment:
+  P(u, v) = R_z(θ·v)·diag(lerp(1, sx, v), lerp(1, sy, v))·C(u) + h·v·ẑ in the axis
+  frame, with both partials closed form (∂P/∂u is the rotated, scaled generator
+  derivative; ∂P/∂v carries the scale term, the θ·J rotation term and h·ẑ). Inverse
+  evaluation is TWO DECOUPLED 1-D SOLVES — v is fixed by the axial coordinate alone
+  (v = (p·ẑ)/h in the axis frame, since the section map moves nothing axially), then u
+  by a 2-D match against that section, the structure `ExtrudedSurface`/`RevolvedSurface`/
+  `SweptSurface` already use and with the same multi-seed rule (refine from every local
+  minimum AND its two neighbours). `IsTwisted` is an exact-zero semantic test, so a
+  zero-twist extrusion never reaches this type at all; `NaturalVSegments` gives v the
+  density the TWIST rate asks for (|θ| over one segments-per-circle step) rather than a
+  constant, and `PanelSegments` gives u enough panels that no wall panel spans more than
+  one such step of ARC at the section's own radius — which is what restores SECOND-order
+  convergence, since a wall panel lerps a long edge's lateral rotation linearly and a
+  profile subdivided only by its own curvature converges first order. **`PanelSegments`
+  is a property of the SURFACE, not of an edge**: an anisotropic top scale changes a top
+  edge's length-to-radius ratio, so asking the edge and asking the generator round to
+  different counts, `IsFullDomainFace` then fails and the face drops to the trimmed
+  path (measured 5152 faces against 1076 for the isotropic control, with the volume
+  OSCILLATING instead of converging) — so it scans BOTH sections and takes the finer.
+  `TwistedRailCurve` is the v rail a fixed local section point traces, the curve
+  `SolidFactory.TwistExtrude` hands `BuildSweptSolid` for its junction edges; and
+  `LoftedSurface` — the lateral skin of a
   loft, P(u, v) = Σ α_k(v)·C_k(u_k) with u_k the section curve's own parameter at the
   normalized u, both parameters over [0, 1]. The blend α is the **cardinal basis** of
   B-spline interpolation (A[k][j] = N_{j,p}(v_k) at the section parameters,
