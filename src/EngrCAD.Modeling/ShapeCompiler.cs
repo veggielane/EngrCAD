@@ -218,8 +218,8 @@ internal static class ShapeCompiler
                 ClassifyBrep(edit.Child, m, entries);
                 entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
-                        "face offset/move/delete on the lowered solid (DirectEdit); the corner and heal " +
-                        "constraints validate at lowering")
+                        "face offset/move/rotate/replace/delete on the lowered solid (DirectEdit); the " +
+                        "corner, orientation and heal constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with a face edit"));
                 break;

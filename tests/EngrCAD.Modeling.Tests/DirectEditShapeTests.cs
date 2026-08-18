@@ -81,17 +81,44 @@ public class DirectEditShapeTests
     }
 
     [Fact]
-    public void EveryDirectEdit_ExplainsAsBRepNative()
+    public void EveryDirectEdit_ExplainsAsBRepNative_MirrorsIncluded()
     {
-        foreach (var shape in (Shape[])
+        // The docs page claims this of ALL FIVE under any similarity INCLUDING a mirror, so
+        // the coverage is the claim rather than a sample: each edit is asked plain, under a
+        // uniform scale and under a reflection. A distance is a length, a translation takes
+        // its linear image, an ANGLE is preserved by every similarity, a replacement carrier
+        // is placed by the same map, and a deletion is purely topological — so none of the
+        // five has anything a similarity could fail to commute with.
+        var cone = new RevolvedSurface(
+            new Line3d(new Vector3d(6, 0, -6), new Vector3d(3, 0, 6)),
+            Vector3d.Zero, Vector3d.UnitZ);
+
+        foreach (var edit in (Func<Shape>[])
                  [
-                     Shape.Box(20, 30, 10).OffsetFaces(4, Top),
-                     Shape.Box(20, 30, 10).MoveFaces(new Vector3d(0, 0, 4), Top),
+                     () => Shape.Box(20, 30, 10).OffsetFaces(4, Top),
+                     () => Shape.Box(20, 30, 10).MoveFaces(new Vector3d(0, 0, 4), Top),
+                     () => Shape.Box(20, 30, 10).RotateFaces(
+                         new Ray3d((10, 0, -5), Vector3d.UnitY), 5,
+                         FaceSetRef.PlanarWithNormal(Vector3d.UnitX)),
+                     () => Shape.Cylinder(6, 12).ReplaceFaceSurfaces(cone, FaceSetRef.Cylindrical(6)),
+                     () => Shape.Box(20, 30, 10).DeleteFaces(FaceSetRef.Cylindrical()),
                  ])
         {
-            var report = shape.Explain(TargetRep.Brep);
-            Assert.All(report.Entries, e => Assert.NotEqual(NodeSupport.Impossible, e.Support));
-            Assert.Contains(report.Entries, e => e.Node.Contains("Faces"));
+            foreach (var placed in (Shape[])
+                     [
+                         edit(),
+                         edit().Scale(2),
+                         edit().Mirror(Vector3d.Zero, Vector3d.UnitX),
+                     ])
+            {
+                var report = placed.Explain(TargetRep.Brep);
+                Assert.All(report.Entries, e => Assert.NotEqual(NodeSupport.Impossible, e.Support));
+                // Case-INSENSITIVE on purpose: `ReplaceFaceSurfaces` spells its own node with
+                // a capital S, so a "Faces" substring test would pass four edits and fail the
+                // fifth on nothing but a name.
+                Assert.Contains(report.Entries, e =>
+                    e.Node.Contains("face", StringComparison.OrdinalIgnoreCase));
+            }
         }
     }
 

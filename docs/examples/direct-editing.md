@@ -199,7 +199,12 @@ Three things are checked before anything moves, and each is refused by name:
   here.
 - **Every rim must have an exact intersection with its neighbour.** A replacement whose
   edges would only be traceable is refused rather than chorded in.
-- **The selection must not be empty**, and the result must still `Validate()`.
+- **The selection must not be empty** — a replacement that names no face is a caller
+  mistake, not a no-op.
+
+The topology is the input's, carried over rather than rebuilt, so what a replacement can
+break is the *geometry* — which is what the first two gates are about. The input itself
+must be a valid single-shell solid, and it is `Validate()`d before anything is read.
 
 ## Deleting a feature
 
