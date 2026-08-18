@@ -432,6 +432,52 @@ public sealed class Sketch
         double chordTolerance = DefaultChordTolerance) =>
         Region2dOffset.Offset(ToRegions(chordTolerance), delta, join, miterLimit, chordTolerance);
 
+    /// <summary>
+    /// This sketch grown or shrunk by a distance that VARIES around the outline — a draft
+    /// that eases off, a wall thicker on one side, a clearance that opens toward an opening.
+    /// The law is stated as a function of POSITION, and the sign carries the direction
+    /// exactly as the constant overload's does: all positive grows, all negative shrinks, a
+    /// law that disagrees with itself is refused by name.
+    ///
+    /// <para><b>Why a positional law rather than a list of distances.</b> A sketch's outline
+    /// is FLATTENED before it becomes a region, so "one distance per vertex" would be one
+    /// distance per CHORD of a flattened arc — a count the caller cannot know and an order
+    /// that depends on winding and on hole nesting. A function of position is independent of
+    /// all three, composes with holes for free (a hole's boundary points get their own
+    /// values, and a positive law advances the material into the hole exactly as it advances
+    /// outward), and is the spelling a designer means.</para>
+    ///
+    /// <para><b>What it costs, stated:</b> the law is SAMPLED at the flattened boundary
+    /// vertices and interpolated linearly in arc length between them, so a law that is AFFINE
+    /// in position is reproduced exactly along every straight edge, while a curved law
+    /// carries the flattening's own sampling. Tighten <paramref name="chordTolerance"/> to
+    /// sample it more finely — the same knob that controls the arcs.</para>
+    /// </summary>
+    /// <param name="distanceAt">Signed offset distance at a boundary point.</param>
+    /// <param name="chordTolerance">Flattening tolerance, which is also the law's own sample
+    /// spacing and the round joins' inscribed-arc tolerance.</param>
+    public IReadOnlyList<Region2d> Offset(
+        Func<Vector2d, double> distanceAt, double chordTolerance = DefaultChordTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(distanceAt);
+        var offset = new List<Region2d>();
+        foreach (var region in ToRegions(chordTolerance))
+        {
+            var perLoop = new List<IReadOnlyList<double>>();
+            foreach (var loop in region.AllLoops())
+            {
+                var law = new double[loop.Count];
+                for (int i = 0; i < loop.Count; i++)
+                    law[i] = distanceAt(loop[i]);
+                perLoop.Add(law);
+            }
+            offset.AddRange(Region2dOffset.Offset(region, perLoop, chordTolerance));
+        }
+        // Several regions of one sketch can grow into each other, so they are read as one
+        // area exactly as the constant set overload reads them.
+        return offset.Count > 1 ? Region2dBoolean.UnionAll(offset) : offset;
+    }
+
     // ---- curved regions + EXACT 2D booleans ----
 
     /// <summary>
@@ -513,6 +559,46 @@ public sealed class Sketch
         double miterLimit = Region2dOffset.DefaultMiterLimit,
         double chordTolerance = DefaultChordTolerance) =>
         CurvedRegion2dOffset.Offset(ToCurvedRegions(chordTolerance), delta, join, miterLimit);
+
+    /// <summary>
+    /// The variable offset with ARCS KEPT — the exact tier's twin of
+    /// <see cref="Offset(Func{Vector2d, double}, double)"/>. The law is sampled at each edge's
+    /// own START, so it is stated per SEGMENT rather than per flattened chord and an arc keeps
+    /// its own single value at each end.
+    ///
+    /// <para><b>This tier reports what it fitted.</b> Straight edges keep exact tangent slabs
+    /// and vertex joins are exact sectors, so an outline of lines and a hole under a locally
+    /// constant law come back with a deviation of exactly ZERO — better than the flattened
+    /// route, whose round joins are inscribed. An ARC under a genuinely varying law is the one
+    /// fitted primitive (its swept boundary is a spiral, not an arc), and
+    /// <see cref="CurvedRegion2dOffset.CurvedVariableOffset.MaxDeviation"/> says by how
+    /// much.</para>
+    /// </summary>
+    public CurvedRegion2dOffset.CurvedVariableOffset OffsetExact(
+        Func<Vector2d, double> distanceAt,
+        double fitTolerance = CurvedRegion2dOffset.DefaultFitTolerance,
+        double chordTolerance = DefaultChordTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(distanceAt);
+        var offset = new List<CurvedRegion2d>();
+        double deviation = 0;
+        foreach (var region in ToCurvedRegions(chordTolerance))
+        {
+            var perLoop = new List<IReadOnlyList<double>>();
+            foreach (var loop in region.AllLoops())
+            {
+                var law = new double[loop.Count];
+                for (int i = 0; i < loop.Count; i++)
+                    law[i] = distanceAt(loop[i].Start);
+                perLoop.Add(law);
+            }
+            var one = CurvedRegion2dOffset.Offset(region, perLoop, fitTolerance);
+            deviation = Math.Max(deviation, one.MaxDeviation);
+            offset.AddRange(one.Regions);
+        }
+        var merged = offset.Count > 1 ? CurvedRegion2dBoolean.UnionAll(offset) : offset;
+        return new CurvedRegion2dOffset.CurvedVariableOffset(merged, deviation, fitTolerance);
+    }
 
     /// <summary>
     /// This sketch's OUTLINE stroked to the given width — the ribbon a pen of that width

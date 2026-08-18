@@ -183,6 +183,24 @@ concerns.
   circuit (first point repeated) encloses its hole. With round caps and joins a
   stroke is the path's Minkowski sum with a disk, short only of the inscribed-arc
   sagitta; straight-segment butt/square/miter strokes are exact.
+  **`Offset(region, distances)` / `Offset(region, distancesPerLoop)`** is the VARIABLE
+  offset: one distance per vertex, interpolated linearly in arc length, one list per loop
+  in `AllLoops` order. The SIGN carries the direction as the constant overload's does —
+  all positive dilates, all negative erodes, a mixed law refused by name — and all-equal
+  distances DELEGATE to the constant path, so that case is bit-identical by construction.
+  Three things are worth knowing. The slab is the external **TANGENT** slab, tilted off
+  the normal by `sin φ = Δr/L`, not the trapezoid through the two offset endpoints, which
+  under-covers near the smaller end by exactly the tangency wedge. **Erosion needs no
+  frame**: the complement trick's frame CANCELS (`B \ ((B∖R) ∪ collar ∪ frameCollar)` is
+  `R ∖ collar` exactly), so an erosion is the region minus the inward collar built from
+  the same primitives with the normal flipped. And a distance is how far the material
+  advances into the VOID on every loop alike, so one positive law grows the outline and
+  shrinks each hole with no separate rule — which follows from the canonical form already
+  keeping material on the LEFT of every loop. Which corners take a join swaps with the
+  direction and is a derivation rather than a negation: `Cross(−a, −b)` equals
+  `Cross(a, b)` exactly, so the inward pass hands the pair to the join in the REVERSED
+  order. Refused by name: a mixed-sign law, a zero or non-finite distance, and an edge
+  whose distance changes by more than its own length (no external tangent exists there).
 - **`Geometry2.SpaceFillingCurve`** + **`Geometry2.Morton2d`** — finite-order Hilbert /
   Moore / Peano / Gosper / Z-order curves laid over a region (`Over(bounds|region, family,
   spacing)`), plus their integer lattices (`LatticeSites`, `AreNeighbours`, `ToPlane`).
@@ -289,6 +307,22 @@ tier carries **lines and circular arcs through the arrangement unflattened**.
 - **`Geometry2.CurveIntersection2d`** — line/line, line/arc and arc/arc in closed form.
 - **`Geometry2.CurvedArrangement2d`** + **`CurvedRegion2dBoolean`** + **`CurvedRegion2dOffset`**
   — the same three algorithms as the polygonal path, with arcs surviving.
+
+**`CurvedRegion2dOffset.Offset(region, distances[, fitTolerance])`** is the curved tier's
+VARIABLE twin, and the one place in that file where something is fitted — so it returns a
+`CurvedVariableOffset` carrying `MaxDeviation` beside the regions (the `BiArcFit.MaxDeviation`
+convention). A straight edge's varying-offset boundary is still a straight tangent line and a
+vertex join is still an exact sector, so **a polygonal outline is EXACT here** — deviation
+exactly zero, and a larger area than the polygonal tier's, whose joins are inscribed. An ARC's
+is not: substituting the arc into the tangency condition gives
+`q(u) = C + (R + σ·r(u)·cos φ)·û − sign(Δ)·r(u)·sin φ·t̂` with `sin φ = Δr/L` constant along the
+edge, a **spiral** representable in no tier whose vocabulary is lines and circles, so it is
+fitted by recursive bisection (a circle through three points per span, endpoints exact so the
+pieces weld and the tolerance is spent strictly between joints) with the measured departure
+reported. An edge whose law is locally CONSTANT takes an exact concentric branch, so a bore
+under one stated distance stays exact. Refused by name beside the polygonal tier's own list: an
+arc whose offset reaches its own CENTRE (the swept boundary has a cusp there rather than a
+spiral, and the constant tier's pie-slice degeneration has no varying-radius counterpart).
 
 **`CurvedRegion2dOffset.Stroke(path, width, cap, join)`** is the curved twin of the polygonal
 `Stroke` above, and it is where the tier's exactness becomes an *equality* rather than a

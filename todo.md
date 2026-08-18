@@ -763,23 +763,31 @@ export — is recorded in CLAUDE.md):
   corner joins so reversals get round noses, closed circuits enclose holes; **exact
   curved offsets ✅ landed** — `CurvedRegion2dOffset` keeps arcs as arcs and makes round
   joins true sectors, which retires the inscribed-arc contract rather than honouring it):
-  **variable offset along the
-  outline ✅ landed** (`Region2dOffset.Offset(region, distances)` — per-vertex distances,
-  linear in arc length, all-equal delegating to the constant path bit-identically) —
-  **and the filed construction was WRONG in the instructive direction**: the exact slab
-  of a linearly varying disc is bounded by the EXTERNAL TANGENT line of the two end
-  circles (tilt sin φ = Δr/L), not the trapezoid through the offset endpoints, which
-  under-covers near the smaller end by the tangency wedge (asserted by a witness point
-  between the secant and the tangent). Verified by an EXACT membership oracle — the
-  per-edge minimisation of |p − e(t)|² − r(t)² is QUADRATIC in t, so the predicate is
-  closed form and thousands of grid probes assert the built region against it outside
-  the join arcs' chord band. Refused by name: holes (compose outer and holes yourself,
-  v1), non-positive distances (variable EROSION stays open here — the complement trick
-  needs the frame's distances defined, a real design question), and an edge whose
-  distance changes by more than its length (the larger disc swallows the sweep; no
-  tangent exists). Also open: the CURVED tier's variable twin (`CurvedRegion2dOffset`
-  — a variable offset of an ARC is a spiral, not an arc, so it needs a fit tier), and
-  `Sketch.Offset` exposure once erosion composes.
+  **variable offsets ✅ landed in full** — per-vertex distances linear in arc length,
+  variable EROSION, HOLES, the curved tier's fitted spiral twin and the `Sketch` law;
+  see design.md §2b and `docs/examples/variable-offset.md`. What remains:
+  - [ ] **A variable-WIDTH stroke.** `Stroke(path, width, …)` is constant-width in both
+    tiers, and the primitives for a varying one exist — a full-width slab is two one-sided
+    tangent slabs back to back, so a per-vertex width raises the same shapes with
+    `sin φ = Δ(w/2)/L` on each side. What is NOT already there is the contract: a stroke
+    has no material side, so "the tangent tilts toward the smaller end" must be stated
+    twice with opposite signs, and a width changing faster than the path advances
+    degenerates on one side before the other. Worth doing for a tapered toolpath bead and
+    a calligraphic pen; the refusal to copy is the swallow guard.
+  - [ ] **A Bézier edge under a variable law.** Still refused with the constant tier's own
+    reason (a cubic's offset is a degree-10 algebraic curve), and the variable case is
+    strictly worse rather than differently hard, so nothing here is a new gap — the fit
+    tier that now exists for the ARC spiral is the shape a Bézier answer would take, and
+    the honest route stays `ToRegion(chordTolerance)` then the polygonal offset.
+  - [ ] **An arc whose variable offset reaches its own CENTRE**, refused by name in the
+    curved tier: the constant tier degenerates there to an exact pie slice, and a varying
+    radius has no such degeneration (the swept boundary has a cusp rather than a spiral).
+    A caller splits the edge or eases the law; a real answer needs the cusp as geometry.
+  - [ ] **`Sketch.Offset(law)` samples the law at FLATTENED vertices.** Exact for an affine
+    law along every straight edge (asserted by refinement insensitivity, with a quadratic
+    control) and carrying the flattening's own sampling otherwise. Carrying segment
+    identity through `ToRegions` so the law could be evaluated per SEGMENT would remove
+    that, and it is a change to the flattening's output rather than to the offset.
 - [ ] **Twist-extrude follow-ups** (`Shape.Extrude(sketch, height, twist, scale, slices)`
   ✅ landed — taper = B-Rep-Native ruled loft, twist = direct mesh section sweep with
   twist-matched profile subdivision + collinear-chord-zip caps, implicit via mesh SDF):
@@ -897,15 +905,17 @@ export — is recorded in CLAUDE.md):
     changes. The anchoring survives either way — `patternUnits="userSpaceOnUse"` is
     origin-anchored exactly as the exact even-odd scan already is — so what is at stake is
     the content model, not the geometry.
-- [ ] **DXF SPLINE follow-up: general B-spline decomposition.** Reading converts degree 1
-  and cubics ALREADY in Bézier form; a general (uniform, or unevenly-knotted) B-spline is
-  reported rather than sampled, which is right but leaves real third-party files on the
-  floor. The exact fix is knot insertion to full multiplicity (The NURBS Book A5.6 Bézier
-  decomposition) and it belongs in `EngrCAD.BRep` beside `BSplineBasis` — which is already
-  public — not in a file reader; the DXF side is then two lines. Rational splines stay
-  refused for a different reason: a sketch's `CubicSeg` is polynomial, so exactness would
-  need a rational segment type, which is a `Sketch` vocabulary change rather than an
-  import one.
+- [ ] **A RATIONAL sketch segment.** `BSplineDecomposition` decomposes a rational spline
+  exactly (it carries homogeneous coordinates, so a DXF weighted SPLINE comes back as
+  rational Bézier pieces), and the DXF reader still refuses one — but for the SKETCH's
+  reason rather than the decomposition's: `CubicSeg` is polynomial, so a conic drawn as a
+  rational cubic has no exact sketch form. Adding one would let an imported rational
+  spline, a projected NURBS silhouette and `NurbsCurve2d`'s own rational members reach a
+  sketch unflattened; the cost is that every `Sketch` consumer (`SketchRegion`'s exact
+  distance and monotone pieces, `ToCurves`/`FromCurves`, the JSON form, DXF/SVG/PDF
+  writing) gains a case, so it is a vocabulary decision rather than an import fix. Note
+  the ELLIPSE precedent cuts both ways: `EllipseSeg` covers the rational quadratics that
+  matter most, which is why this has stayed unnecessary.
 
 ## OpenCASCADE (OCCT) feature parity (open items)
 

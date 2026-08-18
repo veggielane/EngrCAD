@@ -93,6 +93,10 @@ if (Math.Abs(grown.Area - exact) > 1e-9)
     throw new Exception($"expected {exact}, got {grown.Area}");
 ```
 
+The offset distance need not be constant either — see
+[variable 2D offsets](variable-offset.md), where the law is a function of position, the
+sign carries grow-versus-shrink, and the exact tier reports what it had to fit.
+
 **What still flattens.** Béziers. The curved arrangement orders the curves meeting at a
 node by their tangent, breaking ties by curvature — which is decidable for lines and
 circles (a line and a circle never osculate, and two circles that osculate are one circle)

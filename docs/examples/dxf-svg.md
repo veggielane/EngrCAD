@@ -84,13 +84,67 @@ trip is exact either way — but a CAM post that expects one closed polyline per
 prefer the default. **A sketch with no cubics writes byte-for-byte the same file under
 either mode**, so the choice only ever affects Béziers.
 
-Reading is narrower than writing, deliberately. A degree-1 spline is a polyline, and a
-non-rational cubic whose interior knots all have multiplicity 3 is *already* a chain of
-Bézier segments, so its control points split four at a time with nothing computed — that
-covers what this writer emits and what a polybezier exporter emits. A **rational** spline
-has no polynomial cubic form, and a general B-spline needs knot-insertion Bézier
-decomposition; both are **reported by name** rather than sampled, because a sketch that
-silently carried a flattened curve would make every downstream "exact" claim false.
+## Any polynomial spline, whatever its knots
+
+Reading is no longer narrower than writing. A degree-1 spline is its own polyline; anything
+else goes through **Bézier decomposition** — knot insertion to full interior multiplicity
+(The NURBS Book A5.6), with an unclamped or uniform knot vector clamped first — which is a
+change of **basis**, so nothing is fitted or sampled. A file whose splines this library
+wrote is unaffected to the last bit: the insertion loop never runs where an interior knot's
+multiplicity already equals the degree, so a Bézier-form spline decomposes to itself.
+
+The shape worth showing is the one that used to be refused, because it is the one a
+careless reader gets *plausibly* wrong. Seven control points is a Bézier-compatible count
+(3k + 1), so splitting them four at a time produces a curve through the same endpoints and
+the wrong shape in between:
+
+```csharp render:dxf-spline-general
+// A clamped cubic with SINGLE interior knots - a genuine B-spline of four spans, not a
+// chain of Beziers. Splitting its control points four at a time would be silently wrong.
+Vector2d[] control =
+[
+    (0, 0), (10, 18), (26, -14), (40, 6), (54, 20), (68, -10), (80, 0),
+];
+var document = new DxfDocument();
+document.Add(new DxfSpline(control, 3, [0, 0, 0, 0, 1, 2, 3, 4, 4, 4, 4]));
+document.Add(new DxfLine((80, 0), (80, -26)));
+document.Add(new DxfLine((80, -26), (0, -26)));
+document.Add(new DxfLine((0, -26), (0, 0)));
+
+// Four knot spans, so four exact cubics - and nothing reported.
+var sketch = document.ToSketches(out var diagnostics).Single();
+if (diagnostics.Count != 0) throw new Exception(string.Join("; ", diagnostics));
+
+var curves = sketch.ToCurves();
+int cubics = curves.Count(c => c is BezierCurve2d);
+if (cubics != 4) throw new Exception($"expected one exact cubic per knot span, got {cubics}");
+if (curves.Count != 7) throw new Exception($"expected 4 cubics + 3 lines, got {curves.Count}");
+
+var scene = new Scene();
+scene.Add(new Part("profile", Shape.Extrude(sketch, 8)));
+```
+
+![A wavy profile extruded from a general B-spline read out of a DXF file](images/dxf-spline-general.png)
+
+What is still refused is refused for the **sketch's** reason rather than the
+decomposition's, and the messages say which — the distinction matters, because the old
+message ("needs knot insertion") read as a kernel gap:
+
+- a **rational** spline decomposes perfectly well, into rational Béziers, and a sketch's
+  Bézier segment is polynomial with no exact rational form;
+- a **degree 4 or higher** spline decomposes perfectly well too, and a sketch's highest
+  polynomial segment is a cubic, with no exact degree reduction.
+
+```csharp run:dxf-spline-refusals
+var rational = new DxfDocument();
+rational.Add(new DxfSpline([(0, 0), (3, 4), (7, -4), (10, 0)], 3, [0, 0, 0, 0, 1, 1, 1, 1], [1, 2, 2, 1]));
+rational.ToSketches(out var why);
+if (!why.Single().Contains("POLYNOMIAL")) throw new Exception(why.Single());
+```
+
+`BSplineDecomposition.ToBezierSegments` is public kernel API in `EngrCAD.BRep`, beside
+`BSplineBasis`: it takes any degree and carries weights (insertion runs on homogeneous
+coordinates), so a consumer that *can* hold a quartic or a rational piece gets one.
 
 ## Units are declared, and honoured
 
