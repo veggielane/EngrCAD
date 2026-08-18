@@ -409,6 +409,42 @@ public static class FaceGeometry
     }
 
     /// <summary>
+    /// The clip's containment test — whether a probe should be treated as belonging to a face —
+    /// in three parts, all three of which err toward INSIDE.
+    ///
+    /// <para><b>A point that does not project onto the face's surface at all counts as
+    /// inside.</b> A probe can fail to project for reasons that say nothing about the trim — a
+    /// tracer polyline is on its surface only at the vertices, and a stretch spanning none has
+    /// no exact interior sample.</para>
+    ///
+    /// <para><b>Parity is two-sided</b> (<see cref="ContainsTwoSided"/>), so a pole-bounded face
+    /// answers instead of calling every point on itself outside. Without it a sphere-through-a-box
+    /// union loses its whole seam curve and comes back at Euler 4.</para>
+    ///
+    /// <para><b>A stretch running ALONG the face's boundary counts as inside.</b> Parity there is
+    /// decided by rounding, and the geometry is exactly the case a clip must not touch: where two
+    /// solids mate, the shared rim IS a face boundary on one side.</para>
+    ///
+    /// <para><b>One rule, asked rather than restated</b> — but the FIRST clause's direction is
+    /// the caller's, because the two callers mean different things by a probe that will not
+    /// project. For a boolean's intersection curve it is a numerical accident (a tracer polyline
+    /// is on its surface only at the vertices) and must not lose a seam, so it counts as inside.
+    /// For a <see cref="BrepSilhouette"/> curve, which is CONSTRUCTED on the carrier and exact
+    /// everywhere, a projection failure is a statement about the DOMAIN — a partial revolve's
+    /// inverse evaluation refuses an azimuth outside its own sweep — so it counts as outside, and
+    /// erring the other way would draw a ruling on surface a quarter-turn face does not carry
+    /// (measured: both of a band's two rulings survived where only one is on the face).</para>
+    /// </summary>
+    public static bool InsideOrOnBoundary(
+        BrepFace face, in Vector3d probe, bool unprojectableCountsAsInside = true)
+    {
+        if (!face.Surface.TryProjectPoint(probe, out _, InverseEvaluationTolerance))
+            return unprojectableCountsAsInside;
+        return ContainsTwoSided(face, probe) ||
+               DistanceToBoundary(face, probe) <= SeamTolerance;
+    }
+
+    /// <summary>
     /// Crossings of the two v rays from the point's parameters against every pulled-back loop,
     /// or false when the point does not lie on the face's surface at all. Periodic u is handled
     /// by shifting each segment into the test point's period.

@@ -831,6 +831,54 @@ operations. Depends only on `EngrCAD.Core`.
   polylines stop short of a bounded generator's rings and could never refine against
   face boundaries.
 
+- **`BrepSilhouette`** — `OfSolid(solid, view)` / `OfFace(face, view)`: the TRUE silhouette
+  curves of a solid's own surfaces, for a `SilhouetteView.Along(direction)` parallel view or
+  a `SilhouetteView.From(eye)` perspective one. The silhouette is the zero set of
+  `g = N·d` (`N = dP/du x dP/dv`, never normalised — the SIGN is the whole content and a
+  division could only lose precision) or `N·(S − e)` in perspective.
+
+  **Most of it is closed form, and one derivation covers most of that.** A revolve's normal
+  is exactly `R_u M(v)` for a vector `M` of the generator alone, so `g` separates into
+  `A(v)cos u + B(v)sin u + C(v) = 0` and each azimuth is `u = phi(v) ± acos(−C/hypot(A,B))`
+  — a closed form rather than a root find, and the same shape serves perspective with the
+  eye offset folded into the coefficients. Cones and cylindrical bands fall out of it as
+  the case where `u` does not depend on `v` (their A, B and C all carry the same radius
+  factor, which cancels), so they come back as exact RULINGS with nothing special-cased;
+  a view ALONG the axis collapses A and B and leaves `C(v) = 0`, a condition on the
+  generator alone whose roots are exact latitude CIRCLES. An extrusion's normal is
+  independent of v, so its silhouette is rulings at the generator parameters where
+  `C'(u)·(dir x d)` vanishes — a 1-D root find whose answer is an exact `Line3d`. A sphere
+  gives its great circle (its polar circle in perspective); a plane is constant, so it is
+  either wholly edge-on or contributes nothing. **A revolve whose generator is a meridian
+  of a sphere is RECOGNISED as one** (two samples fix the centre and radius in closed form,
+  the rest verify), which is what makes `Shape.Sphere` — a revolve in this kernel —
+  silhouette exactly.
+
+  What is left (NURBS, swept, lofted, helical) is genuinely transcendental and is TRACED as
+  a level set on the parameter rectangle, following `SurfaceIntersection`'s discipline:
+  an anisotropy-aware seed grid, a march step measured in model units, and an exact landing
+  on the domain boundary rather than a stop one step short.
+
+  `SilhouetteFidelity` is a claim about the REPRESENTATION (`Exact` = an analytic curve
+  that IS the silhouette; `Sampled` = closed-form vertices chorded between; `Traced` =
+  Newton-corrected vertices), while `SilhouetteCurve.Deviation` is the MEASUREMENT — the
+  largest `|N.d|` over the curve's own exact samples, i.e. the SINE of the angle by which
+  the curve misses being edge-on, dimensionless and comparable across every curve kind.
+  Its floor is the surface's own INVERSE EVALUATION rather than the answer's accuracy (the
+  probe must project each sample back to read a normal), so an exactly-constructed revolve
+  circle reads ~1e-9 while its radius holds to nine decimals — the closed forms carry the
+  claims and the deviation corroborates.
+
+  Every curve is **clipped to its face's trim** for the reason `BrepBoolean.ClipToFace`
+  states (a carrier is unbounded or bounded only by its own parameter rectangle), through
+  the shared `FaceGeometry.InsideOrOnBoundary`. A PARTIAL revolve additionally filters its
+  azimuths at the SOURCE, because its inverse evaluation folds an out-of-sweep azimuth back
+  inside and the clip cannot see a ruling that belongs to the missing three quarters.
+  Faces with no silhouette CURVE are `Notes` rather than omissions — a plane seen edge-on,
+  a cylinder down its own axis, an eye inside a sphere — which is a statement about the
+  geometry rather than a gap. Consumed by `HiddenLineRemoval` (opt-in
+  `ExactSilhouettes`) and `Shape.SilhouetteCurves`; docs `examples/silhouettes.md`.
+
   **The tracer's numeric constants live in one place**: the private
   `SurfaceIntersection.TracerSettings` record struct (seed resolution and pairing radius,
   march step divisor, seed/branch/closure step multiples, Newton iteration counts, the

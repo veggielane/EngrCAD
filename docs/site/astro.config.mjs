@@ -195,6 +195,7 @@ document.addEventListener('click', function (event) {
             { label: 'Anti-drill tamper mesh', slug: 'examples/tamper-mesh' },
             { label: 'Packing a build plate', slug: 'examples/packing' },
             { label: 'Drawings (hidden lines, sheets, dimensions)', slug: 'examples/drawings' },
+            { label: 'Silhouettes (exact outlines of curved surfaces)', slug: 'examples/silhouettes' },
             { label: '3D annotations (PMI)', slug: 'examples/annotations' },
             { label: 'Exports', slug: 'examples/exports' },
           ],

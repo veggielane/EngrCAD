@@ -4760,6 +4760,156 @@ diagnostic with the coefficients believed. Reading the declaration is right when
 declaration is the only source (144's outer-vs-inner boundary); reading the geometry is
 right when the geometry is independently checkable.
 
+## 5b. Silhouettes (exact outlines of curved surfaces)
+
+`BrepSilhouette` answers a question the kernel could previously only answer from a
+tessellation: **where does a curved surface turn away from the viewer?** Every other line
+on a drawing is a modelled edge and comes out exact; the silhouette is the one part of the
+outline that the model carries no edge for at all, so it had to be read off the display
+mesh — which is why `HiddenLineRemoval` labels those runs `EdgeSource.Silhouette` and why
+exact hidden-line removal was blocked on this.
+
+### The condition, and why the normal is never normalised
+
+For a parallel view along `d`, the silhouette on `S(u, v)` is the zero set of
+
+```
+g(u, v) = N(u, v) . d,        N = dS/du x dS/dv
+```
+
+and for a perspective eye `e` it is `N . (S - e) = 0`. `Surface.NormalRawAt` is the seam
+this needs and it is deliberately NOT `NormalAt`: the **sign** of `g` is the entire content
+of the problem, a division by `|N|` can only lose precision, and a pole has no unit normal
+at all (`NormalAt` throws there) while the raw cross product is perfectly well defined and
+simply vanishes. Its LENGTH then doubles as the degeneracy guard, so the measurement code
+needs no separate pole test. The five surfaces whose silhouettes have a closed form —
+plane, cylinder, sphere, extrusion, revolve — override it exactly; the base class keeps
+central differences, which is what the traced families (NURBS, swept, lofted, helical)
+get, and is consistent with `g` there being solved by Newton rather than in closed form.
+
+### One derivation covers most of the kernel
+
+A surface of revolution's normal is exactly `R_u M(v)` for a vector `M` depending on the
+generator alone — the rotation factors straight out, which is the same separability the
+kernel already exploits for inverse evaluation and for wrap splitting. So
+
+```
+g = A(v) cos u + B(v) sin u + C(v) = 0    =>    u(v) = phi(v) +- acos(-C / hypot(A, B))
+```
+
+is a CLOSED FORM per generator parameter rather than a root find, and perspective needs no
+second derivation: the eye offset folds into the coefficients (`C` picks up the generator's
+own radial and axial terms) and the same expression solves it.
+
+Three families fall out of that one derivation rather than being written down separately,
+which is the reason to prefer it:
+
+- **A cone or a cylindrical band** has A, B and C all carrying the same radius factor, so
+  it cancels and `u` does not depend on `v` at all: the answer is a pair of exact RULINGS,
+  with nothing special-cased.
+- **A view ALONG the axis** collapses A and B, leaving `C(v) = 0` — a condition on the
+  generator alone whose roots are exact latitude CIRCLES.
+- **A sphere** is a revolve in this kernel, so it is recognised as one (two samples fix the
+  centre and radius in closed form, the rest verify) and answers with its great circle, or
+  in perspective its polar circle at `r^2/D` from the centre with radius `r*sqrt(D^2-r^2)/D`.
+
+An extrusion is the other closed-form family and for the complementary reason: its normal
+`C'(u) x dir` is INDEPENDENT of v, so the silhouette is a set of rulings at the generator
+parameters where `C'(u) . (dir x d)` vanishes — a 1-D root find whose answer is an exact
+`Line3d`. A plane is the degenerate member: `g` is constant, so the face is either wholly
+edge-on or contributes nothing, and neither is a curve (see below).
+
+What is left — NURBS, swept, lofted, helical — is genuinely transcendental and is TRACED as
+a level set on the parameter rectangle, following `SurfaceIntersection`'s own discipline:
+an anisotropy-aware seed grid (a band that is long and thin in model units gets its samples
+spaced in model units), a march step measured in model units, and an exact landing on the
+domain rail rather than a stop one step short.
+
+### Fidelity is a claim about the representation; deviation is a measurement
+
+`SilhouetteFidelity` says how the answer is CARRIED — `Exact` (an analytic curve that IS
+the silhouette), `Sampled` (closed-form vertices chorded between them), `Traced`
+(Newton-corrected vertices) — while `SilhouetteCurve.Deviation` is the MEASUREMENT: the
+largest `|N.d|` over the curve's own samples, i.e. the SINE of the angle by which the
+reported curve misses being edge-on. Being dimensionless it is comparable across every
+curve kind, which is what makes one number meaningful for a mixed result.
+
+The measurement has a floor and it is the SURFACE's, not the answer's: the probe must
+inverse-evaluate each sample to read a normal, and `FaceGeometry.InverseEvaluationTolerance`
+is 1e-6. Projecting TIGHT first (1e-12, falling back to the loose tolerance) drops the
+measured deviation of an exactly-constructed sphere circle from ~1.3e-7 to ~1e-9, which is
+the instrument's own noise rather than the geometry's — so the tests state the closed forms
+(a sphere circle's radius, a cylinder ruling pair one diameter apart) and use the deviation
+only as a loose corroboration. The instrument is mutation-checked: rotating a ruling
+through twice its azimuth offset — exactly what a flipped rotation sense would produce —
+reads above 1e-2 where the truth reads below 1e-11.
+
+### Trimming, and the one place the shared clip is not enough
+
+Every curve is clipped to its face's trim through `FaceGeometry.InsideOrOnBoundary` — the
+rule `BrepBoolean.ClipToFace` already states, for the same reason: a carrier is unbounded,
+or bounded only by its own parameter rectangle, so the silhouette of the CARRIER runs past
+the FACE. A curve surviving whole is returned as itself (so a closed circle stays closed),
+and a closed curve's surviving stretches are joined across the seam.
+
+A PARTIAL revolve needs one thing more, and it is a genuine gap rather than a tolerance: a
+quarter-turn revolve's inverse evaluation folds an out-of-sweep azimuth back inside its own
+domain, so a ruling belonging to the missing three quarters projects to a legal (u, v) and
+the trim clip keeps it. The azimuths are therefore filtered at the SOURCE against the
+revolve's stated angle. The test asserts the drop holds with clipping ON **and** OFF, which
+is what proves the domain filter is doing it rather than the clip.
+
+### Faces with no silhouette curve are named, not omitted
+
+A plane seen edge-on, a cylinder viewed down its own axis, an eye inside a sphere — each
+has a well-defined answer that is not a CURVE, and each is a statement about the geometry
+rather than a gap in the implementation. They are `SilhouetteResult.Notes`, so a caller can
+distinguish "this face has no outline of its own" from "this family is not supported",
+which is exactly the distinction `HiddenLineRemoval` needs to decide whether it may trust
+the exact route (below).
+
+### The HLR substitution is all-or-nothing per part, and opt-in
+
+`HiddenLineOptions.ExactSilhouettes` swaps the mesh's view-dependent silhouette for the
+kernel's, and two properties of that swap are decisions rather than conveniences.
+
+**All-or-nothing per part**, because the display mesh carries no face attribution: a mesh
+silhouette cannot be asked for "everything except these faces", so a partly exact outline
+would draw some stretches twice. A part is drawn from its surfaces only when the kernel
+answers without refusing AND returns at least one curve; anything else falls back to the
+mesh entirely. The curve-count test is the honest one rather than a per-face audit: every
+face DOES answer, with a curve or with a named geometric note (the dispatch's default arm
+is the tracer, so no family is silently skipped), and a solve carrying no curves at all is
+exactly the shape a family with no answer would also take — so deferring there is the safe
+reading. The failure direction is therefore the safe one throughout: a part that cannot
+lower, and a solid the solve refuses, both keep exactly the outline they always had.
+
+**Opt-in**, because switching it on legitimately changes what an existing drawing looks
+like: a mesh silhouette is an INSCRIBED polyline and the exact curve is the true outline,
+so line work MOVES outward by the tessellation's own sagitta. Off, a drawing is
+byte-identical to what it always was (asserted point-for-point). The comparison that
+measures the difference has to be set up carefully, and the trap is worth recording: a UV
+cylinder's vertices lie ON the exact circle, so an axis-aligned view lands on two of them
+and the mesh route reads a width of exactly `2r` — perfect, and measuring nothing. The
+difference this feature exists to produce is ALIGNMENT-dependent, so the fixture turns the
+view HALF a facet, where the mesh reads `2r cos(pi/n)` (19.6157 at n = 16) and the exact
+route reads 20.000000000.
+
+### `Shape.SilhouetteExact` is refused, and the reason is the 2D tier
+
+`Shape.Section` has an exact twin (`SectionExact`) returning `CurvedRegion2d`s, so the
+obvious question is why `Shape.Silhouette` does not. The 3D premise the old refusal rested
+on — "a silhouette is the union of projected TRIANGLES, so there is nothing exact to
+recover" — no longer holds, and `Shape.SilhouetteCurves` returns the exact curves. But a
+REGION is 2D, and assembling one exactly would need a curved 2D arrangement over the
+PROJECTED curves: an orthographic projection of a circle is an ELLIPSE, and
+`CurvedRegion2d` carries lines and circular arcs ONLY — deliberately, since that tier's
+cell walk is complete precisely because a line and a circle cannot osculate, which ellipses
+would break. So every curved silhouette but the degenerate ones would be flattened at the
+arrangement's door, which is what `Shape.Silhouette` already does more cheaply. A drawing
+consumes 3D curves rather than a region, which is why the consumer that motivated the work
+is served without it.
+
 ## 6. Interop
 
 The conversion triangle is complete; each direction has a deliberately chosen algorithm:

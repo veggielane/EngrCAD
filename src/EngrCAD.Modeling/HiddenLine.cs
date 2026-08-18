@@ -1,3 +1,4 @@
+using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Core.Spatial;
 using EngrCAD.Mesh;
@@ -33,8 +34,12 @@ public enum EdgeSource
     /// <summary>A modelled edge: exact for B-Rep parts, mesh dihedral otherwise.</summary>
     Feature,
 
-    /// <summary>A view-dependent outline of a SMOOTH surface, taken from the display
-    /// mesh (the true-silhouette-curve gap; faceted at mesh resolution).</summary>
+    /// <summary>
+    /// A view-dependent outline of a SMOOTH surface. Exact — the surface's own silhouette
+    /// curve — when <see cref="HiddenLineOptions.ExactSilhouettes"/> is on and the part's
+    /// every face answers; otherwise taken from the display mesh and faceted at its
+    /// resolution.
+    /// </summary>
     Silhouette,
 
     /// <summary>The boundary of a cut face in a section view.</summary>
@@ -161,10 +166,29 @@ public sealed record HiddenLineOptions
     /// <summary>Default <see cref="SimplifyFraction"/>: 1e-9 of the extent.</summary>
     public const double DefaultSimplifyFraction = 1e-9;
 
-    /// <summary>Include the mesh-derived outline of smooth surfaces (a cylinder seen
-    /// from the side has no modelled edge there). On by default; turning it off leaves
-    /// only exact geometry, which is occasionally what a diagnostic wants.</summary>
+    /// <summary>Include the outline of smooth surfaces (a cylinder seen from the side has
+    /// no modelled edge there). On by default; turning it off leaves only modelled edges,
+    /// which is occasionally what a diagnostic wants.</summary>
     public bool IncludeSilhouette { get; init; } = true;
+
+    /// <summary>
+    /// Take a B-Rep part's silhouette from its own SURFACES
+    /// (<see cref="BrepSilhouette"/>) rather than from the display mesh's view-dependent
+    /// facet-facing flip — the one part of a drawing that is otherwise not exact.
+    ///
+    /// <para><b>All-or-nothing per part, and OPT-IN.</b> Per-face substitution is not
+    /// available (the display mesh carries no face attribution, so the mesh silhouette
+    /// cannot be asked for "everything except these faces"), so a part is drawn from its
+    /// surfaces only when EVERY face answers — a curve or a named geometric note, with no
+    /// unhandled family — and otherwise falls back to the mesh entirely. That is what stops
+    /// a partly-exact outline drawing some stretches twice.</para>
+    ///
+    /// <para>It is opt-in because switching it on legitimately changes what every existing
+    /// drawing looks like: a mesh silhouette is an inscribed polyline and the exact curve is
+    /// the true outline, so committed line work MOVES (outward, by the tessellation's own
+    /// sagitta). Off, a drawing is byte-identical to what it always was.</para>
+    /// </summary>
+    public bool ExactSilhouettes { get; init; }
 
     /// <summary>Emit hidden runs at all. Off gives a visible-only drawing.</summary>
     public bool IncludeHidden { get; init; } = true;
@@ -781,7 +805,7 @@ public static class HiddenLineRemoval
             if (options.IncludeSilhouette)
             {
                 // Silhouettes are read off the already-cut mesh, so they need no clip.
-                foreach (var chain in SilhouetteChains(options))
+                foreach (var chain in ExactSilhouetteChains(options) ?? SilhouetteChains(options))
                     result.Add((chain, EdgeSource.Silhouette));
             }
             return result;
@@ -869,6 +893,61 @@ public static class HiddenLineRemoval
                 return index;
             }
         }
+
+        /// <summary>
+        /// The part's own SURFACES' silhouette curves, sampled into world-space polylines —
+        /// null when the option is off, the part carries no B-Rep, or any face's family the
+        /// solve cannot answer (see <see cref="HiddenLineOptions.ExactSilhouettes"/> for why
+        /// the substitution is all-or-nothing).
+        /// </summary>
+        /// <remarks>
+        /// The view direction is pulled back into the part's OWN frame — exactly as the mesh
+        /// path does for its facing test, and legal for the same reason: a rigid or uniformly
+        /// scaled placement carries a silhouette to a silhouette, since the condition is one
+        /// dot product being zero.
+        /// </remarks>
+        private List<IReadOnlyList<Vector3d>>? ExactSilhouetteChains(HiddenLineOptions options)
+        {
+            if (!options.ExactSilhouettes)
+                return null;
+            var solid = _part.TryGetSolid();
+            if (solid is null)
+                return null;
+
+            SilhouetteResult result;
+            try
+            {
+                result = BrepSilhouette.OfSolid(solid, SilhouetteView.Along(_localToViewer));
+            }
+            catch (Exception e) when (e is InvalidOperationException or NotSupportedException or ArgumentException)
+            {
+                return null;   // the kernel declined: draw the mesh outline instead
+            }
+            // A note is a geometric STATEMENT (an edge-on plane, a cylinder down its axis),
+            // never an unanswered face — but a family with no answer at all would arrive the
+            // same way, so a solve carrying no curves at all defers rather than silently
+            // dropping a part's whole outline.
+            if (result.Curves.Count == 0)
+                return null;
+
+            var chains = new List<IReadOnlyList<Vector3d>>(result.Curves.Count);
+            foreach (var curve in result.Curves)
+            {
+                var domain = curve.Curve.Domain;
+                var parameters = FaceGeometry.ExactSampleParameters(
+                    curve.Curve, domain.Start, domain.End, SilhouetteSamples);
+                var points = new List<Vector3d>(parameters.Count);
+                foreach (double t in parameters)
+                    points.Add(_edgeWorld.TransformPoint(curve.Curve.PointAt(t)));
+                if (points.Count >= 2)
+                    chains.Add(points);
+            }
+            return chains.Count > 0 ? chains : null;
+        }
+
+        /// <summary>Samples per exact silhouette curve — the feature-edge overlay's own
+        /// display density, so an exact outline is no coarser than the rims beside it.</summary>
+        private const int SilhouetteSamples = 96;
 
         /// <summary>
         /// Mesh edges where a SMOOTH surface turns away from the viewer: the two

@@ -831,11 +831,13 @@ public static class BrepBoolean
     /// where two solids mate, the shared rim IS a face boundary on one side. Measured on
     /// <c>Box(20,20,10) &amp; Box(10,30,10)</c>, whose side walls meet the shared top plane
     /// along their own top edges — dropped, the arrangement had nothing to close with.</para>
+    ///
+    /// <para>The rule itself lives on <see cref="FaceGeometry.InsideOrOnBoundary"/>, because
+    /// <c>BrepSilhouette</c>'s trim clip needs the same three-part answer and a second copy of a
+    /// rule that errs deliberately in one direction is how such rules drift.</para>
     /// </summary>
     private static bool InsideForClip(BrepFace face, in Vector3d probe) =>
-        !face.Surface.TryProjectPoint(probe, out _, FaceGeometry.InverseEvaluationTolerance) ||
-        FaceGeometry.ContainsTwoSided(face, probe) ||
-        FaceGeometry.DistanceToBoundary(face, probe) <= FaceGeometry.SeamTolerance;
+        FaceGeometry.InsideOrOnBoundary(face, probe);
 
     /// <summary>
     /// Whether any exact sample of the curve lies STRICTLY inside the face — on its surface,
