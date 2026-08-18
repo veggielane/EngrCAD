@@ -788,12 +788,26 @@ export — is recorded in CLAUDE.md):
     control) and carrying the flattening's own sampling otherwise. Carrying segment
     identity through `ToRegions` so the law could be evaluated per SEGMENT would remove
     that, and it is a change to the flattening's output rather than to the offset.
-- [ ] **Twist-extrude follow-ups** (`Shape.Extrude(sketch, height, twist, scale, slices)`
-  ✅ landed — taper = B-Rep-Native ruled loft, twist = direct mesh section sweep with
-  twist-matched profile subdivision + collinear-chord-zip caps, implicit via mesh SDF):
-  an exact twisted B-Rep surface type would make twist Native (big kernel feature, low
-  priority); tapered sketches with holes are B-Rep-Native now (loft sections carry
-  holes).
+- [ ] **Twisted-extrusion residuals** (`TwistedSurface` ✅ landed — a twist is
+  B-Rep-**Native**, holes included, with the `A*h` volume identity and quadratic
+  convergence; see design.md §5 "Twisted extrusions"):
+  - [ ] **`slices` is now inert for a plain twisted extrude, and the parameter should
+    say so.** `ShapeCompiler.ToMesh` takes the highest-fidelity route available, so a
+    twisted body tessellates its exact B-Rep and the direct section sweep is not reached
+    — one declaration, one geometry (asserted as bit equality between a 2-slice and a
+    64-slice `ToMesh`), which is the right outcome. What is left is the API: `slices`
+    still reads as a fidelity knob at every call site and now only bites where the B-Rep
+    cannot lower (a twisted body welded into a mesh, e.g. the herringbone apex). Either
+    document it there or route the mesh lowering through it deliberately.
+  - [ ] **Rim features refuse on a twisted body** — `Shape.Fillet`/`Chamfer` on the top
+    or bottom cap reports "Straight rim edges need planar neighbor faces", which is
+    correct today (the neighbour is a `TwistedSurface`, and the band would have to meet
+    a surface whose tangent turns along the rim). A twisted body's cap rim is a genuine
+    manufacturing feature, so the blend surface it needs is worth costing.
+  - [ ] **No STEP entity**, so a scene carrying a twisted body throws by name on
+    `--export .step` exactly as a helical thread or a loft does (`BrepArchive` carries
+    it losslessly). An approximating NURBS export would be the escape hatch, and would
+    have to state its deviation.
 - [ ] **Planar-view follow-ups** (`PlanarSection.OfMesh`/`OfSolid`/`SilhouetteOfMesh` +
   `Shape.Section`/`Shape.Silhouette` ✅ landed — both OpenSCAD `projection` modes):
   - [x] ~~**`Region2dBoolean` leaves ~1e-7-area pinholes at near-tangency.**~~ **CLOSED

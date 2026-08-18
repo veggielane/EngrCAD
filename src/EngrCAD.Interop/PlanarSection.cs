@@ -138,7 +138,7 @@ public static partial class PlanarSection
             if (!BoundsStraddle(bounds, origin, normal))
                 continue;
 
-            var grown = bounds.Expanded(weld);
+            var grown = bounds.Expanded(NodeSearchMargin(bounds, weld));
             var faceNodes = new List<int>();
             for (int i = 0; i < nodes.Count; i++)
             {
@@ -216,7 +216,7 @@ public static partial class PlanarSection
             if (!BoundsStraddle(bounds, origin, normal))
                 continue;
 
-            var grown = bounds.Expanded(weld);
+            var grown = bounds.Expanded(NodeSearchMargin(bounds, weld));
             var faceNodes = new List<int>();
             for (int i = 0; i < nodes.Count; i++)
             {
@@ -683,10 +683,9 @@ public static partial class PlanarSection
             if (!wraps && end - start <= weld)
                 continue;
             // The probe sits at the piece's MIDPOINT, never at an end (which is on the trim
-            // boundary, where containment is a tie).
-            double probe = wraps
-                ? WrapParameter(domain, start + 0.5 * (domain.Length - (start - end)))
-                : 0.5 * (start + end);
+            // boundary, where containment is a tie) — snapped onto an exact sample where the
+            // curve is polyline-backed.
+            double probe = ProbeParameter(curve, domain, start, end, wraps);
             if (!InsideFace(face, curve.PointAt(probe)))
                 continue;
             result.Add(new SectionPiece(start, end, wraps, false, startNode, endNode));
@@ -709,6 +708,72 @@ public static partial class PlanarSection
     /// </summary>
     private static bool InsideFace(BrepFace face, in Vector3d point) =>
         FaceGeometry.ContainsTwoSided(face, point);
+
+    /// <summary>
+    /// How far past a face's own bounding box to look for the plane crossings that might
+    /// belong to it. This is a BROAD PHASE and must be sound in the EXCLUDE direction, which
+    /// the weld tier is not: <see cref="BrepQueries.Bounds"/> SAMPLES a curved surface, so a
+    /// curved face's box is systematically small by its own sampling sagitta. Measured on a
+    /// twisted 20-tooth gear (760 curved bands on a 44-unit body), a section endpoint escaped
+    /// its own face's box by <b>6.6e-5</b> — hundreds of times the weld — so the crossing was
+    /// not offered to the face, the run carried no node index, the chain could not close, and
+    /// the whole section came back EMPTY at <b>13 of 49</b> heights swept (an alignment
+    /// phenomenon, not a threshold: the same solid sections perfectly at the other 36).
+    /// <para>Admitting an EXTRA candidate costs nothing — <c>TryParameterOf</c> then declines
+    /// it, since a node not within the weld of this curve produces no cut — while excluding a
+    /// real one loses the whole loop, so the margin is deliberately generous and scaled to
+    /// the FACE rather than to the model (the sagitta is a property of the face's own span).
+    /// A face whose bounds are exact, which is every planar one, is unaffected in practice
+    /// because the extra candidates it now sees are rejected by the same test.</para>
+    /// </summary>
+    private static double NodeSearchMargin(in Aabb bounds, double weld)
+    {
+        var size = bounds.Size;
+        return Math.Max(weld, 1e-3 * Math.Max(size.X, Math.Max(size.Y, size.Z)));
+    }
+
+    /// <summary>
+    /// Where to probe a section piece for containment. The midpoint is the right place in
+    /// principle — never an end, which sits on the trim boundary where containment is a tie —
+    /// but <b>a traced polyline lies on its surface only at its VERTICES</b>, so on a curved
+    /// band a mid-chord probe is off the surface by the chord's own sagitta and the
+    /// containment pullback simply fails: measured, every arc-generator
+    /// <see cref="TwistedSurface"/> band, so a twisted circle sectioned to NOTHING and a
+    /// twisted rounded rectangle likewise (the recorded
+    /// <see cref="FaceGeometry.ExactSampleParameters"/> rule, and the fourth site that had to
+    /// ASK it rather than restate the midpoint). Containment is constant along a piece by
+    /// construction — the pieces are partitioned exactly at the trim crossings — so moving the
+    /// probe to a sample strictly inside the piece cannot change an answer that was already
+    /// reachable; it can only make an unprojectable probe projectable. A curve that is not
+    /// polyline-backed keeps the arithmetic midpoint bit for bit.
+    /// </summary>
+    private static double ProbeParameter(
+        Curve3d curve, in Interval domain, double start, double end, bool wraps)
+    {
+        double probe = wraps
+            ? WrapParameter(domain, start + 0.5 * (domain.Length - (start - end)))
+            : 0.5 * (start + end);
+        if (!FaceGeometry.IsPolylineBacked(curve))
+            return probe;
+
+        double best = probe, bestGap = double.PositiveInfinity;
+        foreach (double t in FaceGeometry.ExactSampleParameters(curve, domain.Start, domain.End, 0))
+        {
+            // A wrapping piece runs start -> domain end -> domain start -> end.
+            bool inside = wraps ? t > start || t < end : t > start && t < end;
+            if (!inside)
+                continue;
+            double gap = Math.Abs(t - probe);
+            if (wraps)
+                gap = Math.Min(gap, domain.Length - gap);
+            if (gap < bestGap)
+            {
+                bestGap = gap;
+                best = t;
+            }
+        }
+        return best;
+    }
 
     private static double WrapParameter(in Interval domain, double t)
     {

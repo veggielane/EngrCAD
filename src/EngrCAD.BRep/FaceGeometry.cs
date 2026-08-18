@@ -39,6 +39,7 @@ public static class FaceGeometry
         CylinderSurface or SphereSurface => 2 * Math.PI,
         RevolvedSurface r when r.IsFullTurn => 2 * Math.PI,
         ExtrudedSurface e when e.Generator.IsClosed => e.DomainU.Length,
+        TwistedSurface t when t.Generator.IsClosed => t.DomainU.Length,
         SweptSurface s when s.Generator.IsClosed => s.DomainU.Length,
         LoftedSurface l when l.IsClosedU => l.DomainU.Length,
         _ => 0,

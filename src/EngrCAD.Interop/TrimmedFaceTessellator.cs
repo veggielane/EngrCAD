@@ -2359,6 +2359,14 @@ internal static class TrimmedFaceTessellator
                     ? double.PositiveInfinity
                     : 2 * Math.PI / (segmentsPerCircle * Math.Abs(h.ArcSweep))),
             ExtrudedSurface e => (FromCurve(e.Generator), double.PositiveInfinity),
+            // A twist makes v NOT ruled — the whole point of the surface — so both
+            // directions carry a finite step, read off the surface's own natural-grid
+            // rules so a refined interior row lands where the grid path would put it.
+            TwistedSurface t => (
+                t.DomainU.Length / Math.Max(
+                    t.Generator.Underlying is Line3d ? 1 : curveSamples,
+                    t.PanelSegments(segmentsPerCircle)),
+                t.DomainV.Length / t.NaturalVSegments(segmentsPerCircle)),
             RevolvedSurface r => (
                 r.DomainU.Length / (r.IsFullTurn ? segmentsPerCircle : curveSamples),
                 FromCurve(r.Generator)),

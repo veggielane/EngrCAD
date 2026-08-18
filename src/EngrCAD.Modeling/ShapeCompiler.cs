@@ -114,20 +114,17 @@ internal static class ShapeCompiler
                         "a non-uniform scale or shear does not commute with this operation"));
                 break;
             case TwistExtrudeShape twisted:
-                // A pure taper is exact: every straight side sweeps a plane through the
-                // scaling centre, so the solid is a ruled loft between base and top. A
-                // twisted side wall is no surface this kernel carries.
-                if (twisted.IsTwisted)
-                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                        "a twisted side wall is not an analytic or ruled surface the B-Rep kernel carries; ToMesh sweeps section rings and ToImplicit wraps that mesh"));
-                else
-                    // Mirrored similarities included: this case IS a two-section loft, so
-                    // it inherits the loft's isometry argument verbatim.
-                    entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
-                        ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
-                            "ruled loft between the base section and the scaled top (SolidFactory.Loft)")
-                        : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                            "a non-uniform scale or shear does not commute with the loft's parameterization"));
+                // Both cases are exact and each says which surface it is: a pure taper is
+                // the ruled loft between base and scaled top (every straight side sweeps a
+                // plane through the scaling centre), a twist an exact TwistedSurface per
+                // profile segment. Mirrored similarities included in both — a taper
+                // inherits the loft's isometry argument, a twist re-declares the sign.
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native, twisted.IsTwisted
+                        ? "exact twisted side surfaces, one per profile segment (SolidFactory.TwistExtrude)"
+                        : "ruled loft between the base section and the scaled top (SolidFactory.Loft)")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear does not commute with this operation"));
                 break;
             case SheetMetalShape:
                 // Similarities only, MIRRORED INCLUDED: thickness, bend radius and flange
@@ -593,11 +590,38 @@ internal static class ShapeCompiler
                     m.TransformVector(extrude.Direction),
                     TransformProfiles(extrude.Holes, m));
 
+            case TwistExtrudeShape { IsTwisted: true } twisted:
+            {
+                // A twist IS an exact surface (TwistedSurface): the section map is a
+                // rotation times a positive diagonal scale, so P and both partials are
+                // closed form. Similarities only, MIRRORS INCLUDED — and the mirror is a
+                // DERIVATION rather than a special case. Under a reflection F,
+                // F·Rot(Z, θ)·F⁻¹ = Rot(F·Z, −θ), so the reflected solid is the same
+                // profile (already placed by TransformProfile) about the mapped axis with
+                // the twist NEGATED; the per-axis scale is untouched because a diagonal
+                // scale on the mapped axes is the same diagonal scale, and stating the
+                // frame by (Z, X) leaves it right-handed with the y coordinate flipped,
+                // which the negated twist is exactly the complement of.
+                DecomposeSimilarity(m, shape, out _, out _, out double factor, out bool mirrored);
+                var placed = m * twisted.PlaneMatrix;
+                var (outerSection, sectionHoles) = twisted.Sketch.ToProfiles();
+                var axisFrame = Frame3d.FromZX(
+                    placed.TransformPoint(Vector3d.Zero),
+                    placed.TransformVector((0, 0, 1)),
+                    placed.TransformVector((1, 0, 0)));
+                return SolidFactory.TwistExtrude(
+                    TransformProfile(outerSection, placed),
+                    axisFrame,
+                    // The height is a LENGTH along the plane normal, so it rides the
+                    // similarity's uniform scale.
+                    twisted.Height * factor,
+                    mirrored ? -twisted.Twist : twisted.Twist,
+                    twisted.ScaleTop,
+                    TransformProfiles(sectionHoles, placed));
+            }
+
             case TwistExtrudeShape twisted:
             {
-                if (twisted.IsTwisted)
-                    throw new NotSupportedException(
-                        "A twisted extrusion has no exact B-Rep side surface; lower to mesh or implicit instead.");
                 DecomposeSimilarity(m, shape, out _, out _, out _); // similarity only (the loft rule)
                 var effective = m * twisted.PlaneMatrix;
                 // The top section is the base scaled per axis about the plane origin and

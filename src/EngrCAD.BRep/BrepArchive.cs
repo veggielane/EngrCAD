@@ -8,8 +8,8 @@ namespace EngrCAD.BRep;
 /// EngrCAD's <b>native</b> B-Rep archive (<c>.ecb</c>): a versioned, human-diffable text
 /// format that round-trips every curve and surface type this kernel has, including the
 /// ones STEP cannot carry — <see cref="HelicalSurface"/>, <see cref="LoftedSurface"/>,
-/// <see cref="SweptSurface"/>, <see cref="OffsetCurve3d"/>, <see cref="SpiralArc3d"/>,
-/// <see cref="CurveSegment"/> mappings and trimmed edge domains.
+/// <see cref="SweptSurface"/>, <see cref="TwistedSurface"/>, <see cref="OffsetCurve3d"/>,
+/// <see cref="SpiralArc3d"/>, <see cref="CurveSegment"/> mappings and trimmed edge domains.
 /// <para><b>Why text.</b> The alternative — a compact binary — buys size on files nobody
 /// has complained about, and gives up the one property this codebase's testing culture is
 /// built on: a committed corpus file that <i>diffs</i>. Golden fingerprints, byte-compared
@@ -207,6 +207,7 @@ public static class BrepArchive
                 ExtrudedSurface s => ExtrudedEntity(s),
                 RevolvedSurface s => RevolvedEntity(s),
                 SweptSurface s => SweptEntity(s),
+                TwistedSurface s => TwistedEntity(s),
                 HelicalSurface s => HelicalEntity(s),
                 LoftedSurface s => LoftedEntity(s),
                 _ => throw Unsupported("surface", surface),
@@ -255,6 +256,20 @@ public static class BrepArchive
             // default 64 would be a DIFFERENT surface wherever the original used another
             // count.
             return Emit(s, $"Swept(#{generator}, #{path}, {Vec(s.StartX)}, {s.FrameCount})");
+        }
+
+        /// <summary>
+        /// A twisted extrusion's lateral surface. The axis FRAME rides verbatim (the
+        /// <c>Frame</c> form stores its axes and rebuilds through
+        /// <see cref="Frame3d.FromOrthonormal"/>, so the round trip is a fixed point
+        /// rather than a re-derivation), and height/twist/scale are the three numbers
+        /// that make the section transform.
+        /// </summary>
+        private int TwistedEntity(TwistedSurface s)
+        {
+            int generator = Curve(s.Generator);
+            return Emit(s,
+                $"Twisted(#{generator}, {Frame(s.Axis)}, {N(s.Height)}, {N(s.Twist)}, {Vec2(s.ScaleTop)})");
         }
 
         // Two entities rather than one variadic Helical: an arc generator is a different
@@ -324,6 +339,7 @@ public static class BrepArchive
                 PhaseShiftedCurve c => Wrapped(c, c.Base, b => $"PhaseShifted(#{b}, {N(c.Shift)})"),
                 LoftRailCurve c => LoftRailEntity(c),
                 SweptRailCurve c => SweptRailEntity(c),
+                TwistedRailCurve c => TwistedRailEntity(c),
                 _ => throw Unsupported("curve", curve),
             };
         }
@@ -363,6 +379,18 @@ public static class BrepArchive
         {
             int surface = Surface(c.Surface);
             return Emit(c, $"SweptRail(#{surface}, {Vec2(c.LocalOffset)})");
+        }
+
+        /// <summary>
+        /// A twist rail. The surface reference is written through the shared entity table,
+        /// so the ONE master surface every rail of a solid rides comes back as one object
+        /// — which is what keeps the reloaded rails and the faces' grid columns the same
+        /// arithmetic rather than several numerically-equal copies.
+        /// </summary>
+        private int TwistedRailEntity(TwistedRailCurve c)
+        {
+            int surface = Surface(c.Surface);
+            return Emit(c, $"TwistRail(#{surface}, {Vec(c.LocalBase)})");
         }
 
         private static BrepArchiveException Unsupported(string kind, object value) =>
@@ -573,6 +601,7 @@ public static class BrepArchive
             "PhaseShifted" => new PhaseShiftedCurve(Ref<Curve3d>(a, 0), Num(a, 1)),
             "LoftRail" => new LoftRailCurve(Ref<LoftedSurface>(a, 0), Num(a, 1)),
             "SweptRail" => new SweptRailCurve(Ref<SweptSurface>(a, 0), Vec2(a, 1)),
+            "TwistRail" => new TwistedRailCurve(Ref<TwistedSurface>(a, 0), Vec(a, 1)),
 
             // surfaces
             "Plane" => new PlaneSurface(Vec(a, 0), Vec(a, 1), Vec(a, 2)),
@@ -582,6 +611,8 @@ public static class BrepArchive
             "Extruded" => new ExtrudedSurface(Ref<Curve3d>(a, 0), Vec(a, 1)),
             "Revolved" => new RevolvedSurface(Ref<Curve3d>(a, 0), Vec(a, 1), Vec(a, 2), Num(a, 3)),
             "Swept" => new SweptSurface(Ref<Curve3d>(a, 0), Ref<Curve3d>(a, 1), Vec(a, 2), Int(a, 3)),
+            "Twisted" => new TwistedSurface(
+                Ref<Curve3d>(a, 0), Frame(a, 1), Num(a, 2), Num(a, 3), Vec2(a, 4)),
             "Helical" => new HelicalSurface(Frame(a, 0), Vec2(a, 1), Vec2(a, 2), Num(a, 3), Range(a, 4)),
             "HelicalArc" => new HelicalSurface(
                 Frame(a, 0), Vec2(a, 1), Num(a, 2), Num(a, 3), Num(a, 4), Num(a, 5), Range(a, 6)),

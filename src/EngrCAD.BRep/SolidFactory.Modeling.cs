@@ -46,6 +46,89 @@ public static partial class SolidFactory
     }
 
     /// <summary>
+    /// Extrudes a planar profile with a TWIST and/or a per-axis taper — OpenSCAD's
+    /// <c>linear_extrude(twist, scale)</c> as exact B-Rep geometry. Each side face is one
+    /// <see cref="TwistedSurface"/> over its own profile segment; the two caps are planes.
+    ///
+    /// <para><paramref name="axis"/> states the twist axis and the scaling centre (its Z
+    /// is the extrude direction, its X/Y the axes <paramref name="scale"/> is measured
+    /// on) — a sketch plane, in the modelling layer. It is a parameter rather than
+    /// something derived from the profile because <see cref="Profile.Origin"/> is an
+    /// arbitrary point ON the boundary, so deriving it would twist about a corner.</para>
+    ///
+    /// <para>A zero twist is accepted and produces a ruled taper; the <c>Shape</c> layer
+    /// routes that case to <see cref="Loft"/> instead, which reaches the same geometry
+    /// through a two-section loft (both are exact — the taper is affine in v either
+    /// way).</para>
+    /// </summary>
+    /// <param name="profile">The base section; wound automatically for outward normals.</param>
+    /// <param name="axis">Twist axis and scaling centre (Z = extrude direction).</param>
+    /// <param name="height">Rise along the axis Z (&gt; 0).</param>
+    /// <param name="twist">Total twist over the height, radians, right-handed about Z.</param>
+    /// <param name="scale">Per-axis scale of the top section (components &gt; 0).</param>
+    /// <param name="holes">Coplanar hole profiles inside the outer one; each hole twists
+    /// and scales about the SAME axis, so it stays a hole at every height.</param>
+    public static BrepSolid TwistExtrude(
+        Profile profile, in Frame3d axis, double height, double twist, Vector2d scale,
+        IReadOnlyList<Profile>? holes = null)
+    {
+        if (!(height > 0) || !double.IsFinite(height))
+            throw new ArgumentOutOfRangeException(nameof(height), height,
+                "A twisted extrusion needs a positive finite height.");
+        var direction = axis.Z;
+        double alignment = profile.Normal.Dot(direction);
+        if (Math.Abs(alignment) < 1e-9)
+            throw new ArgumentException(
+                "The extrude axis lies in the profile plane; a twisted extrusion sweeps along the axis.",
+                nameof(axis));
+        if (alignment < 0)
+            profile = profile.Reversed();
+
+        var profiles = new List<Profile> { profile };
+        foreach (var hole in holes ?? [])
+        {
+            ValidateCoplanarHole(profile, hole);
+            // Holes bound material on their outside: wind them opposite the outer profile.
+            profiles.Add(hole.Normal.Dot(direction) > 0 ? hole.Reversed() : hole);
+        }
+
+        // One master surface supplies the section transform for every rail and both caps,
+        // so a rail edge and the grid columns of the two faces it separates are the same
+        // arithmetic (the Sweep arrangement). It IS the first side face's surface rather
+        // than a fifth copy of the same numbers: the archive and BrepSolid.Transformed key
+        // geometry on REFERENCE identity, so a value-identical twin would be written twice
+        // and moved twice.
+        var frame = axis;
+        var sideSurfaces = new Dictionary<Curve3d, TwistedSurface>(ReferenceEqualityComparer.Instance);
+        TwistedSurface SideSurface(Curve3d segment)
+        {
+            if (!sideSurfaces.TryGetValue(segment, out var surface))
+                sideSurfaces[segment] = surface = new TwistedSurface(segment, frame, height, twist, scale);
+            return surface;
+        }
+        var master = SideSurface(profile.Segments[0]);
+        var topTransform = master.TransformTo(1);
+        double cos = Math.Cos(twist), sin = Math.Sin(twist);
+        var topX = frame.X * cos + frame.Y * sin;
+        var topY = frame.Y * cos - frame.X * sin;
+        var basePoint = profile.Origin;
+
+        return BuildSweptSolid(
+            profiles,
+            makeSideSurface: SideSurface,
+            topTransform: topTransform,
+            makeRailCurve: (bottom, _) => new TwistedRailCurve(master, frame.ToLocal(bottom)),
+            railDomain: Interval.Unit,
+            // Bottom cap: axes swapped so its normal points back down the axis. The origin
+            // is the PROFILE's, so the plane is the section's own however far along the
+            // axis it sits (Extrude's convention).
+            bottomCap: new PlaneSurface(basePoint, frame.Y, frame.X),
+            // Top cap: the frame's axes ROTATED by the twist (orthonormal whatever the
+            // per-axis scale does, since a scale never leaves the plane).
+            topCap: new PlaneSurface(topTransform.TransformPoint(basePoint), topX, topY));
+    }
+
+    /// <summary>
     /// Revolves a planar profile about an axis lying in its plane, through
     /// <paramref name="angle"/> radians (default a full turn). The profile must lie
     /// strictly on one side of the axis. Full turns produce cap-less torus-topology

@@ -36,7 +36,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Extrude(Sketch)` | ✅ native | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Revolve(Sketch)` full turn | ✅ native (axis-touching OK: on-axis stretches become poles) | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Extrude` (profile, holes, shear) | ✅ native | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
-| `Extrude(Sketch, twist, scale)` (OpenSCAD `linear_extrude`) | taper only: ✅ native (ruled loft — straight sides sweep exact planes through the scaling centre; mirrored and HOLED sketches included, since it IS a two-section loft with hole families) · twist: ❌ (no analytic twisted surface) | 🔶 bridged (section-sweep mesh → mesh SDF) | ✅ native (direct section sweep, `slices` rings) |
+| `Extrude(Sketch, twist, scale)` (OpenSCAD `linear_extrude`) | ✅ native — taper: ruled loft (straight sides sweep exact planes through the scaling centre) · twist: exact `TwistedSurface` per profile segment, `SolidFactory.TwistExtrude`; mirrored and HOLED sketches included either way | 🔶 bridged (section-sweep mesh → mesh SDF) | ✅ native (direct section sweep, `slices` rings) |
 | `Revolve` (partial/full, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Sweep` (RMF path, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Loft` (sections) / `LoftAlong` (evolution law) | ✅ native (any similarity, MIRRORED included; `SolidFactory.Loft`) · ❌ sheared (chord parameterization is metric) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
@@ -2869,8 +2869,9 @@ diameter z·m·cos α, tooth thickness m·(π/2 + 2x·tan α), the undercut limi
   three representations — the profile is lines and arcs) and
   `Gears.HelicalGear(spec, faceWidth, helixAngleDegrees, …)` over the twisted
   extrusion (the spur profile is the TRANSVERSE section, so module and pressure
-  angle are transverse values; mesh/implicit only, B-Rep honestly Impossible per
-  the twisted-extrude contract). `GearProfile.ClosedFormArea` is the ideal
+  angle are transverse values; exact in all three now that a twist has an analytic
+  side surface — a 24-tooth module-2 gear at 20 degrees with a 10 mm bore lowers to a
+  Validate-clean 915-face solid). `GearProfile.ClosedFormArea` is the ideal
   outline's exact Green's-theorem area (the involute term is r_b²·t³/6), held
   against `Sketch.Area()` in tests.
 
@@ -3024,8 +3025,10 @@ helical surfaces have no AP214 entity — `BrepArchive` round-trips it).
   INDEX because the apex ring's vertices are exact fixed points of z → W − z. The
   two coincident cap facets are the only ones lying entirely in that plane, so
   "every vertex is at the apex" is an exact test for what to drop; reflected faces
-  keep vertex 0 in place per the fan-diagonal rule. Mesh-only (the twisted-extrude
-  contract), so the mesh is built EAGERLY at the stated quality and wrapped by
+  keep vertex 0 in place per the fan-diagonal rule. Mesh-only for its OWN reason —
+  the apex is a mesh weld BY INDEX, not a boolean and not a topological joint, so
+  the herringbone stays mesh-side even though each half's twisted extrusion is now
+  B-Rep-Native — so the mesh is built EAGERLY at the stated quality and wrapped by
   `Shape.From` — the `Bounds`/`Resized` policy. `SectionAngleAt`/`HalfTwist` state
   the law as arithmetic. **No apex relief groove yet, for a measured reason**: a
   groove is material genuinely removed, so it wants a boolean, and subtracting an

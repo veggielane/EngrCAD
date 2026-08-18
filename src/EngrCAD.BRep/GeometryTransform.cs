@@ -149,6 +149,15 @@ public static class GeometryTransform
             CurveSegment segment => new CurveSegment(
                 Apply(segment.Base, m), segment.BaseStart, segment.BaseEnd),
 
+            // A twist rail is stated in its surface's AXIS-FRAME coordinates, which an
+            // isometry leaves alone (the frame moves with the surface), so the local base
+            // point travels verbatim beside the moved surface. Rebuilding it in-family
+            // rather than wrapping is what keeps the rail and the moved face's u = 0 grid
+            // column the same points — a TransformedCurve wrapper would evaluate the OLD
+            // surface and move the answer, which agrees only to round-off.
+            TwistedRailCurve rail => new TwistedRailCurve(
+                (TwistedSurface)Apply(rail.Surface, m), rail.LocalBase),
+
             _ => curve.Transformed(m),
         };
     }
@@ -214,6 +223,24 @@ public static class GeometryTransform
                     m.TransformPoint(revolved.AxisOrigin),
                     m.TransformVector(revolved.AxisDirection),
                     revolved.Angle);
+
+            // The twist axis is a FRAME, orthonormal and staying so under an isometry, so
+            // it is rebuilt through the one factory that stores its axes VERBATIM (the
+            // AxisRef rule — re-deriving them would move them by an ulp). Height, twist
+            // and the per-axis scale are a LENGTH, an ANGLE and two RATIOS, every one of
+            // which an isometry preserves, so all three travel unchanged.
+            // <para>Under a REFLECTION the twist would flip sign — the same handedness
+            // identity a left-hand thread rides — but this map is proper by
+            // <see cref="RequireRigid"/>, so that case belongs to <c>Shape.Mirror</c>,
+            // which re-DECLARES the twist rather than re-placing it.</para>
+            case TwistedSurface twisted:
+                return new TwistedSurface(
+                    Apply(twisted.Generator, m),
+                    Frame3d.FromOrthonormal(
+                        m.TransformPoint(twisted.Axis.Origin),
+                        m.TransformVector(twisted.Axis.X),
+                        m.TransformVector(twisted.Axis.Y)),
+                    twisted.Height, twisted.Twist, twisted.ScaleTop);
 
             // Rotation-minimizing transport is intrinsic to the path, so sweeping the moved
             // profile along the moved path IS the moved sweep — the frames need no fixing,

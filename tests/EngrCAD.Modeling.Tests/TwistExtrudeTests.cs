@@ -131,8 +131,15 @@ public class TwistExtrudeTests
     }
 
     [Fact]
-    public void Slices_ControlTheSweepResolution()
+    public void Slices_NoLongerReachTheMeshOnceTheTwistIsExact()
     {
+        // `slices` sizes the direct SECTION SWEEP, and ShapeCompiler.ToMesh takes the
+        // highest-fidelity route available — which, now that a twist has an exact surface,
+        // is one tessellation of the B-Rep. So the sweep is not reached for a plain twisted
+        // extrude at all and the two meshes are the SAME mesh, asserted as bit equality
+        // rather than as a tolerance: that is the statement that one declaration now has one
+        // geometry. (The sweep still serves a tree the B-Rep cannot lower — a twisted body
+        // welded into a mesh, which is how the herringbone's apex is built.)
         var coarse = Shape.Extrude(Square(20), height: 10, twist: Math.PI / 2, scale: 1,
             plane: null, slices: 2).ToMesh();
         var fine = Shape.Extrude(Square(20), height: 10, twist: Math.PI / 2, scale: 1,
@@ -140,8 +147,11 @@ public class TwistExtrudeTests
 
         Assert.True(coarse.IsClosed);
         Assert.True(fine.IsClosed);
-        // Chords cut inside the true ruled solid: more slices, more volume recovered.
-        Assert.True(fine.Volume() > coarse.Volume());
+        Assert.Equal(
+            BitConverter.DoubleToInt64Bits(coarse.Volume()),
+            BitConverter.DoubleToInt64Bits(fine.Volume()));
+        // And the identity the exact surface carries: a rotation preserves area, so the
+        // twisted prism encloses exactly the untwisted volume.
         Assert.Equal(4000, fine.Volume(), tolerance: 4000 * 0.005);
     }
 
@@ -159,23 +169,23 @@ public class TwistExtrudeTests
     // ---- Explain honesty -----------------------------------------------------
 
     [Fact]
-    public void Explain_ReportsTheTwistAsBrepImpossible_AndTheMeshRoute()
+    public void Explain_ReportsTheTwistAsBrepNative()
     {
         var shape = Shape.Extrude(Square(20), height: 10, twist: Math.PI / 2);
 
+        // A twist has an exact side surface (TwistedSurface), so it is Native rather than
+        // Impossible, and the detail names the factory that builds it.
         var brep = shape.Explain(TargetRep.Brep).Entries[0];
-        Assert.Equal(NodeSupport.Impossible, brep.Support);
-        Assert.Contains("twisted side wall", brep.Detail);
+        Assert.Equal(NodeSupport.Native, brep.Support);
+        Assert.Contains("twisted", brep.Detail);
+        Assert.NotNull(shape.ToBrep());
 
         var mesh = shape.Explain(TargetRep.Mesh).Entries[0];
-        Assert.Equal(NodeSupport.Bridged, mesh.Support);
-        Assert.Contains("section rings", mesh.Detail);
+        Assert.Equal(NodeSupport.Native, mesh.Support);
 
         var implicitEntry = shape.Explain(TargetRep.Implicit).Entries[0];
         Assert.Equal(NodeSupport.Bridged, implicitEntry.Support);
         Assert.Contains("mesh SDF", implicitEntry.Detail);
-
-        Assert.Throws<ShapeConversionException>(() => shape.ToBrep());
     }
 
     [Fact]
