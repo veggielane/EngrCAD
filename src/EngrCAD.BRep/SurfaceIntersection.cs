@@ -1756,6 +1756,16 @@ public static class SurfaceIntersection
         var state = new MarchState(a, da, b, db, step, settings);
 
         var seeds = FindSeeds(state, settings.SeedResolution, out bool anisotropic);
+        // A branch on a TWISTED band is terminated exactly too, for a reason that is about
+        // its consumers rather than about its aspect: a twisted side face's u boundaries
+        // are the extrusion's own RAILS, so a branch that stops one march step short of
+        // them leaves a gap no downstream assembly can close by tolerance (measured on a
+        // twisted square sectioned at mid height: four branches each 0.19 short at both
+        // ends, a 0.59 corner gap, and PlanarSection's loop walk joins them into a
+        // self-crossing outline). The gate stays narrow rather than universal for the
+        // recorded reason: landing on EVERY pair appends a terminal point to every traced
+        // polyline in the repository, which is a change to geometry that already welds.
+        bool landOnDomain = anisotropic || a is TwistedSurface || b is TwistedSurface;
         var curves = new List<Curve3d>();
         var traced = new List<Vector3d>();
 
@@ -1765,7 +1775,7 @@ public static class SurfaceIntersection
             if (traced.Any(q => q.DistanceSquaredTo(p) < settings.SeedDedupeStepsSquared * step * step))
                 continue;
 
-            var forward = Trace(state, seed, +1, anisotropic, out bool closed);
+            var forward = Trace(state, seed, +1, landOnDomain, out bool closed);
             List<Vector3d> points;
             if (closed)
             {
@@ -1773,7 +1783,7 @@ public static class SurfaceIntersection
             }
             else
             {
-                var backward = Trace(state, seed, -1, anisotropic, out _);
+                var backward = Trace(state, seed, -1, landOnDomain, out _);
                 backward.Reverse();
                 backward.RemoveAt(backward.Count - 1); // shared seed point
                 points = [.. backward, .. forward];

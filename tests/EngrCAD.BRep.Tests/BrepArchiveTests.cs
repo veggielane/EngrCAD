@@ -28,7 +28,7 @@ public class BrepArchiveTests
     public static TheoryData<string> Corpus =>
     [
         "box", "cylinder", "sphere", "torus", "cone-frustum", "cone-apex",
-        "extrude-with-hole", "revolve-partial", "sweep", "loft", "threaded-rod",
+        "extrude-with-hole", "revolve-partial", "sweep", "loft", "threaded-rod", "twisted",
         "rounded-box", "filleted-cylinder-rim", "chamfered-cylinder-rim",
     ];
 
@@ -56,6 +56,10 @@ public class BrepArchiveTests
         "sweep" => SolidFactory.Sweep(
             Disc(2), new CurveSegment(new Circle3d((14, 0, 0), (-1, 0, 0), (0, 0, 1), 14), 0, 1.0)),
         "loft" => SolidFactory.Loft([Square(12), Square(6)]),
+        // A twisted extrusion with a bore: the corpus member for TwistedSurface and
+        // TwistedRailCurve, neither of which STEP can carry.
+        "twisted" => SolidFactory.TwistExtrude(
+            Square(20), Frame3d.WorldXY, 40, Math.PI / 2, new Vector2d(0.6, 1.4), [Disc(5)]),
         // The M8 basic profile in (radius, axial) corners per pitch — the same shape
         // ThreadedRodTests builds; StandardThreads lives in Modeling, which BRep cannot
         // reference.
@@ -164,7 +168,7 @@ public class BrepArchiveTests
         "Line3d", "Circle3d", "Ellipse3d", "Parabola3d", "Hyperbola3d", "NurbsCurve",
         "PolylineCurve3d", "Helix3d", "SpiralArc3d", "OffsetCurve3d", "CurveSegment",
         "ReversedCurve", "TransformedCurve", "PhaseShiftedCurve", "LoftRailCurve",
-        "SweptRailCurve",
+        "SweptRailCurve", "TwistedRailCurve",
     ];
 
     private static Curve3d MakeCurve(string name) => name switch
@@ -190,6 +194,7 @@ public class BrepArchiveTests
             new Circle3d((0, 0, 0), (1, 0, 0), (0, 1, 0), 3), 0.75),
         "LoftRailCurve" => new LoftRailCurve(MakeLoftedSurface(), 0.35),
         "SweptRailCurve" => new SweptRailCurve(MakeSweptSurface(), new Vector2d(0.6, -0.4)),
+        "TwistedRailCurve" => new TwistedRailCurve(MakeTwistedSurface(), new Vector3d(6, -4, 0)),
         _ => throw new ArgumentOutOfRangeException(nameof(name)),
     };
 
@@ -197,7 +202,7 @@ public class BrepArchiveTests
     [
         "PlaneSurface", "CylinderSurface", "SphereSurface", "NurbsSurface",
         "ExtrudedSurface", "RevolvedSurface", "SweptSurface", "HelicalSurface",
-        "LoftedSurface",
+        "LoftedSurface", "TwistedSurface",
     ];
 
     private static Surface MakeSurface(string name) => name switch
@@ -214,8 +219,12 @@ public class BrepArchiveTests
         "HelicalSurface" => new HelicalSurface(
             Frame3d.WorldXY, new Vector2d(3, 0), new Vector2d(4, 0.6), 1.25, new Interval(0, 5)),
         "LoftedSurface" => MakeLoftedSurface(),
+        "TwistedSurface" => MakeTwistedSurface(),
         _ => throw new ArgumentOutOfRangeException(nameof(name)),
     };
+
+    private static TwistedSurface MakeTwistedSurface() => new(
+        new Line3d((8, -6, 0), (8, 6, 0)), Frame3d.WorldXY, 25, 1.1, new Vector2d(0.7, 1.3));
 
     [Theory]
     [MemberData(nameof(CurveTypes))]

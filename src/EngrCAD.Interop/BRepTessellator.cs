@@ -241,7 +241,7 @@ public static class BRepTessellator
                         "trimmed regions the parameter-space path can handle. " +
                         Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, helicalFailure));
                 break;
-            case ExtrudedSurface or RevolvedSurface or SweptSurface or LoftedSurface:
+            case ExtrudedSurface or RevolvedSurface or SweptSurface or LoftedSurface or TwistedSurface:
             {
                 var (uParams, vParams, closedU, closedV) = GridParams(face.Surface, segmentsPerCircle, curveSamples);
                 // Full-domain faces (the factories' and wrap-splitter's output) keep
@@ -354,6 +354,13 @@ public static class BRepTessellator
     {
         var domain = edge.Domain;
 
+        // How many samples a TWISTED face using this edge needs of it — 1 (i.e. nothing
+        // to add) unless a TwistedSurface face is on the other side, so every edge in
+        // every solid that carries no twist is sampled exactly as it always was. Taken as
+        // a floor rather than a replacement, the monotone rule a shared sampling rule has
+        // to follow: no edge anywhere gets coarser.
+        int twistFloor = TwistFloor(edge, segmentsPerCircle);
+
         // Marching-tracer polylines lie on their surfaces only at their vertices
         // (chordal between): sample exactly those, or the trimmed path's inverse
         // evaluation would reject mid-chord samples as off-surface. Routed through
@@ -434,9 +441,26 @@ public static class BRepTessellator
             return points;
         }
 
+        // A twisted extrusion's RAIL takes the same v row count the face's natural grid
+        // uses (the surface owns the rule — TwistedSurface.NaturalVSegments), so the rail
+        // edge and the u = 0 / u = 1 grid columns it separates are the same points.
+        // Read through `Underlying` so a re-placed rail wrapped in a TransformedCurve
+        // keeps the count; the COUNT only, never a position — an isometry cannot change a
+        // twist angle, which is what the count is derived from.
+        if (edge.Curve.Underlying is TwistedRailCurve twistRail)
+        {
+            int n = twistRail.Surface.NaturalVSegments(segmentsPerCircle);
+            var points = new List<Vector3d>(n + 1) { edge.Curve.PointAt(domain.Start) };
+            for (int i = 1; i < n; i++)
+                points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
+            points.Add(edge.Curve.PointAt(domain.End));
+            return points;
+        }
+
         if (edge.IsClosedEdge)
         {
-            int n = IsAngularlyParameterized(edge.Curve) ? segmentsPerCircle : curveSamples;
+            int n = Math.Max(
+                IsAngularlyParameterized(edge.Curve) ? segmentsPerCircle : curveSamples, twistFloor);
             var points = new List<Vector3d>(n);
             for (int i = 0; i < n; i++)
                 points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
@@ -450,7 +474,7 @@ public static class BRepTessellator
         // answer (every straight edge in the repo before this rule) is bit-identical.
         if (edge.Curve.Underlying is Line3d)
         {
-            int n = StraightEdgeSegments(edge, segmentsPerCircle, curveSamples);
+            int n = Math.Max(StraightEdgeSegments(edge, segmentsPerCircle, curveSamples), twistFloor);
             if (n <= 1)
                 return [edge.Curve.PointAt(domain.Start), edge.Curve.PointAt(domain.End)];
             var points = new List<Vector3d>(n + 1) { edge.Curve.PointAt(domain.Start) };
@@ -486,7 +510,7 @@ public static class BRepTessellator
         if (IsAngularlyParameterized(edge.Curve))
         {
             int angular = AngularSegments(TurningAngle(edge.Curve, domain), segmentsPerCircle);
-            int n = Math.Max(curveSamples, angular);
+            int n = Math.Max(Math.Max(curveSamples, angular), twistFloor);
             var points = new List<Vector3d>(n + 1);
             for (int i = 0; i <= n; i++)
                 points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
@@ -502,10 +526,48 @@ public static class BRepTessellator
         if (edge.Curve.Underlying is LoftRailCurve rail && rail.Surface.IsAffineInV)
             return [edge.Curve.PointAt(domain.Start), edge.Curve.PointAt(domain.End)];
 
-        var samples = new List<Vector3d>(curveSamples + 1);
-        for (int i = 0; i <= curveSamples; i++)
-            samples.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / curveSamples)));
+        int generic = Math.Max(curveSamples, twistFloor);
+        var samples = new List<Vector3d>(generic + 1);
+        for (int i = 0; i <= generic; i++)
+            samples.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / generic)));
         return samples;
+    }
+
+    /// <summary>
+    /// The u sample count a TWISTED face using this edge needs of it, or 1 when no such
+    /// face does — the twist-matched profile subdivision, applied through the edge so the
+    /// face's natural grid and its shared boundary polylines round to the SAME count.
+    /// <para>The rule itself lives on <see cref="TwistedSurface.PanelSegments"/> (only the
+    /// surface knows its axis and its twist); this is the max over the ≤ 2 faces the edge
+    /// borders, exactly as <see cref="StraightEdgeSegments"/> takes a max over its uses,
+    /// and for the same reason: <see cref="SampleEdge"/> fills one polyline per edge and
+    /// both sides read it.</para>
+    /// </summary>
+    private static int TwistFloor(BrepEdge edge, int segmentsPerCircle)
+    {
+        int segments = 1;
+        foreach (var use in edge.Uses)
+        {
+            if (use.Loop.Face.Surface is TwistedSurface { IsTwisted: true } twisted)
+                segments = Math.Max(segments, twisted.PanelSegments(segmentsPerCircle));
+        }
+        return segments;
+    }
+
+    /// <summary>
+    /// The per-type segment count <see cref="SampleEdge"/> and <see cref="CurveParams"/>
+    /// both apply to a curve, exposed so a surface whose grid must ALSO resolve something
+    /// else (a twist) can take the max rather than restate the type rules.
+    /// </summary>
+    private static int CurveSegments(Curve3d curve, int segmentsPerCircle, int curveSamples)
+    {
+        if (curve.IsClosed)
+            return IsAngularlyParameterized(curve) ? segmentsPerCircle : curveSamples;
+        if (curve.Underlying is Line3d)
+            return 1;
+        if (IsAngularlyParameterized(curve))
+            return Math.Max(curveSamples, AngularSegments(TurningAngle(curve, curve.Domain), segmentsPerCircle));
+        return curveSamples;
     }
 
     /// <summary>
@@ -637,6 +699,22 @@ public static class BRepTessellator
             CurveParams(swept.Generator, segmentsPerCircle, curveSamples),
             EvenParams(swept.Path.Domain, curveSamples, includeEnd: true),
             swept.Generator.IsClosed, false),
+        // A twisted extrusion sets BOTH directions from the twist rate rather than from a
+        // constant: v gets one row per circular facet angle of twist
+        // (NaturalVSegments), and u gets at least the generator's own density but no
+        // coarser than the twist's own lateral step (PanelSegments — see there for why a
+        // straight side genuinely needs interior samples). The u count is the same one
+        // SampleEdge gives the generator edges through TwistFloor, so the grid boundary
+        // and the shared edge polylines agree by construction rather than by tolerance.
+        TwistedSurface twisted => (
+            EvenParams(
+                twisted.DomainU,
+                Math.Max(
+                    CurveSegments(twisted.Generator, segmentsPerCircle, curveSamples),
+                    twisted.PanelSegments(segmentsPerCircle)),
+                includeEnd: !twisted.Generator.IsClosed),
+            EvenParams(twisted.DomainV, twisted.NaturalVSegments(segmentsPerCircle), includeEnd: true),
+            twisted.Generator.IsClosed, false),
         // A loft's u boundaries ARE its section curves and its v boundaries its rails, so
         // the surface owns the u rule (see LoftedSurface.NaturalUSegments, which mirrors
         // SampleEdge) and v takes the generic curve density the rails are sampled at —
