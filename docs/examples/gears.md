@@ -373,7 +373,8 @@ face.
 A helical gear is **exact in all three representations**, as a spur gear is: the
 twisted extrusion's side surfaces are analytic (`TwistedSurface`), so the lowering
 is B-Rep-Native and `Explain` says so. A 24-tooth, module-2 gear at a 20 degree
-helix lowers to a Validate-clean 915-face solid whose tessellation closes — one
+helix with a 10 mm bore lowers to a Validate-clean 915-face solid whose
+tessellation closes — one
 exact surface per biarc of every flank. Helix angles are limited to plus or minus
 60 degrees.
 

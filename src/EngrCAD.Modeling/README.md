@@ -2776,8 +2776,8 @@ diameter z·m·cos α, tooth thickness m·(π/2 + 2x·tan α), the undercut limi
   `Gears.HelicalGear(spec, faceWidth, helixAngleDegrees, …)` over the twisted
   extrusion (the spur profile is the TRANSVERSE section, so module and pressure
   angle are transverse values; exact in all three now that a twist has an analytic
-  side surface — a 24-tooth module-2 gear at 20 degrees lowers to a Validate-clean
-  915-face solid). `GearProfile.ClosedFormArea` is the ideal
+  side surface — a 24-tooth module-2 gear at 20 degrees with a 10 mm bore lowers to a
+  Validate-clean 915-face solid). `GearProfile.ClosedFormArea` is the ideal
   outline's exact Green's-theorem area (the involute term is r_b²·t³/6), held
   against `Sketch.Area()` in tests.
 
