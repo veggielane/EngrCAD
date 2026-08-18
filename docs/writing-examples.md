@@ -21,7 +21,7 @@ scene.Add(new Part("demo", Shape.Sphere(10)));
 | Fence | Meaning |
 | --- | --- |
 | ` ```csharp render:<id> ` | Executed. Must end with a variable **`scene`** of type `Scene` in scope; the generator renders it to `examples/images/<id>.png`, and the same page must reference that image (`![alt](images/<id>.png)`). |
-| ` ```csharp animate:<id> ` | Executed. Must define `scene`, and may define an **`animation`** (`Animation`); without one it gets a default 4-second turntable. Rendered to an **APNG** at `examples/images/<id>.png` — an APNG *is* a PNG, so the reference rule is unchanged and browsers just play it. Mind the build time and committed size: every frame is an offscreen render, so keep `frames:` modest. |
+| ` ```csharp animate:<id> ` | Executed. Must define `scene`, and may define an **`animation`** (`Animation`) **or** a **`timeVaryingModel`** (`Func<double, Scene>` — a `$t` model, baked one frame at a time); with neither it gets a default 4-second turntable, and with both it is an error, since a timeline and a time-varying model are two answers to what a frame is. Rendered to an **APNG** at `examples/images/<id>.png` — an APNG *is* a PNG, so the reference rule is unchanged and browsers just play it. Mind the build time and committed size: every frame is an offscreen render, so keep `frames:` modest. |
 | ` ```csharp svg:<id> ` | Executed. Must define a variable **`svg`** of type `string` (e.g. `var svg = sheet.ToSvg();`), written verbatim to `examples/images/<id>.svg` and referenced the same way (`![alt](images/<id>.svg)`). For a **drawing sheet**, which is line work on paper rather than a render — it has no camera, no lighting and no pixels, and rasterizing it would throw away the one property that makes it useful. Needs no GL, so it works on any machine. |
 | ` ```csharp run:<id> ` | Executed for correctness only — no screenshot. Use for exports, queries, and other non-visual examples. Throw on unexpected results so regressions fail the build. |
 | ` ```csharp ` | Display-only. Not executed — use sparingly, for fragments that cannot stand alone (project files, switch tables, viewer-interactive calls like `EngrCad.Show`). |
@@ -43,8 +43,14 @@ planes instead of boolean-cut fakes:
 | `section:<x\|y\|z>,<offset>` | Renders with a real axis-aligned section plane at the offset (SDF-routed parts get their isoline overlay on the cut). Repeat with `;` for a quarter or octant cut: `section:x,0;y,0`. |
 
 `animate:` fences take `style:<name>` and `frames:<2..120>` (default 24). The
-snippet's `animation` variable (and `camera`, when there is no camera track) rides
-the same declared-variable convention as `render:` fences. A `render:` fence may also
+snippet's `animation` or `timeVaryingModel` variable (and `camera`, when there is no
+camera track) rides the same declared-variable convention as `render:` fences — and note
+that a variable of a declared NAME but the wrong TYPE is an error rather than a silent
+miss, which is why the `$t` one is spelled out in full instead of the obvious `model`
+(this page's own FEA clip legitimately declares a `StructuralModel model`). A
+`timeVaryingModel` clip is far more expensive than a track — every frame is a full lower
+plus tessellate rather than a matrix — so keep `frames:` modest and expect the build to
+notice. A `render:` fence may also
 declare `var renderSize = (width, height);` — a `(int, int)` tuple — to override the
 default 1600×1120 (a portrait figure, for instance); the 2×-the-display-size rule stays
 the author's to honour.

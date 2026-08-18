@@ -407,3 +407,159 @@ var fly = new FlyThroughTrack(path, lookAhead: 25, lookAt: new Vector3d(0, 0, 0)
 var pose = fly.CameraAt(0.5);
 if (pose.Distance != 25) throw new Exception("lookAhead is the orbit distance");
 ```
+
+
+## `$t` — when the model itself changes shape
+
+Everything above moves poses, a camera, one scalar or the clip planes, and that is what
+makes it cheap. OpenSCAD's `$t` is the other thing: a model whose **geometry** is a
+function of time — a spring compressing, a bellows folding, a parametric sweep played as
+a clip. It cannot be a track, because a track that returned new meshes would break the
+rule this whole page rests on. It is a `Func<double, Scene>` you **bake**.
+
+```csharp animate:animate-morphing-column frames:24
+// The static half is HOISTED — built once, captured — because that object identity is
+// exactly what the bake's cache keys on.
+var plate = Shape.Box(70, 70, 8).Fillet(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+
+Func<double, Scene> timeVaryingModel = t =>
+{
+    var s = new Scene();
+    s.Add(new Part("plate", plate, new PartColor(0.55f, 0.58f, 0.62f)));
+    // The column genuinely changes shape: it twists through a quarter turn and tapers.
+    s.Add(new Part("column",
+        Shape.Extrude(Sketch.Rectangle(26, 26), height: 46,
+                twist: 90 * t, scale: 1 - 0.55 * t, slices: 48)
+             .Translate(0, 0, 8),
+        new PartColor(0.94f, 0.44f, 0.16f)));
+    return s;
+};
+
+var scene = timeVaryingModel(0);   // the page's fallback still, and what a browser would run
+```
+
+![A square column twisting and tapering over a fixed plate](images/animate-morphing-column.png)
+
+**24 frames, one shot — it does not loop.** The column at t = 1 is a different solid
+from the column at t = 0, so there is no seam to close; playing it as a loop would snap
+back rather than come round, and saying so beats picking a length that hides it (the
+same call [the gear clip](gears.md) makes).
+
+Any instant is an ordinary scene, so a still is an ordinary render:
+
+```csharp render:animate-morphing-t0
+var plate = Shape.Box(70, 70, 8).Fillet(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+var scene = new Scene();
+scene.Add(new Part("plate", plate, new PartColor(0.55f, 0.58f, 0.62f)));
+scene.Add(new Part("column",
+    Shape.Extrude(Sketch.Rectangle(26, 26), height: 46, twist: 0, scale: 1.0, slices: 48)
+         .Translate(0, 0, 8),
+    new PartColor(0.94f, 0.44f, 0.16f)));
+var camera = new CameraState(0.9, 0.42, 190, (0, 0, 24));
+```
+
+```csharp render:animate-morphing-t50
+var plate = Shape.Box(70, 70, 8).Fillet(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+var scene = new Scene();
+scene.Add(new Part("plate", plate, new PartColor(0.55f, 0.58f, 0.62f)));
+scene.Add(new Part("column",
+    Shape.Extrude(Sketch.Rectangle(26, 26), height: 46, twist: 45, scale: 0.725, slices: 48)
+         .Translate(0, 0, 8),
+    new PartColor(0.94f, 0.44f, 0.16f)));
+var camera = new CameraState(0.9, 0.42, 190, (0, 0, 24));
+```
+
+```csharp render:animate-morphing-t100
+var plate = Shape.Box(70, 70, 8).Fillet(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+var scene = new Scene();
+scene.Add(new Part("plate", plate, new PartColor(0.55f, 0.58f, 0.62f)));
+scene.Add(new Part("column",
+    Shape.Extrude(Sketch.Rectangle(26, 26), height: 46, twist: 90, scale: 0.45, slices: 48)
+         .Translate(0, 0, 8),
+    new PartColor(0.94f, 0.44f, 0.16f)));
+var camera = new CameraState(0.9, 0.42, 190, (0, 0, 24));
+```
+
+| t = 0 | t = 0.5 | t = 1 |
+| --- | --- | --- |
+| ![Untwisted](images/animate-morphing-t0.png) | ![Half twist](images/animate-morphing-t50.png) | ![Full twist and taper](images/animate-morphing-t100.png) |
+
+### Baking one
+
+`TimeVaryingModel` wraps the factory; the writers are the same three
+`AnimationExport` offers, and they hand back what the cache did:
+
+```csharp
+var baked = new TimeVaryingModel(timeVaryingModel).RenderApng("morph.png", frames: 24);
+Console.WriteLine(baked.Cache);   // "24 frame(s): 25 built, 23 reused (48% hit rate)"
+```
+
+From a model program, `EngrCad.Run` takes the factory directly:
+
+```
+dotnet run -- --animate morph.png --frames 24    # an APNG
+dotnet run -- --animate frames/                  # a numbered PNG sequence
+dotnet run -- --render still.png --t 0.35        # every other verb answers about ONE instant
+```
+
+### What it costs, measured
+
+A frame is a full lower **plus** a full tessellate — there is nothing to reuse between
+frames the way an animation reuses its uploads — so the honest numbers (win-x64) are:
+
+| | geometry per frame | 24-frame bake at 480×360 |
+| --- | --- | --- |
+| cache off | 8.5 ms | 1.9 s |
+| cache on | **4.2 ms** | **1.2 s** |
+
+The cache halves the geometry; at that image size the *render* is the larger share of
+what is left, which is why the whole-bake ratio is smaller than the geometry ratio. One
+instant of a B-Rep model — a boolean bore, a whole-solid round — measures **20–45 ms**
+of geometry alone, i.e. one to three times a 60 Hz frame budget for a small part, and it
+grows with the part.
+
+### The cache, and why hoisting is the whole trick
+
+Across frames most of a model does not change, and a sub-graph your factory returns
+**unchanged is the same object**. So a part whose geometry object has already been
+meshed at this quality adopts that part's caches — display mesh, B-Rep and implicit
+lowerings, feature edges — instead of recomputing them. Those caches are pure functions
+of (geometry, quality) and the geometry is literally the same object, so the transplant
+is not merely equal to what the frame would have computed, it *is* that object: **a
+cached bake and an uncached one are byte-identical**, which a test asserts.
+
+The corollary is the thing to design for. A factory that rebuilds everything every frame
+shares nothing and hits nothing — reported honestly rather than papered over:
+
+| factory | hit rate |
+| --- | --- |
+| everything hoisted (nothing depends on t) | all but the first frame |
+| plate hoisted, column rebuilt (above) | 48% |
+| everything rebuilt per frame | 0% |
+
+A [feature history](features.md) gives you the second mechanism free and at a different
+granularity: driving a `[Param]` and calling `Part.Regenerate` reuses the unchanged
+**prefix** of the history through the regeneration cache. The two compose.
+
+### What it deliberately will not do
+
+**Scrub in the viewer.** The transport drives `Animation.At(t)`, a pure matrices-only
+function it evaluates at frame rate; a `$t` model cannot honour that contract at 20–45 ms
+a frame and rising, so it is refused there by name rather than offered and felt to be
+broken. The live loop that *does* work is the hot-reload path — which is already this
+pipeline for one frame:
+
+```csharp
+double t = 0;
+var model = new TimeVaryingModel(BuildAt);
+EngrCad.ShowLive(() => model.At(t));
+// ...then move t and call EngrCad.NotifySourceChanged() — same debounce, same
+// keep-the-last-good-scene error path, same camera, and it reuses the same cache.
+```
+
+Two smaller decisions, both stated rather than hidden. The camera is framed **once**,
+over the union of *every* frame's bounds — an animation frames over the first and last,
+which is right for an explode whose extremes bracket it and wrong here, since a morphing
+model can be widest in the middle. And the ground grid and depth range are read off one
+box for the whole clip, because letting them follow a growing model makes the grid jump
+between frames.

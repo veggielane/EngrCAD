@@ -808,6 +808,51 @@ server's `screenshot` `t` parameter goes through it too: one seam, so no consume
 have its own idea of what an instant looks like. It evaluates no geometry (posing is
 matrices) and applies the debug modifiers, like every other render entry point.
 
+## `$t` — baking a time-varying model (`ModelAnimation.cs`)
+
+An `Animation` never touches geometry, which is why a whole clip exports through one
+context with the buffers uploaded once. A model whose GEOMETRY follows time — OpenSCAD's
+`$t` — is the other thing, so it is a `Modeling.TimeVaryingModel` (a `Func<double,
+Scene>` plus its geometry cache) that this assembly **bakes**:
+
+```csharp
+var baked = new TimeVaryingModel(t => BuildAt(t)).RenderApng("morph.png", frames: 24);
+Console.WriteLine(baked.Cache);   // "24 frame(s): 25 built, 23 reused (48% hit rate)"
+```
+
+`ModelAnimation.Bake` is the shared core (pixels back, no file), with `RenderApng` /
+`RenderFrames` / `RenderGif` the same three writers and the same ranking
+`AnimationExport` uses. `EngrCad.Run(args, Func<double, Scene>)` is the CLI shape:
+`--animate out.png|out.gif|<directory>` with `--frames n`, and **every other verb answers
+about ONE instant**, chosen by `--t <fraction>` (so `--render still.png --t 0.35` is the
+model a third of the way through) — a deliberate reduction, since a still, an export and
+a window each show one shape and a time-varying model's shape at an instant is exactly
+what `model(t)` returns.
+
+**The cost is the design constraint and it is stated rather than implied.** Every frame
+is a full lower + tessellate: measured (win-x64) at 8.5 ms of geometry a frame uncached
+and 4.2 ms cached on the docs fixture, with a whole 24-frame bake at 480×360 running
+1.9 s → 1.2 s — the cache halves the geometry, and at that image size the render is the
+larger share of what is left. One instant of a B-Rep model (a boolean bore, a
+whole-solid round) is 20–45 ms of geometry alone. **Live scrubbing is refused by name**:
+the transport drives the pure matrices-only `Animation.At(t)` at frame rate and a
+morphing model cannot honour that contract, so the live path is the hot-reload loop
+instead — hold `t`, pass `() => model.At(t)` to `ShowLive`, call `NotifySourceChanged()`
+when it moves; same debounce, same keep-the-last-good-scene error path, same camera, and
+it reuses the same cache.
+
+Two rendering decisions belong to the bake rather than to the model. The camera is
+resolved **once** over the union of EVERY frame's bounds — an `Animation` frames over
+first ∪ last, correct for an explode whose extremes bracket it and wrong here, since a
+morphing model can be widest in the middle, and every frame is built anyway so the union
+is free. And the ground grid and the frustum planes read ONE box for the clip
+(`OffscreenRenderer`'s optional `sceneBounds`; null is the incumbent per-frame arithmetic
+bit for bit), because letting a 1-2-5 grid spacing and a depth range follow a growing
+model makes the grid jump and the depth quantisation shimmer between frames. The memory
+cost is stated: `RenderSequence` batches, so the clip's scenes are alive at once.
+
+Docs: `docs/examples/animation.md` (the `$t` section).
+
 ## Bill of materials
 
 The **BOM** toolbar button shows the current tab's parts list — quantities per distinct

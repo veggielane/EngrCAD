@@ -506,6 +506,61 @@ public sealed class Part
         get { lock (_meshLock) return _meshSegments; }
     }
 
+    /// <summary>
+    /// Takes <paramref name="source"/>'s DERIVED caches — the display mesh, the B-Rep and
+    /// implicit lowerings and the feature-edge overlay — as this part's own, for a part
+    /// built from the SAME geometry object. Every one of those is a pure function of
+    /// (geometry, quality), so this is not a copy of something equal: it installs the very
+    /// objects the destination's own <see cref="GetMesh"/> would have produced, which is
+    /// what makes a <see cref="TimeVaryingModel"/> bake's cache incapable of changing an
+    /// answer. Quality is the CALLER's to match (a mesh built at one resolution must not
+    /// stand in for another); geometry identity is checked here, because getting that
+    /// wrong would be a wrong answer rather than a wrong resolution.
+    /// <para>Annotations are deliberately NOT adopted: they are the part's own list and
+    /// resolve against it, and with the solid already transplanted, resolving them is
+    /// extraction rather than a lowering.</para>
+    /// </summary>
+    internal void AdoptDerivedFrom(Part source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (!ReferenceEquals(Geometry, source.Geometry))
+            throw new InvalidOperationException(
+                $"Part '{Name}' cannot adopt part '{source.Name}''s derived geometry: the two "
+                + "are built from different geometry objects, so the caches are not the same "
+                + "function of the same input.");
+        // Snapshot under the SOURCE's lock and install under this one — never both at
+        // once, so two parts adopting from each other cannot deadlock.
+        var derived = source.SnapshotDerived();
+        lock (_meshLock)
+        {
+            Volatile.Write(ref _mesh, derived.Mesh);   // pairs with HasMesh's lock-free probe
+            _meshSegments = derived.MeshSegments;
+            _solid = derived.Solid;
+            _solidLowered = derived.SolidLowered;
+            _solidError = derived.SolidError;
+            _sdf = derived.Sdf;
+            _sdfLowered = derived.SdfLowered;
+            _sdfError = derived.SdfError;
+            _featureEdges = derived.FeatureEdges;
+        }
+    }
+
+    /// <summary>This part's derived caches, read under its own lock.</summary>
+    private DerivedGeometry SnapshotDerived()
+    {
+        lock (_meshLock)
+            return new DerivedGeometry(
+                _mesh, _meshSegments, _solid, _solidLowered, _solidError,
+                _sdf, _sdfLowered, _sdfError, _featureEdges);
+    }
+
+    /// <summary>Everything a part derives from its geometry, as one value.</summary>
+    private readonly record struct DerivedGeometry(
+        HalfEdgeMesh? Mesh, int MeshSegments,
+        BrepSolid? Solid, bool SolidLowered, Exception? SolidError,
+        Sdf? Sdf, bool SdfLowered, string? SdfError,
+        IReadOnlyList<(Vector3d A, Vector3d B)>? FeatureEdges);
+
     private readonly Lock _constructionLock = new();
     private ConstructionNode? _constructionTree;
     private bool _constructionTreeBuilt;

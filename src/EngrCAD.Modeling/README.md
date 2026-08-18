@@ -3501,6 +3501,46 @@ turns them on. The `TitleBlock` gained `Project` and `Sheet` (N-of-M) fields for
 (scale stays derived, never a settable field it could contradict); the ISO 7200 field layout
 is filed. Docs: `docs/examples/drawings.md#the-shared-frame`.
 
+## Time-varying models (`TimeVaryingModel.cs`)
+
+A model whose GEOMETRY is a function of time — OpenSCAD's `$t`: a spring compressing, a
+bellows folding, a parametric sweep played as a clip. `TimeVaryingModel` wraps a
+`Func<double, Scene>` and `At(t)` returns that instant's scene fully prepared (the
+factory, then the cache below, then `Scene.PreMesh`), so nothing lowers on a render
+thread. The rendering half lives in `EngrCAD.Viewer` (`ModelAnimation` bakes frames);
+this type is the document-model half, and it exists for the cache.
+
+**It is deliberately NOT an animation track.** The `Animation` timeline's load-bearing
+rule is that a track answers with matrices, a camera or a scalar and never with
+geometry, which is what lets a whole clip animate with buffers already uploaded. A
+morphing model breaks that rule by definition, so it is a separate type a caller BAKES
+rather than a fifth kind of track. Live scrubbing is refused by name (see `At`'s remarks
+for the hot-reload recipe that does work); the cost is measured and stated rather than
+implied — 8.5 ms a frame uncached / 4.2 ms cached on the docs fixture's mesh route, and
+20–45 ms for one instant of a B-Rep model, geometry alone (win-x64).
+
+**The cache is the feature.** Across frames most of a model is unchanged, and a
+sub-graph the factory returns unchanged is the SAME OBJECT — so a part whose geometry
+object has already been meshed at this quality adopts that part's derived caches
+(`Part.AdoptDerivedFrom`, internal: display mesh, B-Rep and implicit lowerings,
+feature edges) instead of recomputing them. Those caches are pure functions of
+(geometry, quality) and the geometry is literally the same object, so the transplanted
+result IS what the frame's own lowering would have produced: **a cached bake and an
+uncached one are byte-identical**, which is what a cache must be able to claim before it
+may exist. `ModelCacheReport` reports the hit rate, because it is the number that says
+whether a factory hoisted what it should have — a factory that rebuilds its whole graph
+every frame shares nothing and honestly reads 0%.
+
+Three rules carry it: the key is `(geometry object, mesh quality signature)` — dropping
+the quality half lets a coarse mesh stand in for a fine one at the same geometry, a
+defect the tests SHOW rather than assert away; entries not touched by the most recent
+frame are evicted, so a morphing part's per-frame geometry does not accumulate; and a
+`FeatureHistory`-backed part needs nothing here, since driving a `[Param]` and calling
+`Part.Regenerate` already reuses the unchanged PREFIX of its history — a different
+saving at a different granularity, and the two compose.
+
+Docs: `docs/examples/animation.md` (the `$t` section), design.md's `$t` record.
+
 ## Quality
 
 Bridges and mesh output honor `MeshQuality` (`SegmentsPerCircle`, `CurveSamples` for

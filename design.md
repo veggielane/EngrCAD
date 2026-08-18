@@ -11455,32 +11455,49 @@ geometry kernel building *that* model in the reader's tab. The pieces are
     independently written decoder. One camera per clip when no track drives it,
     framed over the union of first and last frame bounds — never per-frame framing
     (the explode slider's camera lesson).
-- **`$t` (time-parameterized GEOMETRY) — assessed and deliberately deferred.** OpenSCAD's
-  `$t` re-evaluates the model per frame, which is the one thing the Animation section
-  above is built never to do; this assessment records what it would actually take so the
-  decision is a design fact rather than a lingering question. (a) **The shape of the
-  feature is `Func<double, Scene>`**, not a track: geometry changing with t means the
-  instance count, meshes and pick BVHs all may change per frame, so none of the
-  matrix-only machinery (`SetInstancePoses`, APNG export's shared buffers, playback
-  scrubbing at interactive rates) applies — every frame is a full `Scene.PreMesh`. The
-  hot-reload loop already IS this pipeline for n = 1 (`SetScene` with camera preserved),
-  so the honest v1 is a frame-stepping export/preview over `t => scene`, reusing
-  `TabMeshLoader` per frame, NOT a live scrub. (b) **The cost model is the argument**:
-  a typical drilled-plate scene lowers+tessellates in ~1–10 s; at 30 frames even the
-  cheap end is a half-minute bake for one second of playback, so `$t` is an offline
-  RENDER feature (bake frames → APNG/frame sequence, where the per-frame camera rule
-  and writers already exist) and must never share the interactive transport UI, whose
-  scrub contract is "pure function, instant". (c) **Caching is where the real design
-  work lies**: a t-parameterized model usually varies few parameters, so the win is
-  `FeatureHistory`'s prefix caching (unchanged-prefix features reuse their bodies) plus
-  `Part` identity across frames for parts whose geometry did not change (bit-identical
-  parameter snapshot → reuse the cached mesh/buffers). Without that, every frame pays
-  the whole document; with it, a mechanism-plus-one-moving-boss model approaches
-  pose-animation cost. (d) **What it buys over the existing Animation**: morphing
-  geometry (a spring compressing, a bellows, parametric sweeps over time) — real, but
-  every rigid-body use case is already covered better by `MotionStudy`/`ExplodeTrack`.
-  Verdict: build it as a batch `RenderAnimation(Func<double, Scene>, frames, path)`
-  when a concrete model needs it; do not pre-build.
+- **`$t` (time-parameterized GEOMETRY) — BUILT, as the offline bake the assessment
+  prescribed** (`TimeVaryingModel` in Modeling; `ModelAnimation` in Viewer;
+  `EngrCad.Run(args, Func<double, Scene>)`'s `--animate`; docs `examples/animation.md`).
+  The recorded assessment predicted the shape correctly and its four clauses held up, so
+  this entry keeps them and records what building it MEASURED. (a) **The shape is
+  `Func<double, Scene>`, not a track** — a track returning meshes would break the rule the
+  Animation section rests on, so a `$t` model is a value a caller BAKES. (b) **The cost
+  model is the argument, and the measured numbers are smaller than the assessment's
+  guess**: a frame is a full lower + tessellate, measured (win-x64) at **8.5 ms uncached /
+  4.2 ms cached** on the docs fixture's mesh route and **20–45 ms** for one instant of a
+  B-Rep model (a boolean bore, a whole-solid round), geometry alone. That is one to three
+  times a 60 Hz frame budget for a small part rather than the "~1–10 s" first estimated —
+  which does not change the verdict, because the transport's contract is "pure function,
+  instant" and a morphing model cannot honour it at any of those figures. Live scrubbing
+  is therefore **refused by name**, and the live recipe that DOES work is the hot-reload
+  loop, which is already this pipeline for one frame: hold `t`, pass `() => model.At(t)`
+  to `ShowLive`, call `NotifySourceChanged()` when it moves. (c) **Caching was indeed
+  where the design work lay, and the mechanism is OBJECT IDENTITY rather than a parameter
+  snapshot.** An unchanged sub-graph a factory returns is the SAME object, so a part whose
+  geometry object has already been meshed at this quality ADOPTS that part's derived
+  caches (`Part.AdoptDerivedFrom` — display mesh, B-Rep and implicit lowerings, feature
+  edges). Those caches are pure functions of (geometry, quality), so the transplanted
+  result is not merely equal to what the frame would have computed, it IS that object —
+  **a cached bake and an uncached one are byte-identical**, asserted. The cache halves the
+  geometry (2.0×, 48% hit rate on the docs fixture) while the whole 24-frame bake at
+  480×360 goes 1.9 s → 1.2 s, the render being the larger share of what is left at that
+  size. Three riders: the key is `(geometry object, mesh quality signature)` and dropping
+  the quality half is a real defect the test SHOWS (a coarse mesh standing in for a fine
+  one at the same geometry); entries not touched by the most recent frame are evicted, so
+  a morphing part's per-frame geometry does not accumulate; and `FeatureHistory`'s prefix
+  cache is the SECOND mechanism, needing nothing here — it works at a different
+  granularity and the two compose. (d) **What it buys over the Animation is unchanged** —
+  morphing geometry, while every rigid-body case stays better served by
+  `MotionStudy`/`ExplodeTrack`. **Two decisions the build added.** The camera is framed
+  once over the union of EVERY frame's bounds rather than first-union-last: an explode's
+  extremes bracket it, a morphing model can be widest in the middle, and every frame is
+  built anyway so the union costs nothing. And the ground grid and the frustum planes read
+  ONE box for the clip (`OffscreenRenderer`'s optional `sceneBounds`, null being the
+  incumbent per-frame arithmetic bit for bit), because letting a 1-2-5 grid and a depth
+  range follow a growing model makes them jump between frames. The memory cost is stated
+  rather than hidden: `RenderSequence` batches, so every frame's scene is alive at once,
+  and a streaming bake that freed each frame after drawing it would give up both the union
+  camera and the batch.
 - **Mates are a small dense nonlinear least-squares problem, deliberately.** Six unknowns
   per free occurrence, an analytic Jacobian, one global length scale making residuals and
   columns dimensionally uniform, and rank from a pivoted Cholesky. That is enough for the
