@@ -1779,9 +1779,36 @@ public abstract class Shape
     /// <para>Computed from the mesh at <paramref name="quality"/> — a silhouette is the
     /// union of the projected faces, so its fidelity is the mesh's, and a finer mesh costs
     /// more union work. See <see cref="PlanarSection.SilhouetteOfMesh"/> for the cost.</para>
+    ///
+    /// <para><b>There is deliberately no <c>SilhouetteExact</c> beside this, and the reason
+    /// is the 2D tier rather than the 3D one.</b> <see cref="SilhouetteCurves"/> now returns
+    /// the outline's exact 3D curves, so the premise that "there is nothing exact to recover"
+    /// no longer holds in space — but a REGION is 2D, and assembling one exactly would need a
+    /// curved 2D arrangement over the PROJECTED curves. An orthographic projection of a circle
+    /// is an ELLIPSE, and <see cref="CurvedRegion2d"/> carries lines and circular arcs only
+    /// (deliberately, since that tier's cell walk is complete precisely because a line and a
+    /// circle cannot osculate). So every curved silhouette but the degenerate ones would be
+    /// flattened at the arrangement's door, which is what this method already does more
+    /// cheaply. Take <see cref="SilhouetteCurves"/> when exactness is the point — a drawing
+    /// consumes 3D curves, not a region.</para>
     /// </summary>
     public IReadOnlyList<Region2d> Silhouette(SketchPlane plane, MeshQuality? quality = null) =>
         PlanarSection.SilhouetteOfMesh(ToMesh(quality), plane.Frame);
+
+    /// <summary>
+    /// The shape's EXACT silhouette curves in 3D, viewed along <paramref name="plane"/>'s
+    /// normal: the true outline of every curved surface, computed from the B-Rep's own
+    /// surfaces rather than from a tessellation (<see cref="BrepSilhouette"/>).
+    ///
+    /// <para>Each curve carries how it is represented and how far it misses being edge-on,
+    /// and faces with no silhouette CURVE are named rather than omitted silently (a plane
+    /// seen edge-on, a cylinder down its own axis). The result is in the shape's own
+    /// coordinates — a drawing projects it, and <see cref="Silhouette"/> stays the route to
+    /// a 2D region.</para>
+    /// </summary>
+    /// <exception cref="ShapeConversionException">The shape has no B-Rep form.</exception>
+    public SilhouetteResult SilhouetteCurves(SketchPlane plane, SilhouetteOptions? options = null) =>
+        BrepSilhouette.OfSolid(ToBrep(), SilhouetteView.Along(plane.Frame.Z), options);
 
     private void ThrowIfImpossible(TargetRep target)
     {

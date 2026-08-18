@@ -9,6 +9,32 @@ public abstract class Surface
     public abstract Interval DomainV { get; }
     public abstract Vector3d PointAt(double u, double v);
 
+    /// <summary>
+    /// The UNNORMALISED normal <c>∂P/∂u × ∂P/∂v</c>, by central differences unless a
+    /// subclass supplies the closed form.
+    ///
+    /// <para>It exists beside <see cref="NormalAt"/> for two reasons that are the same
+    /// reason. A silhouette is the zero set of <c>N·d</c>, where the SIGN is the whole
+    /// content and the division a unit normal costs can only lose precision — the
+    /// recorded rule that a degeneracy guard reads the sign of an unnormalised cross
+    /// product. And a normal is not defined at a POLE, where <see cref="NormalAt"/>
+    /// throws rather than returning something a caller can test; here the answer is
+    /// simply the zero vector, which a caller checks with a length.</para>
+    ///
+    /// <para>Nothing that existed before calls this, and <see cref="NormalAt"/> is
+    /// unchanged, so adding the exact overrides moved no incumbent answer.</para>
+    /// </summary>
+    public virtual Vector3d NormalRawAt(double u, double v)
+    {
+        double hu = double.IsFinite(DomainU.Length) ? Math.Max(1e-7, DomainU.Length * 1e-7) : 1e-7;
+        double hv = double.IsFinite(DomainV.Length) ? Math.Max(1e-7, DomainV.Length * 1e-7) : 1e-7;
+        double u0 = DomainU.Clamp(u - hu), u1 = DomainU.Clamp(u + hu);
+        double v0 = DomainV.Clamp(v - hv), v1 = DomainV.Clamp(v + hv);
+        var du = (PointAt(u1, v) - PointAt(u0, v)) / (u1 - u0);
+        var dv = (PointAt(u, v1) - PointAt(u, v0)) / (v1 - v0);
+        return du.Cross(dv);
+    }
+
     /// <summary>Unit normal by central differences; subclasses override with exact normals.</summary>
     public virtual Vector3d NormalAt(double u, double v)
     {
@@ -201,6 +227,9 @@ public sealed class PlaneSurface(Vector3d origin, Vector3d xDirection, Vector3d 
     public override Vector3d PointAt(double u, double v) => origin + xDirection * u + yDirection * v;
     public override Vector3d NormalAt(double u, double v) => Normal;
 
+    /// <summary>Exact: x x y is already the unnormalised normal.</summary>
+    public override Vector3d NormalRawAt(double u, double v) => Normal;
+
     /// <summary>Plane coordinates of a 3D point (assumed on or near the plane).</summary>
     public Vector2d Project(in Vector3d point)
     {
@@ -236,6 +265,10 @@ public sealed class CylinderSurface(Vector3d origin, Vector3d xDirection, Vector
     public override Vector3d NormalAt(double u, double v) =>
         xDirection * Math.Cos(u) + yDirection * Math.Sin(u);
 
+    /// <summary>Exact: dP/du x dP/dv is the outward radial scaled by the radius.</summary>
+    public override Vector3d NormalRawAt(double u, double v) =>
+        (xDirection * Math.Cos(u) + yDirection * Math.Sin(u)) * radius;
+
     public override bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
     {
         var d = point - origin;
@@ -262,6 +295,10 @@ public sealed class SphereSurface(Vector3d center, double radius) : Surface
         Math.Cos(v) * Math.Cos(u),
         Math.Cos(v) * Math.Sin(u),
         Math.Sin(v));
+
+    /// <summary>Exact: the outward radial scaled by r^2 cos v, which vanishes at the poles.</summary>
+    public override Vector3d NormalRawAt(double u, double v) =>
+        NormalAt(u, v) * (radius * radius * Math.Cos(v));
 
     public override bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
     {

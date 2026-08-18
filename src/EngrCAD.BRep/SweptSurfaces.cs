@@ -90,6 +90,13 @@ public sealed class ExtrudedSurface(Curve3d generator, Vector3d direction) : Sur
         generator.TangentAt(u).Cross(direction).Normalized();
 
     /// <summary>
+    /// Exact: dP/du x dP/dv is C'(u) x direction, INDEPENDENT of v — which is why an
+    /// extrusion's silhouette is a set of rulings rather than a curve across the band.
+    /// </summary>
+    public override Vector3d NormalRawAt(double u, double v) =>
+        generator.DerivativeAt(u).Cross(direction);
+
+    /// <summary>
     /// Inverse evaluation reduced to ONE dimension. P(u, v) = C(u) + v·direction, so the
     /// component of (P − point) along the direction is whatever v makes it — only the
     /// perpendicular component constrains u. Solving Q(C(u) − point) = 0 (Q = the
@@ -230,6 +237,20 @@ public sealed class RevolvedSurface : Surface
     {
         var rotation = Quaterniond.FromAxisAngle(AxisDirection, u);
         return AxisOrigin + rotation.Rotate(Generator.PointAt(v) - AxisOrigin);
+    }
+
+    /// <summary>
+    /// Exact: dP/du is axis x (R_u q) and dP/dv is R_u q' for q = G(v) - o, so the raw
+    /// normal is R_u[(axis x q) x q'] — a fixed vector of the GENERATOR carried round by
+    /// the rotation, which is the separability a silhouette solve stands on. The vector
+    /// vanishes on the axis, where a revolve has a pole and no normal.
+    /// </summary>
+    public override Vector3d NormalRawAt(double u, double v)
+    {
+        var rotation = Quaterniond.FromAxisAngle(AxisDirection, u);
+        var radial = rotation.Rotate(Generator.PointAt(v) - AxisOrigin);
+        var along = rotation.Rotate(Generator.DerivativeAt(v));
+        return AxisDirection.Cross(radial).Cross(along);
     }
 
     /// <summary>

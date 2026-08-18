@@ -804,14 +804,29 @@ export — is recorded in CLAUDE.md):
     quarter of the scallop. Nor is it systematic: holes at 64x48, none at 32x24, 96x72,
     128x96, 64x96 or 128x48, because whether two lenses overlap is an alignment
     question. The test now asserts the strong form (every hole is uncovered by every
-    facet). Residual, if anyone wants the SMOOTH body's silhouette: that is the
-    "B-Rep silhouettes" item below, not a boolean fix.
-  - [ ] **B-Rep silhouettes** — true silhouette curves on curved surfaces. Today the
-    outline is always mesh-derived, so its fidelity is the mesh's however exact the solid.
-    Now has a second consumer with a sharper need: `HiddenLineRemoval` draws a smooth
-    surface's outline from the display mesh's view-dependent silhouette and labels it
-    `EdgeSource.Silhouette` precisely because it is the one part of a drawing that is not
-    exact. Exact HLR is blocked on this.
+    facet). Residual, if anyone wants the SMOOTH body's silhouette: that is
+    `BrepSilhouette` (✅ landed, below), not a boolean fix.
+  - [ ] **Silhouette follow-ups** (`BrepSilhouette` ✅ landed — closed-form revolve /
+    cone / cylinder / sphere / extrusion silhouettes, traced for the rest, clipped to
+    each face's trim, `HiddenLineOptions.ExactSilhouettes` and `Shape.SilhouetteCurves`;
+    design.md §5b, docs `examples/silhouettes.md`):
+    - [ ] **Make `ExactSilhouettes` the default.** It is opt-in today because switching
+      it on legitimately MOVES line work — a mesh silhouette is an inscribed polyline and
+      the exact curve is the true outline, so every committed drawing PNG carrying a
+      curved body would move outward by the tessellation's own sagitta. That is an
+      improvement rather than a regression, so the decision needs a render pass whose
+      moved pixels can be looked at and signed off, not a code change.
+    - [ ] **Per-FACE substitution**, so a part whose solve declines one surface family
+      keeps the exact outline everywhere else. Blocked on the display mesh carrying no
+      face attribution: a mesh silhouette cannot be asked for "everything except these
+      faces", so a partial swap would draw some stretches twice. `TessellateWithProvenance`
+      already produces the per-triangle face map the tet mesher consumes — the gap is
+      that `Part.GetMesh` does not carry it.
+    - [ ] **The traced family's deviation floor is the SWEPT surface's own inverse
+      evaluation**, not the trace: the corrector drives `N.d` to ~1e-13 at every vertex
+      while the measurement reads ~1e-5, because reading a normal back needs a bracketed
+      1-D solve on the path. Nothing is wrong; a tighter number would need the probe to
+      carry the parameters the tracer already knows rather than re-projecting.
   - [ ] **`OfSolid` on a flush plane** — a plane containing a face or an edge throws
     (that section is an area, not a curve). **The coplanar-boolean tier landing did NOT
     unblock this, and the counterexample is worth keeping**: the natural repair — flush
@@ -1368,12 +1383,16 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   B-Rep feature edges against the display mesh, `DrawingSheet`/`DrawingView` with
   third/first-angle standard layouts and section views, `SheetAnnotation` dimensions,
   SVG/DXF sheet export; `docs/examples/drawings.md`):
-  - [ ] **Exact HLR** (OCCT `HLRBRep`): project edges AND true silhouette curves and
-    classify algebraically against every face, instead of ray-casting against the
-    display mesh. Blocked on the B-Rep silhouette item in the OpenSCAD section — with
-    exact silhouette curves the rest is the same splitting machinery the boolean
-    already has. The seam is right today (a list of classified 2D polylines), so this
-    is a swap behind `HiddenLineRemoval.Project`, not a rewrite of the sheet layer.
+  - [ ] **Exact HLR** (OCCT `HLRBRep`): classify the projected curves algebraically
+    against every face instead of ray-casting against the display mesh. **The
+    silhouette half is no longer the blocker** — `BrepSilhouette` supplies exact
+    silhouette curves and `HiddenLineOptions.ExactSilhouettes` already DRAWS them, so
+    what a drawing draws is exact and only what decides VISIBILITY is still the mesh.
+    What remains is the classification: split each projected curve at its crossings with
+    every projected face boundary and decide each stretch by containment, which is the
+    same splitting machinery the boolean has. The seam is right today (a list of
+    classified 2D polylines), so this is a swap behind `HiddenLineRemoval.Project`, not
+    a rewrite of the sheet layer.
   - [ ] **Auto-dimensioning**: a first pass placing the obvious dimensions (overall
     extents per view, hole diameters and their bolt-circle or grid spacing) from the
     graph's own `DrillShape`/`LocationSet` nodes, the way `HoleTable.For(part)` already
