@@ -4829,12 +4829,25 @@ rather than as a second algorithm makes two behaviours facts instead of arrangem
 face moved parallel to itself does not move at all, and several faces moved by one vector
 each take their own projection. It is also what makes the Native-under-mirror
 classification a theorem — the operation is a dot product, and an orthogonal map preserves
-dot products, so a reflected move pushes by the same amount. **A curved face is refused**,
-and the reason is specific rather than caution: `CarrierBody.ConcentricRim` rebuilds each
-rim as a circle concentric with the ORIGINAL, which is exactly right for an offset (which
-leaves the axis where it was) and false for a translation (which moves it). Left
-unchecked, the hypothesis fails three stages downstream in `OnBothCarriers`; declining it
-at the call names the real cause.
+dot products, so a reflected move pushes by the same amount. **A curved face was refused
+for a specific reason, and that reason is now the fix rather than the boundary**:
+`CarrierBody.ConcentricRim` rebuilt each rim as a circle concentric with the ORIGINAL,
+which is exactly right for an offset (which leaves the axis where it was) and false for a
+translation (which moves it), and left unchecked the hypothesis failed three stages
+downstream in `OnBothCarriers`. So a curved face is now carried BODILY — `Retarget`
+transforms the selected carriers through `GeometryTransform` and hands them to
+`CarrierBody.Rebuild` — and the rim rule reads its axis from the NEW carrier
+(`rimFromCarriers`), which is what makes moving a bore RELOCATE it. Two details are
+load-bearing and neither is a tolerance. **A revolve's axis is read by SCANNING its
+generator for the largest radial**, because a drill tool's generator starts on the axis and
+its first sample reports a degenerate phase; and **a CLOSED rim's seam vertex is turned onto
+the new carrier's own `u = 0`** (`PhaseSeamVertices`), because a closed rim has exactly one
+vertex and where it sits is a PHASE rather than a position — left at whatever angle the old
+axis put it, the rebuilt rim samples to points the band's own tessellation grid does not
+share. The whole rule is gated, so the offset family (which reads a rim's axis off a fit of
+the OLD edge, legal because `SurfaceOffset` carries frames verbatim) is bit-identical. The
+fixture that catches the phase defect must move the face DIAGONALLY: a purely axial move
+lands the old seam on the new `u = 0` by symmetry and the defect is invisible.
 
 **(c) Delete-and-heal is a CONDITION, and the entry's own verification clause turned out
 to be the gate.** Call an edge *wound* when one of its two faces is deleted and the other
@@ -4856,12 +4869,68 @@ and rebuilds only topology, a deletion does not merely *resemble* the body a fea
 added to — it reproduces it, asserted bit for bit against a plate that never had the hole,
 and against the closed-form volume on a plate whose boss came from a real boolean.
 
-**What is refused by name** rather than attempted: a wound that only PARTLY bounds a
-neighbouring loop. Healing that means EXTENDING the two neighbours until they meet in a
-new edge, which is a different operation and can have no answer at all — a box's four
-sides extended past its deleted top never meet. `SurfaceCorner.TrySolveCurve` could supply
-the curve; what is missing is the topology rewiring and a soundness gate, so it is filed
-rather than guessed at.
+**(c2) Extending the neighbours is the second heal, and its gate is the STRIP condition.**
+A wound that only PARTLY bounds a neighbouring loop has no loop to drop, so the two
+neighbours must be EXTENDED until they meet in a new edge — the case of deleting a fillet
+band, a chamfer band or a draft face. The soundness gate the earlier entry was missing turns
+out to be a counting condition rather than a geometric one: **every deleted face must have
+exactly TWO wound edges whose kept neighbours are two distinct faces.** That is what makes
+the replacement ONE new edge used once by each neighbour, hence two-manifold BY
+CONSTRUCTION, with nothing to check afterwards — and it is also what refuses the case that
+genuinely has no answer, since a box's top face has FOUR wound edges and its four sides
+extended past it never meet in one edge at all. A whole-solid rounding's corner patch hits
+the same wall from the other side (three blended edges at a vertex want a corner PATCH), so
+both refusals are one rule.
+
+Three things the construction needed. Corners are solved once per CLUSTER of touched
+vertices — a union-find over the INTERIOR edges the deletion consumes, so a chain of bands
+round a rim contributes one corner per junction rather than one per band — with an extra
+pairing for the CLOSED strip, a fillet round a whole circular rim, which has two closed
+wound edges, no interior edge to join their seam vertices, and therefore needs them unioned
+explicitly (which also puts both neighbours' carriers into that corner's list, without which
+the solve is under-determined). Every new edge is then the exact
+`SurfaceCorner.TrySolveCurve` through its two solved corners rather than a reparameterized
+old curve, which is what keeps a curved edge exact — a box's vertical edge comes back as the
+`Line3d` between its new corners, a bore's rim as the conic through them. And **a
+domain-driven neighbour must be LENGTHENED before it is intersected**: an `ExtrudedSurface`
+is bounded by its own parameter rectangle and the analytic intersection is clipped to it, so
+a sketch extrusion's wall stops exactly at the blend's tangency line and the two neighbours
+"do not meet" for a bookkeeping reason rather than a geometric one. `CarrierBody.TrimToPoints
+(..., extendOnly: true)` reaches past the solved corners — an OVERSHOOT, the Drill doctrine
+one domain over, because a carrier extended to land exactly ON a corner meets its neighbour
+at the very edge of its rectangle where the clip's membership test is decided by round-off —
+and the curve is trimmed back to those corners, so nothing of the overshoot survives.
+
+The two heals are TRIED IN TURN and a wound neither can close is refused with BOTH reasons,
+so the message says what each wanted rather than merely that the deletion failed. The oracle
+is the drop-loops path's own, one step stronger: deleting a fillet band and healing does not
+resemble the unfilleted box, it REPRODUCES it — all eight corners bit for bit against a
+`Shape.Box` that never had the blend, because each is re-solved from the same three planes
+the box was built from. A chamfer band comes off the same way, a fillet round a circular rim
+closes a cylinder back to three faces at πr² h (6283.184092 against 6283.185307, −1.9e-7),
+and a partial run with its terminations gives exactly 24000.
+
+**(d) `RotateFaces` is `Retarget` with a rotation, and that is the whole of it.** Once a
+curved move exists as "transform the selected carriers and rebuild", a rotation is the same
+call with a different matrix — which is why a rotated plane is still exactly a plane and a
+rotated cylinder exactly a cylinder about the turned axis, with nothing fitted. It is the
+draft angle a body with no history cannot ask for by parameter. The axis is a HINGE and the
+API says so: a face the axis lies in tilts about that line and keeps the points on it, which
+is what a drafting caller means, while a face the axis misses swings bodily. The volume
+oracle is the recorded frustum trap in its own right — the change is NOT `area × distance`
+but the trapezoid `depth × height × (width + height·tan θ / 2)`, matched exactly on a leaned
+block.
+
+**(e) Surface replacement's design is its VALIDATION, and one gate is invisible downstream.**
+`CarrierBody.Rebuild(carriers, what)` was already the seam, so `ReplaceFaceSurfaces` is a
+few lines; the substance is which replacements are sound. Three refusals, and the first is
+the one that matters: **a replacement whose outward normal OPPOSES the original's turns the
+solid inside out while leaving every loop, every count and the Euler number unchanged** — so
+`Validate()`, Euler–Poincaré and a re-tessellation all pass on a body that is now a void, and
+nothing downstream could report it. `RequireSameSide` samples both carriers at the face's own
+trim points and refuses by name. The other two are ordinary: an empty selection, and a rim
+with no EXACT intersection on the new pair (`CornerPolicy.ExactOnly`, so a replacement whose
+edges would only be traceable is refused rather than chorded in).
 
 **One measured property worth keeping**, of the signed-zero family: a re-solved corner
 reproduces every nonzero coordinate BIT FOR BIT and can return −0.0 where the original

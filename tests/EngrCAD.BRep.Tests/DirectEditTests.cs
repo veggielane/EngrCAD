@@ -253,12 +253,179 @@ public class DirectEditTests
     }
 
     [Fact]
-    public void MovingACurvedFace_IsRefusedByName()
+    public void MovingACurvedFace_CarriesItsAxisWithIt()
     {
-        var error = Assert.Throws<NotSupportedException>(() => DirectEdit.MoveFaces(
-            SolidFactory.MakeCylinder(5, 10), (1, 0, 0), f => f.Surface is CylinderSurface));
-        Assert.Contains("moves a curved carrier's own axis", error.Message);
-        Assert.Contains("OffsetFaces", error.Message);
+        // The refusal this replaces read "a translation moves a curved carrier's own axis" —
+        // which is true, and is now what the rebuild DOES rather than what stops it. The
+        // assertion with teeth is the RADIUS: a rim rebuilt about the old axis would come back
+        // at |old centre - new corner|, which is not 5.
+        var moved = DirectEdit.MoveFaces(
+            SolidFactory.MakeCylinder(5, 10), (2, 0, 0), f => f.Surface is CylinderSurface);
+        moved.Validate();
+        Assert.Equal(3, moved.Faces.Count());
+
+        var side = moved.Faces.Single(f => f.Surface is CylinderSurface);
+        var cylinder = (CylinderSurface)side.Surface;
+        Assert.Equal(5, cylinder.Radius, 12);
+        Assert.True(cylinder.Origin.AreEqual((2, 0, 0), Exact));
+        foreach (var vertex in moved.Vertices)
+        {
+            var radial = vertex.Position - new Vector3d(2, 0, vertex.Position.Z);
+            Assert.Equal(5, radial.Length, 10);
+            Assert.True(vertex.Position.Z is 0 or 10);
+        }
+    }
+
+    [Fact]
+    public void MovingACurvedFace_KeepsEveryRebuiltRimOnItsOwnCarrierPhase()
+    {
+        // The phase rule at the one point that carries a phase. A closed rim has ONE vertex
+        // and it is a SEAM, so a corner solve — which only knows how to find the nearest point
+        // of the carriers' common locus to a seed — puts it at an arbitrary angle once the
+        // axis has moved. Here the move is DIAGONAL on purpose: a purely axial one lands the
+        // old seam on the new u = 0 by symmetry and the defect is invisible.
+        var moved = DirectEdit.MoveFaces(
+            SolidFactory.MakeCylinder(5, 10), (2, 3, 0), f => f.Surface is CylinderSurface);
+        moved.Validate();
+        var cylinder = (CylinderSurface)moved.Faces.Single(f => f.Surface is CylinderSurface).Surface;
+        foreach (var vertex in moved.Vertices)
+        {
+            var radial = vertex.Position - (cylinder.Origin + cylinder.Axis.Normalized() * vertex.Position.Z);
+            Assert.Equal(5, radial.Length, 10);
+            // u = 0 of the carrier's own frame: the rim's seam sits exactly on +X.
+            Assert.Equal(5, radial.Dot(cylinder.XDirection.Normalized()), 9);
+            Assert.Equal(0, radial.Dot(cylinder.YDirection.Normalized()), 9);
+        }
+    }
+
+    [Fact]
+    public void MovingAPlanarSelection_TakesTheOffsetReductionUnchanged()
+    {
+        // The curved branch must not capture the planar case: an all-planar selection still
+        // reduces to an offset by v.n, which is what keeps every move that ever worked
+        // bit-identical. Asserted against the offset itself rather than against a number.
+        var block = Block();
+        var v = new Vector3d(1.5, -2, 4);
+        var moved = DirectEdit.MoveFaces(block, v, Normal(Vector3d.UnitZ));
+        var offset = DirectEdit.OffsetFaces(block, v.Z, Normal(Vector3d.UnitZ));
+        var a = moved.Vertices.Select(x => x.Position).OrderBy(p => p.X).ThenBy(p => p.Y).ThenBy(p => p.Z).ToList();
+        var b = offset.Vertices.Select(x => x.Position).OrderBy(p => p.X).ThenBy(p => p.Y).ThenBy(p => p.Z).ToList();
+        for (int i = 0; i < a.Count; i++)
+            Assert.True(BitsEqual(a[i], b[i]), $"{a[i]} vs {b[i]}");
+    }
+
+    // ---- rotate ----
+
+    [Fact]
+    public void RotatingASideFaceAboutItsOwnBottomEdge_IsTheExactFrustumIntegral()
+    {
+        // A draft angle put on a body with no history. The block's +X face is hinged about the
+        // line it meets the base in, so the XZ section becomes a trapezoid and the volume is a
+        // CLOSED FORM: depth * height * (width + height*tan(theta)/2). The naive "area times
+        // distance" answer has no meaning here at all, which is the point of the fixture.
+        const double angle = 5;
+        var box = SolidFactory.MakeBox(new Aabb((0, 0, 0), (40, 30, 10)));
+        var side = box.Faces.Single(f => f.IsPlanar(out _, out var n) && n.Normalized().X > 1 - 1e-9);
+        var leaned = DirectEdit.RotateFaces(
+            box, new Ray3d((40, 0, 0), Vector3d.UnitY), angle, f => ReferenceEquals(f, side));
+        leaned.Validate();
+        Assert.True(leaned.SatisfiesEulerFormula(genus: 0));
+
+        double lean = 10 * Math.Tan(angle * Math.PI / 180);
+        var top = leaned.Vertices.Where(v => v.Position.Z > 9.9 && v.Position.X > 1).ToList();
+        Assert.Equal(2, top.Count);
+        foreach (var vertex in top)
+            Assert.Equal(40 + lean, vertex.Position.X, 9);
+        // The hinge line itself did not move.
+        Assert.Equal(2, leaned.Vertices.Count(v => v.Position.Z == 0 && v.Position.X == 40));
+    }
+
+    [Fact]
+    public void RotatingByZero_LeavesEveryVertexWhereItWas()
+    {
+        var box = SolidFactory.MakeBox(new Aabb((5, 7, 3), (25, 37, 13)));
+        var side = box.Faces.Single(f => f.IsPlanar(out _, out var n) && n.Normalized().X > 1 - 1e-9);
+        var turned = DirectEdit.RotateFaces(
+            box, new Ray3d((25, 7, 3), Vector3d.UnitY), 0, f => ReferenceEquals(f, side));
+        turned.Validate();
+        foreach (var vertex in turned.Vertices)
+            Assert.Contains(box.Vertices, original => original.Position.AreEqual(vertex.Position, Exact));
+    }
+
+    [Fact]
+    public void RotatingWithADegenerateAxis_IsRefusedByName()
+    {
+        var error = Assert.Throws<ArgumentException>(() => DirectEdit.RotateFaces(
+            Block(), new Ray3d(Vector3d.Zero, Vector3d.Zero), 5, Normal(Vector3d.UnitZ)));
+        Assert.Contains("no direction", error.Message);
+    }
+
+    // ---- replace ----
+
+    [Fact]
+    public void ReplacingACylindersWallWithACone_GivesTheExactFrustum()
+    {
+        // OCCT's BRepTools_ReShape on a face: the wall's carrier is swapped for a slanted
+        // revolve and every corner re-solved. Both rims stay exact circles because a cone
+        // against an axis-perpendicular plane is an analytic pair, so the answer is the
+        // frustum's own closed form rather than a fit.
+        const double bottom = 6, top = 3, height = 12;
+        var cylinder = SolidFactory.MakeCylinder(bottom, height);
+        var wall = cylinder.Faces.Single(f => f.Surface is CylinderSurface);
+        var cone = new RevolvedSurface(
+            new Line3d((bottom, 0, 0), (top, 0, height)), Vector3d.Zero, Vector3d.UnitZ);
+
+        var frustum = DirectEdit.ReplaceFaceSurfaces(
+            cylinder, f => ReferenceEquals(f, wall) ? cone : null);
+        frustum.Validate();
+        Assert.Equal(3, frustum.Faces.Count());
+
+        var radii = frustum.Vertices
+            .Select(v => (v.Position.Z, R: Math.Sqrt(v.Position.X * v.Position.X + v.Position.Y * v.Position.Y)))
+            .OrderBy(p => p.Z).ToList();
+        Assert.Equal(bottom, radii[0].R, 9);
+        Assert.Equal(top, radii[^1].R, 9);
+        Assert.Equal(0, radii[0].Z, 9);
+        Assert.Equal(height, radii[^1].Z, 9);
+    }
+
+    [Fact]
+    public void ReplacingAFaceWithAnOppositelyFacingSurface_IsRefusedByName()
+    {
+        // The gate nothing downstream can supply: the loops, the counts and Euler-Poincare are
+        // all unchanged by an inside-out swap, so a structural check passes it happily.
+        var block = Block();
+        var top = block.Faces.Single(f => f.IsPlanar(out var o, out var n)
+            && n.Normalized().Z > 1 - 1e-9);
+        // The same plane with its two in-plane directions swapped: identical point set,
+        // opposite normal.
+        var inverted = new PlaneSurface((0, 0, 10), Vector3d.UnitY, Vector3d.UnitX);
+        var error = Assert.Throws<NotSupportedException>(
+            () => DirectEdit.ReplaceFaceSurfaces(block, f => ReferenceEquals(f, top) ? inverted : null));
+        Assert.Contains("faces the opposite way", error.Message);
+        Assert.Contains("inside out", error.Message);
+    }
+
+    [Fact]
+    public void ReplacingNothing_IsRefusedByName()
+    {
+        var error = Assert.Throws<ArgumentException>(() => DirectEdit.ReplaceFaceSurfaces(Block(), _ => null));
+        Assert.Contains("nothing to replace", error.Message);
+    }
+
+    [Fact]
+    public void ReplacingAFaceWhoseNewRimHasNoExactIntersection_IsRefusedByName()
+    {
+        // The exactness policy, stated as a boundary rather than as a promise: a cone meets a
+        // box's SIDE plane in a curve only the marching tracer can sample, and baking a chordal
+        // rim into a solid is the mistake the arc-rim corner policy already refuses.
+        var box = SolidFactory.MakeBox(new Aabb((-20, -20, 0), (20, 20, 10)));
+        var top = box.Faces.Single(f => f.IsPlanar(out _, out var n) && n.Normalized().Z > 1 - 1e-9);
+        var cone = new RevolvedSurface(
+            new Line3d((0, 0, 20), (40, 0, 0)), Vector3d.Zero, Vector3d.UnitZ);
+        var error = Assert.Throws<NotSupportedException>(
+            () => DirectEdit.ReplaceFaceSurfaces(box, f => ReferenceEquals(f, top) ? cone : null));
+        Assert.Contains("marching tracer", error.Message);
     }
 
     // ---- delete ----
@@ -336,15 +503,17 @@ public class DirectEditTests
     }
 
     [Fact]
-    public void DeletingAFaceWhoseWoundOnlyPartlyBoundsANeighbour_IsRefusedByName()
+    public void DeletingABoxsTopFace_IsRefusedByBothHealsWithBothReasons()
     {
         // A box's top face: its four wound edges are part of the four SIDE faces' outer loops,
-        // so healing would mean extending those sides until they meet — which for a prism they
-        // never do. Named, not attempted.
+        // so there is no whole loop to drop — AND the extension has no answer either, because a
+        // face whose whole boundary is wound has no OPPOSITE pair to extend toward each other
+        // (a box's four sides extended past its deleted top never meet). Both routes are named,
+        // which is what makes the message tell a reader which shape would have worked.
         var error = Assert.Throws<NotSupportedException>(
             () => DirectEdit.DeleteFaces(Block(), Normal(Vector3d.UnitZ)));
         Assert.Contains("only PART of the way round a loop", error.Message);
-        Assert.Contains("EXTENDED", error.Message);
+        Assert.Contains("4 exposed edges rather than the two a blend strip has", error.Message);
     }
 
     [Fact]
@@ -370,6 +539,178 @@ public class DirectEditTests
     {
         var error = Assert.Throws<ArgumentException>(() => DirectEdit.DeleteFaces(Block(), _ => false));
         Assert.Contains("matched none", error.Message);
+    }
+
+    // ---- delete by EXTENDING the neighbours ----
+
+    [Fact]
+    public void DeletingAFilletBand_ReproducesTheUnfilletedBoxBitForBit()
+    {
+        // The headline, and the strongest oracle available: the healed body does not merely
+        // LOOK like the box the fillet was put on — its faces keep their own carriers, so the
+        // corners re-solve to the very same numbers and every vertex comes back bit-identical
+        // to a box that never had a fillet. A resemblance test passes a wrong heal.
+        var box = SolidFactory.MakeBox(new Aabb((-30, -20, -5), (30, 20, 5)));
+        var top = box.Faces.Single(f => f.IsPlanar(out _, out var n) && n.Normalized().Z > 1 - 1e-9);
+        var filleted = Filleting.FilletRim(box, top, 3);
+        filleted.Validate();
+        Assert.Equal(10, filleted.Faces.Count());
+
+        var healed = DirectEdit.DeleteFaces(filleted, f => !f.IsPlanar(out _, out _));
+        healed.Validate();
+        Assert.True(healed.SatisfiesEulerFormula(genus: 0));
+        Assert.Equal(6, healed.Faces.Count());
+        Assert.Equal(12, healed.Edges.Count());
+        Assert.Equal(8, healed.Vertices.Count());
+
+        var expected = box.Vertices.Select(v => v.Position).ToList();
+        foreach (var vertex in healed.Vertices)
+            Assert.Contains(expected, p => BitsEqual(p, vertex.Position));
+    }
+
+    [Fact]
+    public void DeletingAChamferBand_ReproducesTheUnchamferedBoxBitForBit()
+    {
+        var box = SolidFactory.MakeBox(new Aabb((-30, -20, -5), (30, 20, 5)));
+        var top = box.Faces.Single(f => f.IsPlanar(out _, out var n) && n.Normalized().Z > 1 - 1e-9);
+        var chamfered = Filleting.ChamferRim(box, top, 3);
+
+        // The chamfer strips are the planes that are neither horizontal nor vertical.
+        var healed = DirectEdit.DeleteFaces(chamfered, f =>
+            f.IsPlanar(out _, out var n)
+            && Math.Abs(n.Normalized().Z) > 1e-9 && Math.Abs(n.Normalized().Z) < 1 - 1e-9);
+        healed.Validate();
+        Assert.Equal(6, healed.Faces.Count());
+        Assert.Equal(8, healed.Vertices.Count());
+
+        var expected = box.Vertices.Select(v => v.Position).ToList();
+        foreach (var vertex in healed.Vertices)
+            Assert.Contains(expected, p => BitsEqual(p, vertex.Position));
+    }
+
+    [Fact]
+    public void DeletingACircularRimFillet_ClosesTheCylinderBackUp()
+    {
+        // A CLOSED strip: both its exposed edges are whole circles and it has no cross edge at
+        // all, so the two seam vertices are one point of the healed body. That merge is what
+        // puts BOTH neighbours' carriers in the corner's list — without it each seam lands on
+        // whichever single surface it started on, which is nowhere near the rim.
+        var cylinder = SolidFactory.MakeCylinder(10, 20);
+        var cap = cylinder.Faces.Single(f =>
+            f.IsPlanar(out var o, out var n) && n.Normalized().Z > 1 - 1e-9);
+        var filleted = Filleting.FilletRim(cylinder, cap, 2);
+        filleted.Validate();
+
+        var band = filleted.Faces.Single(f => f.Surface is RevolvedSurface);
+        var healed = DirectEdit.DeleteFaces(filleted, f => ReferenceEquals(f, band));
+        healed.Validate();
+        Assert.Equal(3, healed.Faces.Count());
+
+        // Both rims come back at the cylinder's own radius, at the caps' own heights.
+        foreach (var vertex in healed.Vertices)
+        {
+            Assert.Equal(10,
+                Math.Sqrt(vertex.Position.X * vertex.Position.X + vertex.Position.Y * vertex.Position.Y), 9);
+            Assert.True(Math.Abs(vertex.Position.Z) < 1e-9 || Math.Abs(vertex.Position.Z - 20) < 1e-9);
+        }
+    }
+
+    [Fact]
+    public void DeletingAFilletBand_LeavesTheInputSolidUntouched()
+    {
+        // Rim surgery rewrites loops in place, so a half-edited failure is the one outcome
+        // that must be impossible. Here it is STRUCTURAL rather than arranged: the heal builds
+        // entirely fresh topology over the input's own curves and surfaces and never writes to
+        // it, so the input is intact whether the heal succeeded or refused.
+        var box = SolidFactory.MakeBox(new Aabb((-30, -20, -5), (30, 20, 5)));
+        var top = box.Faces.Single(f => f.IsPlanar(out _, out var n) && n.Normalized().Z > 1 - 1e-9);
+        var filleted = Filleting.FilletRim(box, top, 3);
+        var before = filleted.Vertices.Select(v => v.Position).ToList();
+
+        _ = DirectEdit.DeleteFaces(filleted, f => !f.IsPlanar(out _, out _));
+        filleted.Validate();
+        Assert.Equal(10, filleted.Faces.Count());
+        Assert.Equal(before.Count, filleted.Vertices.Count());
+        foreach (var (a, b) in before.Zip(filleted.Vertices.Select(v => v.Position)))
+            Assert.True(BitsEqual(a, b));
+
+        // And a REFUSED edit leaves it untouched for the same reason.
+        Assert.Throws<NotSupportedException>(() => DirectEdit.DeleteFaces(filleted, Normal(Vector3d.UnitZ)));
+        filleted.Validate();
+        Assert.Equal(10, filleted.Faces.Count());
+    }
+
+    [Fact]
+    public void DeletingAFilletBand_InheritsProvenanceOntoTheFaceThatCarriedIt()
+    {
+        var box = SolidFactory.MakeBox(new Aabb((-30, -20, -5), (30, 20, 5)));
+        var top = box.Faces.Single(f => f.IsPlanar(out _, out var n) && n.Normalized().Z > 1 - 1e-9);
+        var filleted = Filleting.FilletRim(box, top, 3);
+        var side = filleted.Faces.Single(f =>
+            f.IsPlanar(out _, out var n) && n.Normalized().X > 1 - 1e-9);
+        side.AddProvenance("wall");
+
+        var healed = DirectEdit.DeleteFaces(filleted, f => !f.IsPlanar(out _, out _));
+        var tagged = healed.Faces.Where(f => f.Provenance.Contains("wall")).ToList();
+        Assert.Single(tagged);
+        Assert.True(tagged[0].IsPlanar(out _, out var normal));
+        Assert.True(normal.Normalized().X > 1 - 1e-9);
+    }
+
+    [Fact]
+    public void DeletingAWholeSolidRoundingsPatches_IsRefusedByName()
+    {
+        // A corner patch of FilletAllEdges borders THREE bands, so it is not a strip and has no
+        // opposite pair. Refused with the count, not attempted — the extension can have no
+        // answer, and guessing one would silently reshape the corner.
+        var rounded = Filleting.FilletAllEdges(
+            SolidFactory.MakeBox(new Aabb((0, 0, 0), (20, 14, 8))), 2);
+        var error = Assert.Throws<NotSupportedException>(
+            () => DirectEdit.DeleteFaces(rounded, f => !f.IsPlanar(out _, out _)));
+        Assert.Contains("blend strip", error.Message);
+    }
+
+    [Fact]
+    public void DeletingOnlyTheBandOfAPartialRun_IsRefusedByName()
+    {
+        // A run that stops mid-rim ends in TERMINATION faces, so the band has four exposed
+        // edges rather than two. Deleting the terminations WITH it makes those two interior
+        // and the strip well posed again, which the next test asserts — so the refusal names a
+        // selection that is too small rather than a shape that cannot be healed.
+        var box = SolidFactory.MakeBox(new Aabb((-30, -20, -5), (30, 20, 5)));
+        var top = box.Faces.Single(f => f.IsPlanar(out _, out var n) && n.Normalized().Z > 1 - 1e-9);
+        var run = Filleting.FilletEdges(box,
+            BrepQueries.RimEdges(top).Where(e => e.Curve.PointAt(e.Domain.ParameterAt(0.5)).Y < -19), 3);
+        var error = Assert.Throws<NotSupportedException>(
+            () => DirectEdit.DeleteFaces(run, f => !f.IsPlanar(out _, out _)));
+        Assert.Contains("4 exposed edges rather than the two a blend strip has", error.Message);
+    }
+
+    [Fact]
+    public void DeletingAPartialRunWithItsTerminations_ReproducesTheBox()
+    {
+        var box = SolidFactory.MakeBox(new Aabb((-30, -20, -5), (30, 20, 5)));
+        var top = box.Faces.Single(f => f.IsPlanar(out _, out var n) && n.Normalized().Z > 1 - 1e-9);
+        var run = Filleting.FilletEdges(box,
+            BrepQueries.RimEdges(top).Where(e => e.Curve.PointAt(e.Domain.ParameterAt(0.5)).Y < -19), 3);
+
+        // The band plus the two three-sided termination planes it ends on.
+        var doomed = run.Faces.Where(f =>
+            !f.IsPlanar(out _, out _)
+            || (f.Bounds().Min.Z > 1.9 && f.Loops[0].Coedges.Count == 3)).ToList();
+        Assert.Equal(3, doomed.Count);
+
+        var healed = DirectEdit.DeleteFaces(run, doomed.Contains);
+        healed.Validate();
+        Assert.Equal(6, healed.Faces.Count());
+        // Every vertex is a corner of the original box (the run's stop points leave extra,
+        // collinear vertices on the rim it stopped on — honest topology, not a defect).
+        foreach (var vertex in healed.Vertices)
+        {
+            Assert.Equal(30, Math.Abs(vertex.Position.X), 9);
+            Assert.Equal(20, Math.Abs(vertex.Position.Y), 9);
+            Assert.Equal(5, Math.Abs(vertex.Position.Z), 9);
+        }
     }
 
     private static bool BitsEqual(in Vector3d a, in Vector3d b) =>

@@ -341,6 +341,12 @@ internal enum DirectEditKind
 
     /// <summary>Remove the named faces and heal the wound.</summary>
     Delete,
+
+    /// <summary>Turn each named face about a stated axis.</summary>
+    Rotate,
+
+    /// <summary>Swap each named face's SURFACE for a stated carrier.</summary>
+    ReplaceSurface,
 }
 
 /// <summary>
@@ -352,17 +358,26 @@ internal enum DirectEditKind
 /// </summary>
 internal sealed class DirectEditShape(
     Shape child, DirectEditKind kind, Vector3d amount,
-    Func<BrepSolid, IEnumerable<BrepFace>> selector) : Shape
+    Func<BrepSolid, IEnumerable<BrepFace>> selector,
+    Ray3d? axis = null, Surface? replacement = null) : Shape
 {
     public Shape Child => child;
     public DirectEditKind Kind => kind;
     public Vector3d Amount => amount;
     public Func<BrepSolid, IEnumerable<BrepFace>> Selector => selector;
 
+    /// <summary>The hinge for <see cref="DirectEditKind.Rotate"/>, in model coordinates.</summary>
+    public Ray3d? Axis => axis;
+
+    /// <summary>The new carrier for <see cref="DirectEditKind.ReplaceSurface"/>.</summary>
+    public Surface? Replacement => replacement;
+
     internal override string Describe() => kind switch
     {
         DirectEditKind.Offset => $"OffsetFaces(d={amount.X:g4})",
         DirectEditKind.Move => $"MoveFaces({amount.X:g4}, {amount.Y:g4}, {amount.Z:g4})",
+        DirectEditKind.Rotate => $"RotateFaces({amount.X:g4} deg)",
+        DirectEditKind.ReplaceSurface => $"ReplaceFaceSurfaces({replacement?.GetType().Name})",
         _ => "DeleteFaces",
     };
 }

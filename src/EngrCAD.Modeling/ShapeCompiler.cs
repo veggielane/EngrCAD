@@ -231,8 +231,8 @@ internal static class ShapeCompiler
                 ClassifyBrep(edit.Child, m, entries);
                 entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
-                        "face offset/move/delete on the lowered solid (DirectEdit); the corner and heal " +
-                        "constraints validate at lowering")
+                        "face offset/move/rotate/replace/delete on the lowered solid (DirectEdit); the " +
+                        "corner, orientation and heal constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with a face edit"));
                 break;
@@ -894,6 +894,18 @@ internal static class ShapeCompiler
                         DirectEdit.OffsetFaces(solid, edit.Amount.X * editScale, selected.Contains),
                     DirectEditKind.Move =>
                         DirectEdit.MoveFaces(solid, m.TransformVector(edit.Amount), selected.Contains),
+                    // A rotation is an ANGLE, which every similarity preserves — a reflection
+                    // included, since it maps the axis to its own image and the turn with it.
+                    // The hinge is a ray, so its origin is a point and its direction a vector.
+                    DirectEditKind.Rotate => DirectEdit.RotateFaces(
+                        solid,
+                        new Ray3d(m.TransformPoint(edit.Axis!.Value.Origin),
+                            m.TransformVector(edit.Axis!.Value.Direction)),
+                        edit.Amount.X, selected.Contains),
+                    // The replacement carrier is stated in MODEL coordinates, so it takes the
+                    // accumulated placement — and GeometryTransform refuses a placement no
+                    // surface family survives, by name, rather than re-fitting.
+                    DirectEditKind.ReplaceSurface => ReplaceSurfaces(solid, edit, selected, m),
                     _ => DirectEdit.DeleteFaces(solid, selected.Contains),
                 };
             }
@@ -1457,6 +1469,19 @@ internal static class ShapeCompiler
     /// change to how the expansion is assembled degrades to the old behaviour instead of
     /// producing wrong geometry.
     /// </summary>
+    /// <summary>
+    /// The replacement carrier placed into the lowered solid's coordinates. Its own lambda
+    /// rather than an inline one because a placement matrix arrives by <c>in</c> reference,
+    /// which a closure may not capture — so the transform is applied ONCE here and the
+    /// selector closes over the finished surface.
+    /// </summary>
+    private static BrepSolid ReplaceSurfaces(
+        BrepSolid solid, DirectEditShape edit, HashSet<BrepFace> selected, in Matrix4d m)
+    {
+        var placed = GeometryTransform.Apply(edit.Replacement!, m);
+        return DirectEdit.ReplaceFaceSurfaces(solid, face => selected.Contains(face) ? placed : null);
+    }
+
     private static bool TryPeelDrillTools(DrillShape drill, out List<Shape> tools)
     {
         tools = [];

@@ -168,9 +168,20 @@ internal sealed class CarrierBody
     /// (<see cref="FaceIndex"/>, <see cref="VertexFaces"/>, the carrier array the caller
     /// supplies) is already keyed on, so a tag can only land where its carrier did.</para>
     /// </summary>
-    public BrepSolid Rebuild(Surface[] carriers, string what)
+    /// <param name="rimFromCarriers">
+    /// Where a circular rim's AXIS comes from. False (the offset family's answer) reads it
+    /// from a fit of the ORIGINAL edge, which is right there because
+    /// <see cref="SurfaceOffset"/> carries every frame over verbatim — the offset carrier's
+    /// axis IS the original's. True reads it from the NEW carriers, which is what a
+    /// <see cref="DirectEdit.MoveFaces"/> or a replaced surface needs, because those move the
+    /// axis and a rim built about the old one lands on neither surface. The two agree
+    /// mathematically wherever the axis did not move; the flag exists so the offset path's
+    /// arithmetic — and therefore every shell, draft and offset already committed — stays bit
+    /// for bit what it was.
+    /// </param>
+    public BrepSolid Rebuild(Surface[] carriers, string what, bool rimFromCarriers = false)
     {
-        var layer = Build(carriers, what);
+        var layer = Build(carriers, what, rimFromCarriers);
         var vertices = layer.Positions.Select(p => new BrepVertex(p)).ToArray();
         var edges = layer.BuildEdges(vertices);
         var faces = new BrepFace[Faces.Length];
@@ -377,16 +388,18 @@ internal sealed class CarrierBody
     /// Faces with a zero offset keep their carriers verbatim (an opening does not move), so
     /// a shell's outer skin is the input geometry rather than a re-derivation of it.
     /// </summary>
-    private Layer Build(Surface[] carriers, string what)
+    private Layer Build(Surface[] carriers, string what, bool rimFromCarriers = false)
     {
         var surfaces = (Surface[])carriers.Clone();
         var positions = new Vector3d[Vertices.Length];
         for (int v = 0; v < Vertices.Length; v++)
             positions[v] = CornerAt(v, surfaces, what);
+        if (rimFromCarriers)
+            PhaseSeamVertices(surfaces, positions);
 
         var curves = new (Curve3d, Interval)[Edges.Length];
         for (int e = 0; e < Edges.Length; e++)
-            curves[e] = RimCurve(e, surfaces, positions, what);
+            curves[e] = RimCurve(e, surfaces, positions, what, rimFromCarriers);
 
         // Domain-driven carriers must be re-trimmed to their new loops. An extrusion's or a
         // revolve's grid ignores the loops entirely, so an offset band whose rims moved
@@ -445,11 +458,24 @@ internal sealed class CarrierBody
     /// <see cref="SurfaceCorner"/>'s exact tier, which refuses a chordal answer.
     /// </summary>
     private (Curve3d Curve, Interval Domain) RimCurve(
-        int edge, Surface[] surfaces, Vector3d[] positions, string what)
+        int edge, Surface[] surfaces, Vector3d[] positions, string what, bool rimFromCarriers = false)
     {
         var (a, b) = EdgeFaces[edge];
         var (start, end) = EdgeVertices[edge];
         var original = Edges[edge];
+
+        // An edge NEITHER of whose carriers moved, between two corners that did not move
+        // either, is the edge it always was — so it is carried over verbatim rather than
+        // re-intersected. That is not an optimization: re-deriving it asks a bounded carrier
+        // (an extrusion's wall) for an intersection its own parameter rectangle may clip
+        // away, which is a refusal about bookkeeping on geometry nothing touched. Gated on
+        // the SELECTIVE paths so the offset family's arithmetic is bit-identical.
+        if (rimFromCarriers
+            && ReferenceEquals(surfaces[a], Faces[a].Surface)
+            && ReferenceEquals(surfaces[b], Faces[b].Surface)
+            && positions[start] == Vertices[start].Position
+            && positions[end] == Vertices[end].Position)
+            return (original.Curve, original.Domain);
 
         if (surfaces[a] is PlaneSurface && surfaces[b] is PlaneSurface)
             return (new Line3d(positions[start], positions[end]), Interval.Unit);
@@ -458,7 +484,10 @@ internal sealed class CarrierBody
         // used over a quarter turn, and fitting the carrier would rebuild it closed.
         if (CircularArc.TryFit(original.Curve, original.Domain, out var fit))
         {
-            var rebuilt = ConcentricRim(fit, original, positions[start], positions[end]);
+            RimAxis? axis = null;
+            if (rimFromCarriers && TryRimAxis(surfaces[a], surfaces[b], out var carried))
+                axis = carried;
+            var rebuilt = ConcentricRim(fit, original, positions[start], positions[end], axis);
             if (rebuilt is { } result && OnBothCarriers(result.Curve, result.Domain, surfaces[a], surfaces[b]))
                 return result;
             throw new NotSupportedException(
@@ -469,8 +498,22 @@ internal sealed class CarrierBody
                 "solid whose curved rims stay perpendicular to their axes.");
         }
 
+        // A DOMAIN-DRIVEN carrier is bounded by its own parameter rectangle and the analytic
+        // intersection is clipped to it, so a face that MOVED reaches past where its
+        // neighbour's rectangle stops and the two "do not meet" for a bookkeeping reason.
+        // Extending both to overshoot the solved corners is the trim-the-surface rule run
+        // the other way; the curve is trimmed back to those corners, so nothing survives it.
+        // Selective paths only — the offset family's carriers keep their own extents.
+        var solveA = surfaces[a];
+        var solveB = surfaces[b];
+        if (rimFromCarriers)
+        {
+            var reach = new[] { positions[start], positions[end] };
+            solveA = TrimToPoints(solveA, reach, extendOnly: true);
+            solveB = TrimToPoints(solveB, reach, extendOnly: true);
+        }
         if (SurfaceCorner.TrySolveCurve(
-                surfaces[a], surfaces[b], positions[start], positions[end],
+                solveA, solveB, positions[start], positions[end],
                 SurfaceCorner.CornerPolicy.ExactOnly, out var corner, out var reason))
             return (corner.Curve, corner.Curve.Domain);
 
@@ -479,27 +522,154 @@ internal sealed class CarrierBody
     }
 
     /// <summary>
-    /// The rim rebuilt as a circle about the original's axis, through the solved corner.
-    /// Centre and radius come from the corner; the FRAME comes from the original, so a
-    /// rebuilt rim's u = 0 sits where the carrier's grid puts it and nothing has to be
-    /// re-phased. A closed rim keeps its full turn; an open arc keeps its measured span.
+    /// A closed rim has ONE vertex and it is a SEAM, so where it sits is a phase rather than a
+    /// position — and a corner solve, which only knows how to find the nearest point of the
+    /// carriers' common locus to a seed, has no way to know that. On the offset family it does
+    /// not matter: the carriers keep their frames, so the old seam is still at u = 0 and the
+    /// solve lands on it. On a MOVE it does — the rim's centre has gone somewhere else, and
+    /// the nearest point to the old seam is at an arbitrary angle on the new circle, which
+    /// then disagrees with the circle a carrier-framed reconstruction builds.
+    ///
+    /// <para>So each closed rim's vertex is TURNED about its own axis onto the carrier's
+    /// u = 0 — the phase-alignment rule every analytic intersection in this kernel already
+    /// obeys, applied to the one point that carries a phase. The turn is legal for exactly the
+    /// reason the rim is a circle at all: both carriers are surfaces of revolution about that
+    /// axis (or a plane perpendicular to it), so rotating a point that lies on them about it
+    /// leaves it on them. Where that is not true the rebuilt rim fails the
+    /// <see cref="OnBothCarriers"/> verification and is refused by name — construct, then
+    /// verify, rather than nudge and hope.</para>
+    /// </summary>
+    private void PhaseSeamVertices(Surface[] surfaces, Vector3d[] positions)
+    {
+        for (int e = 0; e < Edges.Length; e++)
+        {
+            if (!Edges[e].IsClosedEdge)
+                continue;
+            var (a, b) = EdgeFaces[e];
+            if (!TryRimAxis(surfaces[a], surfaces[b], out var rim))
+                continue;
+            int seam = EdgeVertices[e].Start;
+            var centre = rim.Origin + rim.Direction * (positions[seam] - rim.Origin).Dot(rim.Direction);
+            double radius = (positions[seam] - centre).Length;
+            if (radius > Tolerance.Default.Linear)
+                positions[seam] = centre + rim.FrameX * radius;
+        }
+    }
+
+    /// <summary>An axis a CARRIER pins, with the phase direction that carrier's grid uses.</summary>
+    private readonly record struct RimAxis(Vector3d Origin, Vector3d Direction, Vector3d FrameX);
+
+    /// <summary>
+    /// The axis a rim between two carriers must be built about, when one of them pins it.
+    ///
+    /// <para>Read from the CARRIER rather than from a fit of the old edge because a
+    /// <see cref="DirectEdit.MoveFaces"/> moves the axis: a cylinder translated sideways
+    /// carries its rim with it, and a circle rebuilt about the old axis lies on neither
+    /// surface. The FRAME comes from the same carrier, which is the phase rule stated at its
+    /// source — a rim built on the carrier's own X lands on that carrier's tessellation grid
+    /// by construction, whatever the fit of the old edge would have recovered.</para>
+    /// </summary>
+    private static bool TryRimAxis(Surface a, Surface b, out RimAxis axis)
+    {
+        axis = default;
+        foreach (var surface in (ReadOnlySpan<Surface>)[a, b])
+        {
+            switch (surface)
+            {
+                case CylinderSurface cylinder:
+                    axis = new RimAxis(
+                        cylinder.Origin, cylinder.Axis.Normalized(), cylinder.XDirection.Normalized());
+                    return true;
+
+                case RevolvedSurface revolved:
+                {
+                    // A revolve's u = 0 half-plane is the one its generator lies in, so the
+                    // phase direction is the generator's own radial — the same reading
+                    // SurfaceOffset preserves when it carries a generator across. The
+                    // generator is SCANNED rather than sampled once: an axis-touching one (a
+                    // drill tool's, a pole cap's) has stretches ON the axis where the radial
+                    // vanishes and says nothing about the phase.
+                    var direction = revolved.AxisDirection.Normalized();
+                    var generator = revolved.Generator;
+                    var best = Vector3d.Zero;
+                    for (int i = 0; i <= 16; i++)
+                    {
+                        var point = generator.PointAt(generator.Domain.ParameterAt(i / 16.0));
+                        var radial = point - revolved.AxisOrigin;
+                        radial -= direction * radial.Dot(direction);
+                        if (radial.LengthSquared > best.LengthSquared)
+                            best = radial;
+                    }
+                    if (!best.TryNormalize(Tolerance.Default, out var frameX))
+                        continue;
+                    axis = new RimAxis(revolved.AxisOrigin, direction, frameX);
+                    return true;
+                }
+
+                case ExtrudedSurface extruded:
+                {
+                    // A circle extruded along its OWN normal is a right cylinder, and it is
+                    // how every `Shape.Cylinder` and every bore a boolean cuts arrives here
+                    // — a `CylinderSurface` is the primitive spelling, not the common one.
+                    // Recognized by GEOMETRY rather than by curve type (the kernel spells a
+                    // circular generator three ways), and the perpendicularity is REQUIRED
+                    // rather than assumed: a SHEARED extrusion of a circle is an oblique
+                    // cylinder whose sections perpendicular to the sweep are ellipses, so the
+                    // orthogonal projection ConcentricRim takes would put the centre in the
+                    // wrong place. Falling through there leaves the refusal, which is right.
+                    if (!CircularArc.TryFit(extruded.Generator, out var circle))
+                        continue;
+                    if (!extruded.Direction.TryNormalize(Tolerance.Default, out var along)
+                        || !circle.Circle.Axis.TryNormalize(Tolerance.Default, out var normal)
+                        || Math.Abs(Math.Abs(along.Dot(normal)) - 1) > Tolerance.Default.Angular)
+                        continue;
+                    // The generator's own start is the surface's u = 0, so its X direction IS
+                    // the phase every consumer of this band samples against.
+                    axis = new RimAxis(
+                        circle.Circle.Center, along, circle.Circle.XDirection.Normalized());
+                    return true;
+                }
+
+                case SphereSurface sphere when (a is PlaneSurface || b is PlaneSurface):
+                {
+                    // A sphere cut by a plane gives a circle whose axis is the plane's
+                    // normal through the sphere's centre.
+                    var plane = (PlaneSurface)(a is PlaneSurface ? a : b);
+                    if (!plane.Normal.TryNormalize(Tolerance.Default, out var normal))
+                        continue;
+                    axis = new RimAxis(sphere.Center, normal, plane.XDirection.Normalized());
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The rim rebuilt as a circle about its axis, through the solved corner. Centre and
+    /// radius come from the corner; the FRAME comes from the original (or, when
+    /// <paramref name="carried"/> is supplied, from the new carrier), so a rebuilt rim's
+    /// u = 0 sits where the carrier's grid puts it and nothing has to be re-phased. A closed
+    /// rim keeps its full turn; an open arc keeps its measured span.
     /// </summary>
     private static (Curve3d Curve, Interval Domain)? ConcentricRim(
-        in CircularArc fit, BrepEdge original, in Vector3d start, in Vector3d end)
+        in CircularArc fit, BrepEdge original, in Vector3d start, in Vector3d end, RimAxis? carried = null)
     {
-        var axis = fit.Circle.Axis.Normalized();
-        var centre = fit.Circle.Center + axis * (start - fit.Circle.Center).Dot(axis);
+        var axis = carried?.Direction ?? fit.Circle.Axis.Normalized();
+        var anchor = carried?.Origin ?? fit.Circle.Center;
+        var centre = anchor + axis * (start - anchor).Dot(axis);
         var radial = start - centre;
         double radius = radial.Length;
         if (radius <= Tolerance.Default.Linear)
             return null;
 
-        // Phase: the rebuilt frame must be the original's, or every downstream grid moves.
-        // Reading the radius as a signed projection onto the original X keeps the frame
-        // EXACT rather than recovering it from a solved point.
-        double x = radial.Dot(fit.Circle.XDirection);
-        double y = radial.Dot(fit.Circle.YDirection);
-        var frameX = fit.Circle.XDirection;
+        // Phase: the rebuilt frame must be the carrier's, or every downstream grid moves.
+        // Reading the radius as a signed projection onto that X keeps the frame EXACT rather
+        // than recovering it from a solved point.
+        var frameX = carried?.FrameX ?? fit.Circle.XDirection;
+        var frameY = carried is null ? fit.Circle.YDirection : axis.Cross(carried.Value.FrameX);
+        double x = radial.Dot(frameX);
+        double y = radial.Dot(frameY);
         double startAngle = 0;
         if (Math.Abs(y) > Tolerance.Default.Linear * Math.Max(1, radius))
         {
@@ -578,6 +748,22 @@ internal sealed class CarrierBody
                     points.Add(curve.PointAt(domain.ParameterAt(i / 8.0)));
             }
         }
+        return TrimToPoints(surface, points);
+    }
+
+    /// <inheritdoc cref="TrimToLoops"/>
+    /// <remarks>
+    /// <para>The rule itself, over the boundary points a caller has already sampled — so
+    /// <see cref="DirectEdit"/>'s heal-by-extension, which rewrites loops rather than carrying
+    /// them over, asks the same question rather than restating it.</para>
+    /// <para><paramref name="extendOnly"/> keeps whatever the surface already spans and merely
+    /// reaches further to cover the points, which is what a heal wants when it is about to
+    /// INTERSECT two neighbours: shrinking one to the corners it is being asked about would
+    /// answer a question about a surface the body does not have.</para>
+    /// </remarks>
+    internal static Surface TrimToPoints(
+        Surface surface, IReadOnlyList<Vector3d> points, bool extendOnly = false)
+    {
         if (points.Count == 0)
             return surface;
 
@@ -592,13 +778,15 @@ internal sealed class CarrierBody
                 // solve against; its loops are rings at one height and the domain is right.
                 if (Math.Abs(axialB - axialA) <= Tolerance.Default.Linear)
                     return surface;
-                double lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+                double lo = extendOnly ? 0 : double.PositiveInfinity;
+                double hi = extendOnly ? 1 : double.NegativeInfinity;
                 foreach (var point in points)
                 {
                     double t = ((point - revolved.AxisOrigin).Dot(axis) - axialA) / (axialB - axialA);
                     lo = Math.Min(lo, t);
                     hi = Math.Max(hi, t);
                 }
+                (lo, hi) = Pad(lo, hi, extendOnly);
                 if (Math.Abs(lo) <= 1e-12 && Math.Abs(hi - 1) <= 1e-12)
                     return surface; // already exact: leave the object identical
                 return new RevolvedSurface(
@@ -612,13 +800,15 @@ internal sealed class CarrierBody
                 if (lengthSquared <= 0)
                     return surface;
                 var anchor = extruded.Generator.PointAt(extruded.Generator.Domain.Start);
-                double lo = double.PositiveInfinity, hi = double.NegativeInfinity;
+                double lo = extendOnly ? 0 : double.PositiveInfinity;
+                double hi = extendOnly ? 1 : double.NegativeInfinity;
                 foreach (var point in points)
                 {
                     double v = (point - anchor).Dot(extruded.Direction) / lengthSquared;
                     lo = Math.Min(lo, v);
                     hi = Math.Max(hi, v);
                 }
+                (lo, hi) = Pad(lo, hi, extendOnly);
                 if (Math.Abs(lo) <= 1e-12 && Math.Abs(hi - 1) <= 1e-12)
                     return surface;
                 return new ExtrudedSurface(
@@ -629,6 +819,21 @@ internal sealed class CarrierBody
             default:
                 return surface;
         }
+    }
+
+    /// <summary>
+    /// An extension OVERSHOOTS the points it was asked to reach — the Drill doctrine, one
+    /// domain over. A carrier extended to land exactly ON a corner meets its neighbour at the
+    /// very edge of its own parameter rectangle, where the intersection clip's membership test
+    /// is decided by round-off; reaching past makes the crossing transversal, and the curve is
+    /// trimmed back to the solved corners afterwards so nothing of the overshoot survives.
+    /// </summary>
+    private static (double Lo, double Hi) Pad(double lo, double hi, bool extendOnly)
+    {
+        if (!extendOnly)
+            return (lo, hi);
+        double margin = 0.05 * Math.Max(hi - lo, 1);
+        return (lo - margin, hi + margin);
     }
 
     /// <summary>The curve's endpoints when it is straight at the weld tier.</summary>
