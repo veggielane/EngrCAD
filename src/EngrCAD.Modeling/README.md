@@ -3547,12 +3547,56 @@ writer makes, with anchor shifts measured from transcribed Helvetica AFM widths.
 Characters outside WinAnsi are refused by name (a dimension that silently lost its
 symbol is a wrong drawing), with ONE deliberate substitution: the drafting diameter sign
 U+2300 travels as O-stroke (U+00D8), its standard typographic stand-in, pinned by test.
-There is deliberately no `PdfDrawing.Add(Sketch)`: PDF paths are lines and cubics only,
-so a circular arc has no exact PDF form and an overload would silently flatten — the
-caller flattens at a tolerance they state. Verified by an independently written PDF
-parser in the test suite (xref offsets checked against their objects, content stream
-tokenized, polyline coordinates asserted bit-identical) and by Poppler's `pdftotext`
-recovering every text run. Docs: `docs/examples/drawings.md`.
+Verified by an independently written PDF parser in the test suite (xref offsets checked
+against their objects, content stream tokenized, polyline coordinates asserted
+bit-identical) and by Poppler's `pdftotext` recovering every text run. Docs:
+`docs/examples/drawings.md`.
+
+**Four things a PDF can carry beyond its line work, every one OPT-IN** — `PdfSheetOptions`
+on `SheetWriter.ToPdf`/`SavePdf`, and `PdfDrawing.Font`/`Compress`/the `layer` arguments
+underneath. **Asking for none writes exactly the file the writer always wrote, byte for
+byte**, which is what makes each safe to reach for on an issued drawing — and since that
+is a claim about two BUILDS rather than about two calls of one, the three default fixtures
+are pinned by COMMITTED byte fingerprints measured on the parent commit, not by a
+same-binary comparison that would pass if the whole default path had moved together.
+
+- **An embedded font subset** (`PdfFont.Embed(font)`, `PdfFontSubset`). WinAnsi has no form
+  for the drafting depth (U+21A7), counterbore (U+2334) or countersink (U+2335) signs, and
+  carries U+2300 only as its O-stroke stand-in — so a real TrueType font is carried as a
+  subset of the glyphs the drawing uses, addressed by glyph index through `/Identity-H`
+  (the encoding then has no repertoire to be outside of, and the substitution stops being
+  needed). The subset is a **deterministic function of the glyph set**: glyphs visited in
+  index order, `head`'s `created`/`modified` stamps ZEROED (the /Info problem wearing a
+  font's clothes), the subset tag a fold of the kept set. Glyph INDICES are kept rather
+  than renumbered, so a composite glyph's components carry over verbatim with no record
+  patching — at the stated cost that `loca`/`hmtx` are sized by the largest kept index
+  rather than by the count. A `cmap` is emitted although a CIDFontType2 never consults one,
+  for a verification reason: with it the subset is a standalone font the kernel's own
+  reader can re-read, so every kept glyph's outline is comparable against the original's.
+  A PostScript (`CFF `/`.otf`) font is refused BY NAME (a CFF subset re-indexes charstrings,
+  subroutines and FDSelect — a separate `FontFile3` path). `/ToUnicode` is what makes the
+  text still copy and search.
+- **Optional-content layers** (a `layer` on every add; `PdfSheetOptions.Layers` names each
+  line class with its own `SheetLayers` name, the SAME names the SVG groups and DXF layer
+  table use). One OCG per layer in first-use order, `/OC … BDC … EMC` marked content, and
+  the declared version moves to PDF 1.5 — a layer-free file keeps 1.4.
+- **Opt-in Flate** (`Compress`), ~5x smaller. The level is pinned (`Optimal`) rather than
+  defaulted, and the tests assert not only its own byte fixed point but that **inflating
+  recovers the uncompressed writer's own stream byte for byte** — a re-spelling and nothing
+  else. Honest scope: .NET's deflate is not a specified byte stream, so the fixed point is
+  a claim about a given runtime.
+- **`PdfDrawing.Add(Sketch, PdfCurveMode, tolerance)`** — the overload v1 refused rather
+  than shipping silently lossy, now offered with the split NAMED. Lines and cubic Béziers
+  are written EXACTLY (a quadratic having already elevated losslessly into the sketch);
+  circular and elliptical arcs have no exact PDF form and are approximated, either as
+  polylines (`Flatten`) or by the standard `k = (4/3)tan(θ/4)` cubic construction
+  (`Kappa`), both to the stated deviation. `PdfSketchReport` returns the exact/approximated
+  counts and the deviation MEASURED from the construction. `PdfDrawing.ArcCubicDeviation`
+  is that error in exact closed form — the squared-radius error collapses to
+  `(4τ⁶/(1+τ²)²)·u²(1−4u²)²` with `τ = tan(θ/4)`, so the cubic lies strictly OUTSIDE the
+  arc, is exact at both ends and at the midpoint, and peaks at `√(1 + 4τ⁶/(27(1+τ²)²))`:
+  **sixth order**, i.e. halving the spans multiplies the error by 64, not the 16 a
+  fourth-order rule would give, and 2.7253e-4·r at a quarter turn.
 
 **The frame is shared** (`DrawingFrame.cs`). The paper, the border and the title block are
 one value type — a `DrawingFrame` — that both `DrawingSheet` (`sheet.Frame()`) and the ECAD

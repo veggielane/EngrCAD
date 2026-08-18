@@ -972,28 +972,41 @@ export — is recorded in CLAUDE.md):
     distance a design study or a configuration could drive. The selector is a
     `FaceSetRef`, which already serializes, so the blocker is only that a `Feature` needs
     writing.
-- [ ] **PDF export follow-ups** (the writer landed: `PdfDrawing` +
-  `SheetWriter.ToPdf`, byte-fixed-point, twin-decoder-verified — see design.md §6c;
-  each item below was declined in v1 with its reason and would be additive):
-  - [ ] **Embedded font.** The standard-14 Helvetica over WinAnsi refuses the drafting
-    symbols beyond the diameter sign (depth U+21A7, cbore U+2334, csk U+2335) and all
-    non-Latin text. The TrueType reader already parses `glyf`; a subset embedder
-    (FontFile2 + a CIDFont or a symbolic TrueType with a cmap) is the honest fix and
-    removes the ⌀→Ø substitution too. Note the fixed point: an embedded subset must be
-    a deterministic function of the used glyph set.
-  - [ ] **PDF layers via optional content groups.** SVG and DXF carry the sheet's
-    layers; PDF needs /OCProperties + `/OC BDC ... EMC` marked content to give Acrobat
-    toggleable layers. Cheap, but every OCG is another object — keep the xref writer's
-    object numbering a function of content so the fixed point survives.
-  - [ ] **Opt-in Flate compression** for very large sheets (the BCL has `ZLibStream`).
-    Declined as default: a sheet's stream is tens of KB and uncompressed ASCII is what
-    the docs fence and the committed assertions read directly. If added, note zlib
-    output is deterministic for a fixed level/strategy, so the fixed point can hold.
-  - [ ] **Loose-profile/sketch PDF export** (`PdfDrawing.Add(Sketch)`): PDF paths are
-    lines + cubic Béziers, so circular/elliptical arcs need flattening or the standard
-    kappa cubic approximation — either way NOT exact, which is why the overload was
-    refused rather than shipped silently lossy. Offer it with a stated tolerance
-    parameter, mirroring `DxfCurveMode`'s honesty about what survives.
+- [ ] **PDF export residuals** (the four v1 follow-ups — embedded font subset,
+  optional-content layers, opt-in Flate, sketch export — all landed; see design.md §6c.
+  What is left is narrower and each item states why it was not taken):
+  - [ ] **A CFF (`.otf`) subset**, the `FontFile3` path `PdfFontSubset` refuses by name.
+    It re-indexes charstrings, local and global subroutines and (for CID-keyed fonts)
+    FDArray/FDSelect — a separate project from the `glyf` subsetter, not an extension of
+    it. `CffOutlines` already parses Type 2 charstrings, so the reading half exists; what
+    does not is emitting a valid CFF, which is where the work is.
+  - [ ] **Compact the subset's glyph NUMBERING.** Indices are kept rather than
+    renumbered, which is what makes composite glyphs carry over verbatim (a composite
+    places its components by index), and it sizes `loca`/`hmtx` by the largest kept index
+    rather than by the count — measured, a Segoe UI Symbol subset for a drafting callout
+    adds 7 458 B to an A4 sheet. Renumbering needs every composite record's component
+    fields patched, which is exactly the parse the current design avoids; worth it only
+    if a caller meets a font whose used glyphs sit high in a large table.
+  - [ ] **PDF layer VISIBILITY policy.** Every OCG is written ON; `/D` could also carry
+    an `/OFF` array (hidden detail off by default) and `/AS` usage for print-vs-screen.
+    Cheap and additive — the reason it is not here is that nothing states an intent yet:
+    a sheet says which CLASS a line is, not which classes a reader should start with.
+  - [ ] **Astral-plane text under an embedded font.** The encoder iterates UTF-16 code
+    UNITS, so a surrogate pair is refused as a character the font has no glyph for — the
+    message is honest but names the wrong thing. Iterating runes would fix both the
+    message and the capability; no consumer has asked.
+  - [ ] **A SIMPLE-font embedding beside the CID one.** An embedded font always takes the
+    `/Identity-H` CID path, so every text string is two bytes per glyph where the built-in
+    Helvetica spends one — a Latin-only drawing that embeds a font for one symbol pays that
+    on all of its text. A `/TrueType` simple font over WinAnsi would halve it and CANNOT
+    spell the drafting symbols, so the honest form is a per-drawing choice (or an automatic
+    one taken from the glyph set), not a replacement; nobody has measured a sheet where it
+    matters, which is why it is filed rather than built.
+  - [ ] **Cross-reference and object STREAMS (PDF 1.5).** The xref stays a plain table and
+    each object its own uncompressed block, which is what makes a revision diffable and
+    what every committed assertion reads directly — the same argument Flate is opt-in for.
+    A very large sheet would shrink further with both; it would also need the twin decoder
+    taught a second xref form, so it is one job rather than two.
 
 What remains against the reference B-Rep kernel (covered: primitives,
 extrude/revolve/sweep, booleans, rim fillets/chamfers, drilled holes, conics + offset

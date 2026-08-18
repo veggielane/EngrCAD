@@ -2,6 +2,41 @@ using EngrCAD.Core;
 
 namespace EngrCAD.Modeling;
 
+/// <summary>
+/// What a sheet's PDF carries beyond its line work. <b>Every member is off or absent by
+/// default</b>, and an all-default value writes the file <see cref="SheetWriter.ToPdf"/>
+/// has always written byte for byte — which is the property that makes each of these
+/// safe to reach for rather than a decision about all previous output.
+/// </summary>
+public sealed record PdfSheetOptions
+{
+    /// <summary>All defaults: the file exactly as it was before any of this existed.</summary>
+    public static PdfSheetOptions Default { get; } = new();
+
+    /// <summary>
+    /// Put each line class on its own toggleable PDF layer (an optional-content group),
+    /// named with the SAME <see cref="SheetLayers"/> names the SVG groups and the DXF
+    /// layer table use — so hidden detail, hatch, dimensions and the title block can be
+    /// switched off in a reader exactly as they can in a drafting package.
+    /// </summary>
+    public bool Layers { get; init; }
+
+    /// <summary>
+    /// Flate-compress the streams. Off by default because an uncompressed ASCII drawing
+    /// is diffable; worth it for a very large sheet. See <see cref="PdfDrawing.Compress"/>
+    /// for what it does to the byte fixed point (nothing, at a fixed runtime).
+    /// </summary>
+    public bool Compress { get; init; }
+
+    /// <summary>
+    /// The font to letter with; null (the default) is the built-in Helvetica.
+    /// <see cref="PdfFont.Embed"/> carries a real TrueType font as a subset instead,
+    /// which is what lets a hole callout's depth, counterbore and countersink symbols —
+    /// none of them in WinAnsi — reach the paper.
+    /// </summary>
+    public PdfFont? Font { get; init; }
+}
+
 // Writing a sheet out. All three writers (SVG, DXF, PDF) consume
 // DrawingSheet.Compute()'s SheetContent and nothing else, so they cannot disagree about
 // what a drawing looks like — they differ only in how a polyline, a dash pattern and a
@@ -108,28 +143,47 @@ public static class SheetWriter
     /// content stream stays in millimetres behind one mm-to-point transform (see
     /// <see cref="PdfDrawing"/> for the whole design, including why there is no y-flip
     /// here and how text is carried).
+    /// <para>Passing no <paramref name="options"/> — or an all-default one — writes
+    /// exactly the file this method has always written, byte for byte; every setting on
+    /// <see cref="PdfSheetOptions"/> is opt-in for that reason.</para>
     /// </summary>
-    public static byte[] ToPdf(this DrawingSheet sheet)
+    public static byte[] ToPdf(this DrawingSheet sheet, PdfSheetOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(sheet);
+        options ??= PdfSheetOptions.Default;
         var content = sheet.Compute();
-        var pdf = new PdfDrawing { Sheet = (content.Format.Width, content.Format.Height) };
+        var pdf = new PdfDrawing
+        {
+            Sheet = (content.Format.Width, content.Format.Height),
+            Compress = options.Compress,
+            Font = options.Font ?? PdfFont.Helvetica,
+        };
+
+        // A layer reaches the PDF as an optional-content group; with Layers off every
+        // one of these is null and the content stream is what it always was. The names
+        // are the SAME SheetLayers the SVG groups and the DXF layer table use, so a
+        // reader's layer panel says what a drafting package's does.
+        string? Layer(string name) => options.Layers ? name : null;
 
         foreach (var run in content.Runs)
         {
-            var (lineClass, _) = ClassOf(run);
-            pdf.AddPolyline(run.Points, closed: false, lineClass);
+            var (lineClass, layer) = ClassOf(run);
+            pdf.AddPolyline(run.Points, closed: false, lineClass, layer: Layer(layer));
         }
-        pdf.AddSegments(content.Hatch);
-        pdf.AddSegments(content.Lines.Select(l => (l.A, l.B)));
+        pdf.AddSegments(content.Hatch, layer: Layer(SheetLayers.Hatch));
+        // One pass in document order rather than grouped by layer: with Layers off every
+        // segment lands in the one null-layer group exactly as it always did, so the
+        // byte-identity claim needs no second code path to keep in step.
+        foreach (var (a, b, layer) in content.Lines)
+            pdf.AddSegments([(a, b)], layer: Layer(layer));
         foreach (var text in content.Texts)
-            pdf.AddText(text.Position, text.Text, text.Height, text.Anchor);
+            pdf.AddText(text.Position, text.Text, text.Height, text.Anchor, Layer(text.Layer));
         return pdf.ToPdf();
     }
 
     /// <summary>Writes the sheet's PDF to a file.</summary>
-    public static void SavePdf(this DrawingSheet sheet, string path) =>
-        File.WriteAllBytes(path, sheet.ToPdf());
+    public static void SavePdf(this DrawingSheet sheet, string path, PdfSheetOptions? options = null) =>
+        File.WriteAllBytes(path, sheet.ToPdf(options));
 
     /// <summary>One rule mapping a classified run onto a line class and a layer, read by
     /// all three writers so they cannot drift.</summary>

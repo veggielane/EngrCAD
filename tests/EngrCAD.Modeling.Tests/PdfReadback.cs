@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Text;
 using EngrCAD.Core;
 
@@ -11,8 +12,16 @@ namespace EngrCAD.Modeling.Tests;
 /// once. It shares nothing with the writer: the xref table is walked and every in-use
 /// offset verified to point at its object, the object graph is followed from /Root to
 /// the page, and the content stream is tokenized operator by operator, reconstructing
-/// stroked polylines (with the graphics state that stroked them, CTM included) and text
-/// runs (decoded through the reader's OWN WinAnsi table).
+/// stroked paths (with the graphics state that stroked them, CTM included) and text
+/// runs.
+///
+/// <para>It decodes the optional pieces too, so each is verified rather than merely
+/// present: a <c>/FlateDecode</c> stream is INFLATED (and the test compares the result
+/// against the uncompressed writer's own stream, so compression is proved to be a pure
+/// re-spelling), marked content puts every stroke and run in its optional-content GROUP
+/// by name, and a run shown as glyph indices under an embedded font is decoded back to
+/// characters through the file's OWN <c>/ToUnicode</c> CMap — which is exactly what a
+/// reader's copy-and-paste does, so "the text survived" means what it says.</para>
 /// </summary>
 internal static class PdfReadback
 {
@@ -20,19 +29,43 @@ internal static class PdfReadback
     /// The CTM is [a b c d e f]; coordinates are RAW (as written), so a test compares
     /// them against the writer's input and asserts the CTM separately.</summary>
     public sealed record Stroke(
-        IReadOnlyList<(IReadOnlyList<Vector2d> Points, bool Closed)> Subpaths,
+        IReadOnlyList<Subpath> Subpaths,
         IReadOnlyList<double> Ctm,
         double LineWidth,
         IReadOnlyList<double> Dash,
-        (double R, double G, double B) Color);
+        (double R, double G, double B) Color,
+        string? Layer);
+
+    /// <summary>One subpath. <see cref="Points"/> is the anchor sequence — the
+    /// <c>m</c> point and the endpoint of every following <c>l</c> or <c>c</c> — so a
+    /// polyline reads exactly as it was written; <see cref="Curves"/> names the cubics
+    /// among them by the index of the anchor each ENDS at, with their two control
+    /// points, so a Bezier's exactness is checkable rather than merely its endpoints'.</summary>
+    public sealed record Subpath(
+        IReadOnlyList<Vector2d> Points, bool Closed,
+        IReadOnlyList<(int EndIndex, Vector2d C1, Vector2d C2)> Curves);
 
     /// <summary>One shown text run, position raw (as written).</summary>
-    public sealed record TextRun(Vector2d Position, double FontSize, string Value);
+    public sealed record TextRun(Vector2d Position, double FontSize, string Value, string? Layer);
+
+    /// <summary>What the file says about the font resource /F1.</summary>
+    /// <param name="Subtype">/Type1 for the built-in Helvetica, /Type0 for an embedded subset.</param>
+    /// <param name="BaseFont">The base font name (subset tag included, when embedded).</param>
+    /// <param name="Program">The embedded font program (FontFile2), or null.</param>
+    /// <param name="Widths">Glyph index to width in 1000-unit text space (/W), empty when not embedded.</param>
+    /// <param name="ToUnicode">Glyph index to the text it stands for, from the /ToUnicode CMap.</param>
+    public sealed record FontInfo(
+        string Subtype, string BaseFont, byte[]? Program,
+        IReadOnlyDictionary<int, double> Widths,
+        IReadOnlyDictionary<int, string> ToUnicode);
 
     public sealed record Document(
         IReadOnlyList<double> MediaBox,
         IReadOnlyList<Stroke> Strokes,
-        IReadOnlyList<TextRun> Texts);
+        IReadOnlyList<TextRun> Texts,
+        FontInfo Font,
+        IReadOnlyList<string> Layers,
+        byte[] Content);
 
     // --------------------------------------------------------------------- file level
 
@@ -94,37 +127,152 @@ internal static class PdfReadback
             return ParseValue(text, ref at);
         }
 
+        // A stream object's DECODED payload: exactly /Length bytes after the stream
+        // keyword's end of line, inflated when the dictionary declares /FlateDecode.
+        byte[] GetStream(PdfRef reference, out Dictionary<string, object> dict)
+        {
+            int at = (int)offsets[reference.Number];
+            _ = ReadNumber(text, ref at);
+            _ = ReadNumber(text, ref at);
+            Expect(text, ref at, "obj");
+            dict = (Dictionary<string, object>)ParseValue(text, ref at);
+            Expect(text, ref at, "stream");
+            if (text[at] == '\r')
+                at++;
+            if (text[at] != '\n')
+                throw new InvalidOperationException("The stream keyword must be followed by an end of line.");
+            at++;
+            int length = (int)Math.Round((double)dict["Length"]);
+            var raw = new byte[length];
+            Array.Copy(pdf, at, raw, 0, length);
+            int after = at + length;
+            SkipWhitespace(text, ref after);
+            Expect(text, ref after, "endstream");
+
+            if (!dict.TryGetValue("Filter", out object? filter))
+                return raw;
+            if (filter is not string name || name != "FlateDecode")
+                throw new InvalidOperationException($"Unsupported stream filter '{filter}'.");
+            using var input = new MemoryStream(raw);
+            using var inflate = new ZLibStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            inflate.CopyTo(output);
+            return output.ToArray();
+        }
+
         var root = (Dictionary<string, object>)GetObject((PdfRef)trailer["Root"]);
         var pages = (Dictionary<string, object>)GetObject((PdfRef)root["Pages"]);
         var kids = (List<object>)pages["Kids"];
         var page = (Dictionary<string, object>)GetObject((PdfRef)kids[0]);
         var mediaBox = ((List<object>)page["MediaBox"]).Select(v => (double)v).ToList();
+        var resources = (Dictionary<string, object>)page["Resources"];
 
-        // The content stream: dict, then exactly /Length bytes after the stream keyword's EOL.
-        int contentAt = (int)offsets[((PdfRef)page["Contents"]).Number];
-        _ = ReadNumber(text, ref contentAt);
-        _ = ReadNumber(text, ref contentAt);
-        Expect(text, ref contentAt, "obj");
-        var streamDict = (Dictionary<string, object>)ParseValue(text, ref contentAt);
-        Expect(text, ref contentAt, "stream");
-        if (text[contentAt] == '\r')
-            contentAt++;
-        if (text[contentAt] != '\n')
-            throw new InvalidOperationException("The stream keyword must be followed by an end of line.");
-        contentAt++;
-        int length = (int)Math.Round((double)streamDict["Length"]);
-        string content = text.Substring(contentAt, length);
-        int after = contentAt + length;
-        SkipWhitespace(text, ref after);
-        Expect(text, ref after, "endstream");
+        // ---- optional content: the catalog's declared order, and the page's aliases ----
+        var layers = new List<string>();
+        if (root.TryGetValue("OCProperties", out object? oc))
+        {
+            var properties = (Dictionary<string, object>)oc;
+            var display = (Dictionary<string, object>)properties["D"];
+            foreach (object reference in (List<object>)display["Order"])
+                layers.Add(LayerName(((Dictionary<string, object>)GetObject((PdfRef)reference))["Name"]));
+            if (((List<object>)properties["OCGs"]).Count != layers.Count)
+                throw new InvalidOperationException("/OCGs and /D /Order disagree about the layer count.");
+        }
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (resources.TryGetValue("Properties", out object? propertyMap))
+        {
+            foreach (var (alias, reference) in (Dictionary<string, object>)propertyMap)
+                aliases[alias] = LayerName(((Dictionary<string, object>)GetObject((PdfRef)reference))["Name"]);
+        }
 
-        var (strokes, texts) = ParseContent(content);
-        return new Document(mediaBox, strokes, texts);
+        var fonts = (Dictionary<string, object>)resources["Font"];
+        if (!fonts.TryGetValue("F1", out object? fontReference))
+            throw new InvalidOperationException("The page has no /F1 font.");
+        var font = ReadFont((Dictionary<string, object>)GetObject((PdfRef)fontReference), GetObject, GetStream);
+
+        byte[] content = GetStream((PdfRef)page["Contents"], out _);
+        var (strokes, texts) = ParseContent(Encoding.Latin1.GetString(content), aliases, font.ToUnicode);
+        return new Document(mediaBox, strokes, texts, font, layers, content);
+    }
+
+    private static FontInfo ReadFont(
+        Dictionary<string, object> font,
+        Func<PdfRef, object> getObject,
+        PdfStreamReader getStream)
+    {
+        string subtype = (string)font["Subtype"];
+        string baseFont = (string)font["BaseFont"];
+        if (subtype != "Type0")
+            return new FontInfo(subtype, baseFont, null, new Dictionary<int, double>(), new Dictionary<int, string>());
+
+        var descendant = (Dictionary<string, object>)getObject(
+            (PdfRef)((List<object>)font["DescendantFonts"])[0]);
+        if ((string)descendant["Subtype"] != "CIDFontType2")
+            throw new InvalidOperationException($"Unexpected descendant font subtype '{descendant["Subtype"]}'.");
+        if ((string)descendant["CIDToGIDMap"] != "Identity")
+            throw new InvalidOperationException("Only /CIDToGIDMap /Identity is understood.");
+
+        // /W is [ cid [w] cid [w] ... ] in this writer's spelling; the array form
+        // "first last w" is not emitted and is refused rather than guessed at.
+        var widths = new Dictionary<int, double>();
+        var w = (List<object>)descendant["W"];
+        for (int i = 0; i < w.Count; i += 2)
+        {
+            int cid = (int)Math.Round((double)w[i]);
+            widths[cid] = (double)((List<object>)w[i + 1])[0];
+        }
+
+        var descriptor = (Dictionary<string, object>)getObject((PdfRef)descendant["FontDescriptor"]);
+        byte[] program = getStream((PdfRef)descriptor["FontFile2"], out var programDict);
+        if ((int)Math.Round((double)programDict["Length1"]) != program.Length)
+            throw new InvalidOperationException("/Length1 disagrees with the decoded font program's length.");
+
+        var toUnicode = ParseToUnicode(
+            Encoding.Latin1.GetString(getStream((PdfRef)font["ToUnicode"], out _)));
+        return new FontInfo(subtype, baseFont, program, widths, toUnicode);
+    }
+
+    /// <summary>An optional-content group's /Name is a PDF literal STRING (UTF-8 bytes),
+    /// not a name token — so it is decoded here rather than cast.</summary>
+    private static string LayerName(object value) => Encoding.UTF8.GetString((byte[])value);
+
+    private delegate byte[] PdfStreamReader(PdfRef reference, out Dictionary<string, object> dict);
+
+    /// <summary>The <c>bfchar</c> entries of a ToUnicode CMap — the reader's own scan,
+    /// so a test comparing decoded text against the source string is checking the file
+    /// rather than the writer's bookkeeping.</summary>
+    private static Dictionary<int, string> ParseToUnicode(string cmap)
+    {
+        var map = new Dictionary<int, string>();
+        int at = 0;
+        while (true)
+        {
+            int begin = cmap.IndexOf("beginbfchar", at, StringComparison.Ordinal);
+            if (begin < 0)
+                return map;
+            int end = cmap.IndexOf("endbfchar", begin, StringComparison.Ordinal);
+            if (end < 0)
+                throw new InvalidOperationException("A beginbfchar block is not closed.");
+            int p = begin + "beginbfchar".Length;
+            while (true)
+            {
+                SkipWhitespace(cmap, ref p);
+                if (p >= end)
+                    break;
+                var code = (byte[])ReadHexString(cmap, ref p);
+                SkipWhitespace(cmap, ref p);
+                var value = (byte[])ReadHexString(cmap, ref p);
+                map[(code[0] << 8) | code[1]] = Encoding.BigEndianUnicode.GetString(value);
+            }
+            at = end + "endbfchar".Length;
+        }
     }
 
     // ---------------------------------------------------------------- content stream
 
-    private static (List<Stroke> Strokes, List<TextRun> Texts) ParseContent(string content)
+    private static (List<Stroke> Strokes, List<TextRun> Texts) ParseContent(
+        string content, IReadOnlyDictionary<string, string> layerAliases,
+        IReadOnlyDictionary<int, string> toUnicode)
     {
         var strokes = new List<Stroke>();
         var texts = new List<TextRun>();
@@ -137,7 +285,12 @@ internal static class PdfReadback
         var color = (R: 0.0, G: 0.0, B: 0.0);
         var stack = new Stack<(double[] Ctm, double Width, List<double> Dash, (double, double, double) Color)>();
 
-        var subpaths = new List<(List<Vector2d> Points, bool Closed)>();
+        // Marked content is its own stack — a BDC may not straddle a q/Q, and this
+        // reader checks that by unwinding them independently.
+        var marked = new Stack<string>();
+
+        var subpaths = new List<(List<Vector2d> Points, bool Closed,
+            List<(int EndIndex, Vector2d C1, Vector2d C2)> Curves)>();
         double textX = 0, textY = 0, fontSize = 0;
 
         int p = 0;
@@ -177,10 +330,24 @@ internal static class PdfReadback
                     color = (rgb[0], rgb[1], rgb[2]);
                     break;
                 }
+                case "BDC":
+                {
+                    // "/OC /OCn BDC": the tag, then the page-resource alias of the group.
+                    if ((string)operands[^2] != "OC")
+                        throw new InvalidOperationException($"Unexpected marked-content tag '{operands[^2]}'.");
+                    string alias = (string)operands[^1];
+                    if (!layerAliases.TryGetValue(alias, out string? layer))
+                        throw new InvalidOperationException($"/{alias} is not in the page's /Properties.");
+                    marked.Push(layer);
+                    break;
+                }
+                case "EMC":
+                    marked.Pop();
+                    break;
                 case "m":
                 {
                     var xy = Numbers(operands, 2);
-                    subpaths.Add(([new Vector2d(xy[0], xy[1])], false));
+                    subpaths.Add(([new Vector2d(xy[0], xy[1])], false, []));
                     break;
                 }
                 case "l":
@@ -189,13 +356,23 @@ internal static class PdfReadback
                     subpaths[^1].Points.Add(new Vector2d(xy[0], xy[1]));
                     break;
                 }
+                case "c":
+                {
+                    var v = Numbers(operands, 6);
+                    var points = subpaths[^1].Points;
+                    subpaths[^1].Curves.Add(
+                        (points.Count, new Vector2d(v[0], v[1]), new Vector2d(v[2], v[3])));
+                    points.Add(new Vector2d(v[4], v[5]));
+                    break;
+                }
                 case "h":
-                    subpaths[^1] = (subpaths[^1].Points, true);
+                    subpaths[^1] = (subpaths[^1].Points, true, subpaths[^1].Curves);
                     break;
                 case "S":
                     strokes.Add(new Stroke(
-                        subpaths.Select(s => ((IReadOnlyList<Vector2d>)s.Points, s.Closed)).ToList(),
-                        [.. ctm], width, [.. dash], color));
+                        subpaths.Select(s => new Subpath(s.Points, s.Closed, s.Curves)).ToList(),
+                        [.. ctm], width, [.. dash], color,
+                        marked.Count == 0 ? null : marked.Peek()));
                     subpaths = [];
                     break;
                 case "BT":
@@ -214,7 +391,9 @@ internal static class PdfReadback
                 }
                 case "Tj":
                     texts.Add(new TextRun(
-                        new Vector2d(textX, textY), fontSize, DecodeWinAnsi((byte[])operands[^1])));
+                        new Vector2d(textX, textY), fontSize,
+                        Decode((byte[])operands[^1], toUnicode),
+                        marked.Count == 0 ? null : marked.Peek()));
                     break;
                 case "ET":
                 case "rg":
@@ -226,7 +405,28 @@ internal static class PdfReadback
             }
             operands.Clear();
         }
+        if (marked.Count != 0)
+            throw new InvalidOperationException($"{marked.Count} marked-content block(s) left open.");
         return (strokes, texts);
+    }
+
+    /// <summary>A shown string as text: 2-byte glyph indices through the file's own
+    /// ToUnicode CMap when the font is embedded, WinAnsi bytes otherwise.</summary>
+    private static string Decode(byte[] bytes, IReadOnlyDictionary<int, string> toUnicode)
+    {
+        if (toUnicode.Count == 0)
+            return DecodeWinAnsi(bytes);
+        if (bytes.Length % 2 != 0)
+            throw new InvalidOperationException("An Identity-H string must be an even number of bytes.");
+        var sb = new StringBuilder(bytes.Length / 2);
+        for (int i = 0; i < bytes.Length; i += 2)
+        {
+            int cid = (bytes[i] << 8) | bytes[i + 1];
+            if (!toUnicode.TryGetValue(cid, out string? value))
+                throw new InvalidOperationException($"Glyph {cid} has no /ToUnicode entry.");
+            sb.Append(value);
+        }
+        return sb.ToString();
     }
 
     private static double[] Numbers(List<object> operands, int count)
@@ -273,6 +473,8 @@ internal static class PdfReadback
                 dict[key] = ParseValue(text, ref p);
             }
         }
+        if (text[p] == '<')
+            return ReadHexString(text, ref p);
         if (text[p] == '[')
         {
             p++;
@@ -336,6 +538,33 @@ internal static class PdfReadback
         while (p < text.Length && !IsDelimiter(text[p]))
             p++;
         return text[start..p];
+    }
+
+    private static object ReadHexString(string text, ref int p)
+    {
+        p++;   // '<'
+        var bytes = new List<byte>();
+        int digits = 0, value = 0;
+        while (true)
+        {
+            char c = text[p++];
+            if (c == '>')
+            {
+                if (digits == 1)
+                    bytes.Add((byte)(value << 4));   // the spec pads an odd trailing digit
+                return bytes.ToArray();
+            }
+            if (char.IsWhiteSpace(c))
+                continue;
+            int digit = Convert.ToInt32(c.ToString(), 16);
+            value = digits == 0 ? digit : (value << 4) | digit;
+            if (++digits == 2)
+            {
+                bytes.Add((byte)value);
+                digits = 0;
+                value = 0;
+            }
+        }
     }
 
     private static byte[] ReadLiteralString(string text, ref int p)
