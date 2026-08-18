@@ -17,6 +17,26 @@
       "reason": "does not compile against the browser's assemblies: The name 'TetMesher' does not exist in the current context"
     },
     {
+      "id": "animate-morphing-column",
+      "page": "examples/animation.md",
+      "live": true
+    },
+    {
+      "id": "animate-morphing-t0",
+      "page": "examples/animation.md",
+      "live": true
+    },
+    {
+      "id": "animate-morphing-t100",
+      "page": "examples/animation.md",
+      "live": true
+    },
+    {
+      "id": "animate-morphing-t50",
+      "page": "examples/animation.md",
+      "live": true
+    },
+    {
       "id": "animate-planetary",
       "page": "examples/gears.md",
       "live": true
@@ -153,6 +173,11 @@
       "live": true
     },
     {
+      "id": "chamfer-variable-run",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
       "id": "cone",
       "page": "examples/primitives.md",
       "live": true
@@ -194,6 +219,16 @@
       "live": true
     },
     {
+      "id": "direct-edit-blend-after",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
+      "id": "direct-edit-blend-before",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
       "id": "direct-edit-composed",
       "page": "examples/direct-editing.md",
       "live": true
@@ -209,7 +244,17 @@
       "live": true
     },
     {
+      "id": "direct-edit-feature",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
       "id": "direct-edit-move",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
+      "id": "direct-edit-move-bore",
       "page": "examples/direct-editing.md",
       "live": true
     },
@@ -219,7 +264,27 @@
       "live": true
     },
     {
+      "id": "direct-edit-replace",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
+      "id": "direct-edit-rotate",
+      "page": "examples/direct-editing.md",
+      "live": true
+    },
+    {
       "id": "draft-boss",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "draft-cored-bore",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "draft-cored-plate",
       "page": "examples/loft-draft-shell.md",
       "live": true
     },
@@ -236,6 +301,11 @@
     {
       "id": "drop-down",
       "page": "examples/representations.md",
+      "live": true
+    },
+    {
+      "id": "dxf-spline-general",
+      "page": "examples/dxf-svg.md",
       "live": true
     },
     {
@@ -305,6 +375,21 @@
     },
     {
       "id": "extrude-twist",
+      "page": "examples/extrude-revolve-sweep.md",
+      "live": true
+    },
+    {
+      "id": "extrude-twist-boolean",
+      "page": "examples/extrude-revolve-sweep.md",
+      "live": true
+    },
+    {
+      "id": "extrude-twist-holes",
+      "page": "examples/extrude-revolve-sweep.md",
+      "live": true
+    },
+    {
+      "id": "extrude-twist-taper",
       "page": "examples/extrude-revolve-sweep.md",
       "live": true
     },
@@ -455,6 +540,11 @@
     },
     {
       "id": "fillet-variable",
+      "page": "examples/chamfer-fillet.md",
+      "live": true
+    },
+    {
+      "id": "fillet-variable-run",
       "page": "examples/chamfer-fillet.md",
       "live": true
     },
@@ -746,6 +836,31 @@
       "live": true
     },
     {
+      "id": "roof-hip",
+      "page": "examples/roof.md",
+      "live": true
+    },
+    {
+      "id": "roof-lshape",
+      "page": "examples/roof.md",
+      "live": true
+    },
+    {
+      "id": "roof-pitches",
+      "page": "examples/roof.md",
+      "live": true
+    },
+    {
+      "id": "roof-slot",
+      "page": "examples/roof.md",
+      "live": true
+    },
+    {
+      "id": "roof-star",
+      "page": "examples/roof.md",
+      "live": true
+    },
+    {
       "id": "round-edges",
       "page": "examples/loft-draft-shell.md",
       "live": true
@@ -778,6 +893,11 @@
     {
       "id": "section-cutaway",
       "page": "examples/viewer.md",
+      "live": true
+    },
+    {
+      "id": "section-flush-step",
+      "page": "examples/2d-views.md",
       "live": true
     },
     {
@@ -857,6 +977,16 @@
     },
     {
       "id": "shell-cup",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "shell-open-corner",
+      "page": "examples/loft-draft-shell.md",
+      "live": true
+    },
+    {
+      "id": "shell-open-corner-cut",
       "page": "examples/loft-draft-shell.md",
       "live": true
     },
@@ -1010,6 +1140,26 @@
     {
       "id": "transforms",
       "page": "examples/transforms-patterns.md",
+      "live": true
+    },
+    {
+      "id": "variable-offset-erosion",
+      "page": "examples/variable-offset.md",
+      "live": true
+    },
+    {
+      "id": "variable-offset-exact",
+      "page": "examples/variable-offset.md",
+      "live": true
+    },
+    {
+      "id": "variable-offset-hole",
+      "page": "examples/variable-offset.md",
+      "live": true
+    },
+    {
+      "id": "variable-offset-plate",
+      "page": "examples/variable-offset.md",
       "live": true
     },
     {

@@ -473,25 +473,21 @@ var section = new DrawingView(new Part("housing", housing),
 };
 
 // The callout a hole table prints. Three of these characters have NO WinAnsi form, so
-// the built-in Helvetica refuses the string outright; an embedded font carries them.
+// the built-in Helvetica cannot draw them as glyphs at all.
 section.Annotate(new SheetNote((0, 18), (34, 26), "\u23008 \u21A712\n\u2334\u230015 \u21A76"));
 section.Annotate(SheetLinearDimension.Horizontal((-30, 0), (30, 0), -18));
 sheet.Add(section);
 sheet.Title = sheet.Title with { Title = "BEARING HOUSING", DrawingNumber = "EC-1044" };
 
-// The built-in Helvetica cannot write this sheet AT ALL - the depth sign has no WinAnsi
-// form, so the writer refuses BY NAME rather than dropping the character.
-try
-{
-    sheet.ToPdf();
-    throw new Exception("the standard-14 font should have refused the depth sign");
-}
-catch (NotSupportedException refusal) when (refusal.Message.Contains("U+21A7"))
-{
-    // Named, as it should be.
-}
+// Under the built-in Helvetica they become the WORD forms ASME Y14.5 permits, so the
+// sheet still writes and still reads. That is a substitution rather than a silent drop:
+// the mapping is public (PdfDrawing.DraftingWords) and the words are the standard's own.
+string plain = System.Text.Encoding.Latin1.GetString(sheet.ToPdf());
+if (!plain.Contains("DEEP") || !plain.Contains("CBORE"))
+    throw new Exception("the drafting symbols should have been spelled out");
 
-// With the font embedded, the same sheet writes and the symbols travel verbatim.
+// With the font embedded the same sheet carries the SYMBOLS instead - the word forms are
+// the fallback for a font that cannot spell them, never a downgrade of one that can.
 var bytes = sheet.ToPdf(new PdfSheetOptions { Font = PdfFont.Embed(font) });
 if (!System.Text.Encoding.Latin1.GetString(bytes).Contains("/FontFile2"))
     throw new Exception("the subset font program did not reach the file");
