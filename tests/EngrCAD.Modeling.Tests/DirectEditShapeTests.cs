@@ -175,8 +175,14 @@ public class DirectEditShapeTests
     }
 
     [Fact]
-    public void RotateFaces_IsNativeUnderASimilarity()
+    public void RotateFaces_IsCLASSIFIEDNativeUnderASimilarity()
     {
+        // Deliberately a claim about SUPPORT rather than about geometry: an angle is preserved
+        // by every similarity, so no node reports Impossible. Whether a PARTICULAR scaled body
+        // lowers is a separate question the kernel answers at the rim solve — a scale can change
+        // which surface family a wall lowers as, and two adjacent ExtrudedSurface neighbours then
+        // want their generators lengthened in u (filed). The rigid twin above is the geometric
+        // assertion; naming this one "IsNative" would have conflated the two.
         var report = Shape.Box(40, 30, 10)
             .RotateFaces(new Ray3d((20, 0, -5), Vector3d.UnitY), 6,
                 FaceSetRef.PlanarWithNormal(Vector3d.UnitX))
@@ -223,5 +229,65 @@ public class DirectEditShapeTests
         var bounds = Bounds(frustum.Translate(40, -25, 7));
         Assert.Equal(40 + bottom, bounds.Max.X, 6);
         Assert.Equal(7 + height / 2, bounds.Max.Z, 9);
+    }
+
+    [Fact]
+    public void MoveFaces_RelocatesABoreCutByABoolean()
+    {
+        // A difference marks the subtracted tool's walls REVERSED, so this is the sense-aware
+        // path as well as the curved one. The oracle is that a move RELOCATES rather than
+        // resizes: the volume is bit-identical to the concentric housing's (the bore is still
+        // a Phi 6 cylinder through the full height), while the bore's own rims have moved.
+        const double outer = 20, bore = 6, height = 30;
+        var housing = Shape.Cylinder(outer, height) - Shape.Cylinder(bore, height + 10);
+        var offCentre = housing.MoveFaces(new Vector3d(5, 0, 0), FaceSetRef.Cylindrical(bore));
+
+        double before = new Part("a", housing).MassProperties().Volume;
+        double after = new Part("b", offCentre).MassProperties().Volume;
+        Assert.Equal(0, Math.Abs(after - before) / before, 11);
+
+        // Every bore vertex sits at exactly the bore radius about the MOVED axis. Rebuilt
+        // about the old one they would come back at |old centre - new corner|, not 6.
+        var solid = offCentre.ToBrep();
+        solid.Validate();
+        var wall = solid.Faces.Single(
+            f => f.IsCylindrical(out _, out _, out double r) && Math.Abs(r - bore) < 1e-9);
+        foreach (var vertex in wall.Edges().SelectMany(e => new[] { e.StartVertex, e.EndVertex }).Distinct())
+        {
+            var radial = vertex.Position - new Vector3d(5, 0, vertex.Position.Z);
+            Assert.Equal(bore, radial.Length, 9);
+        }
+    }
+
+    [Fact]
+    public void DeleteFaces_TakesABlendBackOffThroughTheGraph()
+    {
+        // The docs page's own fixture, and its own claim: deleting the blend does not merely
+        // resemble the unfilleted plate, it REPRODUCES it — every corner bit for bit against a
+        // Shape.Box that never had the rim, because each is re-solved from the same three
+        // planes. Pinned here because the page states it on THIS construction (Shape.Box +
+        // Fillet), where the BRep fixture states it on SolidFactory.MakeBox.
+        var rounded = Shape.Box(60, 40, 12).Fillet(3, Top);
+        var sharp = rounded.DeleteFaces(
+            FaceSetRef.Where("blend", face => !face.IsPlanar(out _, out _)));
+
+        var healed = sharp.ToBrep();
+        healed.Validate();
+        Assert.Equal(6, healed.Faces.Count());
+
+        static List<Vector3d> Corners(BrepSolid solid) => solid.Vertices
+            .Select(v => v.Position)
+            .OrderBy(p => p.X).ThenBy(p => p.Y).ThenBy(p => p.Z)
+            .ToList();
+
+        var got = Corners(healed);
+        var want = Corners(Shape.Box(60, 40, 12).ToBrep());
+        Assert.Equal(want.Count, got.Count);
+        for (int i = 0; i < want.Count; i++)
+        {
+            Assert.Equal(BitConverter.DoubleToInt64Bits(want[i].X), BitConverter.DoubleToInt64Bits(got[i].X));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(want[i].Y), BitConverter.DoubleToInt64Bits(got[i].Y));
+            Assert.Equal(BitConverter.DoubleToInt64Bits(want[i].Z), BitConverter.DoubleToInt64Bits(got[i].Z));
+        }
     }
 }

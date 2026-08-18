@@ -584,6 +584,30 @@ internal sealed class CarrierBody
                     return true;
                 }
 
+                case ExtrudedSurface extruded:
+                {
+                    // A circle extruded along its OWN normal is a right cylinder, and it is
+                    // how every `Shape.Cylinder` and every bore a boolean cuts arrives here
+                    // — a `CylinderSurface` is the primitive spelling, not the common one.
+                    // Recognized by GEOMETRY rather than by curve type (the kernel spells a
+                    // circular generator three ways), and the perpendicularity is REQUIRED
+                    // rather than assumed: a SHEARED extrusion of a circle is an oblique
+                    // cylinder whose sections perpendicular to the sweep are ellipses, so the
+                    // orthogonal projection ConcentricRim takes would put the centre in the
+                    // wrong place. Falling through there leaves the refusal, which is right.
+                    if (!CircularArc.TryFit(extruded.Generator, out var circle))
+                        continue;
+                    if (!extruded.Direction.TryNormalize(Tolerance.Default, out var along)
+                        || !circle.Circle.Axis.TryNormalize(Tolerance.Default, out var normal)
+                        || Math.Abs(Math.Abs(along.Dot(normal)) - 1) > Tolerance.Default.Angular)
+                        continue;
+                    // The generator's own start is the surface's u = 0, so its X direction IS
+                    // the phase every consumer of this band samples against.
+                    axis = new RimAxis(
+                        circle.Circle.Center, along, circle.Circle.XDirection.Normalized());
+                    return true;
+                }
+
                 case SphereSurface sphere when (a is PlaneSurface || b is PlaneSurface):
                 {
                     // A sphere cut by a plane gives a circle whose axis is the plane's

@@ -664,8 +664,8 @@ operations. Depends only on `EngrCAD.Core`.
   already documents for curves.
 - **`DirectEdit`** — editing a solid by acting on its FACES rather than on a parameter, which
   is what makes an imported STEP or IGES body editable: a body with no construction history
-  has no parameter to change. Three operations, all exact and all built on `Shelling`'s
-  per-face offset law rather than beside it:
+  has no parameter to change. Five operations, all exact and all built on `Shelling`'s
+  per-face offset law and `CarrierBody`'s rebuild rather than beside them:
   - **`DirectEdit.OffsetFaces(solid, distance, selector)`** pushes the named faces along
     their own outward normals and re-solves every corner the move disturbs; unnamed faces
     keep their carriers verbatim. All-planar solids take the polyhedral three-plane path,
@@ -682,15 +682,40 @@ operations. Depends only on `EngrCAD.Core`.
     the surface's), so the outward sign is honoured once and the caller stays orientation-free
     (`CarrierBody.Recognize(solid, allowReversedFaces)` gates it; SHELL and DRAFT keep the
     reversed-face refusal, so their output is bit-identical).
-  - **`DirectEdit.MoveFaces(solid, translation, selector)`** translates planar faces, and is
-    the offset under another name BY DERIVATION: a plane is invariant under translation
-    within itself, so displacing a face by `v` reaches exactly the plane an offset of `v·n̂`
-    reaches. Implemented as that reduction rather than beside it, which makes two
+  - **`DirectEdit.MoveFaces(solid, translation, selector)`** translates the named faces. For a
+    PLANAR one it is the offset under another name BY DERIVATION: a plane is invariant under
+    translation within itself, so displacing a face by `v` reaches exactly the plane an offset
+    of `v·n̂` reaches. Implemented as that reduction rather than beside it, which makes two
     consequences facts rather than arrangements — a face moved parallel to itself does not
     move at all, and several faces moved by one vector each take their own projection. A
-    CURVED face is refused by name: a translation moves the carrier's own axis, while
-    `CarrierBody`'s rim reconstruction builds each new edge concentric with the original,
-    which is exactly right for an offset and false for a move.
+    CURVED face is carried BODILY (`Retarget`, a `GeometryTransform` of the selected carriers
+    followed by `CarrierBody.Rebuild`) — which is what makes moving a bore RELOCATE it rather
+    than resize it, and what the earlier refusal was about: a rim must be rebuilt concentric
+    with the NEW carrier rather than the old one. `RimAxis`/`TryRimAxis` read the axis and the
+    frame's own +X off the carrier (`CylinderSurface`, `RevolvedSurface` — its generator SCANNED
+    for the largest radial, since an axis-touching generator's first sample reports a degenerate
+    phase — and a sphere against a plane), and `PhaseSeamVertices` turns each CLOSED rim's single
+    seam vertex onto that carrier's own `u = 0`, because a closed rim's start IS a phase rather
+    than a position and a seam left at an arbitrary angle detaches the rim from the band's
+    tessellation grid. The whole rule is gated behind `Rebuild(..., rimFromCarriers: true)`, so
+    the OFFSET family — which reads a rim's axis off a fit of the old edge, legal because
+    `SurfaceOffset` carries frames verbatim — is bit-identical.
+  - **`DirectEdit.RotateFaces(solid, axis, degrees, selector)`** turns the named faces about a
+    ray: a draft angle applied to a body with no history to re-parameterize. The axis is a
+    HINGE — a face the axis lies in tilts about that line and keeps the points on it, which is
+    what a drafting caller means, while a face the axis misses swings bodily. It is `Retarget`
+    with a rotation instead of a translation, so a rotated plane is exactly a plane and a
+    rotated cylinder exactly a cylinder about the turned axis; nothing is fitted. A zero angle
+    returns the solid untouched and a degenerate axis refuses by name.
+  - **`DirectEdit.ReplaceFaceSurfaces(solid, replacement)`** gives the named faces a different
+    carrier and re-solves their edges — OCCT's `BRepTools_ReShape` at the granularity that
+    matters, since the topology is untouched and only the surface underneath changes. Three
+    gates fire before anything moves, and the first is the one nothing downstream could catch:
+    **a replacement whose outward normal OPPOSES the original's turns the solid inside out
+    while leaving every loop, every count and the Euler number unchanged** (`RequireSameSide`
+    samples both carriers at the face's own trim points), so it is refused by name; likewise an
+    empty selection, and a rim with no EXACT intersection on the new pair (`CornerPolicy.ExactOnly`
+    — a replacement whose edges would only be traceable is refused rather than chorded in).
   - **`DirectEdit.DeleteFaces(solid, selector)`** removes a feature and heals the wound —
     a boss, a pad, a pocket liner, a counterbore's step. The rule is a CONDITION rather than
     a list of shapes: call an edge *wound* when one of its two faces goes and the other
@@ -700,14 +725,36 @@ operations. Depends only on `EngrCAD.Core`.
     interior loop really is a hole, whereas on a cylinder or an extruded band a second loop
     is routinely the far END of the band, and dropping one there leaves an open tube that
     satisfies BOTH `Validate()` and Euler–Poincaré, so nothing downstream would catch it.
-    Refused by name: a wound only PARTLY bounding a neighbour's loop (healing that needs the
-    neighbours EXTENDED until they meet, a different operation which can have no answer at
-    all — a box's sides extended past its deleted top never meet), a wound consuming an
-    outer loop, a non-planar neighbour, an empty selection and a whole-solid selection.
-    Geometry is shared and topology rebuilt, so the input is untouched and every survivor
-    keeps its own surface object — which is what lets a deletion RESTORE the body a feature
-    was added to rather than merely resemble it (verified bit for bit, and on boolean output
-    against the closed-form volume).
+    **Where no loop can be dropped the neighbours are EXTENDED until they meet**
+    (`DirectEdit.Extend.cs`, the blend case: a fillet or chamfer band's wound runs only part of
+    the way round each neighbour's loop, so there is nothing to drop). The condition is the
+    STRIP: every deleted face must have exactly TWO wound edges whose kept neighbours are two
+    distinct faces, which is what makes the replacement ONE new edge used once by each and so
+    two-manifold BY CONSTRUCTION — no count to check afterwards. Corners are solved once per
+    CLUSTER of touched vertices (union-find over the interior edges the deletion consumes, plus
+    a pairing of the two seam vertices of a CLOSED strip, which has no interior edge to join
+    them and whose two neighbours must both be in the corner's carrier list), and every new edge
+    is the exact `SurfaceCorner.TrySolveCurve` through its two solved corners rather than a
+    reparameterized old curve — so a box's vertical edge comes back as the `Line3d` between its
+    new corners and a cylinder's rim as the conic through them. A DOMAIN-DRIVEN neighbour is
+    lengthened before it is intersected (`CarrierBody.TrimToPoints(..., extendOnly: true)`, the
+    trim-the-surface rule running the other way, with an OVERSHOOT for the Drill doctrine's
+    reason — a carrier extended to land exactly ON a corner meets its neighbour at the very edge
+    of its own parameter rectangle, where the intersection clip's membership test is decided by
+    round-off), which is what takes the heal past `Shape.Box` walls to a sketch extrusion's.
+    Both heals are TRIED IN TURN and a wound neither can close is refused with BOTH reasons, so
+    the message says what each wanted. Still refused by name: a face with more than two wound
+    edges (a box's top has four, and its four sides extended past it never meet in one edge at
+    all; a whole-solid rounding's corner patch is the same wall, where three blended edges meet
+    at a vertex and a corner PATCH is what would be needed), a wound consuming an outer loop, a
+    non-planar neighbour on the drop-loops path, a pair with no exact intersection, an empty
+    selection and a whole-solid selection. **Every refusal fires before a single coedge moves**,
+    the rim-surgery all-or-nothing rule. Geometry is shared and topology rebuilt, so the input is
+    untouched and every survivor keeps its own surface object — which is what lets a deletion
+    RESTORE the body a feature was added to rather than merely resemble it: a fillet band and a
+    chamfer band each come off leaving all eight corners of the original box BIT FOR BIT, and a
+    fillet round a circular rim closes a cylinder back to three faces at πr²h (measured
+    6283.184092 against 6283.185307, −1.9e-7 relative, the mass-properties grade).
   Provenance inherits at every site (a tag naming the plate still names the plate after the
   boss on it has gone). One measured property worth keeping: **a re-solved corner reproduces
   every nonzero coordinate bit for bit and can return −0.0 where the original held +0.0**,

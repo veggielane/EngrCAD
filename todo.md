@@ -896,34 +896,30 @@ export — is recorded in CLAUDE.md):
 
 ## OpenCASCADE (OCCT) feature parity (open items)
 
-- [ ] **Direct editing follow-ups** (`DirectEdit.OffsetFaces`/`MoveFaces`/`DeleteFaces` +
-  the `Shape` overloads landed — see design.md §5 and `examples/direct-editing.md`; each
-  item below was refused BY NAME in v1 with its reason, so none is a silent gap):
-  - [ ] **Delete-face by EXTENDING the neighbours.** v1 heals only a wound that bounds a
-    complete interior loop of a planar face (a boss, a pad, a pocket); a wound that runs
-    only part of the way round a loop — deleting a chamfer band, a fillet band, a draft
-    face — needs the two neighbours extended until they meet in a NEW edge, which
-    `SurfaceCorner.TrySolveCurve` can already solve for the analytic pairs. The work is
-    not the curve: it is the topology rewiring (two rim loops collapse into one edge) plus
-    a soundness gate, since the extension can have no answer at all (a box's four sides
-    extended past its deleted top never meet) and the refusal must come BEFORE any coedge
-    moves. Note the v1 gate is `IsPlanar` on the loop-dropping face and the general fix
-    subsumes it.
-  - [ ] **Move a CURVED face.** Refused today because `CarrierBody.ConcentricRim` rebuilds
-    each rim as a circle concentric with the ORIGINAL — exactly right for an offset (which
-    leaves the axis alone) and false for a translation, which moves it. The fix is to take
-    the rim's new axis from the new CARRIER rather than from the fit, keeping the phase
-    rule (frame taken verbatim, never re-derived from a solved point). Would also unlock
-    ROTATING a face, which is `Draft` with an arbitrary neutral line.
-  - [ ] **Replace a face's surface** (OCCT `BRepTools_ReShape`): swap a planar face for a
-    cone or a cylinder and re-solve the corners. `CarrierBody.Rebuild(carriers, what)` is
-    already exactly that seam — it takes one carrier per face and rebuilds everything —
-    so this is an API and a validation question rather than a geometric one.
-  - [ ] **Direct edits as FEATURES.** They are `Shape` graph nodes today, so they compose
-    and `Explain` reports them, but there is no `Feature` wrapper and so no `[Param]`
-    distance a design study or a configuration could drive. The selector is a
-    `FaceSetRef`, which already serializes, so the blocker is only that a `Feature` needs
-    writing.
+- [ ] **Direct editing residuals** (the five operations and their four `Feature` wrappers
+  landed — see design.md §5 and `examples/direct-editing.md`; each item below is refused BY
+  NAME with its reason, so none is a silent gap):
+  - [ ] **A deleted face with MORE than two wound edges.** The heal-by-extension gate is the
+    STRIP condition — exactly two wound edges onto two distinct kept faces — which is what
+    makes the replacement one edge used once by each. A whole-solid rounding's CORNER PATCH
+    has three, and so does the band of a partial fillet RUN when its two termination faces
+    are left behind (deleting that run's band *with* its terminations is an ordinary strip
+    and works). Both want a corner PATCH — the surface a three-way extension actually meets
+    in — rather than a better counting rule, and a box's top face (four wound edges, four
+    sides that never meet in one edge at all) is the case that must stay refused whatever
+    is built.
+  - [ ] **A replacement rim with no EXACT intersection.** `ReplaceFaceSurfaces` solves each
+    new edge at `CornerPolicy.ExactOnly` and refuses otherwise, so swapping a face for a
+    carrier whose rims would only be TRACEABLE is out of reach. `AllowTraced` exists and
+    LABELS its deviation, so the question is whether a direct edit may hand back a chorded
+    rim at all — the same call `SurfaceCorner`'s own policy makes, one layer up.
+  - [ ] **A rotation under a uniform SCALE whose neighbours lower as extrusions.** An angle
+    is preserved by every similarity and the hinge rides the placement, so `RotateFaces` is
+    Native under a scale in principle — but `Scale(3)` changes which surface family a box's
+    walls lower as, and two adjacent `ExtrudedSurface` neighbours then need their GENERATORS
+    lengthened (in u) where `CarrierBody.TrimToPoints`' extension reaches only along v. The
+    committed angle-under-a-placement assertion is therefore stated on a RIGID placement;
+    the scaled case refuses by name at the rim solve.
 - [ ] **PDF export follow-ups** (the writer landed: `PdfDrawing` +
   `SheetWriter.ToPdf`, byte-fixed-point, twin-decoder-verified — see design.md §6c;
   each item below was declined in v1 with its reason and would be additive):
